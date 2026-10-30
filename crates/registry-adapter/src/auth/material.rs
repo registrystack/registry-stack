@@ -125,12 +125,14 @@ pub(crate) enum MaterialFault {
     NotVisibleAscii,
 }
 
-/// Encode one `Authorization: Basic` value from the resolved pair, the
-/// way Evidence does: refuse an empty username or password, refuse a
-/// colon in the username, then base64 the `username:password` bytes.
-/// Every intermediate that holds the pair or its encoding is zeroizing
-/// and pre-sized, so no reallocation frees a copy.
-pub(crate) fn basic_value(
+/// Encode the Basic credential payload from the resolved pair, the way
+/// Evidence does: refuse an empty username or password, refuse a colon
+/// in the username, then base64 the `username:password` bytes. The
+/// payload is what callers hand the destination authorization, which
+/// owns the scheme prefix; every intermediate that holds the pair or
+/// its encoding is zeroizing and pre-sized, so no reallocation frees a
+/// copy.
+pub(crate) fn basic_payload(
     username: &[u8],
     password: &[u8],
 ) -> Result<ProtectedText, MaterialFault> {
@@ -148,9 +150,20 @@ pub(crate) fn basic_value(
     STANDARD
         .encode_slice(joined.as_slice(), encoded.as_mut_slice())
         .expect("the pre-sized buffer holds the standard encoding");
-    let mut value = Zeroizing::new(Vec::with_capacity(6 + encoded.len()));
+    Ok(ProtectedText::from_owned(encoded))
+}
+
+/// Encode one full `Authorization: Basic <credentials>` value from the
+/// resolved pair: the token request the auth layer dials itself carries
+/// the fixed Basic prefix here.
+pub(crate) fn basic_value(
+    username: &[u8],
+    password: &[u8],
+) -> Result<ProtectedText, MaterialFault> {
+    let payload = basic_payload(username, password)?;
+    let mut value = Zeroizing::new(Vec::with_capacity(6 + payload.len()));
     value.extend_from_slice(b"Basic ");
-    value.extend_from_slice(encoded.as_slice());
+    value.extend_from_slice(payload.as_bytes());
     Ok(ProtectedText::from_owned(value))
 }
 
@@ -160,20 +173,18 @@ fn encoded_len(bytes: &[u8]) -> usize {
     bytes.len().div_ceil(3) * 4
 }
 
-/// Encode one `Authorization: <scheme> <token>` value; the token must be
-/// visible ASCII, as a header-presented credential must be.
-pub(crate) fn scheme_value(scheme: &str, token: &[u8]) -> Result<ProtectedText, MaterialFault> {
+/// Encode one bearer-style token payload; the token must be visible
+/// ASCII, as a header-presented credential must be. The payload is what
+/// callers hand the destination authorization, which owns the scheme
+/// prefix, so no scheme text is parsed from or joined to the token here.
+pub(crate) fn token_value(token: &[u8]) -> Result<ProtectedText, MaterialFault> {
     if token.is_empty() {
         return Err(MaterialFault::Empty);
     }
     if !token.iter().all(|byte| (0x21..=0x7e).contains(byte)) {
         return Err(MaterialFault::NotVisibleAscii);
     }
-    let mut value = Zeroizing::new(Vec::with_capacity(scheme.len() + 1 + token.len()));
-    value.extend_from_slice(scheme.as_bytes());
-    value.push(b' ');
-    value.extend_from_slice(token);
-    Ok(ProtectedText::from_owned(value))
+    Ok(ProtectedText::from_bytes(token))
 }
 
 /// Encode one `application/x-www-form-urlencoded` body from ordered
@@ -264,49 +275,50 @@ mod tests {
         assert!(!format!("{clone:?}").contains("secret-canary"));
     }
 
-    /// The Basic value is the standard encoding of `user:password`, with
-    /// and without base64 padding, and the split is refused where it
-    /// would be ambiguous.
+    /// The Basic payload is the standard encoding of `user:password`,
+    /// with and without base64 padding, the split is refused where it
+    /// would be ambiguous, and the full value carries the fixed prefix
+    /// only where the token request itself is built.
     #[test]
     fn basic_values_encode_and_refuse() {
+        let payload = basic_payload(b"user", b"pass").expect("a usable pair");
+        assert_eq!(payload.as_bytes(), b"dXNlcjpwYXNz");
+        // "user:password" is 13 bytes, so the encoding pads with `==`.
+        let payload = basic_payload(b"user", b"password").expect("a usable pair");
+        assert_eq!(payload.as_bytes(), b"dXNlcjpwYXNzd29yZA==");
         let value = basic_value(b"user", b"pass").expect("a usable pair");
         assert_eq!(value.as_bytes(), b"Basic dXNlcjpwYXNz");
-        // "user:password" is 13 bytes, so the encoding pads with `==`.
-        let value = basic_value(b"user", b"password").expect("a usable pair");
-        assert_eq!(value.as_bytes(), b"Basic dXNlcjpwYXNzd29yZA==");
         assert_eq!(
-            basic_value(b"", b"pass").unwrap_err(),
+            basic_payload(b"", b"pass").unwrap_err(),
             MaterialFault::Empty,
             "an empty username is unusable"
         );
         assert_eq!(
-            basic_value(b"user", b"").unwrap_err(),
+            basic_payload(b"user", b"").unwrap_err(),
             MaterialFault::Empty,
             "an empty password is unusable"
         );
         assert_eq!(
-            basic_value(b"us:er", b"pass").unwrap_err(),
+            basic_payload(b"us:er", b"pass").unwrap_err(),
             MaterialFault::UsernameColon,
             "a colon in the username would move the split"
         );
     }
 
-    /// A scheme value joins with one space and refuses a token that could
-    /// fold or inject.
+    /// A token payload stays the payload alone, and refuses a token that
+    /// could fold or inject; the scheme prefix is the authorization's,
+    /// never joined here.
     #[test]
-    fn scheme_values_join_and_validate() {
-        let value = scheme_value("ApiToken", b"abc123").expect("a usable token");
-        assert_eq!(value.as_bytes(), b"ApiToken abc123");
+    fn token_values_stay_payloads_and_validate() {
+        let value = token_value(b"abc123").expect("a usable token");
+        assert_eq!(value.as_bytes(), b"abc123");
         assert_eq!(
-            scheme_value("Bearer", b"to ken").unwrap_err(),
+            token_value(b"to ken").unwrap_err(),
             MaterialFault::NotVisibleAscii
         );
+        assert_eq!(token_value(b"").unwrap_err(), MaterialFault::Empty);
         assert_eq!(
-            scheme_value("Bearer", b"").unwrap_err(),
-            MaterialFault::Empty
-        );
-        assert_eq!(
-            scheme_value("Bearer", b"line\nbreak").unwrap_err(),
+            token_value(b"line\nbreak").unwrap_err(),
             MaterialFault::NotVisibleAscii
         );
     }

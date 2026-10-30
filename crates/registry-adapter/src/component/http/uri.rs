@@ -38,9 +38,13 @@
 //! empty segment, no `;`, and every percent escape uppercase and
 //! decoding to a byte no server reads as structure or as an alias
 //! (not `/`, `\`, `?`, `;`, `%`, `:`, an unreserved character, or a
-//! control). The transport additionally refuses a decoded path holding
-//! invisible format characters; the `http` component maps that refusal
-//! of a pinned target to `egress.refused` as well.
+//! control). A dot segment, literal or percent-escaped, is refused on
+//! the raw text before any parse: the WHATWG parser collapses `.` and
+//! `..` silently, so a link like `/base/x/../y` or `/base/%2e%2e/y`
+//! would otherwise reach an undeclared path under the credential. The
+//! transport additionally refuses a decoded path holding invisible
+//! format characters; the `http` component maps that refusal of a
+//! pinned target to `egress.refused` as well.
 //!
 //! The query the source wrote is sent as written: a link whose query the
 //! parser would percent-encode differently is refused rather than
@@ -129,8 +133,9 @@ pub enum LinkRefusal {
     Fragment,
     /// The parser would send a different query than the one written.
     QueryNotAsWritten,
-    /// The path is not canonical: an empty segment, a `;`, or a percent
-    /// escape that is malformed, lowercase, or decodes to an alias.
+    /// The path is not canonical: an empty segment, a `;`, a dot
+    /// segment, or a percent escape that is malformed, lowercase, or
+    /// decodes to an alias.
     NonCanonicalPath,
     /// The normalized path is not the base path or beneath it at a
     /// segment boundary.
@@ -186,8 +191,8 @@ impl PinnedOrigin {
     /// [`OriginError`] when the base URL is over the URL bound, holds
     /// whitespace, a control, or `\`, is not written
     /// `scheme://authority`, is not `http` or `https`, does not parse,
-    /// or carries userinfo, a query, a fragment, or a non-canonical
-    /// path.
+    /// carries userinfo, a query, a fragment, a dot segment, or a
+    /// non-canonical path.
     pub fn new(base_url: &str) -> Result<Self, OriginError> {
         let (scheme, rest) = screen(base_url).map_err(|fault| match fault {
             RawFault::TooLong => OriginError::TooLong,
@@ -202,6 +207,12 @@ impl PinnedOrigin {
             RawFault::Userinfo => OriginError::Userinfo,
             _ => OriginError::NotAbsolute,
         })?;
+        // The base path is judged on its raw text for the same reason a
+        // link is: a base the parser would collapse could silently
+        // widen the pin.
+        if has_dot_segment(raw_path(rest)) {
+            return Err(OriginError::NonCanonicalPath);
+        }
         let parsed = Url::parse(base_url).map_err(|_| OriginError::Unparseable)?;
         if !parsed.username().is_empty() || parsed.password().is_some() {
             return Err(OriginError::Userinfo);
@@ -250,7 +261,9 @@ impl PinnedOrigin {
     ///
     /// [`LinkRefusal`], class `egress.refused`, for every rule of
     /// section 8.11.5 the link breaks, and for raw input the parser
-    /// would repair rather than refuse.
+    /// would repair rather than refuse: dropped tabs and newlines,
+    /// trimmed spaces, `\` read as `/`, a collapsed dot segment, a
+    /// rewritten query.
     pub fn pin(&self, link: &str) -> Result<PinnedLink, LinkRefusal> {
         let (scheme, rest) = screen(link).map_err(|fault| match fault {
             RawFault::TooLong => LinkRefusal::TooLong,
@@ -265,6 +278,12 @@ impl PinnedOrigin {
             RawFault::Userinfo => LinkRefusal::Userinfo,
             _ => LinkRefusal::NotAbsolute,
         })?;
+        // A dot segment is judged on the raw text: the parser collapses
+        // it before any rule below could see it, and the collapsed path
+        // would land on a path nobody declared.
+        if has_dot_segment(raw_path(rest)) {
+            return Err(LinkRefusal::NonCanonicalPath);
+        }
         let url = Url::parse(link).map_err(|_| LinkRefusal::Unparseable)?;
         if url.scheme() != self.origin.scheme() {
             return Err(LinkRefusal::SchemeMismatch);
@@ -369,6 +388,62 @@ fn screen_authority(rest: &str) -> Result<(), RawFault> {
         return Err(RawFault::Userinfo);
     }
     Ok(())
+}
+
+/// The raw path text of a post-authority remainder: from the first `/`,
+/// up to the `?` or `#` that ends the path. Empty when the link carries
+/// no path at all.
+fn raw_path(rest: &str) -> &str {
+    let Some(start) = rest.find('/') else {
+        return "";
+    };
+    let path_and_more = &rest[start..];
+    let end = path_and_more
+        .find(['?', '#'])
+        .unwrap_or(path_and_more.len());
+    &path_and_more[..end]
+}
+
+/// Whether the raw path carries a dot segment the WHATWG parser would
+/// silently collapse: a segment that is, or percent-decodes to, `.`
+/// or `..`. Malformed escapes are not dot segments; the canonical-path
+/// rule refuses those later. Both hex cases decode, since the parser
+/// reads `%2e` and `%2E` the same.
+fn has_dot_segment(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| is_dot_segment(segment.as_bytes()))
+}
+
+/// Whether one raw segment percent-decodes to exactly `.` or `..`.
+fn is_dot_segment(segment: &[u8]) -> bool {
+    let mut decoded = Vec::with_capacity(segment.len());
+    let mut index = 0;
+    while index < segment.len() {
+        if segment[index] != b'%' {
+            decoded.push(segment[index]);
+            index += 1;
+            continue;
+        }
+        let (Some(high), Some(low)) = (
+            segment.get(index + 1).copied().and_then(hex_digit),
+            segment.get(index + 2).copied().and_then(hex_digit),
+        ) else {
+            return false;
+        };
+        decoded.push((high << 4) | low);
+        index += 3;
+    }
+    decoded == b"." || decoded == b".."
+}
+
+/// The value of one hexadecimal digit, either case.
+fn hex_digit(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        b'A'..=b'F' => Some(digit - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Whether a serialized path is canonical: no empty segment, no `;`,

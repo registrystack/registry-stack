@@ -211,21 +211,22 @@ async fn basic_sends_one_preemptive_header() {
         .expect("the pair resolves")
         .expect("basic sends a header");
     assert_eq!(credential.header.name(), "authorization");
-    assert_eq!(credential.header.value().as_bytes(), b"Basic dXNlcjpwYXNz");
+    // The header carries the base64 payload alone; the `Basic ` prefix
+    // is the destination authorization's, applied at the egress
+    // boundary from the declared kind, never parsed from this value.
+    assert_eq!(credential.header.value().as_bytes(), b"dXNlcjpwYXNz");
     assert!(events.is_empty(), "a static kind records no token events");
     assert_eq!(double.request_count(), 0, "the auth layer sends nothing");
 }
 
-/// `static-authorization` presents the token under the declared scheme,
-/// defaulting to `Bearer`.
+/// `static-authorization` declares its scheme on the plan and carries
+/// the token payload alone; the declared scheme prefixes the value at
+/// the egress boundary, defaulting to `Bearer`.
 #[tokio::test]
 async fn static_authorization_presents_the_declared_scheme() {
     std::env::set_var("ADAPTER_IT_AUTH_TOKEN", "tok");
-    let cases: [(Option<&str>, &[u8]); 2] = [
-        (None, b"Bearer tok".as_slice()),
-        (Some("ApiToken"), b"ApiToken tok".as_slice()),
-    ];
-    for (scheme, expected) in cases {
+    let cases: [(Option<&str>, &str); 2] = [(None, "Bearer"), (Some("ApiToken"), "ApiToken")];
+    for (scheme, declared) in cases {
         let endpoint = EndpointAuthentication::StaticAuthorization {
             scheme: scheme.map(str::to_owned),
         };
@@ -239,13 +240,22 @@ async fn static_authorization_presents_the_declared_scheme() {
             ),
         )
         .expect("a usable plan");
+        assert_eq!(
+            plan.declared_scheme(),
+            Some(declared),
+            "the declared scheme travels on the plan, not in the credential"
+        );
         let mut events = Vec::new();
         let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
             .await
             .expect("the token resolves")
             .expect("a header is sent");
         assert_eq!(credential.header.name(), "authorization");
-        assert_eq!(credential.header.value().as_bytes(), expected);
+        assert_eq!(
+            credential.header.value().as_bytes(),
+            b"tok",
+            "the token stays a payload; the scheme is never joined here"
+        );
     }
 }
 
@@ -312,7 +322,9 @@ mod oauth2_client_credentials {
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-bh");
+        // The issued token is a payload; the `Bearer ` prefix is the
+        // destination authorization's, applied at the egress boundary.
+        assert_eq!(credential.header.value().as_bytes(), b"issued-bh");
 
         let requests = double.requests();
         assert_eq!(requests.len(), 1, "one token request");
@@ -368,7 +380,7 @@ mod oauth2_client_credentials {
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-fb");
+        assert_eq!(credential.header.value().as_bytes(), b"issued-fb");
         let request = &double.requests()[0];
         assert!(
             request.header("authorization").is_none(),
@@ -436,7 +448,7 @@ mod oauth2_client_credentials {
             .await
             .expect("the cache answers")
             .expect("a header is sent");
-        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-cache");
+        assert_eq!(credential.header.value().as_bytes(), b"issued-cache");
         assert_eq!(double.request_count(), 1, "the second send is a cache hit");
         assert!(events.contains(&AuthEvent::TokenCacheHit));
 
@@ -519,7 +531,7 @@ mod oauth2_client_credentials {
                 .await
                 .expect("a credential issues")
                 .expect("a header is sent");
-            assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-reuse");
+            assert_eq!(credential.header.value().as_bytes(), b"issued-reuse");
         }
         assert_eq!(
             double.request_count(),
@@ -747,7 +759,7 @@ mod oauth2_private_key_jwt {
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-pj");
+        assert_eq!(credential.header.value().as_bytes(), b"issued-pj");
 
         let request = &double.requests()[0];
         assert!(
@@ -964,12 +976,13 @@ mod marker_secret_absence {
                 .expect("a header is sent");
             let value = String::from_utf8_lossy(credential.header.value().as_bytes()).into_owned();
             match tag {
-                // The Basic kind carries the marker base64-encoded, so the
-                // raw marker appears nowhere at all; the decoded pair is
-                // the exact credential.
+                // The Basic kind carries the marker base64-encoded, so
+                // the raw marker appears nowhere at all; the value is
+                // the payload alone (the `Basic ` prefix is the egress
+                // boundary's) and the decoded pair is the exact
+                // credential.
                 "basic" => {
-                    assert!(value.starts_with("Basic "), "{value}");
-                    let pair = base64_decode(value.trim_start_matches("Basic "));
+                    let pair = base64_decode(&value);
                     assert_eq!(
                         pair,
                         format!("marker-user:{MARKER_SECRET}").into_bytes(),
@@ -1034,8 +1047,8 @@ mod marker_secret_absence {
                 .expect("a header is sent");
             assert_eq!(
                 credential.header.value().as_bytes(),
-                format!("Bearer {MARKER_SECRET}").as_bytes(),
-                "the issued credential is the bearer"
+                MARKER_SECRET.as_bytes(),
+                "the issued token stays a payload; the bearer prefix is the egress boundary's"
             );
 
             let request = &double.requests()[0];
@@ -1123,10 +1136,7 @@ mod marker_secret_absence {
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(
-            credential.header.value().as_bytes(),
-            b"Bearer issued-pj-mark"
-        );
+        assert_eq!(credential.header.value().as_bytes(), b"issued-pj-mark");
         let request = &double.requests()[0];
         let body = request.body_text();
         assert!(

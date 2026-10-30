@@ -1265,19 +1265,94 @@ impl fmt::Debug for DestinationAuthorization {
     }
 }
 
+/// One declared authorization scheme, bounded inline so templates stay
+/// `Copy`.
+///
+/// The frozen bytes are 1 to 32 RFC 9110 token bytes. The scheme is
+/// declared configuration, never secret: `Debug` shows it, the wire form
+/// is built by [`DestinationAuthorizationValue::scheme`] as the scheme,
+/// one space, and the provider payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DestinationAuthorizationScheme {
+    bytes: [u8; DESTINATION_AUTHORIZATION_SCHEME_BYTES],
+    len: u8,
+}
+
+/// The greatest declared authorization scheme length, in bytes.
+pub const DESTINATION_AUTHORIZATION_SCHEME_BYTES: usize = 32;
+
+impl DestinationAuthorizationScheme {
+    /// Freeze one declared scheme: 1 to 32 RFC 9110 token bytes.
+    pub fn new(scheme: &str) -> Result<Self, DestinationRequestError> {
+        let bytes = scheme.as_bytes();
+        if bytes.is_empty()
+            || bytes.len() > DESTINATION_AUTHORIZATION_SCHEME_BYTES
+            || !bytes.iter().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            })
+        {
+            return Err(DestinationRequestError::InvalidAuthorization);
+        }
+        let mut frozen = [0_u8; DESTINATION_AUTHORIZATION_SCHEME_BYTES];
+        frozen[..bytes.len()].copy_from_slice(bytes);
+        Ok(Self {
+            bytes: frozen,
+            len: bytes.len() as u8,
+        })
+    }
+
+    /// The scheme as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)])
+            .expect("a frozen scheme is ASCII token bytes")
+    }
+}
+
 /// Authorization presence, scheme, and maximum rendered header bytes frozen by a template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DestinationAuthorizationTemplate {
     Forbidden,
-    Basic { max_value_bytes: usize },
-    Bearer { max_value_bytes: usize },
+    Basic {
+        max_value_bytes: usize,
+    },
+    Bearer {
+        max_value_bytes: usize,
+    },
+    /// One declared scheme the provider froze at compile; the value must
+    /// carry the same scheme.
+    Scheme {
+        scheme: DestinationAuthorizationScheme,
+        max_value_bytes: usize,
+    },
 }
 
 impl DestinationAuthorizationTemplate {
     fn max_value_bytes(self) -> usize {
         match self {
             Self::Forbidden => 0,
-            Self::Basic { max_value_bytes } | Self::Bearer { max_value_bytes } => max_value_bytes,
+            Self::Basic { max_value_bytes }
+            | Self::Bearer { max_value_bytes }
+            | Self::Scheme {
+                max_value_bytes, ..
+            } => max_value_bytes,
         }
     }
 }
@@ -1302,6 +1377,7 @@ impl DestinationBodyTemplate {
 enum DestinationAuthorizationKind {
     Basic,
     Bearer,
+    Scheme(DestinationAuthorizationScheme),
 }
 
 /// Opaque typed authorization value produced by a credential provider.
@@ -1338,6 +1414,30 @@ impl DestinationAuthorizationValue {
     /// Build a Bearer value while preserving an existing zeroizing owner.
     pub fn bearer_zeroizing(token: Zeroizing<Vec<u8>>) -> Result<Self, DestinationRequestError> {
         Self::with_prefix(DestinationAuthorizationKind::Bearer, b"Bearer ", token)
+    }
+
+    /// Build a declared-scheme value from a provider-produced token payload.
+    pub fn scheme(
+        scheme: DestinationAuthorizationScheme,
+        token: Vec<u8>,
+    ) -> Result<Self, DestinationRequestError> {
+        Self::scheme_zeroizing(scheme, Zeroizing::new(token))
+    }
+
+    /// Build a declared-scheme value while preserving an existing zeroizing owner.
+    pub fn scheme_zeroizing(
+        scheme: DestinationAuthorizationScheme,
+        token: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, DestinationRequestError> {
+        let scheme_bytes = scheme.as_str().as_bytes();
+        let mut prefix = [0_u8; DESTINATION_AUTHORIZATION_SCHEME_BYTES + 1];
+        prefix[..scheme_bytes.len()].copy_from_slice(scheme_bytes);
+        prefix[scheme_bytes.len()] = b' ';
+        Self::with_prefix(
+            DestinationAuthorizationKind::Scheme(scheme),
+            &prefix[..scheme_bytes.len() + 1],
+            token,
+        )
     }
 
     fn with_prefix(
@@ -2145,21 +2245,25 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
         if query_count + usize::from(api_key_query) > MAX_DESTINATION_REQUEST_QUERY_COMPONENTS {
             return Err(DestinationRequestError::TooManyQueryComponents);
         }
-        let authorization_kind_valid = matches!(
+        let authorization_kind_valid = match (
+            self.authorization,
+            authorization.as_ref().map(|value| value.kind),
+        ) {
+            (DestinationAuthorizationTemplate::Forbidden, None) => true,
             (
-                self.authorization,
-                authorization.as_ref().map(|value| value.kind)
-            ),
-            (DestinationAuthorizationTemplate::Forbidden, None)
-                | (
-                    DestinationAuthorizationTemplate::Basic { .. },
-                    Some(DestinationAuthorizationKind::Basic)
-                )
-                | (
-                    DestinationAuthorizationTemplate::Bearer { .. },
-                    Some(DestinationAuthorizationKind::Bearer)
-                )
-        );
+                DestinationAuthorizationTemplate::Basic { .. },
+                Some(DestinationAuthorizationKind::Basic),
+            ) => true,
+            (
+                DestinationAuthorizationTemplate::Bearer { .. },
+                Some(DestinationAuthorizationKind::Bearer),
+            ) => true,
+            (
+                DestinationAuthorizationTemplate::Scheme { scheme, .. },
+                Some(DestinationAuthorizationKind::Scheme(value_scheme)),
+            ) => value_scheme == scheme,
+            _ => false,
+        };
         if !authorization_kind_valid
             || authorization
                 .as_ref()
@@ -2356,6 +2460,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
                 format == OAuth2ClientCredentialsBodyFormat::FormClientSecretBody
             }
             DestinationAuthorizationTemplate::Bearer { .. } => false,
+            DestinationAuthorizationTemplate::Scheme { .. } => false,
         }
     }
 
@@ -2447,6 +2552,11 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             DestinationAuthorizationTemplate::Bearer { max_value_bytes } => {
                 (8..=MAX_DESTINATION_HEADER_VALUE_BYTES).contains(&max_value_bytes)
             }
+            DestinationAuthorizationTemplate::Scheme {
+                scheme,
+                max_value_bytes,
+            } => ((scheme.as_str().len() + 2)..=MAX_DESTINATION_HEADER_VALUE_BYTES)
+                .contains(&max_value_bytes),
         };
         if !authorization_bound_valid {
             return Err(DestinationRequestError::InvalidAuthorization);
@@ -2624,6 +2734,8 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
                 if value.kind == DestinationAuthorizationKind::Basic => {}
             (DestinationAuthorizationTemplate::Bearer { .. }, Some(value))
                 if value.kind == DestinationAuthorizationKind::Bearer => {}
+            (DestinationAuthorizationTemplate::Scheme { scheme, .. }, Some(value))
+                if value.kind == DestinationAuthorizationKind::Scheme(scheme) => {}
             _ => return Err(DestinationRequestError::AuthorizationShapeMismatch),
         }
         if authorization
@@ -3777,6 +3889,22 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationBody<S> {
 }
 
 impl<S: DestinationSlot> BoundedDestinationBody<S> {
+    /// The bounded response size in bytes, without exposing the bytes.
+    ///
+    /// A caller that must distinguish an empty body from a non-empty one
+    /// (an empty upstream reply is JSON null) reads the length instead of
+    /// the content.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Whether the bounded response carries no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
     #[cfg(test)]
     #[must_use]
     fn as_bytes(&self) -> &[u8] {
@@ -6029,6 +6157,217 @@ mod tests {
             DestinationRequestError::TooManyQueryComponents
         );
         assert!(!format!("{template:?}").contains("records"));
+    }
+
+    #[test]
+    fn declared_scheme_freezes_token_bytes_and_refuses_everything_else() {
+        let scheme =
+            DestinationAuthorizationScheme::new("ApiToken").expect("a plain token scheme freezes");
+        assert_eq!(scheme.as_str(), "ApiToken");
+        assert!(DestinationAuthorizationScheme::new("").is_err());
+        assert!(DestinationAuthorizationScheme::new("has space").is_err());
+        assert!(DestinationAuthorizationScheme::new("Auth= XS").is_err());
+        assert!(DestinationAuthorizationScheme::new("scheme\n").is_err());
+        assert!(DestinationAuthorizationScheme::new(&"a".repeat(33)).is_err());
+        let longest = DestinationAuthorizationScheme::new(&"a".repeat(32))
+            .expect("the 32-byte ceiling is admissible");
+        assert_eq!(longest.as_str(), "a".repeat(32));
+    }
+
+    #[test]
+    fn declared_scheme_value_builds_the_wire_form_and_stays_redacted() {
+        let scheme =
+            DestinationAuthorizationScheme::new("ApiToken").expect("declared scheme freezes");
+        let value = DestinationAuthorizationValue::scheme(scheme, b"secret-payload".to_vec())
+            .expect("a payload under the ceiling renders");
+        assert_eq!(value.value.as_slice(), b"ApiToken secret-payload");
+        assert_eq!(
+            format!("{value:?}"),
+            "DestinationAuthorizationValue([REDACTED])"
+        );
+        assert!(DestinationAuthorizationValue::scheme(scheme, Vec::new()).is_err());
+        assert!(DestinationAuthorizationValue::scheme(
+            scheme,
+            vec![b'a'; MAX_DESTINATION_HEADER_VALUE_BYTES]
+        )
+        .is_err());
+        let zeroized = DestinationAuthorizationValue::scheme_zeroizing(
+            scheme,
+            Zeroizing::new(b"secret-payload".to_vec()),
+        )
+        .expect("the zeroizing constructor renders the same wire form");
+        assert_eq!(zeroized.value.as_slice(), b"ApiToken secret-payload");
+    }
+
+    #[test]
+    fn declared_scheme_template_accepts_only_its_own_scheme() {
+        let scheme =
+            DestinationAuthorizationScheme::new("ApiToken").expect("declared scheme freezes");
+        let script = DataDestinationRequestTemplate::new_script_send(
+            SideEffectingSendMethod::Get(
+                QueryStringContentAcknowledgement::acknowledge_content_in_access_logs(),
+            ),
+            "/records/**",
+            &[],
+            DestinationAuthorizationTemplate::Scheme {
+                scheme,
+                max_value_bytes: 64,
+            },
+            None,
+            None,
+            128,
+        )
+        .expect("a declared-scheme script template validates");
+        script
+            .render_script(
+                "/records/42",
+                &[],
+                Some(
+                    DestinationAuthorizationValue::scheme(scheme, b"payload".to_vec())
+                        .expect("typed provider value"),
+                ),
+                None,
+                None,
+                None,
+            )
+            .expect("the declared scheme renders on the script path");
+        assert_eq!(
+            script
+                .render_script(
+                    "/records/42",
+                    &[],
+                    Some(
+                        DestinationAuthorizationValue::bearer(b"payload".to_vec())
+                            .expect("typed provider value"),
+                    ),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap_err(),
+            DestinationRequestError::InvalidAuthorization
+        );
+        let other = DestinationAuthorizationScheme::new("Token").expect("the other scheme freezes");
+        assert_eq!(
+            script
+                .render_script(
+                    "/records/42",
+                    &[],
+                    Some(
+                        DestinationAuthorizationValue::scheme(other, b"payload".to_vec())
+                            .expect("typed provider value"),
+                    ),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap_err(),
+            DestinationRequestError::InvalidAuthorization
+        );
+        // An over-tight bound refuses the value at the render, where the
+        // script path applies the template's bound.
+        let tight = DataDestinationRequestTemplate::new_script_send(
+            SideEffectingSendMethod::Get(
+                QueryStringContentAcknowledgement::acknowledge_content_in_access_logs(),
+            ),
+            "/records/**",
+            &[],
+            DestinationAuthorizationTemplate::Scheme {
+                scheme,
+                max_value_bytes: 9,
+            },
+            None,
+            None,
+            128,
+        )
+        .expect("an over-tight bound still compiles");
+        assert_eq!(
+            tight
+                .render_script(
+                    "/records/42",
+                    &[],
+                    Some(
+                        DestinationAuthorizationValue::scheme(scheme, b"payload".to_vec())
+                            .expect("typed provider value"),
+                    ),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap_err(),
+            DestinationRequestError::InvalidAuthorization
+        );
+        // The typed render path answers the same rule.
+        let typed = DataDestinationRequestTemplate::new(
+            DestinationMethod::Get,
+            "/records",
+            &[],
+            &[],
+            DestinationAuthorizationTemplate::Scheme {
+                scheme,
+                max_value_bytes: 64,
+            },
+            DestinationBodyTemplate::Forbidden,
+            128,
+        )
+        .expect("a declared-scheme typed template validates");
+        typed
+            .render(
+                &[],
+                &[],
+                Some(
+                    DestinationAuthorizationValue::scheme(scheme, b"payload".to_vec())
+                        .expect("typed provider value"),
+                ),
+                None,
+            )
+            .expect("the declared scheme renders on the typed path");
+        assert_eq!(
+            typed
+                .render(
+                    &[],
+                    &[],
+                    Some(
+                        DestinationAuthorizationValue::bearer(b"payload".to_vec())
+                            .expect("typed provider value"),
+                    ),
+                    None,
+                )
+                .unwrap_err(),
+            DestinationRequestError::AuthorizationShapeMismatch
+        );
+        assert_eq!(
+            DataDestinationRequestTemplate::new(
+                DestinationMethod::Get,
+                "/records",
+                &[],
+                &[],
+                DestinationAuthorizationTemplate::Scheme {
+                    scheme,
+                    max_value_bytes: 9,
+                },
+                DestinationBodyTemplate::Forbidden,
+                128,
+            )
+            .unwrap_err(),
+            DestinationRequestError::InvalidAuthorization
+        );
+    }
+
+    #[test]
+    fn bounded_body_exposes_only_its_length() {
+        let empty = BoundedDestinationBody::<DataDestination> {
+            bytes: Zeroizing::new(Vec::new()),
+            slot: PhantomData,
+        };
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+        let filled = BoundedDestinationBody::<DataDestination> {
+            bytes: Zeroizing::new(b"{}".to_vec()),
+            slot: PhantomData,
+        };
+        assert!(!filled.is_empty());
+        assert_eq!(filled.len(), 2);
     }
 
     #[test]

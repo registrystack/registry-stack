@@ -30,17 +30,18 @@ use std::time::Duration;
 use registry_adapter_core::ErrorClass;
 use registry_adapter_core::{
     AdapterRuntimeConfig, Cidr, Endpoint, EndpointAuthentication, EndpointBinding,
+    MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::destination::json::decode_script_json;
 use registry_platform_httputil::destination::{
-    DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
-    DestinationAuthorizationValue, DestinationProfile, DestinationRequestError,
-    DestinationResponseError, DestinationResponseHeaderError, DestinationSendError,
-    DestinationTlsMaterialError, QueryStringContentAcknowledgement, ScriptRequestBodyFormat,
-    SideEffectingSendMethod, MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_DESTINATION_OPERATION_TIMEOUT,
-    MAX_DESTINATION_REQUEST_BODY_BYTES, MAX_DESTINATION_REQUEST_HEADER_BYTES,
-    MAX_DESTINATION_TARGET_BYTES,
+    DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationScheme,
+    DestinationAuthorizationTemplate, DestinationAuthorizationValue, DestinationDeliveryCertainty,
+    DestinationProfile, DestinationRequestError, DestinationResponseError,
+    DestinationResponseHeaderError, DestinationSendError, DestinationTlsMaterialError,
+    QueryStringContentAcknowledgement, ScriptRequestBodyFormat, SideEffectingSendMethod,
+    MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_DESTINATION_REQUEST_BODY_BYTES,
+    MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_yaml::ExternalId;
 use serde_json::Value;
@@ -90,9 +91,6 @@ pub enum EgressFault {
     Request(DestinationRequestError),
     /// The binding's configured TLS material was refused by the platform.
     DestinationTls(DestinationTlsMaterialError),
-    /// The endpoint's declared static-authorization scheme cannot
-    /// travel on a data send, which speaks Basic and Bearer.
-    SchemeUnsupported,
     /// The endpoint's kind acquires a token, and this build does not
     /// wire the token send yet: the deployment refuses to start, so the
     /// gap is visible at startup and never at a first request.
@@ -116,9 +114,6 @@ impl fmt::Display for EgressFault {
             Self::Destination(fault) => fault.fmt(formatter),
             Self::Request(fault) => fault.fmt(formatter),
             Self::DestinationTls(fault) => fault.fmt(formatter),
-            Self::SchemeUnsupported => formatter.write_str(
-                "the endpoint's static-authorization scheme cannot travel on a data send",
-            ),
             Self::TokenSendUnwired => {
                 formatter.write_str("the endpoint's token send is not wired in this build")
             }
@@ -192,6 +187,10 @@ pub enum EgressRefusal {
     /// The credential for the send is missing or not in the shape the
     /// destination authorization carries.
     Credential,
+    /// The send's declared attempt timeout is above the maximum the
+    /// platform accepts; the send refuses rather than the engine
+    /// silently shortening what the operator declared.
+    AttemptAboveMaximum,
 }
 
 impl EgressRefusal {
@@ -212,14 +211,17 @@ impl fmt::Display for EgressRefusal {
             Self::Credential => {
                 formatter.write_str("the send's credential is not in a transportable shape")
             }
+            Self::AttemptAboveMaximum => formatter.write_str(
+                "the declared attempt timeout is above the maximum the platform accepts",
+            ),
         }
     }
 }
 
 /// One upstream failure inside an admitted exchange: a catchable
-/// `upstream` class, the status when the upstream produced one, and the
-/// reply body when it was JSON within the bound.
-#[derive(Debug)]
+/// `upstream` class, the status when the upstream produced one, the
+/// reply body when it was JSON within the bound, and whether the
+/// request may have reached the destination.
 pub struct UpstreamFailure {
     /// The catchable class the failure raises.
     pub class: ErrorClass,
@@ -228,15 +230,47 @@ pub struct UpstreamFailure {
     /// The reply body, decoded when it was strict JSON within the
     /// bound, so a clause can read a source's error detail.
     pub body: Option<Value>,
+    /// Whether the request may have been delivered, so an operator
+    /// reading the journal can tell a maybe-sent POST from one the
+    /// destination never saw.
+    pub certainty: DestinationDeliveryCertainty,
 }
 
 impl UpstreamFailure {
-    fn new(class: ErrorClass, status: Option<u16>, body: Option<Value>) -> Self {
+    fn new(
+        class: ErrorClass,
+        status: Option<u16>,
+        body: Option<Value>,
+        certainty: DestinationDeliveryCertainty,
+    ) -> Self {
         Self {
             class,
             status,
             body,
+            certainty,
         }
+    }
+
+    /// The static journal name of the failure's delivery certainty, a
+    /// closed fact the journal event carries.
+    #[must_use]
+    pub fn certainty_journal_name(&self) -> &'static str {
+        match self.certainty {
+            DestinationDeliveryCertainty::MaybeSent => "maybe-sent",
+            DestinationDeliveryCertainty::NotSent => "not-sent",
+        }
+    }
+}
+
+impl fmt::Debug for UpstreamFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UpstreamFailure")
+            .field("class", &self.class)
+            .field("status", &self.status)
+            .field("certainty", &self.certainty)
+            .field("body", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -250,14 +284,14 @@ impl fmt::Display for UpstreamFailure {
         if let Some(status) = self.status {
             write!(formatter, " (status {status})")?;
         }
-        Ok(())
+        write!(formatter, "; {}", self.certainty_journal_name())
     }
 }
 
-/// One send's reply: the status inside the reviewed range, the decoded
-/// body (an empty body is JSON null), and the declared response headers
-/// present on the response.
-#[derive(Debug)]
+/// One send's reply: the status (always inside the reviewed range,
+/// and outside it too when the send opted out of the throw), the
+/// decoded body (an empty body is JSON null), and the declared response
+/// headers present on the response.
 pub struct SentReply {
     /// The upstream status.
     pub status: u16,
@@ -267,13 +301,34 @@ pub struct SentReply {
     pub headers: ResponseHeaders,
 }
 
-/// The method one data send declares.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SendMethod {
+impl fmt::Debug for SentReply {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SentReply")
+            .field("status", &self.status)
+            .field("body", &"[REDACTED]")
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+/// The shape one `http` send declares: a read travels in the query
+/// string and carries no body; a side effect travels in the body. The
+/// shape makes a body on a GET unrepresentable, and the frozen template
+/// refuses a POST without a body.
+#[derive(Debug)]
+pub enum SendShape<'a> {
     /// A read; the send travels in the query string.
     Get,
     /// A side effect; the send travels in the body.
-    Post,
+    Post(SendBody<'a>),
 }
 
 /// The body codec one POST send carries.
@@ -286,7 +341,6 @@ pub enum SendBodyFormat {
 }
 
 /// The request body of one POST send.
-#[derive(Debug)]
 pub struct SendBody<'a> {
     /// The body codec; the transport owns the content type.
     pub format: SendBodyFormat,
@@ -294,8 +348,17 @@ pub struct SendBody<'a> {
     pub bytes: &'a [u8],
 }
 
+impl fmt::Debug for SendBody<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SendBody")
+            .field("format", &self.format)
+            .field("bytes", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// What one `http` send carries to the egress boundary.
-#[derive(Debug)]
 pub struct OutboundSend<'a> {
     /// The send's absolute target: the filled `path` under the
     /// endpoint's base URL, or the source's pinned `httpUri` link.
@@ -303,17 +366,17 @@ pub struct OutboundSend<'a> {
     pub link: &'a str,
     /// The exchange headers on this send; only listed names travel.
     pub exchange_headers: &'a [(String, String)],
-    /// The method the send declares.
-    pub method: SendMethod,
-    /// The request body, for a POST send.
-    pub body: Option<SendBody<'a>>,
+    /// The shape the send declares: a GET without a body, or a POST
+    /// with one.
+    pub shape: SendShape<'a>,
     /// The credential [`EndpointEgress::authorize`] produced for this
     /// send, if the endpoint's kind produces one.
     pub authorization: Option<&'a AuthHeader>,
     /// The whole outbound attempt's deadline, from the endpoint's
-    /// declared attempt timeout. The platform's one-operation ceiling
-    /// caps what the frozen policy accepts; a declared attempt above it
-    /// is truncated, never raised.
+    /// declared attempt timeout. The platform's one-operation ceiling is
+    /// the same bound `attemptTimeoutMilliseconds` is checked against at
+    /// authoring; a declared attempt above it is refused, never
+    /// shortened.
     pub attempt: Duration,
     /// The response byte bound, from the endpoint's declared maximum.
     pub maximum_response_bytes: usize,
@@ -324,6 +387,32 @@ pub struct OutboundSend<'a> {
     pub throw_exception_on_failure: bool,
 }
 
+impl fmt::Debug for OutboundSend<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OutboundSend")
+            .field("link", &self.link)
+            .field(
+                "exchange_headers",
+                &self
+                    .exchange_headers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .field("shape", &self.shape)
+            .field("authorization", &self.authorization.map(AuthHeader::name))
+            .field("attempt", &self.attempt)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field("ok_status_range", &self.ok_status_range)
+            .field(
+                "throw_exception_on_failure",
+                &self.throw_exception_on_failure,
+            )
+            .finish()
+    }
+}
+
 /// One endpoint's outbound state, compiled once at startup.
 pub struct EndpointEgress {
     endpoint: ExternalId,
@@ -332,6 +421,7 @@ pub struct EndpointEgress {
     origin: PinnedOrigin,
     policy: DataDestinationPolicy,
     request_allowlist: Vec<String>,
+    authorization_scheme: Option<DestinationAuthorizationScheme>,
     get_template: DataDestinationRequestTemplate,
     post_template: DataDestinationRequestTemplate,
 }
@@ -364,8 +454,9 @@ impl EndpointEgress {
             .map(|name| name.as_str().to_owned())
             .collect();
         let request_names: Vec<&str> = request_allowlist.iter().map(String::as_str).collect();
-        let (authorization, api_key) = authorization_slots(&declared.authentication)
-            .map_err(|()| EgressFault::SchemeUnsupported)?;
+        let (authorization, api_key, authorization_scheme) =
+            authorization_slots(plan.declared_scheme(), &declared.authentication)
+                .map_err(EgressFault::Request)?;
         let api_key_header = api_key.map(|name| (name, MAX_DESTINATION_HEADER_VALUE_BYTES));
         let path_rule = path_rule(&origin);
         let get_template = script_template(
@@ -402,6 +493,7 @@ impl EndpointEgress {
             origin,
             policy,
             request_allowlist,
+            authorization_scheme,
             get_template,
             post_template,
         })
@@ -503,6 +595,12 @@ impl EndpointEgress {
     /// refuses, [`EgressError::Upstream`] for every failure inside an
     /// admitted exchange.
     pub async fn send(&self, send: OutboundSend<'_>) -> Result<SentReply, EgressError> {
+        // A declared attempt above the ceiling the authoring check
+        // bounds `attemptTimeoutMilliseconds` with is refused, never
+        // shortened (`products/adapter/CONCEPT.md` section 8.8).
+        if send.attempt > Duration::from_millis(MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS) {
+            return Err(EgressError::Refused(EgressRefusal::AttemptAboveMaximum));
+        }
         let outbound = self
             .filter
             .outbound(
@@ -521,20 +619,19 @@ impl EndpointEgress {
         let (authorization, api_key) = self
             .credential_slots(send.authorization)
             .map_err(EgressError::Refused)?;
-        let (body_format, body) = match (send.method, send.body) {
-            (SendMethod::Get, _) => (None, None),
-            (SendMethod::Post, Some(body)) => {
+        let (template, body_format, body) = match &send.shape {
+            SendShape::Get => (&self.get_template, None, None),
+            SendShape::Post(body) => {
                 let format = match body.format {
                     SendBodyFormat::Json => ScriptRequestBodyFormat::Json,
                     SendBodyFormat::Form => ScriptRequestBodyFormat::Form,
                 };
-                (Some(format), Some(Zeroizing::new(body.bytes.to_vec())))
+                (
+                    &self.post_template,
+                    Some(format),
+                    Some(Zeroizing::new(body.bytes.to_vec())),
+                )
             }
-            (SendMethod::Post, None) => (None, None),
-        };
-        let template = match send.method {
-            SendMethod::Get => &self.get_template,
-            SendMethod::Post => &self.post_template,
         };
         let header_values: Vec<(&str, &[u8])> = outbound
             .iter()
@@ -552,11 +649,9 @@ impl EndpointEgress {
             .map_err(EgressRefusal::Request)
             .map_err(EgressError::Refused)?;
 
-        // The platform's one-operation ceiling caps a frozen send.
-        let remaining = send.attempt.min(MAX_DESTINATION_OPERATION_TIMEOUT);
         let reply = self
             .policy
-            .send(rendered, remaining)
+            .send(rendered, send.attempt)
             .await
             .map_err(destination_send_outcome)?;
 
@@ -569,6 +664,7 @@ impl EndpointEgress {
                 ErrorClass::UpstreamRedirect,
                 Some(status),
                 None,
+                DestinationDeliveryCertainty::MaybeSent,
             )));
         }
 
@@ -586,6 +682,7 @@ impl EndpointEgress {
                 inbound_header_outcome(&fault),
                 Some(status),
                 None,
+                DestinationDeliveryCertainty::MaybeSent,
             ))
         })?;
 
@@ -597,30 +694,64 @@ impl EndpointEgress {
                     response_body_outcome(&fault),
                     Some(status),
                     None,
+                    DestinationDeliveryCertainty::MaybeSent,
                 ))
             })?;
-        let body = decode_script_json(body).map_or(Value::Null, |decoded| decoded.into_parts().0);
 
         let (low, high) = send.ok_status_range;
-        if status < low || status > high {
+        let out_of_range = status < low || status > high;
+        // An empty body is JSON null; a non-JSON body raises
+        // `upstream.malformed`, also under `throwExceptionOnFailure:
+        // false` (`products/adapter/CONCEPT.md` section 8.11). Only an
+        // out-of-range status under the throw flag answers
+        // `upstream.http` without a decoded body, because the route is
+        // ending anyway and the body never decoded.
+        let decoded = if body.is_empty() {
+            Value::Null
+        } else {
+            match decode_script_json(body) {
+                Ok(decoded) => decoded.into_parts().0,
+                Err(_) => {
+                    return Err(EgressError::Upstream(UpstreamFailure::new(
+                        if out_of_range && send.throw_exception_on_failure {
+                            ErrorClass::UpstreamHttp
+                        } else {
+                            ErrorClass::UpstreamMalformed
+                        },
+                        Some(status),
+                        None,
+                        DestinationDeliveryCertainty::MaybeSent,
+                    )));
+                }
+            }
+        };
+
+        // Under the throw flag an out-of-range status raises
+        // `upstream.http` carrying the decoded body; under
+        // `throwExceptionOnFailure: false` the reply returns as it is
+        // and the route reads the status itself (CONCEPT 8.11).
+        if out_of_range && send.throw_exception_on_failure {
             return Err(EgressError::Upstream(UpstreamFailure::new(
                 ErrorClass::UpstreamHttp,
                 Some(status),
-                Some(body),
+                Some(decoded),
+                DestinationDeliveryCertainty::MaybeSent,
             )));
         }
         Ok(SentReply {
             status,
-            body,
+            body: decoded,
             headers,
         })
     }
 
-    /// Split the produced credential into the destination
-    /// authorization's slots: the injected authorization slot for the
-    /// Basic and Bearer kinds, the API-key slot for the declared header.
-    /// The platform appends both after the exchange's selected headers,
-    /// so no exchange entry can shadow a credential.
+    /// Build the destination authorization's slots from the produced
+    /// credential: the injected authorization slot for the kinds that
+    /// speak one, the API-key slot for the declared header. The plan's
+    /// kind and its declared scheme decide the prefix, so the header's
+    /// payload is never parsed for a scheme; the platform appends both
+    /// slots after the exchange's selected headers, so no exchange entry
+    /// can shadow a credential.
     fn credential_slots(
         &self,
         authorization: Option<&AuthHeader>,
@@ -636,22 +767,27 @@ impl EndpointEgress {
             (_, None) => return Err(EgressRefusal::Credential),
             (_, Some(header)) => header,
         };
-        let (scheme, payload) =
-            scheme_payload(header.value().as_bytes()).ok_or(EgressRefusal::Credential)?;
-        let value = match scheme {
-            Scheme::Basic => DestinationAuthorizationValue::basic(payload.to_vec()),
-            Scheme::Bearer => DestinationAuthorizationValue::bearer(payload.to_vec()),
-        }
-        .map_err(|_| EgressRefusal::Credential)?;
+        let payload = header.value().as_bytes();
+        let value = match self.plan.kind() {
+            // An OAuth2 kind never reaches a data send while the token
+            // send is unwired: the load refuses the plan, and even a
+            // wired plan could not serve a header here without a token.
+            AuthKind::Oauth2ClientCredentials | AuthKind::Oauth2PrivateKeyJwt => {
+                DestinationAuthorizationValue::bearer(payload.to_vec())
+            }
+            AuthKind::Basic => DestinationAuthorizationValue::basic(payload.to_vec()),
+            AuthKind::StaticAuthorization => {
+                let scheme = self.authorization_scheme.ok_or(EgressRefusal::Credential)?;
+                DestinationAuthorizationValue::scheme_zeroizing(
+                    scheme,
+                    Zeroizing::new(payload.to_vec()),
+                )
+            }
+            _ => return Err(EgressRefusal::Credential),
+        };
+        let value = value.map_err(|_| EgressRefusal::Credential)?;
         Ok((Some(value), None))
     }
-}
-
-/// The authorization scheme one produced header value carries, and the
-/// payload after it.
-enum Scheme {
-    Basic,
-    Bearer,
 }
 
 /// The destination authorization's two credential slots: the injected
@@ -661,40 +797,34 @@ type CredentialSlots = (
     Option<Zeroizing<Vec<u8>>>,
 );
 
-/// Split one produced authorization value into its scheme and payload;
-/// `None` when the value carries no known scheme prefix or an empty
-/// payload.
-fn scheme_payload(value: &[u8]) -> Option<(Scheme, &[u8])> {
-    let space = value.iter().position(|byte| *byte == b' ')?;
-    let (scheme, rest) = value.split_at(space);
-    let payload = &rest[1..];
-    let scheme = if scheme.eq_ignore_ascii_case(b"basic") {
-        Scheme::Basic
-    } else if scheme.eq_ignore_ascii_case(b"bearer") {
-        Scheme::Bearer
-    } else {
-        return None;
-    };
-    if payload.is_empty() {
-        return None;
-    }
-    Some((scheme, payload))
-}
-
 /// The authorization and API-key slots a template freezes, from the
-/// declared authentication kind. `Err` when the declared
-/// static-authorization scheme is not Bearer, the only scheme a data
-/// send carries.
-fn authorization_slots(
-    authentication: &EndpointAuthentication,
-) -> Result<(DestinationAuthorizationTemplate, Option<&str>), ()> {
+/// declared authentication kind and the plan's declared scheme. The
+/// scheme is declared configuration: a static authorization freezes its
+/// own scheme into the destination authorization, whatever scheme the
+/// operator declared, and a produced header never carries one to parse.
+/// `Err` when the declared scheme is not 1 to 32 HTTP token bytes, the
+/// bound the platform's declared-scheme template carries.
+fn authorization_slots<'a>(
+    declared_scheme: Option<&'a str>,
+    authentication: &'a EndpointAuthentication,
+) -> Result<
+    (
+        DestinationAuthorizationTemplate,
+        Option<&'a str>,
+        Option<DestinationAuthorizationScheme>,
+    ),
+    DestinationRequestError,
+> {
     let maximum = MAX_DESTINATION_HEADER_VALUE_BYTES;
     match authentication {
-        EndpointAuthentication::None {} => Ok((DestinationAuthorizationTemplate::Forbidden, None)),
+        EndpointAuthentication::None {} => {
+            Ok((DestinationAuthorizationTemplate::Forbidden, None, None))
+        }
         EndpointAuthentication::Basic {} => Ok((
             DestinationAuthorizationTemplate::Basic {
                 max_value_bytes: maximum,
             },
+            None,
             None,
         )),
         EndpointAuthentication::Oauth2ClientCredentials {}
@@ -703,22 +833,24 @@ fn authorization_slots(
                 max_value_bytes: maximum,
             },
             None,
+            None,
         )),
-        EndpointAuthentication::StaticAuthorization { scheme } => {
-            let declared = scheme.as_deref().unwrap_or("bearer");
-            if !declared.eq_ignore_ascii_case("bearer") {
-                return Err(());
-            }
+        EndpointAuthentication::StaticAuthorization { .. } => {
+            let scheme = declared_scheme.ok_or(DestinationRequestError::InvalidAuthorization)?;
+            let frozen = DestinationAuthorizationScheme::new(scheme)?;
             Ok((
-                DestinationAuthorizationTemplate::Bearer {
+                DestinationAuthorizationTemplate::Scheme {
+                    scheme: frozen,
                     max_value_bytes: maximum,
                 },
                 None,
+                Some(frozen),
             ))
         }
         EndpointAuthentication::StaticApiKey { header_name } => Ok((
             DestinationAuthorizationTemplate::Forbidden,
             Some(header_name.as_str()),
+            None,
         )),
     }
 }
@@ -836,16 +968,36 @@ pub(crate) fn partition_send_fault(fault: DestinationSendError) -> SendFaultClas
 /// stages are the catchable `upstream.connection`, a post-connect
 /// deadline is `upstream.timeout`, an unusable head is
 /// `upstream.malformed`, and an over-bound head is `upstream.too-large`.
+/// Each failure carries its delivery certainty from the platform's own
+/// classification, so the journal can tell a maybe-sent POST from a
+/// request the destination never saw.
 fn destination_send_outcome(fault: DestinationSendError) -> EgressError {
-    let failure = |class| EgressError::Upstream(UpstreamFailure::new(class, None, None));
+    let failure = |class, certainty| {
+        EgressError::Upstream(UpstreamFailure::new(class, None, None, certainty))
+    };
     match partition_send_fault(fault) {
         SendFaultClass::ResolutionUnanswered
         | SendFaultClass::DeadlineBeforeConnect
-        | SendFaultClass::ConnectFailed
-        | SendFaultClass::ExchangeFailed => failure(ErrorClass::UpstreamConnection),
-        SendFaultClass::DeadlineAfterConnect => failure(ErrorClass::UpstreamTimeout),
-        SendFaultClass::ResponseHeadUnusable => failure(ErrorClass::UpstreamMalformed),
-        SendFaultClass::ResponseHeadOverBound => failure(ErrorClass::UpstreamTooLarge),
+        | SendFaultClass::ConnectFailed => failure(
+            ErrorClass::UpstreamConnection,
+            DestinationDeliveryCertainty::NotSent,
+        ),
+        SendFaultClass::ExchangeFailed => failure(
+            ErrorClass::UpstreamConnection,
+            DestinationDeliveryCertainty::MaybeSent,
+        ),
+        SendFaultClass::DeadlineAfterConnect => failure(
+            ErrorClass::UpstreamTimeout,
+            DestinationDeliveryCertainty::MaybeSent,
+        ),
+        SendFaultClass::ResponseHeadUnusable => failure(
+            ErrorClass::UpstreamMalformed,
+            DestinationDeliveryCertainty::MaybeSent,
+        ),
+        SendFaultClass::ResponseHeadOverBound => failure(
+            ErrorClass::UpstreamTooLarge,
+            DestinationDeliveryCertainty::MaybeSent,
+        ),
         SendFaultClass::Refused(fault) => EgressError::Refused(EgressRefusal::Destination {
             journal_name: destination_refusal_name(&fault),
             fault,
@@ -893,6 +1045,7 @@ fn upstream_header_outcome(_fault: &DestinationResponseHeaderError, status: u16)
         ErrorClass::UpstreamMalformed,
         Some(status),
         None,
+        DestinationDeliveryCertainty::MaybeSent,
     ))
 }
 
@@ -980,8 +1133,12 @@ mod tests {
 
     /// Every platform send fault, all unit variants, in declaration
     /// order: the partition table below is asserted over the complete
-    /// list, so a variant the platform adds breaks this test instead of
-    /// silently taking the refusal arm.
+    /// list, so a variant the platform adds breaks this test at the
+    /// array's length instead of silently passing. The const array
+    /// itself does not refuse anything; the compile-breaking checks are
+    /// the partition's exhaustive match (a new variant lands in the
+    /// refusal arm and is caught by this table) and the closed journal
+    /// name mapping, whose non-exhaustive match refuses to compile.
     const EVERY_SEND_FAULT: [DestinationSendError; 23] = [
         DestinationSendError::InvalidRemainingTimeout,
         DestinationSendError::InvalidFrozenPolicy,
@@ -1017,104 +1174,142 @@ mod tests {
     /// partition when the token send unit wires it; no second copy.
     #[test]
     fn the_one_partition_classifies_every_send_fault() {
-        // The data class each partition class raises.
-        let data_class = |fault: &DestinationSendError| destination_send_outcome(*fault).class();
-        let expected: [(&DestinationSendError, ErrorClass); 23] = [
+        // The data class and delivery certainty each partition class
+        // raises; only an established connection is ever maybe-sent.
+        let outcome = |fault: &DestinationSendError| match destination_send_outcome(*fault) {
+            EgressError::Upstream(failure) => (failure.class, failure.certainty),
+            // A refusal never left the boundary; the platform's own
+            // classification says the same.
+            EgressError::Refused(_) => (ErrorClass::EgressRefused, fault.delivery_certainty()),
+        };
+        let expected: [(
+            &DestinationSendError,
+            ErrorClass,
+            DestinationDeliveryCertainty,
+        ); 23] = [
             (
                 &DestinationSendError::InvalidRemainingTimeout,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::InvalidFrozenPolicy,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::InvalidFrozenRequest,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::ResolutionFailed,
                 ErrorClass::UpstreamConnection,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::ResolutionCapacityUnavailable,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::TooManyResolverAnswers,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::NoResolverAnswers,
                 ErrorClass::UpstreamConnection,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::ResolverPortMismatch,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::ResolverAddressFamilyMismatch,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::LiteralOriginMismatch,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::CloudMetadataDenied,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::AlwaysDeniedAddress,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::PrivateAddressNotAllowed,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::NonGlobalAddressDenied,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::DevelopmentAddressDenied,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::TlsMaterialUnavailable,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::ClientBuildFailed,
                 ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::DeadlineExceeded,
                 ErrorClass::UpstreamConnection,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::TransportFailed,
                 ErrorClass::UpstreamConnection,
+                DestinationDeliveryCertainty::NotSent,
             ),
             (
                 &DestinationSendError::DeadlineExceededAfterConnect,
                 ErrorClass::UpstreamTimeout,
+                DestinationDeliveryCertainty::MaybeSent,
             ),
             (
                 &DestinationSendError::TransportFailedAfterConnect,
                 ErrorClass::UpstreamConnection,
+                DestinationDeliveryCertainty::MaybeSent,
             ),
             (
                 &DestinationSendError::TooManyResponseHeaders,
                 ErrorClass::UpstreamMalformed,
+                DestinationDeliveryCertainty::MaybeSent,
             ),
             (
                 &DestinationSendError::ResponseHeaderBytesExceeded,
                 ErrorClass::UpstreamTooLarge,
+                DestinationDeliveryCertainty::MaybeSent,
             ),
         ];
-        for (fault, class) in expected {
-            assert_eq!(data_class(fault), class, "{fault:?} on the data path");
+        for (fault, class, certainty) in expected {
+            let (actual_class, actual_certainty) = outcome(fault);
+            assert_eq!(actual_class, class, "{fault:?} on the data path");
+            assert_eq!(
+                actual_certainty, certainty,
+                "{fault:?}'s delivery certainty"
+            );
         }
         // The partition's refusal arm carries the fault untouched, so
         // the journal name is available on the refusal path.
@@ -1135,24 +1330,20 @@ mod tests {
         const MARKER: &str = "c4b-marker-9f31ab";
         let names = [
             (
-                destination_refusal_name(&DestinationSendError::PrivateAddressNotAllowed),
-                "private-address-not-allowed",
+                destination_refusal_name(&DestinationSendError::InvalidRemainingTimeout),
+                "invalid-remaining-timeout",
             ),
             (
-                destination_refusal_name(&DestinationSendError::CloudMetadataDenied),
-                "cloud-metadata-denied",
+                destination_refusal_name(&DestinationSendError::InvalidFrozenPolicy),
+                "invalid-frozen-policy",
             ),
             (
-                destination_refusal_name(&DestinationSendError::TlsMaterialUnavailable),
-                "tls-material-unavailable",
+                destination_refusal_name(&DestinationSendError::InvalidFrozenRequest),
+                "invalid-frozen-request",
             ),
             (
-                destination_refusal_name(&DestinationSendError::ClientBuildFailed),
-                "client-build-failed",
-            ),
-            (
-                destination_refusal_name(&DestinationSendError::ResolverPortMismatch),
-                "resolver-port-mismatch",
+                destination_refusal_name(&DestinationSendError::ResolutionFailed),
+                "resolution-failed",
             ),
             (
                 destination_refusal_name(&DestinationSendError::ResolutionCapacityUnavailable),
@@ -1163,18 +1354,79 @@ mod tests {
                 "too-many-resolver-answers",
             ),
             (
-                destination_refusal_name(&DestinationSendError::ResolverAddressFamilyMismatch),
-                "resolver-address-family-mismatch",
-            ),
-            (
                 destination_refusal_name(&DestinationSendError::NoResolverAnswers),
                 "no-resolver-answers",
             ),
             (
-                destination_refusal_name(&DestinationSendError::ResolutionFailed),
-                "resolution-failed",
+                destination_refusal_name(&DestinationSendError::ResolverPortMismatch),
+                "resolver-port-mismatch",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::ResolverAddressFamilyMismatch),
+                "resolver-address-family-mismatch",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::LiteralOriginMismatch),
+                "literal-origin-mismatch",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::CloudMetadataDenied),
+                "cloud-metadata-denied",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::AlwaysDeniedAddress),
+                "always-denied-address",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::PrivateAddressNotAllowed),
+                "private-address-not-allowed",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::NonGlobalAddressDenied),
+                "non-global-address-denied",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::DevelopmentAddressDenied),
+                "development-address-denied",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::TlsMaterialUnavailable),
+                "tls-material-unavailable",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::ClientBuildFailed),
+                "client-build-failed",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::DeadlineExceeded),
+                "deadline-exceeded",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::TransportFailed),
+                "transport-failed",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::DeadlineExceededAfterConnect),
+                "deadline-exceeded-after-connect",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::TransportFailedAfterConnect),
+                "transport-failed-after-connect",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::TooManyResponseHeaders),
+                "too-many-response-headers",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::ResponseHeaderBytesExceeded),
+                "response-header-bytes-exceeded",
             ),
         ];
+        assert_eq!(
+            names.len(),
+            EVERY_SEND_FAULT.len(),
+            "every variant's journal name is asserted verbatim"
+        );
         for (actual, expected) in names {
             assert_eq!(actual, expected, "the journal name is the closed mapping's");
         }
@@ -1219,24 +1471,41 @@ mod tests {
         );
     }
 
-    /// A produced authorization value splits into its scheme and
-    /// payload, case-insensitively, and a value without a known scheme
-    /// or with an empty payload is refused.
+    /// The declared-scheme slots a static authorization freezes: the
+    /// plan's declared scheme travels into the template whatever it
+    /// spells, and a scheme outside the platform's token bound refuses
+    /// the load instead of failing closed at the first send.
     #[test]
-    fn produced_values_split_into_scheme_and_payload() {
-        let (scheme, payload) = scheme_payload(b"Basic dXNlcjpwYXNz").expect("basic value");
-        assert!(matches!(scheme, Scheme::Basic));
-        assert_eq!(payload, b"dXNlcjpwYXNz");
-        let (scheme, payload) = scheme_payload(b"Bearer token-1").expect("bearer value");
-        assert!(matches!(scheme, Scheme::Bearer));
-        assert_eq!(payload, b"token-1");
-        let (scheme, _) = scheme_payload(b"bearer token-2").expect("lowercase bearer");
-        assert!(matches!(scheme, Scheme::Bearer));
-        assert!(
-            scheme_payload(b"DMZToken token-3").is_none(),
-            "an unknown scheme"
+    fn declared_scheme_slots_carry_the_declared_scheme() {
+        let authentication = EndpointAuthentication::StaticAuthorization { scheme: None };
+        let (template, api_key, frozen) =
+            authorization_slots(Some("Bearer"), &authentication).expect("bearer slots");
+        assert!(api_key.is_none());
+        assert_eq!(
+            frozen.as_ref().map(DestinationAuthorizationScheme::as_str),
+            Some("Bearer")
         );
-        assert!(scheme_payload(b"Bearer ").is_none(), "an empty payload");
-        assert!(scheme_payload(b"Bearer").is_none(), "no payload at all");
+        assert!(matches!(
+            template,
+            DestinationAuthorizationTemplate::Scheme { .. }
+        ));
+        let (_, _, frozen) = authorization_slots(Some("ApiToken"), &authentication)
+            .expect("a declared scheme freezes");
+        assert_eq!(
+            frozen.as_ref().map(DestinationAuthorizationScheme::as_str),
+            Some("ApiToken")
+        );
+        let overlong_scheme = "a".repeat(33);
+        let overlong = authorization_slots(Some(&overlong_scheme), &authentication);
+        assert_eq!(
+            overlong.unwrap_err(),
+            DestinationRequestError::InvalidAuthorization
+        );
+        // A static authorization whose plan declares no scheme is a
+        // compile fault, not a send-time surprise.
+        assert_eq!(
+            authorization_slots(None, &authentication).unwrap_err(),
+            DestinationRequestError::InvalidAuthorization
+        );
     }
 }

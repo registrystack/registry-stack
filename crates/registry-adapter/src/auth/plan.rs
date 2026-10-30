@@ -15,7 +15,7 @@
 //! it compiles a source.
 
 use crate::auth::{
-    material::{basic_value, is_credential_value_bytes, scheme_value, AuthHeader},
+    material::{basic_payload, is_credential_value_bytes, token_value, AuthHeader},
     token::{
         acquire_token, resolve_protected, CacheBounds, ClientAssertionSigner, TokenBudget,
         TokenEndpointPlan, TokenRequestParameters, TokenSend, UpstreamStatusAction,
@@ -405,6 +405,19 @@ impl AuthPlan {
         self.token.as_ref()
     }
 
+    /// The scheme a static authorization presents its token under, when
+    /// the endpoint's kind is the static authorization. The scheme is
+    /// declared configuration the plan owns: the produced header carries
+    /// the payload alone, so no caller ever parses a scheme out of
+    /// secret text.
+    #[must_use]
+    pub fn declared_scheme(&self) -> Option<&str> {
+        match &self.static_credential {
+            Some(StaticCredential::Authorization { scheme, .. }) => Some(scheme.as_str()),
+            _ => None,
+        }
+    }
+
     /// The credential for one upstream send, or `None` under the
     /// `none` kind.
     ///
@@ -447,7 +460,7 @@ impl AuthPlan {
             context.events,
         )
         .await?;
-        let value = scheme_value("Bearer", token.as_bytes()).map_err(|_| AuthError::Credential)?;
+        let value = token_value(token.as_bytes()).map_err(|_| AuthError::Credential)?;
         Ok(Some(AuthorizedCredential {
             header: AuthHeader::new("authorization", value),
             generation,
@@ -516,14 +529,13 @@ fn authorize_static(
         } => {
             let username = resolve_protected(resolver, username_ref)?;
             let password = resolve_protected(resolver, password_ref)?;
-            let value = basic_value(username.as_bytes(), password.as_bytes())
+            let value = basic_payload(username.as_bytes(), password.as_bytes())
                 .map_err(|_| AuthError::Credential)?;
             Ok(AuthHeader::new("authorization", value))
         }
-        StaticCredential::Authorization { scheme, token_ref } => {
+        StaticCredential::Authorization { token_ref, .. } => {
             let token = resolve_protected(resolver, token_ref)?;
-            let value =
-                scheme_value(scheme, token.as_bytes()).map_err(|_| AuthError::Credential)?;
+            let value = token_value(token.as_bytes()).map_err(|_| AuthError::Credential)?;
             Ok(AuthHeader::new("authorization", value))
         }
         StaticCredential::ApiKey {
@@ -1238,7 +1250,7 @@ mod tests {
         .await
         .expect("basic sends a header");
         assert_eq!(header.name(), "authorization");
-        assert_eq!(header.value().as_bytes(), b"Basic dXNlcjpwYXNz");
+        assert_eq!(header.value().as_bytes(), b"dXNlcjpwYXNz");
 
         let header = authorize(
             &EndpointAuthentication::StaticAuthorization { scheme: None },
@@ -1250,7 +1262,7 @@ mod tests {
         .await
         .expect("static authorization sends a header");
         assert_eq!(header.name(), "authorization");
-        assert_eq!(header.value().as_bytes(), b"Bearer tok");
+        assert_eq!(header.value().as_bytes(), b"tok");
 
         let header = authorize(
             &EndpointAuthentication::StaticAuthorization {
@@ -1263,7 +1275,9 @@ mod tests {
         )
         .await
         .expect("a declared scheme is honored");
-        assert_eq!(header.value().as_bytes(), b"ApiToken tok");
+        // The produced header stays the payload alone; the declared
+        // scheme travels on the plan for the destination authorization.
+        assert_eq!(header.value().as_bytes(), b"tok");
 
         let header = authorize(
             &EndpointAuthentication::StaticApiKey {
@@ -1613,7 +1627,7 @@ mod tests {
                 .expect("the first issuance")
                 .expect("a header is sent")
         };
-        assert_eq!(first.header.value().as_bytes(), b"Bearer issued-1");
+        assert_eq!(first.header.value().as_bytes(), b"issued-1");
 
         // The first send's 401 invalidates the only issuance there is.
         let mut refresh_used = false;
@@ -1639,7 +1653,7 @@ mod tests {
                 .expect("the second issuance")
                 .expect("a header is sent")
         };
-        assert_eq!(second.header.value().as_bytes(), b"Bearer issued-2");
+        assert_eq!(second.header.value().as_bytes(), b"issued-2");
 
         // A late 401 about the first send arrives: the newer issuance
         // stays cached because its generation is not the one named, and
@@ -1677,7 +1691,7 @@ mod tests {
                 .expect("the cache answers")
                 .expect("a header is sent")
         };
-        assert_eq!(third.header.value().as_bytes(), b"Bearer issued-2");
+        assert_eq!(third.header.value().as_bytes(), b"issued-2");
         let asks = *send.asks.lock().expect("asks");
         assert_eq!(asks, 2, "the stale 401 sent nothing");
     }
@@ -1807,7 +1821,7 @@ mod tests {
                 .expect("the refresh issues again")
                 .expect("a header is sent")
         };
-        assert_eq!(second.header.value().as_bytes(), b"Bearer at");
+        assert_eq!(second.header.value().as_bytes(), b"at");
         let asks = *send.asks.lock().expect("asks");
         assert_eq!(asks, 2, "the zero cache sent again instead of answering");
         assert!(
@@ -1932,8 +1946,8 @@ mod tests {
         // credential endpoint A issued.
         let mut sent_generations = Vec::new();
         for (plan, expected) in [
-            (&plan_a, &b"Bearer issued-a.example.invalid"[..]),
-            (&plan_b, b"Bearer issued-b.example.invalid"),
+            (&plan_a, &b"issued-a.example.invalid"[..]),
+            (&plan_b, b"issued-b.example.invalid"),
         ] {
             for _ in 0..2 {
                 let mut context = AuthorizeContext {
@@ -2032,7 +2046,7 @@ mod tests {
             .expect("a header is sent");
         assert_eq!(
             credential.header.value().as_bytes(),
-            b"Bearer issued-b.example.invalid"
+            b"issued-b.example.invalid"
         );
     }
 

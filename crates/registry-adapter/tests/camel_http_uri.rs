@@ -403,31 +403,35 @@ fn a_base_path_prefix_that_is_not_a_segment_boundary_is_refused() {
     assert_eq!(target(&origin, "https://fhir.example.org/api"), "/api");
 }
 
-/// Dot segments are resolved by the one parse before the base-path
-/// comparison, and the resolved path is the one sent.
+/// A dot segment, literal or percent-escaped in either hex case, is
+/// refused on the raw text before any parse: the WHATWG parser collapses
+/// it silently, so the sent path would otherwise be a path nobody
+/// declared, rewritten by the parser rather than the source.
 #[test]
-fn dot_segments_are_resolved_before_the_base_path_comparison() {
+fn a_dot_segment_is_refused_on_the_raw_text() {
     let origin = fhir();
     for link in [
+        "https://fhir.example.org/fhir/R4/x/../y",
         "https://fhir.example.org/fhir/R4/../../admin",
         "https://fhir.example.org/fhir/R4/..",
-        "https://fhir.example.org/fhir/R4/%2e%2e/%2E%2E/admin",
+        "https://fhir.example.org/fhir/R4/./y",
+        "https://fhir.example.org/fhir/R4/%2e%2e/y",
+        "https://fhir.example.org/fhir/R4/%2E%2E/admin",
+        "https://fhir.example.org/fhir/R4/x/%2E%2E",
+        "https://fhir.example.org/fhir/R4/%2e/y",
         "https://fhir.example.org/fhir/R4/.%2e/x",
         "https://fhir.example.org/fhir/R4/Patient/../../R5",
     ] {
         assert_eq!(
             refused(&origin, link),
-            LinkRefusal::OutsideBasePath,
+            LinkRefusal::NonCanonicalPath,
             "{link}"
         );
     }
+    // A dot lookalike that is not a whole segment travels as written.
     assert_eq!(
-        target(&origin, "https://fhir.example.org/fhir/R4/x/../Patient/./1"),
-        "/fhir/R4/Patient/1"
-    );
-    assert_eq!(
-        target(&origin, "https://fhir.example.org/fhir/R5/../R4/Patient"),
-        "/fhir/R4/Patient"
+        target(&origin, "https://fhir.example.org/fhir/R4/x.y/..z/.a"),
+        "/fhir/R4/x.y/..z/.a"
     );
 }
 
@@ -617,7 +621,6 @@ fn a_pinned_target_passes_the_transport_target_rule() {
         "https://fhir.example.org/fhir/R4/Patient?_count=50&_getpages=abc&_page=2",
         "https://fhir.example.org/fhir/R4/Observation?identifier=urn:oid:1.2%7cabc&code=a|b",
         "https://fhir.example.org/fhir/R4/Patient?a=1;b=2",
-        "https://fhir.example.org/fhir/R4/x/../Patient/./1",
         "HTTPS://FHIR.EXAMPLE.ORG:443/fhir/R4/Patient",
         "https://fhir.example.org/fhir/R4/Patient%20Name",
         "https://fhir.example.org/fhir/R4/Jos%C3%A9",
@@ -662,6 +665,22 @@ fn a_base_url_outside_the_pinnable_shape_is_refused() {
         ),
         (
             "https://fhir.example.org/a;b",
+            OriginError::NonCanonicalPath,
+        ),
+        // A dot segment in the base path is refused on the raw text,
+        // before the parser could collapse it and silently widen the
+        // pin: the resolved base would hold paths the operator never
+        // wrote.
+        (
+            "https://fhir.example.org/a/../b",
+            OriginError::NonCanonicalPath,
+        ),
+        (
+            "https://fhir.example.org/./b",
+            OriginError::NonCanonicalPath,
+        ),
+        (
+            "https://fhir.example.org/%2e%2e/b",
             OriginError::NonCanonicalPath,
         ),
         ("https://[fe80::1%25eth0]/", OriginError::Unparseable),

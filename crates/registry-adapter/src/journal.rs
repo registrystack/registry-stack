@@ -161,7 +161,8 @@ pub struct JournalEvent {
     /// The route serving the exchange.
     pub route_id: String,
     /// Value-free per-kind facts (endpoint id, method, status, duration,
-    /// response size and digest, error class, problem code) as a bounded
+    /// response size and digest, error class, problem code, a send's
+    /// delivery certainty: `maybe-sent` or `not-sent`) as a bounded
     /// JSON object, or none.
     pub detail: Option<String>,
 }
