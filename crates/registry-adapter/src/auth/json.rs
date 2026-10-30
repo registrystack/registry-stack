@@ -115,9 +115,11 @@ fn escape_is_valid(bytes: &[u8], cursor: usize) -> Option<usize> {
 /// Decode a JSON string's contents, escapes included, into text in a
 /// zeroizing buffer; a lone surrogate half or invalid UTF-8 refuses. The
 /// decoded buffer is pre-sized to the raw length, so decoding never
-/// reallocates and never frees a copy of a decoded value.
+/// reallocates, and the buffer is zeroizing on every path, so every
+/// refusal — mid-string or at the UTF-8 check — erases the decoded
+/// bytes it drops, including the copy a `FromUtf8Error` hands back.
 fn decode_string(raw: &[u8]) -> Option<Zeroizing<String>> {
-    let mut text: Vec<u8> = Vec::with_capacity(raw.len());
+    let mut text = Zeroizing::new(Vec::with_capacity(raw.len()));
     let mut index = 0;
     while index < raw.len() {
         let byte = raw[index];
@@ -171,7 +173,19 @@ fn decode_string(raw: &[u8]) -> Option<Zeroizing<String>> {
         }
         index += 1;
     }
-    String::from_utf8(text).ok().map(Zeroizing::new)
+    // Hand the buffer to `from_utf8` without a plain copy: the bytes
+    // leave the zeroizing buffer only to enter the checked string, and
+    // a refused decode comes back inside the error to be erased rather
+    // than freed as they stand.
+    let bytes = std::mem::take(&mut *text);
+    drop(text);
+    match String::from_utf8(bytes) {
+        Ok(text) => Some(Zeroizing::new(text)),
+        Err(error) => {
+            drop(Zeroizing::new(error.into_bytes()));
+            None
+        }
+    }
 }
 
 /// Skip JSON whitespace.
