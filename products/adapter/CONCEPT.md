@@ -424,7 +424,9 @@ otherwise. Section 8.10 is the authoritative list.
   Camel 4 uses variables, which are not ported. Divergence: `type` names a
   code map, `codeMap:<id>`, never a Java type. A code map maps an
   `ExternalId` key to one JSON scalar; lookup is exact and case-sensitive
-  over a string input; a miss or a non-string input raises
+  over a string input. As in Camel (`ConvertBodyTest.testConvertNullBody`),
+  a null or absent input passes through unchanged whatever `mandatory`
+  says; any other non-string input, or a miss, raises
   `conversion.unmapped`, and with `mandatory: false` a miss leaves the
   target absent. Rhai scripts reach the same lookup through
   `code_map(id, key)`. Every reference is a literal id that resolves, and
@@ -440,11 +442,19 @@ otherwise. Section 8.10 is the authoritative list.
   (raises a declared catchable error class with a constant message, section
   8.11.6).
 - Splitting and aggregation: `split` (`expression`, `aggregationStrategy`
-  default returns the original message, `stopOnException` default false,
-  `CamelSplitIndex`, `CamelSplitSize`, `CamelSplitComplete`, plus the
-  current Camel failure accounting `errorThreshold`, `maxFailedRecords`, and
-  `CamelSplitResult`; `parallelProcessing`, `streaming`, and `timeout` not
-  ported; mandatory `maximumItems`), `loop` (`expression` count or `doWhile`
+  default `use-original` with `propagateException: true`, so the original
+  message returns and an item failure is raised after every item has run,
+  as `Splitter` does; `stopOnException` default false,
+  `CamelSplitIndex`, `CamelSplitSize` (set before the first item; our split
+  does not stream), `CamelSplitComplete`, plus the
+  current Camel failure accounting `errorThreshold` (a ratio in 0 to 1,
+  stopping once the failure ratio reaches it) and `maxFailedRecords`
+  (stopping once failures reach it), each exclusive with
+  `stopOnException`, and `CamelSplitResult`, set only when one of the two
+  is configured; `parallelProcessing`, `streaming`, `timeout`, `group`, and
+  `onPrepare` not ported; divergence: the expression must yield a JSON
+  array, where Camel also splits maps and strings; mandatory
+  `maximumItems`), `loop` (`expression` count or `doWhile`
   predicate, `copy` default false, `CamelLoopIndex`, `CamelLoopSize` for a
   count loop; mandatory `maximumIterations`; the `doWhile` predicate is
   evaluated on the current exchange before every iteration, the first
@@ -454,7 +464,9 @@ otherwise. Section 8.10 is the authoritative list.
   false; failure propagates to the error handler, so a record is never
   served without its enrichment unless the pack handles the failure).
 - Aggregation strategies, compiled in and named after Camel's built-ins:
-  `use-latest`, `use-original`, `grouped-body`; plus two additions for JSON
+  `use-latest`, `use-original` (`propagateException`, default true),
+  `grouped-body` (skips null bodies; an empty split yields an empty
+  array); plus two additions for JSON
   bodies, marked as such: `json-array-append` (`from`, `into`, `uniqueBy`;
   a duplicate `uniqueBy` value raises `aggregation.duplicate`) and
   `json-merge` (`from`, `into`). A custom strategy is a `rhai` entrypoint over
