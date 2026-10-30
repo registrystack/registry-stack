@@ -206,7 +206,12 @@ The facade contract is an artifact, not engine code, and nothing about any
 one target API is compiled in (D17). A profile declares its operation set
 with paths, methods, request and response envelopes, pagination parameters,
 and problem codes, and declares which parts are parameterized by the
-deployment. The first profile, `breg-records` v1, is a starting target, not
+deployment. Facade operation paths are single-brace `{name}` templates,
+the facade HTTP path template of Camel's REST DSL (`rest get /{id}`) and
+OpenAPI path templating, while `{{name}}` is the pack layer's substitution
+syntax (Camel property placeholders, the port table in section 8.10); the
+profile check resolves each `{name}` in an operation path against that
+operation's path parameters. The first profile, `breg-records` v1, is a starting target, not
 the only one: it mirrors the Base Registry Engine's public read surface
 (`/v1/records/{type}`, `/v1/records/{type}/{record_id}`) plus write
 operations (`records-search`, `records-get`, `records-create`,
@@ -333,7 +338,7 @@ routes:
           uri: "http:tracker"
           parameters:
             httpMethod: GET
-            path: "/api/tracker/trackedEntities/{id}"
+            path: "/api/tracker/trackedEntities/{{id}}"
             pathParameters: { id: { header: recordId } }
             query: { program: { constant: "{{program}}" }, fields: { constant: "*" } }
       - choice:
@@ -579,7 +584,7 @@ is in the profile's shape.
   names an endpoint declared in the pack and bound to a base URL in the
   runtime config. Parameters: `httpMethod`, `path` (an origin-relative
   template, starting with `/`, appended to the endpoint's base path, whose
-  `{name}` segments are filled from `pathParameters` expressions and
+  `{{name}}` segments are filled from `pathParameters` expressions and
   percent-encoded by the engine as single segments; every placeholder is
   bound and every binding is used), or instead of `path`, `httpUri` (an
   expression yielding an absolute link the source returned, pinned to the
