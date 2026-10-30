@@ -4,10 +4,10 @@ id: case-api-fixtures
 pack: case-api-pack
 upstreamVersion: "2.7"
 provenance:
-  kind: documented
+  type: documented
   reference: https://example.invalid/api-handbook#cases
 intercepts:
-  - kind: endpoint
+  - type: endpoint
     endpoint: case-api
 entries:
   - operation: cases.get

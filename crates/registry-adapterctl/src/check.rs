@@ -9,8 +9,10 @@
 //! script and query-file inventory (CFG-EMBED-1), verifies the versions
 //! and digests the project pins for its profile and pack against the
 //! artifacts as read (CFG-ID-4), precompiles the pack's Rhai entrypoints,
-//! checks each fixture entry's expected facade response against the
-//! derived result schema of the operation it names, and composes the pure
+//! checks each fixture entry's expected facade response against the schema
+//! its expected status selects (the operation's derived result schema for a
+//! 2xx status, the profile's derived problem envelope for any other), and
+//! composes the pure
 //! checks of `registry-adapter-core` (never re-implements them). It is
 //! offline: no network, no database, no execution of a checked route or
 //! script.
@@ -22,10 +24,11 @@
 use clap::Args;
 use registry_adapter_core::{
     check_fixture_expected_response, check_project_pins, check_workspace,
-    derive_operation_result_schema, finding, script_references, CheckCode, ScriptSite, Workspace,
-    ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
-    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
-    ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    derive_operation_result_schema, derive_problem_envelope_schema, finding, script_references,
+    CheckCode, ScriptSite, Workspace, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND,
+    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION,
+    ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::sha256_uri;
 use registry_platform_script::rhai::{
@@ -34,6 +37,7 @@ use registry_platform_script::rhai::{
 use registry_platform_yaml::{
     ApiVersion, Decoded, Diagnostic, Digest, EnvelopeRule, Expect, FormatSpec, Reader, Report,
 };
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -559,27 +563,47 @@ fn digest_of(bytes: &[u8]) -> Digest {
 }
 
 /// Check every fixture entry's expected facade response body against the
-/// result schema derived from the operation the entry names (CONCEPT 6).
-/// Core owns the derivation and the check; the pairing refusal for an
-/// entry whose operation cannot derive a schema is already reported by the
-/// core fixture checks, so such an entry checks no body here.
+/// schema its expected status selects: the operation's derived result
+/// schema for a 2xx status, the profile's derived problem envelope for any
+/// other (CONCEPT 6). Core owns the derivation and the check; a derivation
+/// fault is already reported by the workspace check, so an entry whose
+/// schema cannot derive checks no body here.
 fn check_fixture_bodies(
     profile: &registry_adapter_core::AdapterProfile,
     project: &registry_adapter_core::AdapterProject,
     fixtures: &[registry_adapter_core::AdapterFixture],
     report: &mut Report,
 ) {
+    // The workspace check derives every envelope once (core's
+    // check_envelope_derivation) and reports each derivation fault as a
+    // named adapter.profile finding, so the entry check runs only over
+    // schemas that derived, never over a stand-in that would invent
+    // findings. An expected status of 2xx validates against the operation's
+    // result schema, any other against the profile's problem envelope, and
+    // the selection is the core check's.
+    let problem = derive_problem_envelope_schema(profile);
     for fixture in fixtures {
         for (entry_index, entry) in fixture.entries.iter().enumerate() {
-            let schema =
+            let status = entry.expected_facade_response.status.get();
+            let is_result = (200..=299).contains(&status);
+            let result_schema =
                 match derive_operation_result_schema(profile, project, entry.operation.as_str()) {
                     Ok(schema) => schema,
                     Err(_) => continue,
                 };
+            if !is_result && problem.is_err() {
+                continue;
+            }
+            // A 2xx expected status never consults the problem schema; the
+            // never-true stand-in keeps one call site while the envelope has
+            // not derived.
+            let stand_in = Value::Bool(false);
+            let problem_schema = problem.as_ref().unwrap_or(&stand_in);
             for diagnostic in check_fixture_expected_response(
                 entry_index,
                 &entry.expected_facade_response,
-                &schema,
+                &result_schema,
+                problem_schema,
             ) {
                 report.push(diagnostic);
             }

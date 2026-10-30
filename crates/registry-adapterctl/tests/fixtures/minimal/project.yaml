@@ -1,6 +1,8 @@
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
-id: case-deployment
+project:
+  id: case-deployment
+  version: "1"
 profile:
   id: case-api
   version: 1.0.0
@@ -8,7 +10,7 @@ profile:
 pack:
   id: case-api-pack
   version: 1.0.0
-  digest: sha256:89dbe18abafc4a1150aadfe10e65ee15bfaa2a0dbe1941668d06b25b5e27865f
+  digest: sha256:ca5a4a2c6d3b2927554578c0064b502194f26e141f3db510aa033a6d19f4f331
 recordTypes:
   - name: case
     fields:
@@ -16,10 +18,10 @@ recordTypes:
         type: string
         required: true
 templatedRoutes:
-  - routeTemplateRef: fetchPage
+  - routeTemplate: fetchPage
     routeId: fetchCases
     parameters:
-      recordType: case
+      record-type: case
 bindings:
   - id: find-cases
     operation: cases.get

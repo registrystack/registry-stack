@@ -15,7 +15,7 @@ endpoints:
 routeTemplates:
   - id: fetchPage
     parameters:
-      - name: recordType
+      - name: record-type
         type: string
         required: true
         description: The declared record type the page fetches.

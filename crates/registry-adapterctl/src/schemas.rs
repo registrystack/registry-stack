@@ -264,6 +264,20 @@ fn apply_manual_wire_forms(schema: &mut Value, file: &str) {
                 "type",
             );
         }
+        "fixture.v1alpha1.schema.json" => {
+            internally_tagged(
+                definitions
+                    .get_mut("FixtureProvenance")
+                    .expect("the fixture schema defines the fixture provenance"),
+                "type",
+            );
+            internally_tagged(
+                definitions
+                    .get_mut("Intercept")
+                    .expect("the fixture schema defines the intercept"),
+                "type",
+            );
+        }
         _ => {}
     }
 }
@@ -615,7 +629,7 @@ mod tests {
             serde_json::from_str(&documents().unwrap()["pack.v1alpha1.schema.json"]).unwrap();
         let classes = pack["$defs"]["ErrorClass"]["enum"].as_array().unwrap();
         assert!(classes.contains(&serde_json::json!("upstream.timeout")));
-        assert!(classes.contains(&serde_json::json!("script.budgetExceeded")));
+        assert!(classes.contains(&serde_json::json!("script.budget-exceeded")));
         assert!(!classes.contains(&serde_json::json!("UpstreamTimeout")));
         assert_eq!(classes.len(), registry_adapter_core::ErrorClass::ALL.len());
         for class in registry_adapter_core::ErrorClass::ALL {
@@ -685,5 +699,58 @@ mod tests {
             basic["properties"]["usernameRef"]["$ref"],
             "#/$defs/SecretReference"
         );
+    }
+
+    /// The fixture provenance and intercept schemas render the internally
+    /// tagged form the reader accepts: the `type` member names the kind and
+    /// the kind's fields sit beside it. The validator gets the document's
+    /// definitions so the union's `$ref`s resolve.
+    #[test]
+    fn the_fixture_union_schemas_carry_the_type_tag() {
+        let fixture: Value =
+            serde_json::from_str(&documents().unwrap()["fixture.v1alpha1.schema.json"]).unwrap();
+        let definitions = fixture["$defs"].clone();
+        for (definition, instances) in [
+            (
+                "FixtureProvenance",
+                vec![
+                    serde_json::json!({"type": "captured", "reference": "lab-system"}),
+                    serde_json::json!({"type": "documented", "reference": "handbook"}),
+                ],
+            ),
+            (
+                "Intercept",
+                vec![
+                    serde_json::json!({"type": "endpoint", "endpoint": "case-api"}),
+                    serde_json::json!({"type": "token-endpoint", "endpoint": "case-api"}),
+                ],
+            ),
+        ] {
+            let root = serde_json::json!({
+                "$defs": definitions,
+                "allOf": [{"$ref": format!("#/$defs/{definition}")}],
+            });
+            let validator = jsonschema::JSONSchema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .compile(&root)
+                .unwrap();
+            for instance in instances {
+                assert!(
+                    validator.validate(&instance).is_ok(),
+                    "{definition} must accept the reader's form: {instance}"
+                );
+            }
+            let external = match definition {
+                "FixtureProvenance" => serde_json::json!({"documented": {"reference": "x"}}),
+                _ => serde_json::json!({"endpoint": {"endpoint": "case-api"}}),
+            };
+            assert!(
+                validator.validate(&external).is_err(),
+                "{definition} must refuse the externally tagged form"
+            );
+            assert!(validator
+                .validate(&serde_json::json!({"type": "imagined"}))
+                .is_err());
+        }
     }
 }

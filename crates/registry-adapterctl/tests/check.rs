@@ -449,8 +449,8 @@ fn an_unknown_template_refuses_with_the_core_code_and_stays_value_free() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("project.yaml"),
-            "routeTemplateRef: fetchPage",
-            &format!("routeTemplateRef: {ghost}"),
+            "routeTemplate: fetchPage",
+            &format!("routeTemplate: {ghost}"),
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);
@@ -474,7 +474,7 @@ fn a_fixture_without_provenance_refuses_at_the_reader() {
                 let line = line.trim_start();
                 !(line.starts_with("provenance:")
                     || line.starts_with("reference:")
-                    || line.starts_with("kind: documented"))
+                    || line.starts_with("type: documented"))
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -544,8 +544,8 @@ fn the_human_refusal_names_the_code_on_stderr() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("project.yaml"),
-            "routeTemplateRef: fetchPage",
-            "routeTemplateRef: ghost",
+            "routeTemplate: fetchPage",
+            "routeTemplate: ghost",
         );
     });
     let mut stdout = Vec::new();
