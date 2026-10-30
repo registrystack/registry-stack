@@ -113,7 +113,7 @@ impl Served {
 
     /// Start over the project directory at `project`.
     pub async fn start_with_project(upstream_url: &str, project: &Path) -> Self {
-        let mut served = Self::spawn_with_project(upstream_url, project).await;
+        let mut served = Self::spawn_with_project(upstream_url, project, CURSOR_KEY).await;
         served.wait_until_listening();
         served
     }
@@ -121,7 +121,17 @@ impl Served {
     /// Start over `project` and return the stderr of an adapter that
     /// refuses to start; panics when it starts, or never exits.
     pub async fn refusal_with_project(upstream_url: &str, project: &Path) -> String {
-        let mut served = Self::spawn_with_project(upstream_url, project).await;
+        Self::refusal_with_cursor_key(upstream_url, project, CURSOR_KEY).await
+    }
+
+    /// As [`Self::refusal_with_project`], with `cursor_key` as the cursor
+    /// key secret.
+    pub async fn refusal_with_cursor_key(
+        upstream_url: &str,
+        project: &Path,
+        cursor_key: &str,
+    ) -> String {
+        let mut served = Self::spawn_with_project(upstream_url, project, cursor_key).await;
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if let Some(status) = served.child.try_wait().expect("poll the adapter") {
@@ -141,7 +151,7 @@ impl Served {
         }
     }
 
-    async fn spawn_with_project(upstream_url: &str, project: &Path) -> Self {
+    async fn spawn_with_project(upstream_url: &str, project: &Path, cursor_key: &str) -> Self {
         let database = schema_url().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
@@ -194,7 +204,7 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             .env("TEST_UPSTREAM_PASSWORD", PASSWORD)
             .env("TEST_DB_URL", &database)
             .env("TEST_JWKS", &jwks)
-            .env("TEST_CURSOR_KEY", CURSOR_KEY)
+            .env("TEST_CURSOR_KEY", cursor_key)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()

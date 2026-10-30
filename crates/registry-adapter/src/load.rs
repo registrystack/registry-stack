@@ -120,6 +120,13 @@ pub struct Loaded {
     pub deployment: String,
 }
 
+/// Whether a served operation already answers the facade path: the router
+/// takes one handler per path, so a second binding on it would never be
+/// reached.
+fn serves_path(served: &[ServedOperation], path: &str) -> bool {
+    served.iter().any(|operation| operation.method_path == path)
+}
+
 fn format_spec(kind: &'static str, api_version: &'static str) -> FormatSpec<'static> {
     FormatSpec {
         kind,
@@ -286,7 +293,16 @@ pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, Loa
             &mut scripts,
         );
         match outcome {
-            Ok(operation) => served.push(operation),
+            Ok(operation) => {
+                if serves_path(&served, &operation.method_path) {
+                    return Err(LoadError::Runtime(format!(
+                        "binding {} was refused: another binding already serves the facade path {}",
+                        binding.id.as_str(),
+                        operation.method_path
+                    )));
+                }
+                served.push(operation);
+            }
             Err(BindingRefusal::NotServed(reason)) => {
                 unserved.push((binding.id.as_str().to_owned(), reason));
             }
@@ -327,6 +343,9 @@ fn compile_binding(
         .operations
         .get(binding.operation.as_str())
         .ok_or("the binding names no profile operation")?;
+    if operation.method != registry_adapter_core::HttpMethod::Get {
+        return Err("a facade method other than GET is not served by this runtime yet".into());
+    }
     let route_id = binding.route.as_str();
     let steps: Vec<Step> = if let Some(templated) = project.templated_routes.get(route_id) {
         let template = pack
@@ -516,5 +535,26 @@ mod tests {
             document[2]["to"]["parameters"]["path"], "/api/abc/{{id}}",
             "{{id}} is bound per request by pathParameters"
         );
+    }
+
+    #[test]
+    fn a_second_binding_on_a_served_path_is_found() {
+        let operation = ServedOperation {
+            operation: "records-get".to_owned(),
+            method_path: "/v1/records/{recordType}/{id}".to_owned(),
+            record_type_parameter: "recordType".to_owned(),
+            record_id_parameter: Some("id".to_owned()),
+            binding: "person-get".to_owned(),
+            record_type: "person".to_owned(),
+            route_id: "route".to_owned(),
+            steps: Vec::new(),
+            maximum_upstream_calls: 1,
+            response_envelope: String::new(),
+            record_schema: json!({}),
+            pagination: None,
+        };
+        let served = [operation];
+        assert!(serves_path(&served, "/v1/records/{recordType}/{id}"));
+        assert!(!serves_path(&served, "/v1/records/{recordType}"));
     }
 }

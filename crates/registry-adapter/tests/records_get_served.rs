@@ -322,3 +322,14 @@ async fn a_script_that_fails_its_pinned_digest_refuses_startup() {
         "the refusal names its cause: {stderr}"
     );
 }
+
+#[tokio::test]
+async fn an_unusable_cursor_key_refuses_startup_before_the_listener_opens() {
+    let upstream = UpstreamDouble::start();
+
+    let stderr =
+        Served::refusal_with_cursor_key(&upstream.url(""), &Served::example_project(), "too-short")
+            .await;
+
+    assert!(stderr.contains("cursor key"), "{stderr}");
+}

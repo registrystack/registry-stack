@@ -45,6 +45,8 @@ pub enum ServeError {
     Bind(String),
     #[error("the server stopped: {0}")]
     Serve(String),
+    #[error("the stop signal handler could not be installed: {0}")]
+    Signal(String),
 }
 
 /// A verified caller.
@@ -316,6 +318,23 @@ fn tls_connector(
     }
 }
 
+/// Resolve on the first SIGTERM or SIGINT. The handlers are installed here,
+/// before anything is served, so a failure to install one refuses startup
+/// rather than leaving a runtime that SIGTERM would stop with sends in
+/// flight.
+fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, ServeError> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| ServeError::Signal(error.to_string()))?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|error| ServeError::Signal(error.to_string()))?;
+    Ok(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+    })
+}
+
 /// Load the deployment, migrate the journal, and serve until a stop signal.
 pub async fn run(
     project_directory: &std::path::Path,
@@ -331,6 +350,9 @@ pub async fn run(
         ));
     }
     let authenticator = authenticator(&loaded.runtime, &loaded.resolver).await?;
+    // Every secret the runtime reads resolves before the listener binds.
+    let codec = codec(&loaded.runtime, &loaded.resolver)?;
+    let shutdown = shutdown_signal()?;
     let migration = pool(&loaded.runtime.database, &loaded.resolver, true)?;
     {
         let client = migration
@@ -354,15 +376,13 @@ pub async fn run(
     }
     tracing::info!(address = %local, "listening");
     let state = Arc::new(FacadeState {
-        codec: codec(&loaded.runtime, &loaded.resolver)?,
+        codec,
         loaded,
         authenticator,
         journal,
     });
     axum::serve(listener, router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown)
         .await
         .map_err(|error| ServeError::Serve(error.to_string()))
 }

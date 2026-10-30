@@ -21,6 +21,7 @@ use registry_adapter_core::ErrorClass;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use zeroize::Zeroizing;
 
 use crate::component::http::header_filter::HeaderFilter;
 use crate::component::http::uri::PinnedOrigin;
@@ -65,11 +66,14 @@ impl LoopbackSender {
         let host = url.host_str().unwrap_or_default();
         let port = url.port_or_known_default().unwrap_or(80);
 
-        let mut head = format!(
-            "GET {} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n",
-            link.target()
-        )
-        .into_bytes();
+        // The head carries the credential: it is wiped when dropped.
+        let mut head = Zeroizing::new(
+            format!(
+                "GET {} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n",
+                link.target()
+            )
+            .into_bytes(),
+        );
         for (name, value) in headers.iter() {
             head.extend_from_slice(name.as_str().as_bytes());
             head.extend_from_slice(b": ");
@@ -246,11 +250,12 @@ fn dechunk(mut rest: &[u8]) -> Option<Vec<u8>> {
         if size == 0 {
             return Some(body);
         }
-        if rest.len() < size + 2 {
+        let chunk_end = size.checked_add(2)?;
+        if rest.len() < chunk_end {
             return None;
         }
         body.extend_from_slice(&rest[..size]);
-        rest = &rest[size + 2..];
+        rest = &rest[chunk_end..];
     }
 }
 
@@ -276,5 +281,10 @@ mod tests {
     #[test]
     fn refuses_a_truncated_body() {
         assert!(parse(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n{}").is_none());
+    }
+
+    #[test]
+    fn refuses_a_chunk_size_that_overflows_the_length() {
+        assert!(dechunk(b"ffffffffffffffff\r\nabc\r\n0\r\n\r\n").is_none());
     }
 }
