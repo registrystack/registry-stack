@@ -11,8 +11,9 @@
 #
 # Declaration mapping is this project's decision, because OpenCRVS
 # declarations are configured per deployment. The `declaration_fields`
-# route parameter below names which declaration leaves a record exposes
-# and the record field each lands in; the two parent-reference leaves are
+# route parameter below is a map from the record field a declaration leaf
+# lands in to the declaration key it is read from; the two
+# parent-reference leaves are
 # the ones the Evidence reference's fixture project reads (mother and
 # father personReference), here as synthetic stand-ins. A deployment
 # replaces them with its own configured keys and declares the matching
@@ -57,7 +58,7 @@ profile:
 pack:
   id: opencrvs-events
   version: "1"
-  digest: sha256:cc13a4b1dd19207b3ea0d0021fad30602e2a46a5852ad81ed9939f56c26fd19a
+  digest: sha256:473ff6124384227abefcd88dc024756964bde5bb59c312ae3f73da748784c918
 recordTypes:
   - name: birth
     fields:
@@ -84,12 +85,16 @@ templatedRoutes:
     routeId: birth-search
     parameters:
       event_type: birth
-      declaration_fields: "mother.personReference=mother_reference,father.personReference=father_reference"
+      declaration_fields:
+        mother_reference: mother.personReference
+        father_reference: father.personReference
   - routeTemplate: fetch-event
     routeId: birth-fetch
     parameters:
       event_type: birth
-      declaration_fields: "mother.personReference=mother_reference,father.personReference=father_reference"
+      declaration_fields:
+        mother_reference: mother.personReference
+        father_reference: father.personReference
 bindings:
   - id: birth-search
     operation: records-search
@@ -112,3 +117,6 @@ accessProfiles:
       - records-get
     recordTypes:
       - birth
+parameterizedParts:
+  registryIdentifier: opencrvs-events-registry
+  datasetIdentifier: births

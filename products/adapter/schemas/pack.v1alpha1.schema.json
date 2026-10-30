@@ -1570,13 +1570,22 @@
     },
     "TemplateParameterType": {
       "description": "A template parameter's value type (CFG-VAL-9).",
-      "enum": [
-        "string",
-        "integer",
-        "number",
-        "boolean"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "string",
+            "integer",
+            "number",
+            "boolean"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "map",
+          "description": "A flat, bounded string-to-string map, whose only use in a template\nbody is a whole-value `constant` placeholder.",
+          "type": "string"
+        }
+      ]
     },
     "ThrottleMode": {
       "description": "Throttle mode, Camel 4's `mode` option.",

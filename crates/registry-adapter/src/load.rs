@@ -627,4 +627,27 @@ mod tests {
             directory.path().join("pack.yaml")
         );
     }
+
+    #[test]
+    fn a_map_parameter_instantiates_as_the_whole_object() {
+        let template: RouteTemplate = serde_json::from_value(json!({
+            "id": "search",
+            "parameters": [{"name": "labels", "type": "map", "defaultValue": {}}],
+            "steps": [
+                {"setProperty": {"name": "labels", "value": {"constant": "{{labels}}"}}}
+            ]
+        }))
+        .expect("the template parses");
+        let supplied = BTreeMap::from([("labels".to_owned(), json!({"a": "b"}))]);
+        let steps = serde_json::to_value(instantiate(&template, &supplied).expect("instantiates"))
+            .expect("steps serialize");
+        assert_eq!(
+            steps[0]["setProperty"]["value"]["constant"],
+            json!({"a": "b"})
+        );
+
+        let defaulted = serde_json::to_value(instantiate(&template, &BTreeMap::new()).unwrap())
+            .expect("steps serialize");
+        assert_eq!(defaulted[0]["setProperty"]["value"]["constant"], json!({}));
+    }
 }

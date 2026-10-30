@@ -40,6 +40,7 @@ pub enum CheckCode {
     PackGraphQlQueryInvalid,
     PackGraphQlQueryRequired,
     PackInvalidHeaderName,
+    PackMapParameterMisplaced,
     PackReservedHeaderName,
     PackScriptUncompilable,
     PackTooManyHeaders,
@@ -145,6 +146,7 @@ impl CheckCode {
         Self::PackGraphQlQueryInvalid,
         Self::PackGraphQlQueryRequired,
         Self::PackInvalidHeaderName,
+        Self::PackMapParameterMisplaced,
         Self::PackReservedHeaderName,
         Self::PackScriptUncompilable,
         Self::PackTooManyHeaders,
@@ -246,6 +248,7 @@ impl CheckCode {
             Self::PackGraphQlQueryInvalid => "adapter.pack.graphql-query-invalid",
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
             Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
+            Self::PackMapParameterMisplaced => "adapter.pack.map-parameter-misplaced",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
             Self::PackTooManyHeaders => "adapter.pack.too-many-headers",
@@ -385,6 +388,7 @@ impl CheckCode {
             | Self::PackGraphQlQueryInvalid
             | Self::PackGraphQlQueryRequired
             | Self::PackInvalidHeaderName
+            | Self::PackMapParameterMisplaced
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable
             | Self::PackTooManyHeaders

@@ -22,14 +22,9 @@ fn shape_records(exchange) {
             data.date_of_event = event.dateOfEvent;
         }
         let declaration = event.declaration;
-        if declaration != () && map != () && map != "" {
-            for pair in map.split(",") {
-                let parts = pair.split("=");
-                if parts.len() != 2 {
-                    throw "declaration_fields holds a pair that is not key=field";
-                }
-                let key = parts[0].trim();
-                let field = parts[1].trim();
+        if declaration != () && map != () {
+            for field in map.keys() {
+                let key = map[field];
                 if declaration[key] != () {
                     data[field] = declaration[key];
                 }

@@ -954,7 +954,24 @@ fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     for (index, template) in pack.route_templates.iter().enumerate() {
         let mut refused: HashSet<(String, String)> = HashSet::new();
+        let is_map = |name: &str| {
+            template.parameters.iter().any(|parameter| {
+                parameter.name.as_str() == name && parameter.r#type == TemplateParameterType::Map
+            })
+        };
+        let misplaced = |index: usize, path: &str, name: &str| {
+            finding(
+                CheckCode::PackMapParameterMisplaced,
+                &format!("/routeTemplates/{index}/steps{path}"),
+                &format!(
+                    "the map parameter {{{{{name}}}}} is used where only text fits"
+                ),
+                "Use a map parameter only as the whole value of a constant in setProperty or setBody.",
+            )
+        };
         walk_steps(&template.steps, &mut |step, path| {
+            // The only slots a map's object value lands in whole.
+            let map_home = matches!(step, Step::SetBody(_) | Step::SetProperty(_));
             // A send's path carries placeholders like any expression slot.
             let path_text = match step {
                 Step::To(to) => to.parameters.as_ref().and_then(|p| p.path.clone()),
@@ -963,6 +980,9 @@ fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
             };
             if let Some(text) = path_text {
                 for (name, _) in placeholders(&text) {
+                    if is_map(&name) && refused.insert((name.clone(), path.to_string())) {
+                        findings.push(misplaced(index, path, &name));
+                    }
                     let declared = template
                         .parameters
                         .iter()
@@ -985,6 +1005,15 @@ fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
                         continue;
                     };
                     for (name, _) in placeholders(text) {
+                        let whole = [format!("{{{{{name}}}}}"), format!("{{{{?{name}}}}}")]
+                            .iter()
+                            .any(|placeholder| placeholder == text);
+                        if is_map(&name)
+                            && !(whole && map_home)
+                            && refused.insert((name.clone(), path.to_string()))
+                        {
+                            findings.push(misplaced(index, path, &name));
+                        }
                         let declared = template
                             .parameters
                             .iter()
@@ -1010,14 +1039,34 @@ fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
 /// Whether a supplied parameter value matches the declared parameter type
 /// (CFG-VAL-9): `string` accepts JSON strings, `integer` accepts integral
 /// JSON numbers, `number` accepts any JSON number, and `boolean` accepts
-/// JSON booleans.
+/// JSON booleans, and `map` accepts a flat, bounded string-to-string object.
 fn value_matches_type(value: &serde_json::Value, expected: TemplateParameterType) -> bool {
     match expected {
         TemplateParameterType::String => value.is_string(),
         TemplateParameterType::Integer => value.is_i64() || value.is_u64(),
         TemplateParameterType::Number => value.is_number(),
         TemplateParameterType::Boolean => value.is_boolean(),
+        TemplateParameterType::Map => is_bounded_string_map(value),
     }
+}
+
+/// The most entries a map parameter may carry.
+const MAP_PARAMETER_MAXIMUM_ENTRIES: usize = 64;
+/// The most bytes one map parameter key or value may carry.
+const MAP_PARAMETER_MAXIMUM_TEXT_BYTES: usize = 256;
+
+/// Whether a value is a flat JSON object of at most
+/// [`MAP_PARAMETER_MAXIMUM_ENTRIES`] entries whose keys and values are
+/// non-empty strings of at most [`MAP_PARAMETER_MAXIMUM_TEXT_BYTES`] bytes.
+fn is_bounded_string_map(value: &serde_json::Value) -> bool {
+    let Some(members) = value.as_object() else {
+        return false;
+    };
+    let sound = |text: &str| !text.is_empty() && text.len() <= MAP_PARAMETER_MAXIMUM_TEXT_BYTES;
+    members.len() <= MAP_PARAMETER_MAXIMUM_ENTRIES
+        && members
+            .iter()
+            .all(|(key, member)| sound(key) && member.as_str().is_some_and(sound))
 }
 
 /// Every Rhai reference in every route body, route template body, and
@@ -6955,6 +7004,98 @@ mod tests {
         }])
         .expect("unique");
         assert_clean(check_pack(&pack));
+    }
+
+    /// A map parameter is a flat, bounded string-to-string map; the
+    /// instantiation refuses a non-object, a nested value, an empty key or
+    /// value, and more entries than the bound.
+    #[test]
+    fn project_checks_a_map_parameter_is_a_flat_bounded_string_map() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let instantiate = |value: serde_json::Value| {
+            let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
+            pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+                id: local("fetch-page"),
+                parameters: vec![TemplateParameter {
+                    name: local("labels"),
+                    r#type: TemplateParameterType::Map,
+                    required: false,
+                    default_value: None,
+                    description: None,
+                }],
+                steps: vec![to_get("case-api")],
+            }])
+            .expect("unique");
+            let mut project = project_builder(&pack);
+            project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+            project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
+                route_template: id("fetch-page"),
+                route_id: id("fetch-cases"),
+                parameters: BTreeMap::from([("labels".to_string(), value)]),
+            }])
+            .expect("unique");
+            check_project(&workspace(&profile, &pack, &project))
+        };
+
+        assert_clean(instantiate(serde_json::json!({
+            "mother_reference": "mother.personReference"
+        })));
+        assert_clean(instantiate(serde_json::json!({})));
+        for refused in [
+            serde_json::json!("mother.personReference"),
+            serde_json::json!(["a"]),
+            serde_json::json!({"a": 1}),
+            serde_json::json!({"a": {"b": "c"}}),
+            serde_json::json!({"a": ""}),
+            serde_json::json!({"": "b"}),
+            serde_json::json!({"a": "x".repeat(257)}),
+            serde_json::Value::Object(
+                (0..65)
+                    .map(|index| (format!("k{index}"), serde_json::json!("v")))
+                    .collect(),
+            ),
+        ] {
+            assert_has(
+                &instantiate(refused.clone()),
+                CheckCode::ProjectParameterTypeMismatch,
+            );
+        }
+    }
+
+    /// A map parameter's only home is a whole-value `constant` in a
+    /// `setProperty` or `setBody`; inside longer text, in a path, or in any
+    /// other slot it refuses, because the engine cannot render an object
+    /// as text.
+    #[test]
+    fn pack_refuses_a_map_parameter_used_anywhere_but_a_whole_value_constant() {
+        let template = |steps: Vec<Step>| {
+            let mut pack = pack_builder(vec![], vec![]);
+            pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+                id: local("fetch-page"),
+                parameters: vec![TemplateParameter {
+                    name: local("labels"),
+                    r#type: TemplateParameterType::Map,
+                    required: false,
+                    default_value: None,
+                    description: None,
+                }],
+                steps,
+            }])
+            .expect("unique");
+            check_pack(&pack)
+        };
+        let constant = |text: &str| crate::model::Expression::Constant(serde_json::json!(text));
+
+        assert_clean(template(vec![Step::SetBody(constant("{{labels}}"))]));
+        assert_has(
+            &template(vec![Step::SetBody(constant("labels: {{labels}}"))]),
+            CheckCode::PackMapParameterMisplaced,
+        );
+        let mut path = to_get("case-api");
+        if let Step::To(to) = &mut path {
+            to.parameters.as_mut().expect("parameters").path = Some("/v2/{{labels}}".to_owned());
+        }
+        assert_has(&template(vec![path]), CheckCode::PackMapParameterMisplaced);
     }
 
     /// Typed instantiation checking: an unknown supplied name, a value

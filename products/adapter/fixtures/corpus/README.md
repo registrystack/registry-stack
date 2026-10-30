@@ -66,7 +66,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 87 members.
+finding per code. The corpus holds 101 members.
 
 ### Profile members
 
@@ -95,6 +95,7 @@ finding per code. The corpus holds 87 members.
 | `adapter.pack.too-many-headers` | The endpoint allowlists 33 request headers, one past the transport's 32-name bound | `adapter.pack.too-many-headers` | checks |
 | `adapter.pack.unknown-script` | A route's `rhai` file is not in the digest-pinned inventory | `adapter.pack.unknown-script` | checks |
 | `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
+| `adapter.pack.map-parameter-misplaced` | The `map` parameter `{{labels}}` sits inside longer text (`look up {{labels}}`), where an object cannot be rendered | `adapter.pack.map-parameter-misplaced` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
 | `adapter.pack.script-uncompilable` | A pinned script does not parse (missing closing brace; its pin matches the broken bytes) | `adapter.pack.script-uncompilable` | tool |
 | `adapter.pack.entrypoint-parameter` | A pinned script's entrypoint takes `record`, not the `exchange` the slot passes (CONCEPT 8.11.3); the script parses and hashes to its pin | `adapter.pack.entrypoint-parameter` | tool |

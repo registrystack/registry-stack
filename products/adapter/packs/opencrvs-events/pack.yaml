@@ -39,9 +39,9 @@
 # status, type, dateOfEvent) and the declaration leaves the project maps.
 # Declarations are configured per OpenCRVS deployment, so the route
 # template's `declaration_fields` parameter, set in the project, is the
-# only way a declaration leaf reaches a record: a comma-separated list of
-# `declaration.key=record_field` pairs, for example
-# `mother.personReference=mother_reference`. A key not listed never leaves
+# only way a declaration leaf reaches a record: a map from record field to
+# declaration key, for example
+# `mother_reference: mother.personReference`. A key not listed never leaves
 # the source. A mapped record field the project has not declared is refused
 # when the engine validates the route result against the closed model.
 #
@@ -103,12 +103,11 @@ routeTemplates:
         required: true
         description: The OpenCRVS event type the search is limited to, for example birth.
       - name: declaration_fields
-        type: string
-        defaultValue: ""
+        type: map
+        defaultValue: {}
         description: >-
-          Comma-separated declaration.key=record_field pairs naming the
-          declaration leaves a record exposes and the project field each
-          lands in. Empty exposes none.
+          A map from the record field a declaration leaf lands in to the
+          OpenCRVS declaration key it is read from. Empty exposes none.
     steps:
       - onException:
           exception:
@@ -170,12 +169,11 @@ routeTemplates:
         required: true
         description: The OpenCRVS event type the lookup is limited to, for example birth.
       - name: declaration_fields
-        type: string
-        defaultValue: ""
+        type: map
+        defaultValue: {}
         description: >-
-          Comma-separated declaration.key=record_field pairs naming the
-          declaration leaves a record exposes and the project field each
-          lands in. Empty exposes none.
+          A map from the record field a declaration leaf lands in to the
+          OpenCRVS declaration key it is read from. Empty exposes none.
     steps:
       - onException:
           exception:
@@ -236,13 +234,13 @@ scripts:
   - path: scripts/next-continuation.rhai
     digest: sha256:283b66a19638f8ec1699c588781043db7bd62ed9d89d671cec02cd2815648bd4
   - path: scripts/shape-records.rhai
-    digest: sha256:6c3640632e51901373f8bc50de800914a5affedf4e71280b54e9a480460e6d50
+    digest: sha256:a2ed4e5ce768555fca5c388028e9549fb751e9bf588b74ec22f5ce83f3fd3f00
   - path: scripts/get-query.rhai
     digest: sha256:892f252e9a97304ebb78ca2e16eaad79e22680581428f1ab7f24d84521d9d6fa
   - path: scripts/get-outcome.rhai
     digest: sha256:1774b3c858f51e32305ae56f2915d63f3e4865dafa94bd29d1f9ce57e526234e
   - path: scripts/to-record.rhai
-    digest: sha256:1b1efe30cb0b9ce620b8a48e6507c503ca0c3860fb73166bef231b31b2ca311f
+    digest: sha256:d42ba86e4c85f9b692b4a086c97c15c9cedb50f8dd02bc658d6f15519a4d1414
 capabilities:
   components:
     - http

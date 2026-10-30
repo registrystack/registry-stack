@@ -122,6 +122,25 @@ printf 'Example check passed\n'
   "${fixture_flags[@]}" >/dev/null
 printf 'Example fixture replay passed\n'
 
+# The OpenCRVS birth example is held to the same two commands. Its fixtures
+# are hand-derived from the reviewed Evidence reference and marked synthetic
+# (each file says so): nothing has run against a real OpenCRVS, so this
+# proves the contract shape, not the live upstream.
+ocrvs_flags=()
+for fixture in products/adapter/fixtures/opencrvs-events/*.yaml; do
+  ocrvs_flags+=(--fixtures "$fixture")
+done
+"$adapterctl_bin" check products/adapter/examples/opencrvs-events/project.yaml \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack products/adapter/packs/opencrvs-events/pack.yaml \
+  "${ocrvs_flags[@]}" >/dev/null
+printf 'OpenCRVS example check passed\n'
+"$adapterctl_bin" fixtures replay products/adapter/examples/opencrvs-events/project.yaml \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack products/adapter/packs/opencrvs-events/pack.yaml \
+  "${ocrvs_flags[@]}" >/dev/null
+printf 'OpenCRVS example fixture replay passed\n'
+
 # Each committed experiment holds the concrete contract its project compiles
 # to (`generated/openapi.json` beside the project). `compile --check` refuses
 # on drift, so an experiment cannot rot behind a reader, core, or document

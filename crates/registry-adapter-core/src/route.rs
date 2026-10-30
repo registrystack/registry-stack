@@ -927,6 +927,9 @@ pub enum TemplateParameterType {
     Integer,
     Number,
     Boolean,
+    /// A flat, bounded string-to-string map, whose only use in a template
+    /// body is a whole-value `constant` placeholder.
+    Map,
 }
 
 /// A route template, Camel's `routeTemplate` without its `from`
