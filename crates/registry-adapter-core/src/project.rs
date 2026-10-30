@@ -84,9 +84,22 @@ pub struct Binding {
     pub record_type: LocalId,
     /// The route the operation dispatches to.
     pub route: ExternalId,
+    /// The declared fields of the bound record type a search binding
+    /// filters on (`products/adapter/CONCEPT.md` section 8.11.1); the
+    /// facade offers exactly these as typed equality query parameters.
+    /// Every entry must name a declared field, checked at the project
+    /// checks; the list is unique (CFG-ID-6).
+    #[serde(default, skip_serializing_if = "filters_empty")]
+    pub filters: registry_platform_yaml::UniqueList<LocalId>,
     /// The declared budget of upstream sends per exchange; the static
     /// worst-case count must stay within it.
     pub maximum_upstream_calls: registry_platform_yaml::BoundedU64<1, 100_000>,
+}
+
+/// A filter list is omitted from the wire when empty, the shape `Vec`'s
+/// `skip_serializing_if = "Vec::is_empty"` gave.
+fn filters_empty(filters: &registry_platform_yaml::UniqueList<LocalId>) -> bool {
+    filters.is_empty()
 }
 
 impl registry_platform_yaml::Identified for Binding {
@@ -218,6 +231,7 @@ mod tests {
                 operation: ExternalId::new("cases-find").expect("op"),
                 record_type: LocalId::new("case").expect("type"),
                 route: ExternalId::new("fetch-cases").expect("route"),
+                filters: registry_platform_yaml::UniqueList::new(Vec::new()).expect("unique"),
                 maximum_upstream_calls: registry_platform_yaml::BoundedU64::<1, 100_000>::new(30)
                     .expect("budget"),
             }])
@@ -238,6 +252,39 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<AdapterProject>(&json).ok(),
             Some(project)
+        );
+    }
+
+    /// A binding's filter list is unique (CFG-ID-6): a repeated field
+    /// name refuses at the reader, a declared list reads back in order,
+    /// and an omitted list reads as empty and serializes omitted.
+    #[test]
+    fn a_binding_refuses_duplicate_filters() {
+        let binding_json = |filters: &str| {
+            format!(
+                r#"{{"id":"find-cases","operation":"cases-find","recordType":"case","route":"fetch-cases"{filters},"maximumUpstreamCalls":30}}"#
+            )
+        };
+        let duplicate = binding_json(r#","filters":["region","region"]"#);
+        assert!(
+            serde_json::from_str::<Binding>(&duplicate).is_err(),
+            "a repeated filter field refuses"
+        );
+        let declared = binding_json(r#","filters":["region","opened-on"]"#);
+        let parsed = serde_json::from_str::<Binding>(&declared).expect("parse");
+        let names: Vec<&str> = parsed
+            .filters
+            .iter()
+            .map(|filter| filter.as_str())
+            .collect();
+        assert_eq!(names, vec!["region", "opened-on"]);
+        let omitted = serde_json::from_str::<Binding>(&binding_json("")).expect("parse");
+        assert!(omitted.filters.is_empty());
+        assert!(
+            !serde_json::to_string(&omitted)
+                .expect("serialize")
+                .contains("filters"),
+            "an empty filter list stays off the wire"
         );
     }
 

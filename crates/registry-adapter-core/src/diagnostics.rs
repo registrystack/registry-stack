@@ -45,9 +45,12 @@ pub enum CheckCode {
     ProfileProblemClassUnresolved,
     ProfileProblemEnvelopeMissingCodeSlot,
     ProfileProblemEnvelopeUncompilable,
+    ProfileRecordIdParameterMissing,
     ProfileRequestEnvelopeMissingRecordSlot,
     ProfileResponseEnvelopeMissingResultSlot,
     ProfileResponseEnvelopeUncompilable,
+    ProfileUnknownRecordIdParameter,
+    ProfileUnknownRecordTypeParameter,
     ProfileUnknownSlot,
     ProfileUnresolvedPathParameter,
     // adapter.project.*
@@ -57,6 +60,7 @@ pub enum CheckCode {
     ProjectPinVersionMismatch,
     ProjectRequiredParameterUnbound,
     ProjectTemplateNotInstantiated,
+    ProjectUnknownFilterField,
     ProjectUnknownOperation,
     ProjectUnknownRecordType,
     ProjectUnknownRoute,
@@ -130,9 +134,12 @@ impl CheckCode {
         Self::ProfileProblemClassUnresolved,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileProblemEnvelopeUncompilable,
+        Self::ProfileRecordIdParameterMissing,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
         Self::ProfileResponseEnvelopeMissingResultSlot,
         Self::ProfileResponseEnvelopeUncompilable,
+        Self::ProfileUnknownRecordIdParameter,
+        Self::ProfileUnknownRecordTypeParameter,
         Self::ProfileUnknownSlot,
         Self::ProfileUnresolvedPathParameter,
         Self::ProjectDuplicateRouteId,
@@ -141,6 +148,7 @@ impl CheckCode {
         Self::ProjectPinVersionMismatch,
         Self::ProjectRequiredParameterUnbound,
         Self::ProjectTemplateNotInstantiated,
+        Self::ProjectUnknownFilterField,
         Self::ProjectUnknownOperation,
         Self::ProjectUnknownRecordType,
         Self::ProjectUnknownRoute,
@@ -216,6 +224,7 @@ impl CheckCode {
             Self::ProfileProblemEnvelopeUncompilable => {
                 "adapter.profile.problem-envelope-uncompilable"
             }
+            Self::ProfileRecordIdParameterMissing => "adapter.profile.record-id-parameter-missing",
             Self::ProfileRequestEnvelopeMissingRecordSlot => {
                 "adapter.profile.request-envelope-missing-record-slot"
             }
@@ -225,6 +234,10 @@ impl CheckCode {
             Self::ProfileResponseEnvelopeUncompilable => {
                 "adapter.profile.response-envelope-uncompilable"
             }
+            Self::ProfileUnknownRecordIdParameter => "adapter.profile.unknown-record-id-parameter",
+            Self::ProfileUnknownRecordTypeParameter => {
+                "adapter.profile.unknown-record-type-parameter"
+            }
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
             Self::ProfileUnresolvedPathParameter => "adapter.profile.unresolved-path-parameter",
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
@@ -233,6 +246,7 @@ impl CheckCode {
             Self::ProjectPinVersionMismatch => "adapter.project.pin-version-mismatch",
             Self::ProjectRequiredParameterUnbound => "adapter.project.required-parameter-unbound",
             Self::ProjectTemplateNotInstantiated => "adapter.project.template-not-instantiated",
+            Self::ProjectUnknownFilterField => "adapter.project.unknown-filter-field",
             Self::ProjectUnknownOperation => "adapter.project.unknown-operation",
             Self::ProjectUnknownRecordType => "adapter.project.unknown-record-type",
             Self::ProjectUnknownRoute => "adapter.project.unknown-route",
@@ -299,9 +313,12 @@ impl CheckCode {
             | Self::ProfileProblemClassUnresolved
             | Self::ProfileProblemEnvelopeMissingCodeSlot
             | Self::ProfileProblemEnvelopeUncompilable
+            | Self::ProfileRecordIdParameterMissing
             | Self::ProfileRequestEnvelopeMissingRecordSlot
             | Self::ProfileResponseEnvelopeMissingResultSlot
             | Self::ProfileResponseEnvelopeUncompilable
+            | Self::ProfileUnknownRecordIdParameter
+            | Self::ProfileUnknownRecordTypeParameter
             | Self::ProfileUnknownSlot
             | Self::ProfileUnresolvedPathParameter => crate::naming::ADAPTER_PROFILE_KIND,
             Self::FixtureResponseSchema
@@ -359,6 +376,7 @@ impl CheckCode {
             | Self::ProjectPinVersionMismatch
             | Self::ProjectRequiredParameterUnbound
             | Self::ProjectTemplateNotInstantiated
+            | Self::ProjectUnknownFilterField
             | Self::ProjectUnknownOperation
             | Self::ProjectUnknownRecordType
             | Self::ProjectUnknownRoute

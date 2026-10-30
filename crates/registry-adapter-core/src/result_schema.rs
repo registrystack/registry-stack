@@ -11,7 +11,7 @@
 use crate::checks::is_placeholder_name;
 use crate::diagnostics::{finding, CheckCode};
 use crate::fixture::RecordedResponse;
-use crate::profile::AdapterProfile;
+use crate::profile::{AdapterProfile, ParameterizedPart};
 use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Map, Value};
@@ -20,10 +20,12 @@ use serde_json::{json, Map, Value};
 /// (`products/adapter/CONCEPT.md` section 6): the operation's response
 /// envelope with every slot replaced by the closed schema of what fills
 /// it, and the `record` and `records` slots expanded from the record type
-/// the deployment binds to the operation. Errors are value-free and name
-/// the configuration gap: an unknown operation, an envelope that is not a
-/// JSON template, or a result slot with no binding to a declared record
-/// type.
+/// the deployment binds to the operation. An operation bound more than
+/// once resolves through its first binding; a concrete derivation for a
+/// named binding is [`derive_binding_result_schema`]. Errors are
+/// value-free and name the configuration gap: an unknown operation, an
+/// envelope that is not a JSON template, or a result slot with no binding
+/// to a declared record type.
 pub fn derive_operation_result_schema(
     profile: &AdapterProfile,
     project: &AdapterProject,
@@ -38,7 +40,77 @@ pub fn derive_operation_result_schema(
         .bindings
         .iter()
         .find(|binding| binding.operation.as_str() == operation_id);
-    derive_value(&template, binding, Some(project))
+    derive_value(
+        &template,
+        binding,
+        Some(project),
+        &profile.parameterized_parts,
+    )
+}
+
+/// The derived schema of one binding's response body: the bound
+/// operation's response envelope with every slot replaced by the closed
+/// schema of what fills it, and the `record` and `records` slots expanded
+/// from the record type this binding names — the per-binding resolution
+/// the compiled contract needs, where one operation serves several bound
+/// record types (`products/adapter/CONCEPT.md` sections 6 and 7). A
+/// parameterized part derives as a plain string, never as its stand-in
+/// literal, because the contract cannot know the deployment's value.
+pub fn derive_binding_result_schema(
+    profile: &AdapterProfile,
+    project: &AdapterProject,
+    binding: &Binding,
+) -> Result<Value, String> {
+    let operation = profile
+        .operations
+        .get(binding.operation.as_str())
+        .ok_or_else(|| {
+            format!(
+                "the binding names operation {}, which the profile does not declare",
+                binding.operation.as_str()
+            )
+        })?;
+    let template = parse_envelope_template(operation.response_envelope.text())?;
+    derive_value(
+        &template,
+        Some(binding),
+        Some(project),
+        &profile.parameterized_parts,
+    )
+}
+
+/// The derived schema of one binding's request body: the bound
+/// operation's request envelope derived like
+/// [`derive_binding_result_schema`], with the `record` slot expanded from
+/// the binding's record type. An operation that declares no request
+/// envelope is refused by name of the fault.
+pub fn derive_operation_request_schema(
+    profile: &AdapterProfile,
+    project: &AdapterProject,
+    binding: &Binding,
+) -> Result<Value, String> {
+    let operation = profile
+        .operations
+        .get(binding.operation.as_str())
+        .ok_or_else(|| {
+            format!(
+                "the binding names operation {}, which the profile does not declare",
+                binding.operation.as_str()
+            )
+        })?;
+    let request_envelope = operation.request_envelope.as_ref().ok_or_else(|| {
+        format!(
+            "the operation {} declares no request envelope",
+            binding.operation.as_str()
+        )
+    })?;
+    let template = parse_envelope_template(request_envelope.text())?;
+    derive_value(
+        &template,
+        Some(binding),
+        Some(project),
+        &profile.parameterized_parts,
+    )
 }
 
 /// The derived schema of the profile's problem envelope
@@ -51,7 +123,7 @@ pub fn derive_operation_result_schema(
 /// the problem slots, never a record.
 pub fn derive_problem_envelope_schema(profile: &AdapterProfile) -> Result<Value, String> {
     let template = parse_envelope_template(profile.problem_envelope.text())?;
-    derive_value(&template, None, None)
+    derive_value(&template, None, None, &profile.parameterized_parts)
 }
 
 /// The derivation error an envelope carrying a record slot raises when the
@@ -183,9 +255,10 @@ fn derive_value(
     template: &Value,
     binding: Option<&Binding>,
     project: Option<&AdapterProject>,
+    parts: &[ParameterizedPart],
 ) -> Result<Value, String> {
     match template {
-        Value::String(text) => Ok(derive_member(text, binding, project)?.0),
+        Value::String(text) => Ok(derive_member(text, binding, project, parts)?.0),
         Value::Object(members) => {
             let mut properties = Map::new();
             let mut required = Vec::new();
@@ -196,7 +269,7 @@ fn derive_value(
                 let text = value.as_str();
                 let (schema, optional) = match text.and_then(decode_slot) {
                     Some(slot) => (slot_schema(slot.0, binding, project)?, slot.1),
-                    None => (derive_value(value, binding, project)?, false),
+                    None => (derive_value(value, binding, project, parts)?, false),
                 };
                 properties.insert(key.clone(), schema);
                 if !optional {
@@ -213,7 +286,7 @@ fn derive_value(
         Value::Array(items) => {
             let mut items_schema: Option<Value> = None;
             for item in items {
-                let schema = derive_value(item, binding, project)?;
+                let schema = derive_value(item, binding, project, parts)?;
                 match &items_schema {
                     Some(previous) if previous != &schema => {
                         return Err(
@@ -242,15 +315,22 @@ const ENVELOPE_GRAMMAR_RULE: &str =
     "an envelope placeholder fills a whole member value or a whole string member, never a part of a string";
 
 /// One object member's schema and whether it may be absent: a whole-value
-/// optional slot (`{{?slot}}`) is optional, everything else is required.
+/// optional slot (`{{?slot}}`) is optional, everything else is required. A
+/// literal standing for a declared parameterized part derives as a plain
+/// string: the deployment declares the part's value, so the contract
+/// cannot carry it as a constant.
 fn derive_member(
     text: &str,
     binding: Option<&Binding>,
     project: Option<&AdapterProject>,
+    parts: &[ParameterizedPart],
 ) -> Result<(Value, bool), String> {
     match decode_slot(text) {
         Some((name, optional)) => Ok((slot_schema(name, binding, project)?, optional)),
         None if text.contains(SLOT_MARK) => Err(ENVELOPE_GRAMMAR_RULE.to_string()),
+        None if parts.iter().any(|part| part.name.as_str() == text) => {
+            Ok((json!({"type": "string"}), false))
+        }
         None => Ok((json!({"type": "string", "const": text}), false)),
     }
 }
@@ -469,7 +549,7 @@ pub fn check_fixture_expected_response(
 mod tests {
     use super::*;
     use crate::fixture::RecordedResponse as Expected;
-    use crate::profile::{EnvelopeTemplate, ProfileOperation};
+    use crate::profile::{EnvelopeTemplate, ParameterizedPart, ProfileOperation};
     use crate::project::{Binding, PinnedRef, ProjectIdentity, RecordField};
     use crate::route::TemplatedRoute;
     use registry_platform_yaml::{
@@ -501,6 +581,9 @@ mod tests {
             method: crate::model::HttpMethod::Get,
             path: "/v2/cases".to_string(),
             path_parameters: UniqueList::new(Vec::new()).expect("empty"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: registry_platform_yaml::BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(envelope.to_string()),
             pagination: None,
@@ -565,6 +648,7 @@ mod tests {
                     operation: external("cases-find"),
                     record_type: local("case"),
                     route: external("fetch-cases"),
+                    filters: UniqueList::new(Vec::new()).expect("unique"),
                     maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
                 }]
             } else {
@@ -811,6 +895,7 @@ mod tests {
             operation: external("cases-find"),
             record_type: local("ghost"),
             route: external("fetch-cases"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
         }])
         .expect("unique");
@@ -887,5 +972,165 @@ mod tests {
         assert!(findings
             .iter()
             .all(|finding| finding.message.contains("result schema")));
+    }
+
+    /// A case binding and a patient binding of one operation each expand
+    /// their own record type: the per-binding derivation resolves the
+    /// named binding, where the operation-level derivation keeps its
+    /// first-binding rule (`products/adapter/CONCEPT.md` section 7).
+    #[test]
+    fn the_per_binding_derivation_resolves_the_named_binding() {
+        let envelope = r#"{"record": {{record}}}"#;
+        let profile = profile(envelope);
+        let mut deployment = project(true);
+        deployment.record_types = UniqueIdList::new(vec![
+            record_type(),
+            RecordType {
+                name: local("patient"),
+                fields: UniqueList::new(vec![RecordField {
+                    name: local("wheelchair"),
+                    r#type: RecordFieldType::Boolean,
+                    required: true,
+                }])
+                .expect("unique"),
+            },
+        ])
+        .expect("unique");
+        deployment.bindings = UniqueIdList::new(vec![
+            Binding {
+                id: local("find-cases"),
+                operation: external("cases-find"),
+                record_type: local("case"),
+                route: external("fetch-cases"),
+                filters: UniqueList::new(Vec::new()).expect("unique"),
+                maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+            },
+            Binding {
+                id: local("find-patients"),
+                operation: external("cases-find"),
+                record_type: local("patient"),
+                route: external("fetch-patients"),
+                filters: UniqueList::new(Vec::new()).expect("unique"),
+                maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+            },
+        ])
+        .expect("unique");
+        let bindings: Vec<Binding> = deployment.bindings.iter().cloned().collect();
+        let cases =
+            derive_binding_result_schema(&profile, &deployment, &bindings[0]).expect("derive");
+        assert_eq!(cases["properties"]["record"]["required"], json!(["id"]));
+        let patients =
+            derive_binding_result_schema(&profile, &deployment, &bindings[1]).expect("derive");
+        assert_eq!(
+            patients["properties"]["record"]["required"],
+            json!(["wheelchair"])
+        );
+        let first =
+            derive_operation_result_schema(&profile, &deployment, "cases-find").expect("derive");
+        assert_eq!(first["properties"]["record"]["required"], json!(["id"]));
+        let ghost = Binding {
+            id: local("find-ghosts"),
+            operation: external("cases-missing"),
+            record_type: local("case"),
+            route: external("fetch-cases"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+        };
+        assert!(
+            derive_binding_result_schema(&profile, &deployment, &ghost).is_err(),
+            "a binding naming no declared operation is refused"
+        );
+    }
+
+    /// The request derivation expands a write operation's request
+    /// envelope against the binding's record type; an operation that
+    /// declares no request envelope is refused by name of the fault.
+    #[test]
+    fn the_request_derivation_expands_the_request_envelope() {
+        let write_profile = profile(r#"{"cases": {{records}}}"#);
+        let mut operations: Vec<ProfileOperation> =
+            write_profile.operations.iter().cloned().collect();
+        operations[0].request_envelope =
+            Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string()));
+        let write_profile = AdapterProfile {
+            operations: UniqueIdList::new(operations).expect("unique"),
+            ..write_profile
+        };
+        let deployment = project(true);
+        let binding: Binding = deployment.bindings.iter().next().expect("bound").clone();
+        let schema =
+            derive_operation_request_schema(&write_profile, &deployment, &binding).expect("derive");
+        assert_eq!(schema["properties"]["input"]["required"], json!(["id"]));
+        let read_profile = profile(r#"{"cases": {{records}}}"#);
+        assert!(
+            derive_operation_request_schema(&read_profile, &deployment, &binding).is_err(),
+            "an operation with no request envelope is refused"
+        );
+    }
+
+    /// A parameterized part derives as a plain string, never as the
+    /// stand-in const literal: the contract cannot know the deployment's
+    /// value (CONCEPT section 7). A non-part literal keeps its const, the
+    /// per-binding and request derivations unpin the same way, and the
+    /// problem envelope unpins like an operation's envelope.
+    #[test]
+    fn a_parameterized_part_derives_as_a_string_not_a_const() {
+        let with_parts = |envelope: &str| {
+            let mut profile = profile(envelope);
+            profile.parameterized_parts = UniqueList::new(vec![ParameterizedPart {
+                name: external("registryIdentifier"),
+                description: "the deployment's registry identifier".to_string(),
+            }])
+            .expect("unique");
+            profile
+        };
+        let parts_profile =
+            with_parts(r#"{"meta": {"registryIdentifier": "registryIdentifier"}, "kind": "case"}"#);
+        let deployment = project(true);
+        let schema = derive_operation_result_schema(&parts_profile, &deployment, "cases-find")
+            .expect("derive");
+        assert_eq!(
+            schema["properties"]["meta"]["properties"]["registryIdentifier"],
+            json!({"type": "string"})
+        );
+        assert_eq!(
+            schema["properties"]["kind"],
+            json!({"type": "string", "const": "case"})
+        );
+        let binding: Binding = deployment.bindings.iter().next().expect("bound").clone();
+        let per_binding =
+            derive_binding_result_schema(&parts_profile, &deployment, &binding).expect("derive");
+        assert_eq!(
+            per_binding["properties"]["meta"]["properties"]["registryIdentifier"],
+            json!({"type": "string"})
+        );
+        let mut request_profile = with_parts(r#"{"cases": {{records}}}"#);
+        let operations: Vec<ProfileOperation> = request_profile
+            .operations
+            .iter()
+            .cloned()
+            .map(|mut operation| {
+                operation.request_envelope = Some(EnvelopeTemplate(
+                    r#"{"meta": {"registryIdentifier": "registryIdentifier"}}"#.to_string(),
+                ));
+                operation
+            })
+            .collect();
+        request_profile.operations = UniqueIdList::new(operations).expect("unique");
+        let request = derive_operation_request_schema(&request_profile, &deployment, &binding)
+            .expect("derive");
+        assert_eq!(
+            request["properties"]["meta"]["properties"]["registryIdentifier"],
+            json!({"type": "string"})
+        );
+        let mut problem_profile = with_parts(r#"{"cases": {{records}}}"#);
+        problem_profile.problem_envelope = EnvelopeTemplate(
+            r#"{"meta": {"registryIdentifier": "registryIdentifier"}}"#.to_string(),
+        );
+        let problem = derive_problem_envelope_schema(&problem_profile).expect("derive");
+        assert_eq!(
+            problem["properties"]["meta"]["properties"]["registryIdentifier"],
+            json!({"type": "string"})
+        );
     }
 }

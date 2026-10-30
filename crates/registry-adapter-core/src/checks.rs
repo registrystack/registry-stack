@@ -250,6 +250,7 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
             &operation.path,
             &operation.path_parameters,
         ));
+        findings.extend(record_parameter_checks(&prefix, operation));
         findings.extend(envelope_checks(&prefix, &operation.response_envelope));
         if !(operation.response_envelope.mentions(SLOT_RECORD)
             || operation.response_envelope.mentions(SLOT_RECORDS))
@@ -492,6 +493,58 @@ fn facade_path_parameter_checks(
                 "Use the parameter in the path template, or drop it from pathParameters.",
             ));
         }
+    }
+    findings
+}
+
+/// The record-parameter faults of a facade operation
+/// (`products/adapter/CONCEPT.md` sections 7 and 8.11.1): the record-type
+/// parameter must name a declared path parameter, a declared
+/// `recordIdParameter` must name one too, and an operation whose declared
+/// path parameters include a record identifier — a parameter beyond the
+/// record type, the get, update, and patch of the concept — must name its
+/// `recordIdParameter`. A search or create whose only declared parameter
+/// is the record type fills none. The check keys on the declared
+/// pathParameters member, never the raw template or the method; the
+/// requiredness arm stays off while the record-type parameter itself is
+/// unknown, so one fault reports at a time.
+fn record_parameter_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    let declared: std::collections::HashSet<&str> = operation
+        .path_parameters
+        .iter()
+        .map(|parameter| parameter.as_str())
+        .collect();
+    let type_parameter_resolves = declared.contains(operation.record_type_parameter.as_str());
+    if !type_parameter_resolves {
+        findings.push(finding(
+            CheckCode::ProfileUnknownRecordTypeParameter,
+            &format!("{prefix}/recordTypeParameter"),
+            "the record type parameter names no declared path parameter",
+            "Name one of the operation's pathParameters; the bound record type substitutes into it.",
+        ));
+    }
+    if let Some(record_id) = &operation.record_id_parameter {
+        if !declared.contains(record_id.as_str()) {
+            findings.push(finding(
+                CheckCode::ProfileUnknownRecordIdParameter,
+                &format!("{prefix}/recordIdParameter"),
+                "the record id parameter names no declared path parameter",
+                "Name one of the operation's pathParameters; the caller's recordId header fills it.",
+            ));
+        }
+    } else if type_parameter_resolves
+        && operation
+            .path_parameters
+            .iter()
+            .any(|parameter| parameter.as_str() != operation.record_type_parameter.as_str())
+    {
+        findings.push(finding(
+            CheckCode::ProfileRecordIdParameterMissing,
+            prefix,
+            "the operation declares a path parameter beyond the record type and names no recordIdParameter",
+            "Name the parameter the caller's recordId header fills in recordIdParameter.",
+        ));
     }
     findings
 }
@@ -2589,6 +2642,33 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 "Name a record type the project declares.",
             ));
         }
+        // A search binding filters on declared fields of its bound record
+        // type (`products/adapter/CONCEPT.md` section 8.11.1): the facade
+        // offers exactly the declared list as typed equality query
+        // parameters, so a filter naming no declared field refuses at the
+        // entry. Duplicates are the reader's concern (CFG-ID-6). The check
+        // stays off while the record type itself is unknown.
+        if let Some(record_type) = workspace
+            .project
+            .record_types
+            .get(binding.record_type.as_str())
+        {
+            let declared: HashSet<&str> = record_type
+                .fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect();
+            for (filter_index, filter) in binding.filters.iter().enumerate() {
+                if !declared.contains(filter.as_str()) {
+                    findings.push(finding(
+                        CheckCode::ProjectUnknownFilterField,
+                        &format!("{prefix}/filters/{filter_index}"),
+                        "the filter names no field the bound record type declares",
+                        "Name a declared field of the binding's record type, or drop the filter.",
+                    ));
+                }
+            }
+        }
         // A raw template never instantiated has no concrete send shape:
         // the runtime would interpolate nothing and send the placeholder
         // text, so a binding may only name a pack route or an
@@ -3493,6 +3573,9 @@ mod tests {
             method,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: Some(local("type")),
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -3772,6 +3855,9 @@ mod tests {
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: Some(local("type")),
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{{mysterySlot}}"#.to_string()),
             pagination: None,
@@ -3844,6 +3930,9 @@ mod tests {
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: Some(local("type")),
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"empty": true}"#.to_string()),
             pagination: None,
@@ -4063,6 +4152,9 @@ mod tests {
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{{records}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -4076,6 +4168,9 @@ mod tests {
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -4105,6 +4200,9 @@ mod tests {
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: Some(PaginationParameters {
@@ -4115,6 +4213,81 @@ mod tests {
             }),
         }]);
         assert_clean(check_profile(&profile));
+    }
+
+    /// The record-type parameter names a declared path parameter
+    /// (`products/adapter/CONCEPT.md` section 7): an unknown name refuses
+    /// at the member, the bound record type substitutes into a declared
+    /// parameter, and a correct operation stays clean.
+    #[test]
+    fn the_record_type_parameter_names_a_declared_path_parameter() {
+        let mut unknown = operation("records-get", HttpMethod::Get);
+        unknown.record_type_parameter = local("ghost");
+        assert_has(
+            &check_profile(&profile_builder(vec![unknown])),
+            CheckCode::ProfileUnknownRecordTypeParameter,
+        );
+        let declared = operation("records-get", HttpMethod::Get);
+        assert_clean(check_profile(&profile_builder(vec![declared])));
+    }
+
+    /// `recordIdParameter` is required exactly where the declared path
+    /// parameters include a record identifier: the get, update, and patch
+    /// of the concept declare the parameter their `recordId` header fills,
+    /// while a search or create whose only declared parameter is the
+    /// record type fills none. The check keys on the declared
+    /// pathParameters member, never the raw template or the method
+    /// (`products/adapter/CONCEPT.md` section 7).
+    #[test]
+    fn the_record_id_parameter_is_required_where_a_record_identifier_is_declared() {
+        let two_parameters = |record_id_parameter: Option<LocalId>| {
+            let mut point_operation = operation("records-get", HttpMethod::Get);
+            point_operation.path = "/v2/cases/{type}/{record_id}".to_string();
+            point_operation.path_parameters =
+                UniqueList::new(vec![local("type"), local("record_id")]).expect("unique");
+            point_operation.record_id_parameter = record_id_parameter;
+            point_operation
+        };
+        assert_has(
+            &check_profile(&profile_builder(vec![two_parameters(None)])),
+            CheckCode::ProfileRecordIdParameterMissing,
+        );
+        assert_clean(check_profile(&profile_builder(vec![two_parameters(Some(
+            local("record_id"),
+        ))])));
+
+        let mut search = operation("records-search", HttpMethod::Get);
+        search.record_id_parameter = None;
+        search.pagination = Some(PaginationParameters {
+            cursor_parameter: id("cursor"),
+            page_size_parameter: id("limit"),
+            page_size_minimum: BoundedU64::<1, 10_000>::new(1).expect("min"),
+            page_size_maximum: BoundedU64::<1, 100_000>::new(500).expect("max"),
+        });
+        assert_clean(check_profile(&profile_builder(vec![search])));
+
+        let mut create = operation("records-create", HttpMethod::Post);
+        create.record_id_parameter = None;
+        create.request_envelope = Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string()));
+        assert_clean(check_profile(&profile_builder(vec![create])));
+
+        let mut type_only_update = operation("records-update", HttpMethod::Put);
+        type_only_update.record_id_parameter = None;
+        type_only_update.request_envelope =
+            Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string()));
+        assert_clean(check_profile(&profile_builder(vec![type_only_update])));
+    }
+
+    /// A `recordIdParameter` naming no declared path parameter refuses at
+    /// the member.
+    #[test]
+    fn the_record_id_parameter_names_a_declared_path_parameter() {
+        let mut ghost = operation("records-get", HttpMethod::Get);
+        ghost.record_id_parameter = Some(local("ghost"));
+        assert_has(
+            &check_profile(&profile_builder(vec![ghost])),
+            CheckCode::ProfileUnknownRecordIdParameter,
+        );
     }
 
     // ----- pack checks -----
@@ -4482,6 +4655,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route,
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         };
         let mut project = project_builder(&pack);
@@ -4984,6 +5158,9 @@ mod tests {
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -5022,6 +5199,7 @@ mod tests {
             operation: id("cases-create"),
             record_type: local("case"),
             route: id("create-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -5119,6 +5297,9 @@ mod tests {
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -5134,6 +5315,7 @@ mod tests {
             operation: id("cases-create"),
             record_type: local("case"),
             route: id("create-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10_000).expect("budget"),
         }])
         .expect("unique");
@@ -5706,6 +5888,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(budget).expect("budget"),
         }])
         .expect("unique");
@@ -5987,6 +6170,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
         }])
         .expect("unique");
@@ -6009,6 +6193,7 @@ mod tests {
             operation: id("cases-missing"),
             record_type: local("ghost"),
             route: id("nowhere"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -6045,6 +6230,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-cases"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -6290,6 +6476,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(3).expect("budget"),
         }])
         .expect("unique");
@@ -6300,10 +6487,52 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(11).expect("budget"),
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
+    }
+
+    /// A binding filters on declared record fields only
+    /// (`products/adapter/CONCEPT.md` section 8.11.1): an undeclared field
+    /// name refuses at its own list entry, two undeclared names refuse at
+    /// both entries, and declared names pass.
+    #[test]
+    fn a_binding_filters_on_declared_fields_only() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let route = RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps: vec![to_get("case-api")],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        let binding = |filters: Vec<LocalId>| Binding {
+            id: local("find-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("fetch-case"),
+            filters: UniqueList::new(filters).expect("unique"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+        };
+        project.bindings =
+            UniqueIdList::new(vec![binding(vec![local("national_id")])]).expect("unique");
+        assert_clean(check_project(&workspace(&profile, &pack, &project)));
+
+        project.bindings = UniqueIdList::new(vec![binding(vec![local("ghost"), local("specter")])])
+            .expect("unique");
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert_eq!(findings.len(), 2);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::ProjectUnknownFilterField.code()
+        );
+        assert_eq!(findings[0].path, "/bindings/0/filters/0");
+        assert_eq!(findings[1].path, "/bindings/0/filters/1");
     }
 
     /// Redelivery never applies to a `to: direct:` send, so a
@@ -6444,6 +6673,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(6).expect("budget"),
         }])
         .expect("unique");
@@ -6454,6 +6684,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(7).expect("budget"),
         }])
         .expect("unique");
@@ -6467,6 +6698,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(4).expect("budget"),
         }])
         .expect("unique");
@@ -6508,6 +6740,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(8).expect("budget"),
         }])
         .expect("unique");
@@ -6519,6 +6752,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -6534,6 +6768,9 @@ mod tests {
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -6553,6 +6790,7 @@ mod tests {
             operation: id("cases-create"),
             record_type: local("case"),
             route: id("create-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -6580,6 +6818,7 @@ mod tests {
             operation: id("cases-create"),
             record_type: local("case"),
             route: id("create-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -6613,6 +6852,7 @@ mod tests {
             operation: id("cases-create"),
             record_type: local("case"),
             route: id("create-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -6830,14 +7070,13 @@ mod tests {
     #[test]
     fn profile_refuses_paths_that_leave_the_origin() {
         for path in [
-            "https://cases.example.invalid/v2",
-            "//cases.example.invalid/v2",
-            "v2/cases",
-            "/v2/../admin",
+            "https://cases.example.invalid/v2/{type}",
+            "//cases.example.invalid/v2/{type}",
+            "v2/cases/{type}",
+            "/v2/../admin/{type}",
         ] {
             let mut bad = operation("cases-find", HttpMethod::Get);
             bad.path = path.to_string();
-            bad.path_parameters = UniqueList::new(Vec::new()).expect("empty");
             let profile = profile_builder(vec![bad]);
             let findings = check_profile(&profile);
             assert_eq!(findings.len(), 1, "at {path}");
@@ -7659,6 +7898,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -7757,6 +7997,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -7779,6 +8020,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -7995,6 +8237,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("hop2"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
         }])
         .expect("unique");

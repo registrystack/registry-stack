@@ -83,6 +83,21 @@ pub struct ProfileOperation {
     /// list is unique (CFG-ID-6).
     #[serde(default, skip_serializing_if = "path_parameters_empty")]
     pub path_parameters: UniqueList<LocalId>,
+    /// The path parameter the bound record type substitutes into
+    /// (`products/adapter/CONCEPT.md` section 7): one of `pathParameters`,
+    /// checked at the profile checks. No rule reads meaning from the
+    /// parameter's position.
+    pub record_type_parameter: LocalId,
+    /// The path parameter the caller's `recordId` header fills on get,
+    /// update, and patch; one of `pathParameters` when declared. A search
+    /// or create operation fills none; the profile checks require the
+    /// parameter exactly where the facade reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_id_parameter: Option<LocalId>,
+    /// The status the facade answers a success with; two hundreds only
+    /// (CFG-QTY-4). Every non-2xx answer is a problem body.
+    #[serde(default = "default_success_status")]
+    pub success_status: registry_platform_yaml::BoundedU32<200, 299>,
     /// Where a writable record sits in an incoming body. A write
     /// operation's request envelope must name the `record` slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,6 +205,11 @@ fn path_parameters_empty(parameters: &UniqueList<LocalId>) -> bool {
     parameters.is_empty()
 }
 
+/// The success status an operation that declares none answers with.
+fn default_success_status() -> registry_platform_yaml::BoundedU32<200, 299> {
+    registry_platform_yaml::BoundedU32::new(200).expect("the default status is in range")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +221,9 @@ mod tests {
             path: "/v2/cases/{type}".to_string(),
             path_parameters: UniqueList::new(vec![LocalId::new("type").expect("id")])
                 .expect("unique"),
+            record_type_parameter: LocalId::new("type").expect("id"),
+            record_id_parameter: Some(LocalId::new("type").expect("id")),
+            success_status: default_success_status(),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -266,7 +289,7 @@ mod tests {
     /// parameter name refuses at the reader.
     #[test]
     fn profile_refuses_duplicate_path_parameters() {
-        let operation = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type","type"],"responseEnvelope":"{\"cases\": {{records}}}"}"#;
+        let operation = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type","type"],"recordTypeParameter":"type","responseEnvelope":"{\"cases\": {{records}}}"}"#;
         let json = format!(
             r#"{{"id":"case-api","version":"1.0.0","operations":[{operation}],"problems":[],"problemEnvelope":"{{}}"}}"#
         );
@@ -274,12 +297,63 @@ mod tests {
             serde_json::from_str::<AdapterProfile>(&json).is_err(),
             "a repeated path parameter refuses"
         );
-        let unique = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type"],"responseEnvelope":"{\"cases\": {{records}}}"}"#;
+        let unique = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type"],"recordTypeParameter":"type","responseEnvelope":"{\"cases\": {{records}}}"}"#;
         let json = format!(
             r#"{{"id":"case-api","version":"1.0.0","operations":[{unique}],"problems":[],"problemEnvelope":"{{}}"}}"#
         );
         let profile = serde_json::from_str::<AdapterProfile>(&json).expect("parse");
         assert_eq!(profile.operations[0].path_parameters.len(), 1);
+    }
+
+    /// An operation names the path parameter the bound record type
+    /// substitutes into: the member is required at the reader
+    /// (`products/adapter/CONCEPT.md` section 7), an operation without
+    /// one refuses, and a declared member round-trips.
+    #[test]
+    fn an_operation_requires_its_record_type_parameter() {
+        let without = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type"],"responseEnvelope":"{\"cases\": {{records}}}"}"#;
+        let json = format!(
+            r#"{{"id":"case-api","version":"1.0.0","operations":[{without}],"problems":[],"problemEnvelope":"{{}}"}}"#
+        );
+        assert!(
+            serde_json::from_str::<AdapterProfile>(&json).is_err(),
+            "an operation without a record type parameter is refused"
+        );
+        let declared = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type"],"recordTypeParameter":"type","responseEnvelope":"{\"cases\": {{records}}}"}"#;
+        let json = format!(
+            r#"{{"id":"case-api","version":"1.0.0","operations":[{declared}],"problems":[],"problemEnvelope":"{{}}"}}"#
+        );
+        let profile = serde_json::from_str::<AdapterProfile>(&json).expect("parse");
+        assert_eq!(profile.operations[0].record_type_parameter.as_str(), "type");
+    }
+
+    /// `successStatus` defaults to 200 and admits two hundreds only
+    /// (CFG-QTY-4): the typed bound refuses anything else at the reader,
+    /// and a declared status reads back.
+    #[test]
+    fn success_status_defaults_to_200_and_stays_two_hundreds_only() {
+        let base = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type"],"recordTypeParameter":"type""#;
+        let tail = r#","responseEnvelope":"{\"cases\": {{records}}}"}"#;
+        let profile_json = |operation: String| {
+            format!(
+                r#"{{"id":"case-api","version":"1.0.0","operations":[{operation}],"problems":[],"problemEnvelope":"{{}}"}}"#
+            )
+        };
+        let parsed = serde_json::from_str::<AdapterProfile>(&profile_json(format!("{base}{tail}")))
+            .expect("parse");
+        assert_eq!(parsed.operations[0].success_status.get(), 200);
+        let parsed = serde_json::from_str::<AdapterProfile>(&profile_json(format!(
+            "{base},\"successStatus\":201{tail}"
+        )))
+        .expect("parse");
+        assert_eq!(parsed.operations[0].success_status.get(), 201);
+        for refused in [199, 300] {
+            let json = format!("{base},\"successStatus\":{refused}{tail}");
+            assert!(
+                serde_json::from_str::<AdapterProfile>(&profile_json(json)).is_err(),
+                "a success status outside 200 to 299 is refused"
+            );
+        }
     }
 
     /// The profile artifact round-trips with profile-declared operation
