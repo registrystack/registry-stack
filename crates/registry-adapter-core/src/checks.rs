@@ -3239,8 +3239,9 @@ fn worst_body(
 }
 
 /// Runtime checks (`products/adapter/CONCEPT.md` sections 10.2 and 13.7):
-/// endpoint coverage, credential-kind match, loopback-only `none`, and the
-/// plain-HTTP confinement.
+/// endpoint coverage, credential-kind match, `none` confined to the
+/// numeric loopback or `https` with an mTLS identity, and the plain-HTTP
+/// confinement.
 #[must_use]
 pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
@@ -3385,13 +3386,18 @@ fn check_credential_pair(
         return;
     }
     if let (EndpointAuthentication::None {}, RuntimeCredential::None {}) = (kind, credential) {
+        // A `none` credential leans on the transport alone: the numeric
+        // loopback keeps plain HTTP off the network, and an mTLS identity
+        // is only a credential when the handshake itself is encrypted, so
+        // plain HTTP refuses even with one bound.
         let loopback = is_loopback_origin(&binding.base_url);
-        if !loopback && binding.mtls_identity.is_none() {
+        let identity_over_tls = binding.mtls_identity.is_some() && binding.base_url.is_https();
+        if !loopback && !identity_over_tls {
             findings.push(finding(
                 CheckCode::AuthNoneNotLoopback,
                 &format!("{prefix}/credential"),
-                "a none credential reaches a non-loopback origin without an mTLS identity",
-                "Add an mTLS client identity, or declare an authentication kind.",
+                "a none credential reaches an origin that is neither numeric loopback nor https with an mTLS identity",
+                "Add an mTLS client identity over TLS, use a numeric loopback origin, or declare an authentication kind.",
             ));
         }
     }
@@ -7302,8 +7308,10 @@ mod tests {
         assert_has(&findings, CheckCode::AuthKindMismatch);
     }
 
-    /// A `none` credential is refused on a non-loopback origin without an
-    /// mTLS identity, and admitted with one.
+    /// A `none` credential leans on the transport alone: it is refused
+    /// off the numeric loopback unless the origin is `https` and an mTLS
+    /// identity is bound, and admitted on the loopback with or without
+    /// one.
     #[test]
     fn runtime_refuses_none_outside_loopback_without_mtls() {
         let profile = profile_builder(vec![]);
@@ -7311,36 +7319,42 @@ mod tests {
         endpoint.authentication = EndpointAuthentication::None {};
         let pack = pack_builder(vec![endpoint], vec![]);
         let project = project_builder(&pack);
-        let public = EndpointBinding {
+        let none_binding = |base: &str, mtls: bool| EndpointBinding {
             endpoint: id("case-api"),
-            base_url: Url::new("https://cases.example.invalid").expect("url"),
+            base_url: Url::new(base).expect("url"),
             credential: Some(RuntimeCredential::None {}),
             tls_trust_profile: None,
-            mtls_identity: None,
-        };
-        let runtime = runtime_builder(vec![public]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&runtime);
-        assert_has(
-            &check_runtime(&ws, &runtime),
-            CheckCode::AuthNoneNotLoopback,
-        );
-        let with_mtls = EndpointBinding {
-            endpoint: id("case-api"),
-            base_url: Url::new("https://cases.example.invalid").expect("url"),
-            credential: Some(RuntimeCredential::None {}),
-            tls_trust_profile: None,
-            mtls_identity: Some(MtlsIdentity {
+            mtls_identity: mtls.then(|| MtlsIdentity {
                 certificate_ref: SecretReference::new("secret:env/CERT").expect("secret"),
                 key_ref: SecretReference::new("secret:env/KEY").expect("secret"),
             }),
         };
-        let runtime = runtime_builder(vec![with_mtls]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&runtime);
-        assert!(
-            !codes(&check_runtime(&ws, &runtime)).contains(&CheckCode::AuthNoneNotLoopback.code())
-        );
+        let none_finds = |binding: EndpointBinding, expected: CheckCode| {
+            let runtime = runtime_builder(vec![binding]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&runtime);
+            codes(&check_runtime(&ws, &runtime)).contains(&expected.code())
+        };
+        assert!(none_finds(
+            none_binding("https://cases.example.invalid", false),
+            CheckCode::AuthNoneNotLoopback
+        ));
+        assert!(none_finds(
+            none_binding("http://cases.example.invalid", true),
+            CheckCode::AuthNoneNotLoopback
+        ));
+        assert!(!none_finds(
+            none_binding("https://cases.example.invalid", true),
+            CheckCode::AuthNoneNotLoopback
+        ));
+        assert!(!none_finds(
+            none_binding("http://127.0.0.1:8081", false),
+            CheckCode::AuthNoneNotLoopback
+        ));
+        assert!(!none_finds(
+            none_binding("http://127.0.0.1:8081", true),
+            CheckCode::AuthNoneNotLoopback
+        ));
     }
 
     #[test]
