@@ -30,6 +30,7 @@ use crate::auth::{
 };
 use registry_adapter_core::CredentialPlacement;
 use registry_platform_config::SecretResolver;
+use registry_platform_httputil::client::DEFAULT_REQUEST_TIMEOUT;
 use registry_platform_httputil::{
     TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
@@ -69,6 +70,11 @@ pub const UNREGISTERED_ERROR_CODE: &str = "unregistered-error-code";
 /// bound of the single-flight refresh: a stalled authorization server
 /// must not park every engine worker that shares the endpoint.
 pub(crate) const TOKEN_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// The ceiling one token send may take, the platform's request timeout.
+/// The layer enforces it around the send itself, so the single-flight
+/// window never depends on a `TokenSend` implementation's own timeout
+/// discipline.
+pub(crate) const TOKEN_SEND_CEILING: Duration = DEFAULT_REQUEST_TIMEOUT;
 
 /// The registered RFC 6749 and RFC 8707 code names.
 const REGISTERED_ERROR_CODES: &[&str] = &[
@@ -237,11 +243,12 @@ impl fmt::Display for TransportFailure {
 ///
 /// The send is asynchronous and its future must be `Send`: the
 /// acquisition polls it while holding the endpoint's cache lock, and the
-/// engine polls many acquisitions at once. Waiters queue for that lock
-/// for at most [`TOKEN_ADMISSION_TIMEOUT`]; past the bound a waiter
-/// fails with a transport timeout rather than block its caller, so an
-/// implementation may take as long as its own request timeout but never
-/// longer than that plus the admission bound holds anyone else.
+/// engine polls many acquisitions at once. The layer bounds every send
+/// by the cache's send ceiling, the platform's request timeout, so the
+/// single-flight window never depends on this implementation's timeout
+/// discipline; a well-behaved implementation still sets its own,
+/// shorter request timeout, which is what answers first in the normal
+/// case.
 pub trait TokenSend: Send + Sync {
     /// Send one rendered token request.
     fn send<'a>(
@@ -673,10 +680,12 @@ impl CacheState {
 /// binding with the same credential shares freshness, because the
 /// deployment holds one client identity per endpoint. The lock never
 /// poisons: a send that panics releases it, and the next waiter starts
-/// a fresh acquisition.
+/// a fresh acquisition. Both waits are bounded: a lock waiter at
+/// `admission_timeout`, a send at `send_ceiling`.
 pub struct TokenCache {
     state: Mutex<CacheState>,
     admission_timeout: Duration,
+    send_ceiling: Duration,
 }
 
 impl TokenCache {
@@ -686,6 +695,7 @@ impl TokenCache {
         Self {
             state: Mutex::new(CacheState::default()),
             admission_timeout: TOKEN_ADMISSION_TIMEOUT,
+            send_ceiling: TOKEN_SEND_CEILING,
         }
     }
 
@@ -746,14 +756,14 @@ impl Default for TokenCache {
 ///
 /// The acquisition holds the endpoint's cache lock from the miss through
 /// the store, which is the single-flight refresh: concurrent exchanges
-/// serialize behind the one request in flight, each waiting for the lock
-/// for at most the cache's admission bound before refusing with a
-/// transport timeout. The lifetime anchor is taken just before the send,
-/// the earliest moment the issuer could have issued, so a cached
-/// credential can never outlive its real expiry. An issuance that earns
-/// no cache lifetime is never stored, Evidence's rule, so the returned
-/// generation is `None` for it and a 401 about that send invalidates
-/// nothing.
+/// serialize behind the one request in flight, which the cache's send
+/// ceiling bounds, and each waiter holds the lock for at most the
+/// cache's admission bound before refusing. The lifetime anchor is
+/// taken just before the send, the earliest moment the issuer could
+/// have issued, so a cached credential can never outlive its real
+/// expiry. An issuance that earns no cache lifetime is never stored,
+/// Evidence's rule, so the returned generation is `None` for it and a
+/// 401 about that send invalidates nothing.
 pub(crate) async fn acquire_token(
     plan: &TokenEndpointPlan,
     budget: &mut TokenBudget,
@@ -788,9 +798,12 @@ pub(crate) async fn acquire_token(
         .inspect_err(|_| events.push(AuthEvent::TokenBudgetExhausted))?;
     let anchored = Instant::now();
     events.push(AuthEvent::TokenRequested);
-    let wire = match send.send(&request).await {
-        Ok(wire) => wire,
-        Err(failure) => {
+    // The ceiling around the send is this layer's, not the
+    // implementation's: a `TokenSend` without a working timeout cannot
+    // wedge the endpoint's single-flight window past it.
+    let wire = match timeout(cache.send_ceiling, send.send(&request)).await {
+        Ok(Ok(wire)) => wire,
+        Ok(Err(failure)) => {
             let fault = match failure {
                 TransportFailure::Transport(kind) => {
                     events.push(AuthEvent::TokenTransportFailed { kind: kind.kind() });
@@ -802,6 +815,16 @@ pub(crate) async fn acquire_token(
                 }
             };
             return Err(AuthError::Token(fault));
+        }
+        // The send outlived the ceiling: the request went out and no
+        // answer came back in time, which is a transport timeout.
+        Err(_elapsed) => {
+            events.push(AuthEvent::TokenTransportFailed {
+                kind: TransportKind::Timeout.kind(),
+            });
+            return Err(AuthError::Token(TokenFault::Transport {
+                kind: TransportKind::Timeout,
+            }));
         }
     };
     match read_answer(
@@ -1863,6 +1886,7 @@ mod tests {
         let cache = TokenCache {
             state: Mutex::new(CacheState::default()),
             admission_timeout: Duration::from_millis(30),
+            send_ceiling: TOKEN_SEND_CEILING,
         };
         let generation = {
             let mut guard = cache.state.lock().await;
@@ -1915,6 +1939,7 @@ mod tests {
         plan.cache = Arc::new(TokenCache {
             state: Mutex::new(CacheState::default()),
             admission_timeout: Duration::from_millis(30),
+            send_ceiling: TOKEN_SEND_CEILING,
         });
         // Hold the cache lock the way a stalled refresh would.
         let held = plan.cache.state.lock().await;
@@ -1947,6 +1972,91 @@ mod tests {
             "no budget was spent waiting"
         );
         drop(held);
+    }
+
+    /// A send that never answers cannot wedge the endpoint: the layer's
+    /// own ceiling around the send bounds the single-flight window, so
+    /// the acquisition fails with a transport timeout, the budget shows
+    /// the one send it attempted, and the cache lock is free for the
+    /// next acquisition.
+    #[tokio::test]
+    async fn a_send_that_never_answers_is_bounded_by_the_ceiling() {
+        struct NeverAnswers;
+        impl TokenSend for NeverAnswers {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(std::future::pending())
+            }
+        }
+        std::env::set_var("ADAPTER_TEST_CEILING_ID", "cid-ceiling");
+        std::env::set_var("ADAPTER_TEST_CEILING_SECRET", "csecret-ceiling");
+        let mut plan = client_secret_plan(
+            CredentialPlacement::FormBody,
+            3600,
+            None,
+            "ADAPTER_TEST_CEILING_ID",
+            "ADAPTER_TEST_CEILING_SECRET",
+        );
+        plan.cache = Arc::new(TokenCache {
+            state: Mutex::new(CacheState::default()),
+            admission_timeout: TOKEN_ADMISSION_TIMEOUT,
+            send_ceiling: Duration::from_millis(30),
+        });
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let error = acquire_token(
+            &plan,
+            &mut budget,
+            &resolver(),
+            &NeverAnswers,
+            &FixedSigner,
+            &mut events,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            AuthError::Token(TokenFault::Transport {
+                kind: TransportKind::Timeout
+            }),
+            "a send that outlives the ceiling is a transport timeout"
+        );
+        assert_eq!(
+            events,
+            vec![
+                AuthEvent::TokenRequested,
+                AuthEvent::TokenTransportFailed { kind: "timeout" }
+            ],
+            "the request went out and never answered"
+        );
+        assert_eq!(
+            budget.remaining(plan.endpoint()),
+            1,
+            "the attempted send was charged"
+        );
+        // The lock is free: the next acquisition takes the cache, sends,
+        // and answers normally.
+        let send = ScriptedSend::always(
+            200,
+            Some("application/json"),
+            r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
+        );
+        let mut events = Vec::new();
+        let (token, _) = acquire_token(
+            &plan,
+            &mut budget,
+            &resolver(),
+            &send,
+            &FixedSigner,
+            &mut events,
+        )
+        .await
+        .expect("the next acquisition takes the freed lock");
+        assert_eq!(token.as_bytes(), b"at");
+        assert_eq!(send.token_request_count(), 1);
     }
 
     /// The private-key-jwt request carries the assertion in the form
