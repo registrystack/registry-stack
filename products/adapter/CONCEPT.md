@@ -724,9 +724,8 @@ is in the profile's shape.
   frozen ceiling on one operation, as in Messaging; a value above it is
   refused, never shortened) and `maximumResponseBytes` (1 to 1048576),
   required and without default, spelled as CFG-NAME-5 and Evidence spell
-  them; the runtime binding may lower either, never raise it. A `POST`,
-  `PUT`, or `PATCH` send carries a body; one without a body is refused.
-  Divergence: Camel's `connectTimeout`, `responseTimeout`, `soTimeout`,
+  them; the runtime binding may lower either, never raise it. A `POST`
+  send carries a body; one without a body is refused. Divergence: Camel's `connectTimeout`, `responseTimeout`, `soTimeout`,
   and `connectionRequestTimeout` collapse into the one attempt timeout, and
   the facade deadline still bounds the total. A body over the bound raises
   `upstream.too-large`. A 3xx raises `upstream.redirect` whatever
