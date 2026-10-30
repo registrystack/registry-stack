@@ -5,6 +5,8 @@
 //! component kinds, and script seams (`products/adapter/CONCEPT.md`
 //! sections 8.5, 8.6, and 8.7).
 
+use std::collections::BTreeMap;
+
 use registry_platform_yaml::Digest;
 /// Serialize an externally tagged serde form under a `type` member, the
 /// shape `registry-platform-yaml`'s `tagged_union!` reads. The same helper
@@ -240,8 +242,16 @@ pub enum AggregationStrategy {
     /// Keep the newest exchange: the default for `enrich`, which replaces
     /// the body with the resource reply.
     UseLatest {},
-    /// Keep the original exchange: the default for `split`.
-    UseOriginal {},
+    /// Keep the original exchange: the default for `split`. With
+    /// `propagateException` false, the split's item failures are
+    /// swallowed and the original message returns
+    /// (manual/split-eip.html, `UseOriginalAggregationStrategy`).
+    UseOriginal {
+        /// Whether an item failure is raised after the split completes;
+        /// Camel's default is true.
+        #[serde(default = "default_true", skip_serializing_if = "is_default_true")]
+        propagate_exception: bool,
+    },
     /// Concatenate the split results into one list, Camel's `groupedBody`.
     GroupedBody {},
     /// Append one array's elements into another, refusing a duplicate
@@ -254,6 +264,11 @@ pub enum AggregationStrategy {
         /// Member whose value must stay unique across appended elements.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unique_by: Option<String>,
+        /// Property names carried out of each reply, each naming a
+        /// singular `jsonpath` on the reply body; an absent selection
+        /// removes the property (section 8.11.7).
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        properties: BTreeMap<String, String>,
     },
     /// Merge one JSON object into another. No duplicate refusal.
     JsonMerge {
@@ -261,8 +276,15 @@ pub enum AggregationStrategy {
         from: String,
         /// The message body member the object lands in.
         into: String,
+        /// Property names carried out of each reply, each naming a
+        /// singular `jsonpath` on the reply body; an absent selection
+        /// removes the property (section 8.11.7).
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        properties: BTreeMap<String, String>,
     },
-    /// A custom strategy: a Rhai entrypoint over the old and new bodies.
+    /// A custom strategy: a Rhai entrypoint over the old and new bodies,
+    /// named `oldExchange` and `newExchange` after Camel's own
+    /// `AggregationStrategy.aggregate`.
     Rhai {
         /// The script file and entrypoint, resolved against the pack's
         /// script inventory.
@@ -272,6 +294,14 @@ pub enum AggregationStrategy {
 
 registry_platform_yaml::tagged_union!(AggregationStrategy, tag = "type");
 serialize_tagged_union!(AggregationStrategy, tag = "type");
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_default_true(value: &bool) -> bool {
+    *value
+}
 
 /// A closed error class, the port of Camel's Java exception hierarchy
 /// (`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest

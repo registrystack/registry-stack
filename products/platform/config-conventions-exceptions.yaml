@@ -709,6 +709,18 @@ exceptions:
   class: protocol-constant
   reason: The member is one of the two JSON-body aggregation strategies this grammar adds beside Camel's own options; Apache Camel names no such strategy, so the kebab-case key is this grammar's own spelling, not a Camel option name
   resolution: Permanent.
+- rule: CFG-ID-1
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/3/properties/json-array-append/properties/properties
+  class: exchange-model
+  reason: "The keys name exchange properties, the adapter exchange model's own namespace: case-sensitive names a route may also `setProperty`, with the engine's reserved names camelCase (`AdapterNextContinuation`). The `LocalId` grammar would refuse the camelCase property names the exchange model itself allows, and `ExternalId` would misname a pack-chosen name as an upstream one."
+  resolution: "Permanent for the adapter pack v1alpha1 exchange-property namespace. The route registration check refuses a key under the reserved `Adapter` prefix, the same line `setProperty` holds, and the strategy carries only properties the resource route set."
+- rule: CFG-ID-1
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/4/properties/json-merge/properties/properties
+  class: exchange-model
+  reason: "The keys name exchange properties, the adapter exchange model's own namespace: case-sensitive names a route may also `setProperty`, with the engine's reserved names camelCase (`AdapterNextContinuation`). The `LocalId` grammar would refuse the camelCase property names the exchange model itself allows, and `ExternalId` would misname a pack-chosen name as an upstream one."
+  resolution: "Permanent for the adapter pack v1alpha1 exchange-property namespace. The route registration check refuses a key under the reserved `Adapter` prefix, the same line `setProperty` holds, and the strategy carries only properties the resource route set."
 - rule: CFG-NAME-4
   format: adapter/pack
   location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/CircuitBreakerStep/properties/slidingWindowCalls

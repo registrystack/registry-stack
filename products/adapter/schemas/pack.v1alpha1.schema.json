@@ -19,10 +19,16 @@
         },
         {
           "additionalProperties": false,
-          "description": "Keep the original exchange: the default for `split`.",
+          "description": "Keep the original exchange: the default for `split`. With\n`propagateException` false, the split's item failures are\nswallowed and the original message returns\n(manual/split-eip.html, `UseOriginalAggregationStrategy`).",
           "properties": {
             "use-original": {
               "additionalProperties": false,
+              "properties": {
+                "propagateException": {
+                  "description": "Whether an item failure is raised after the split completes;\nCamel's default is true.",
+                  "type": "boolean"
+                }
+              },
               "type": "object"
             }
           },
@@ -60,6 +66,13 @@
                   "description": "The message body member the array lands in.",
                   "type": "string"
                 },
+                "properties": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
+                  "type": "object"
+                },
                 "uniqueBy": {
                   "description": "Member whose value must stay unique across appended elements.",
                   "type": "string"
@@ -91,6 +104,13 @@
                 "into": {
                   "description": "The message body member the object lands in.",
                   "type": "string"
+                },
+                "properties": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
+                  "type": "object"
                 }
               },
               "required": [
@@ -107,7 +127,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A custom strategy: a Rhai entrypoint over the old and new bodies.",
+          "description": "A custom strategy: a Rhai entrypoint over the old and new bodies,\nnamed `oldExchange` and `newExchange` after Camel's own\n`AggregationStrategy.aggregate`.",
           "properties": {
             "rhai": {
               "additionalProperties": false,

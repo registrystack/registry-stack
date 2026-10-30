@@ -70,6 +70,8 @@ pub enum ScriptLoadError {
     DigestMismatch(String),
     #[error("script {path} entrypoint {entrypoint} does not compile as a one-parameter function named exchange")]
     Entrypoint { path: String, entrypoint: String },
+    #[error("script {path} entrypoint {entrypoint} does not compile as a two-parameter function named oldExchange and newExchange")]
+    EntrypointPair { path: String, entrypoint: String },
 }
 
 /// A failed entrypoint call, as the error class it raises.
@@ -107,6 +109,44 @@ impl ScriptSet {
         file: &str,
         entrypoint: &str,
     ) -> Result<(), ScriptLoadError> {
+        self.compile_into(pack, pack_directory, file, entrypoint, &["exchange"], false)
+    }
+
+    /// Compile `(file, entrypoint)` as an aggregation strategy entrypoint:
+    /// a two-parameter function over the old and new bodies, named for
+    /// Camel's own `AggregationStrategy.aggregate(oldExchange, newExchange)`
+    /// (`products/adapter/CONCEPT.md` section 8.11.7; `new` alone is a
+    /// reserved word in the pinned engine, so Camel's full names it is).
+    /// The same digest verification as [`ScriptSet::add`] applies.
+    pub fn add_aggregation(
+        &mut self,
+        pack: &AdapterPack,
+        pack_directory: &Path,
+        file: &str,
+        entrypoint: &str,
+    ) -> Result<(), ScriptLoadError> {
+        self.compile_into(
+            pack,
+            pack_directory,
+            file,
+            entrypoint,
+            &["oldExchange", "newExchange"],
+            true,
+        )
+    }
+
+    /// The shared registration: read the file behind the pack's pinned
+    /// digest and compile the entrypoint under the declared parameter
+    /// names. A pair already compiled is kept.
+    fn compile_into(
+        &mut self,
+        pack: &AdapterPack,
+        pack_directory: &Path,
+        file: &str,
+        entrypoint: &str,
+        parameters: &[&str],
+        pair: bool,
+    ) -> Result<(), ScriptLoadError> {
         let key = (file.to_owned(), entrypoint.to_owned());
         if self.compiled.contains_key(&key) {
             return Ok(());
@@ -121,14 +161,23 @@ impl ScriptSet {
         if sha256_uri(&bytes) != pinned.digest.as_str() {
             return Err(ScriptLoadError::DigestMismatch(file.to_owned()));
         }
-        let entrypoint_error = || ScriptLoadError::Entrypoint {
-            path: file.to_owned(),
-            entrypoint: entrypoint.to_owned(),
+        let entrypoint_error = || {
+            if pair {
+                ScriptLoadError::EntrypointPair {
+                    path: file.to_owned(),
+                    entrypoint: entrypoint.to_owned(),
+                }
+            } else {
+                ScriptLoadError::Entrypoint {
+                    path: file.to_owned(),
+                    entrypoint: entrypoint.to_owned(),
+                }
+            }
         };
         let source = std::str::from_utf8(&bytes).map_err(|_| entrypoint_error())?;
-        let ast = compile_entrypoint(&SCRIPT_PROFILE, source, entrypoint, &[1])
+        let ast = compile_entrypoint(&SCRIPT_PROFILE, source, entrypoint, &[parameters.len()])
             .map_err(|_: RhaiCompileError| entrypoint_error())?;
-        if entrypoint_parameters(&ast, entrypoint) != ["exchange"] {
+        if entrypoint_parameters(&ast, entrypoint).as_slice() != parameters {
             return Err(entrypoint_error());
         }
         self.compiled.insert(key, ast);
@@ -147,12 +196,42 @@ impl ScriptSet {
             .get(&(file.to_owned(), entrypoint.to_owned()))
             .ok_or(ScriptFailure::Failed)?;
         let argument = rhai::serde::to_dynamic(exchange).map_err(|_| ScriptFailure::Failed)?;
+        self.invoke(ast, entrypoint, (argument,))
+    }
+
+    /// Run one aggregation strategy entrypoint over the old and new
+    /// bodies (section 8.11.7). A split's first call passes a null `old`,
+    /// which the entrypoint sees as `()`.
+    pub fn aggregate(
+        &self,
+        file: &str,
+        entrypoint: &str,
+        old: &Value,
+        new: &Value,
+    ) -> Result<Value, ScriptFailure> {
+        let ast = self
+            .compiled
+            .get(&(file.to_owned(), entrypoint.to_owned()))
+            .ok_or(ScriptFailure::Failed)?;
+        let old_value = rhai::serde::to_dynamic(old).map_err(|_| ScriptFailure::Failed)?;
+        let new_value = rhai::serde::to_dynamic(new).map_err(|_| ScriptFailure::Failed)?;
+        self.invoke(ast, entrypoint, (old_value, new_value))
+    }
+
+    /// Call a compiled entrypoint under the profile's limits and convert
+    /// its result back to JSON.
+    fn invoke<A: rhai::FuncArgs>(
+        &self,
+        ast: &rhai::AST,
+        entrypoint: &str,
+        args: A,
+    ) -> Result<Value, ScriptFailure> {
         let engine = build_engine(
             &SCRIPT_PROFILE,
             Some(Instant::now() + CALL_DEADLINE),
             |_| {},
         );
-        let result = call_with_fresh_scope(&engine, ast, entrypoint, (argument,))
+        let result = call_with_fresh_scope(&engine, ast, entrypoint, args)
             .map_err(|error| failure(&error))?;
         rhai::serde::from_dynamic::<Value>(&result).map_err(|_| ScriptFailure::Failed)
     }

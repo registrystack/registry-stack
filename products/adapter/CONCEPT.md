@@ -501,8 +501,8 @@ otherwise. Section 8.10 is the authoritative list.
   bodies, marked as such: `json-array-append` (`from`, `into`, `uniqueBy`;
   a duplicate `uniqueBy` value raises `aggregation.duplicate`) and
   `json-merge` (`from`, `into`). A custom strategy is a `rhai` entrypoint over
-  the old and new bodies, Camel's custom `AggregationStrategy` bean in our
-  form.
+  the old and new bodies (named `oldExchange` and `newExchange`), Camel's
+  custom `AggregationStrategy` bean in our form.
 - Resilience: `circuitBreaker` with resilience4j semantics and defaults
   (section 8.7), `onFallback`; `throttle` (Camel 4: `mode` TotalRequests
   default or ConcurrentRequests, limit expression, `timePeriodMilliseconds`
@@ -934,8 +934,11 @@ What an entrypoint returns depends on its slot:
 | `setBody`, `transform`, an expression value (`setHeader`, `setProperty`, `query`, `body`, `pathParameters`, `httpUri`, `split` expression, `loop` count) | the value |
 | A predicate (`when`, `filter`, `validate`, `onWhen`, `retryWhile`, `doWhile`) | a `bool`; anything else raises `script` |
 | `script` EIP | a map of property names to values, set on the exchange; the body is unchanged |
-| A custom aggregation strategy on `split` or `loop` | `fn(old, new)`, with `old` as `()` on the first call, returning the aggregated body |
-| A custom aggregation strategy on `enrich` | `fn(original, resource)`, returning `#{ body, properties }` |
+| A custom aggregation strategy (`split`, `enrich`) | `fn(oldExchange, newExchange)`, with `oldExchange` as `()` on the first call of a split, returning `#{ body, properties }` (`body` required; `properties` names the property writes, an absent selection clearing) |
+
+`oldExchange` and `newExchange` carry Camel's own
+`AggregationStrategy.aggregate` names: `new` alone is a reserved word in
+the pinned engine, so the shorter spelling cannot compile.
 
 Each script file is its own compilation unit: an entrypoint may call
 functions defined in the same file only, and `check` refuses a call to a

@@ -14,9 +14,10 @@ use std::path::{Path, PathBuf};
 
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, Step, Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
-    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
-    ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    AdapterRuntimeConfig, AggregationStrategy, Step, ToParameters, Workspace,
+    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
+    ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
     sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider,
@@ -538,6 +539,7 @@ fn compile_binding(
 
     let mut refusal: Option<String> = None;
     let mut script_uses: Vec<(String, String)> = Vec::new();
+    let mut strategy_uses: Vec<(String, String)> = Vec::new();
     registry_adapter_core::walk_steps(&steps, &mut |step, _pointer| {
         if let Step::To(to) = step {
             let id = &to.uri.id;
@@ -552,6 +554,11 @@ fn compile_binding(
                 script_uses.push((script.file.clone(), script.entrypoint.clone()));
             }
         }
+        for strategy in step_aggregation_strategies(step) {
+            if let AggregationStrategy::Rhai { expression: script } = strategy {
+                strategy_uses.push((script.file.clone(), script.entrypoint.clone()));
+            }
+        }
     });
     if let Some(reason) = refusal {
         return Err(reason.into());
@@ -559,6 +566,13 @@ fn compile_binding(
     for (file, entrypoint) in script_uses {
         scripts
             .add(pack, pack_directory, &file, &entrypoint)
+            .map_err(|error| BindingRefusal::Fault(error.to_string()))?;
+    }
+    // A strategy script answers the old and new bodies, so it compiles as
+    // a two-parameter function.
+    for (file, entrypoint) in strategy_uses {
+        scripts
+            .add_aggregation(pack, pack_directory, &file, &entrypoint)
             .map_err(|error| BindingRefusal::Fault(error.to_string()))?;
     }
     Ok(ServedOperation {
@@ -685,19 +699,35 @@ fn step_expressions(step: &Step) -> Vec<Expression> {
             .filter_map(|clause| clause.predicate())
             .collect(),
         Step::Filter(filter) => filter.predicate().into_iter().collect(),
-        Step::To(to) => to
-            .parameters
-            .iter()
-            .flat_map(|parameters| {
-                parameters
-                    .path_parameters
-                    .values()
-                    .chain(parameters.query.values())
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .collect(),
+        Step::Split(split) => vec![split.expression.clone()],
+        Step::Loop(looped) => looped.expression().into_iter().collect(),
+        Step::To(to) => send_expressions(to.parameters.as_ref()),
+        Step::Enrich(enrich) => send_expressions(enrich.parameters.as_ref()),
         Step::OnException(clause) => clause.on_when.iter().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The path and query expressions one send carries.
+fn send_expressions(parameters: Option<&ToParameters>) -> Vec<Expression> {
+    parameters
+        .iter()
+        .flat_map(|parameters| {
+            parameters
+                .path_parameters
+                .values()
+                .chain(parameters.query.values())
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The aggregation strategies a step carries directly.
+fn step_aggregation_strategies(step: &Step) -> Vec<&AggregationStrategy> {
+    match step {
+        Step::Split(split) => split.aggregation_strategy.as_ref().into_iter().collect(),
+        Step::Enrich(enrich) => enrich.aggregation_strategy.as_ref().into_iter().collect(),
         _ => Vec::new(),
     }
 }

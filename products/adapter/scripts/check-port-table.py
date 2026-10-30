@@ -171,6 +171,36 @@ EVIDENCE: dict[str, list[str]] = {
         "checks.rs:fixtures_refuse_unknown_intercepts_and_entries",
         "fixture.rs:fixture_round_trips",
     ],
+    # Increment 1 rows, recorded as they land; pending until the increment
+    # is delivered as a whole.
+    "Splitter": [
+        "engine:tests/camel_split_loop.rs:split_runs_each_piece_under_the_engine_headers_and_returns_the_original",
+        "engine:tests/camel_split_loop.rs:a_stop_inside_a_piece_ends_the_split_and_the_route",
+        "engine:tests/camel_split_loop.rs:split_item_failures_raise_after_the_split_or_sooner_or_never",
+        "engine:tests/camel_split_loop.rs:split_failure_accounting_counts_stops_and_reports",
+        "engine:tests/camel_split_loop.rs:split_refuses_its_shape_and_bound_faults",
+    ],
+    "Loop": [
+        "engine:tests/camel_split_loop.rs:a_count_loop_repeats_with_the_loop_headers",
+        "engine:tests/camel_split_loop.rs:a_do_while_loop_tests_its_predicate_before_each_iteration",
+        "engine:tests/camel_split_loop.rs:a_loop_at_its_bound_completes_and_one_past_it_raises",
+        "engine:tests/camel_split_loop.rs:a_loop_count_must_be_an_integer_and_the_shape_must_be_well_formed",
+        "engine:tests/camel_split_loop.rs:copy_mode_starts_each_iteration_from_the_original_and_keeps_the_last",
+    ],
+    "Content Enricher": [
+        "engine:tests/camel_split_loop.rs:enrich_merges_the_resource_reply_through_its_strategy",
+        "engine:tests/camel_split_loop.rs:enrich_failure_propagates_unless_it_aggregates_on_exception",
+        "engine:tests/camel_split_loop.rs:enrich_refuses_the_unserved_shapes_at_load",
+    ],
+    "Aggregation strategies": [
+        "engine:src/processor/aggregation/mod.rs:use_latest_and_use_original_pick_their_bodies",
+        "engine:src/processor/aggregation/mod.rs:grouped_body_concatenates_and_skips_null_bodies",
+        "engine:src/processor/aggregation/mod.rs:json_array_append_appends_into_the_named_member_and_refuses_duplicates",
+        "engine:src/processor/aggregation/mod.rs:json_merge_merges_member_wise_into_the_named_member",
+        "engine:src/processor/aggregation/mod.rs:the_properties_map_sets_carries_and_clears",
+        "engine:src/processor/aggregation/mod.rs:a_custom_strategy_returns_its_body_and_properties",
+        "engine:src/processor/aggregation/mod.rs:a_custom_strategy_without_a_body_member_fails",
+    ],
 }
 
 SECTION = "### 8.10 The Camel port table"

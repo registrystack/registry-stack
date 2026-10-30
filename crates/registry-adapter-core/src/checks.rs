@@ -60,8 +60,10 @@ const ENGINE_HEADERS: &[&str] = &[
     "camelfiltermatched",
     "camelhttpresponsecode",
     "camelloopindex",
+    "camelloopsize",
     "camelsplitcomplete",
     "camelsplitindex",
+    "camelsplitresult",
     "camelsplitsize",
 ];
 

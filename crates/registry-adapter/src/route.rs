@@ -22,7 +22,8 @@ use std::pin::Pin;
 use std::time::{Duration, Instant, SystemTime};
 
 use registry_adapter_core::{
-    is_route_unwritable_header_name, ErrorClass, Expression, HttpMethod, OnExceptionStep,
+    is_route_unwritable_header_name, AdapterRuntimeConfig, AggregationStrategy, Endpoint,
+    EndpointBinding, EnrichStep, ErrorClass, Expression, HttpMethod, OnExceptionStep,
     SendComponent, SetPropertyStep, Step, ToParameters, ToStep,
 };
 use registry_platform_config::SecretResolver;
@@ -34,7 +35,7 @@ use crate::auth::{
     UpstreamStatusAction,
 };
 use crate::component::http::uri::{encode_path_segment, percent_encode, LinkRefusal};
-use crate::egress::{EgressError, EndpointEgress, OutboundSend, SendShape};
+use crate::egress::{EgressError, EgressFault, EndpointEgress, OutboundSend, SendShape};
 use crate::exchange::{
     Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
     REDELIVERY_MAX_COUNTER_HEADER, RESERVED_PROPERTY_PREFIX,
@@ -144,6 +145,59 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
             }
             Step::Stop(_) => {}
             Step::ThrowException(_) => {}
+            Step::Split(split) => {
+                if split.maximum_items.is_none() {
+                    return Err(
+                        "the split step declares no maximumItems bound; declare it".to_owned()
+                    );
+                }
+                // Stopping at the first failure leaves no threshold to
+                // reach; the authoring checks refuse the pair too.
+                if split.stop_on_exception
+                    && (split.error_threshold.is_some() || split.maximum_failed_records.is_some())
+                {
+                    return Err(
+                        "the split step sets stopOnException beside its failure accounting"
+                            .to_owned(),
+                    );
+                }
+                check_expression("split", &split.expression)?;
+                check_strategy(split.aggregation_strategy.as_ref())?;
+                check_steps(&split.steps, true)?;
+            }
+            Step::Loop(looped) => {
+                match looped.language_members() {
+                    0 => {
+                        return Err(
+                            "the loop step carries no count or predicate language key".to_owned()
+                        )
+                    }
+                    1 => {}
+                    _ => {
+                        return Err(
+                            "the loop step carries more than one count or predicate language key"
+                                .to_owned(),
+                        )
+                    }
+                }
+                if looped.maximum_iterations.is_none() {
+                    return Err(
+                        "the loop step declares no maximumIterations bound; declare it".to_owned(),
+                    );
+                }
+                if let Some(expression) = looped.expression() {
+                    if looped.do_while {
+                        check_predicate_expression("loop", &expression)?;
+                    } else {
+                        check_expression("loop", &expression)?;
+                    }
+                }
+                check_steps(&looped.steps, true)?;
+            }
+            Step::Enrich(enrich) => {
+                check_enrich(enrich)?;
+                check_strategy(enrich.aggregation_strategy.as_ref())?;
+            }
             Step::OnException(clause) if !in_clause => check_clause(clause)?,
             other => {
                 return Err(format!(
@@ -257,6 +311,69 @@ fn check_to(to: &ToStep) -> Result<(), String> {
     Ok(())
 }
 
+/// An `enrich` send holds to the same served surface as a `to` send:
+/// http component, GET, a declared path, no origin or body members. The
+/// strategy is checked beside it.
+fn check_enrich(enrich: &EnrichStep) -> Result<(), String> {
+    if enrich.uri.component != SendComponent::Http {
+        return Err("an enrich step is served for the http component only".into());
+    }
+    let Some(parameters) = &enrich.parameters else {
+        return Err("an enrich step without parameters is not served".into());
+    };
+    if !matches!(parameters.http_method, None | Some(HttpMethod::Get)) {
+        return Err("an enrich step is served for GET only".into());
+    }
+    if parameters.path.is_none() {
+        return Err("an enrich step without a path is not served".into());
+    }
+    if parameters.http_uri.is_some()
+        || parameters.body.is_some()
+        || !parameters.resume_bindings.is_empty()
+    {
+        return Err("an enrich step with httpUri, body or resumeBindings is not served".into());
+    }
+    for expression in parameters.query.values() {
+        check_expression("query", expression)?;
+    }
+    for expression in parameters.path_parameters.values() {
+        check_expression("pathParameters", expression)?;
+    }
+    parse_ok_range(parameters)?;
+    if matches!(
+        enrich.aggregation_strategy,
+        Some(AggregationStrategy::GroupedBody {})
+    ) {
+        return Err("the grouped-body strategy is served for split only".into());
+    }
+    Ok(())
+}
+
+/// The JSON strategies' `properties` selectors compile under the declared
+/// bounds before the route is registered, and the names they write stay
+/// out of the engine's reserved `Adapter` namespace, the same line
+/// `setProperty` holds (section 8.11.7).
+fn check_strategy(strategy: Option<&AggregationStrategy>) -> Result<(), String> {
+    if let Some(
+        AggregationStrategy::JsonArrayAppend { properties, .. }
+        | AggregationStrategy::JsonMerge { properties, .. },
+    ) = strategy
+    {
+        for selector in properties.values() {
+            compile_selector(selector)
+                .map_err(|fault| format!("the strategy properties jsonpath {fault}"))?;
+        }
+        for name in properties.keys() {
+            if name.starts_with(RESERVED_PROPERTY_PREFIX) {
+                return Err(format!(
+                    "the strategy may not write the reserved property {name}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_ok_range(parameters: &ToParameters) -> Result<(u16, u16), String> {
     let Some(text) = &parameters.ok_status_code_range else {
         return Ok(DEFAULT_OK_RANGE);
@@ -283,6 +400,31 @@ pub struct EndpointRuntime {
     pub base: String,
     pub attempt: Duration,
     pub maximum_response_bytes: usize,
+}
+
+impl EndpointRuntime {
+    /// Compile one endpoint's outbound state over its binding: the same
+    /// construction the loader performs per endpoint, for callers that
+    /// assemble a route context directly.
+    pub fn compile(
+        binding: &EndpointBinding,
+        declared: &Endpoint,
+        config: &AdapterRuntimeConfig,
+        resolver: &SecretResolver,
+    ) -> Result<Self, EgressFault> {
+        let egress = EndpointEgress::compile(binding, declared, config, resolver)?;
+        let base = format!(
+            "{}{}",
+            egress.origin().origin_url().trim_end_matches('/'),
+            egress.origin().base_path()
+        );
+        Ok(Self {
+            attempt: egress.attempt(),
+            maximum_response_bytes: egress.maximum_response_bytes(),
+            egress,
+            base,
+        })
+    }
 }
 
 /// What a route run needs beside the exchange.
@@ -578,6 +720,11 @@ impl Run<'_, '_> {
                 auth: None,
             }),
             Step::To(to) => self.send(to).await,
+            Step::Split(split) => processor::split::run(self, split).await,
+            Step::Loop(counted) => processor::r#loop::run(self, counted).await,
+            // Boxed: enrich sends through this same dispatcher, so an
+            // unboxed pair of futures would recurse without bound.
+            Step::Enrich(enrich) => Box::pin(processor::enrich::run(self, enrich)).await,
             // The unserved kinds never reach here: check_servable refuses
             // them by name before a route is registered.
             _ => Err(RouteFailure::of(ErrorClass::Script)),
