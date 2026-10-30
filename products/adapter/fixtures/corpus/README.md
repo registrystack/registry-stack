@@ -66,7 +66,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 79 members.
+finding per code. The corpus holds 83 members.
 
 ### Profile members
 
