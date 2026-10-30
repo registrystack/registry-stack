@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/formats/adapter/project/v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.http-uri-members: this artifact set must be refused with
+# exactly adapter.route.http-uri-members. The send carries `httpUri` beside `path`, and a query beside it; an http send carries exactly one of path and httpUri, and no query beside httpUri.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.http-uri-members/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:7fd924931e88f401832c6884f2fe2705694d2304ccc3ae62a596d419cbb3eebb
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:aad34f6af1a802d8f5e08bb052cb561254cbe1624cffa96ff20fefa578d2fe76
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

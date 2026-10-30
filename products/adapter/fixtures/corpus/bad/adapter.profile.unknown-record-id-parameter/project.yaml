@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/formats/adapter/project/v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.unknown-record-id-parameter: this artifact set must be refused with
+# exactly adapter.profile.unknown-record-id-parameter. The operation's recordIdParameter names `ghost_id`, which is no declared path parameter.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.unknown-record-id-parameter/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:264ce473eb33c50ffa9d083bcef11f7186c8fcdff051103ba20e9a40ba05436c
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:055978dd5b58197110da7690e230f5e38ffe7953414d0d24d04300cd4c2d54c3
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

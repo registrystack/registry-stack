@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.throw-exception-class: this artifact set must be refused with
+# exactly adapter.route.throw-exception-class. The route raises `facade.not-found`, a facade class no route may
+# raise.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.throw-exception-class/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - throwException:
+          exceptionType: facade.not-found
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+              filter[region]:
+                constant: west
+capabilities: {}
