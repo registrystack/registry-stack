@@ -5080,6 +5080,9 @@ dependencies = [
  "registry-platform-ratelimit",
  "registry-platform-script",
  "registry-platform-yaml",
+ "rhai",
+ "serde_json",
+ "tokio",
  "tokio-postgres",
 ]
 

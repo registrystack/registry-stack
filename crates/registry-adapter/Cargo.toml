@@ -22,6 +22,9 @@ jsonpath-rust.workspace = true
 # Steering pin, unused in code: holds jsonpath-rust's pest at 2.8.5; see
 # the comment on `pest` in the root [workspace.dependencies].
 pest.workspace = true
+tokio.workspace = true
+rhai.workspace = true
+serde_json.workspace = true
 tokio-postgres.workspace = true
 registry-adapter-core.workspace = true
 registry-platform-audit.workspace = true
