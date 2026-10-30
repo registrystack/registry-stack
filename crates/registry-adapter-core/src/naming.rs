@@ -81,6 +81,13 @@ pub const MAX_UPSTREAM_PATH_CHARACTERS: usize = 2048;
 /// The longest `from` field path a field mapping or code-map entry may name.
 pub const MAX_FIELD_PATH_CHARACTERS: usize = 256;
 
+/// The longest token-request text parameter a runtime credential may
+/// bind: `scope`, `audience`, `resource`, and `clientAssertionAudience`
+/// each travel verbatim in the token request, so the reader refuses an
+/// empty or oversized one at authoring time, with the same ceiling the
+/// auth plan enforces when it builds the request.
+pub const MAX_TOKEN_PARAMETER_BYTES: usize = 512;
+
 /// The upstream retention window an operator may declare for the audit
 /// journal, in days. It matches the platform access-log bound.
 pub const MAX_AUDIT_RETENTION_DAYS: u32 = 3_650;

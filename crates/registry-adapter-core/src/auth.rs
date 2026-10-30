@@ -158,14 +158,26 @@ pub enum RuntimeCredential {
         #[serde(rename = "clientSecretRef")]
         client_secret_ref: SecretReference,
         /// The token-request scope parameter.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "bounded_token_parameter",
+            skip_serializing_if = "Option::is_none"
+        )]
         scope: Option<String>,
         /// Fixed `audience` form parameter.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "bounded_token_parameter",
+            skip_serializing_if = "Option::is_none"
+        )]
         audience: Option<String>,
         /// RFC 8707 resource indicator sent as a token-request form
         /// parameter.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "bounded_token_parameter",
+            skip_serializing_if = "Option::is_none"
+        )]
         resource: Option<String>,
         /// Where the shared client secret travels.
         #[serde(rename = "credentialPlacement")]
@@ -201,14 +213,27 @@ pub enum RuntimeCredential {
         #[serde(
             rename = "clientAssertionAudience",
             default,
+            deserialize_with = "bounded_token_parameter",
             skip_serializing_if = "Option::is_none"
         )]
         client_assertion_audience: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "bounded_token_parameter",
+            skip_serializing_if = "Option::is_none"
+        )]
         scope: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "bounded_token_parameter",
+            skip_serializing_if = "Option::is_none"
+        )]
         audience: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "bounded_token_parameter",
+            skip_serializing_if = "Option::is_none"
+        )]
         resource: Option<String>,
         #[serde(rename = "maximumCacheSeconds")]
         maximum_cache_seconds: BoundedU64<0, 86_400>,
@@ -223,6 +248,30 @@ pub enum RuntimeCredential {
 
 registry_platform_yaml::tagged_union!(RuntimeCredential, tag = "type");
 serialize_tagged_union!(RuntimeCredential, tag = "type");
+
+/// The bound every token-request text parameter answers to at the
+/// reader: at least one byte and at most the shared ceiling, the same
+/// bound the auth plan enforces when it builds the request, so a
+/// credential that parses cannot be refused later by the plan.
+fn bounded_token_parameter<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let text = Option::<String>::deserialize(deserializer)?;
+    match text {
+        Some(text)
+            if text.is_empty() || text.len() > crate::naming::MAX_TOKEN_PARAMETER_BYTES =>
+        {
+            Err(serde::de::Error::custom(
+                registry_platform_yaml::Invalid::expected(
+                    "a token-request parameter of at least 1 and at most 512 bytes",
+                    "Write a non-empty scope, audience, resource, or clientAssertionAudience of at most 512 bytes.",
+                ),
+            ))
+        }
+        text => Ok(text),
+    }
+}
 
 impl RuntimeCredential {
     /// The kind tag this credential serializes with; it must equal the
@@ -463,5 +512,110 @@ mod tests {
             serde_json::from_str::<MtlsIdentity>(&json).ok(),
             Some(identity)
         );
+    }
+
+    /// The token-request text parameters are bounded at the reader:
+    /// `scope`, `audience`, `resource`, and `clientAssertionAudience`
+    /// each refuse below one byte or above the shared ceiling, on both
+    /// OAuth2 kinds; an absent parameter stays absent, and a parameter at
+    /// the ceiling round-trips.
+    #[test]
+    fn token_request_parameters_are_bounded_at_the_reader() {
+        fn parameter<'a>(credential: &'a RuntimeCredential, field: &str) -> Option<&'a str> {
+            let (scope, audience, resource, assertion_audience) = match credential {
+                RuntimeCredential::Oauth2ClientCredentials {
+                    scope,
+                    audience,
+                    resource,
+                    ..
+                } => (
+                    scope.as_deref(),
+                    audience.as_deref(),
+                    resource.as_deref(),
+                    None,
+                ),
+                RuntimeCredential::Oauth2PrivateKeyJwt {
+                    scope,
+                    audience,
+                    resource,
+                    client_assertion_audience,
+                    ..
+                } => (
+                    scope.as_deref(),
+                    audience.as_deref(),
+                    resource.as_deref(),
+                    client_assertion_audience.as_deref(),
+                ),
+                _ => return None,
+            };
+            match field {
+                "scope" => scope,
+                "audience" => audience,
+                "resource" => resource,
+                "clientAssertionAudience" => assertion_audience,
+                _ => unreachable!("a field of the test table"),
+            }
+        }
+        let client_credentials = |field: &str, value: Option<&str>| {
+            let mut json = serde_json::json!({
+                "type": "oauth2-client-credentials",
+                "tokenEndpoint": "https://token.example.invalid/oauth/token",
+                "clientIdRef": "secret:env/CLIENT_ID",
+                "clientSecretRef": "secret:env/SECRET",
+                "credentialPlacement": "basic-header",
+                "maximumCacheSeconds": 0
+            });
+            if let Some(value) = value {
+                json[field] = serde_json::json!(value);
+            }
+            serde_json::to_string(&json).expect("json")
+        };
+        let private_key_jwt = |field: &str, value: Option<&str>| {
+            let mut json = serde_json::json!({
+                "type": "oauth2-private-key-jwt",
+                "tokenEndpoint": "https://token.example.invalid/oauth/token",
+                "clientIdRef": "secret:env/CLIENT_ID",
+                "clientAssertionKeyRef": "secret:file/assertion.pem",
+                "maximumCacheSeconds": 0
+            });
+            if let Some(value) = value {
+                json[field] = serde_json::json!(value);
+            }
+            serde_json::to_string(&json).expect("json")
+        };
+        let at_ceiling = "s".repeat(crate::naming::MAX_TOKEN_PARAMETER_BYTES);
+        let beyond = format!("{at_ceiling}s");
+        type Builder = fn(&str, Option<&str>) -> String;
+        let kinds: [(Builder, &[&str]); 2] = [
+            (client_credentials, &["scope", "audience", "resource"]),
+            (
+                private_key_jwt,
+                &["scope", "audience", "resource", "clientAssertionAudience"],
+            ),
+        ];
+        for (kind, fields) in kinds {
+            for field in fields {
+                let credential: RuntimeCredential =
+                    serde_json::from_str(&kind(field, None)).expect("an absent parameter parses");
+                assert_eq!(parameter(&credential, field), None, "absent at {field}");
+                let credential: RuntimeCredential =
+                    serde_json::from_str(&kind(field, Some(&at_ceiling)))
+                        .expect("a parameter at the ceiling parses");
+                assert_eq!(parameter(&credential, field), Some(at_ceiling.as_str()));
+                let back = serde_json::to_string(&credential).expect("serialize");
+                let reparsed: RuntimeCredential =
+                    serde_json::from_str(&back).expect("a bound parameter round-trips");
+                assert_eq!(reparsed, credential);
+                for (value, why) in [
+                    (Some(beyond.as_str()), "beyond the ceiling"),
+                    (Some(""), "below one byte"),
+                ] {
+                    assert!(
+                        serde_json::from_str::<RuntimeCredential>(&kind(field, value)).is_err(),
+                        "{field} refuses a value {why}"
+                    );
+                }
+            }
+        }
     }
 }
