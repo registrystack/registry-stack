@@ -1616,6 +1616,7 @@ def classify(
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "documents_contracts": bool(affected & DOCUMENTS_PACKAGES),
         "documents_postgres": bool(affected & DOCUMENTS_POSTGRES_PACKAGES),
+        "adapter_contracts": bool(affected & ADAPTER_PACKAGES),
         "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

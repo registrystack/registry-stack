@@ -78,6 +78,7 @@ jobs:
       messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}
       documents_contracts: ${{ steps.filter.outputs.documents_contracts }}
       documents_postgres: ${{ steps.filter.outputs.documents_postgres }}
+      adapter_contracts: ${{ steps.filter.outputs.adapter_contracts }}
       coordinator: ${{ steps.filter.outputs.coordinator }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -1308,6 +1309,37 @@ jobs:
           DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
         run: cargo test --locked -p registry-documents --features postgres-test --test postgres_hooks
 
+  adapter-contracts:
+    name: Registry Adapter product contracts
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.adapter_contracts == 'true' }}
+    runs-on: ubuntu-24.04
+    # The script formats, lints, and tests the adapter crates, then holds the
+    # generated schemas and the configuration conventions against their
+    # generators; all of it compiles cold.
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.16"
+
+      - name: Registry Adapter contract consistency
+        run: products/adapter/scripts/check-contracts.sh
+
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime
     needs: [changes, rust-policy]
@@ -1916,6 +1948,7 @@ jobs:
       - messaging-smtp
       - documents-contracts
       - documents-postgres
+      - adapter-contracts
       - coordinator-postgres
       - config-conformance
     runs-on: ubuntu-slim
@@ -3353,6 +3386,7 @@ jobs:
       - messaging-smtp
       - documents-contracts
       - documents-postgres
+      - adapter-contracts
       - coordinator-postgres
       - config-conformance
       - release-tool
