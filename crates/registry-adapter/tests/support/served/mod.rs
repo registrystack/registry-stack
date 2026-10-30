@@ -113,6 +113,35 @@ impl Served {
 
     /// Start over the project directory at `project`.
     pub async fn start_with_project(upstream_url: &str, project: &Path) -> Self {
+        let mut served = Self::spawn_with_project(upstream_url, project).await;
+        served.wait_until_listening();
+        served
+    }
+
+    /// Start over `project` and return the stderr of an adapter that
+    /// refuses to start; panics when it starts, or never exits.
+    pub async fn refusal_with_project(upstream_url: &str, project: &Path) -> String {
+        let mut served = Self::spawn_with_project(upstream_url, project).await;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = served.child.try_wait().expect("poll the adapter") {
+                assert!(!status.success(), "the adapter exited successfully");
+                let mut stderr = String::new();
+                if let Some(mut pipe) = served.child.stderr.take() {
+                    pipe.read_to_string(&mut stderr).expect("read stderr");
+                }
+                return stderr;
+            }
+            assert!(
+                TcpStream::connect(("127.0.0.1", served.port)).is_err(),
+                "the adapter started serving"
+            );
+            assert!(Instant::now() < deadline, "the adapter never exited");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    async fn spawn_with_project(upstream_url: &str, project: &Path) -> Self {
         let database = schema_url().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
@@ -170,15 +199,13 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             .stderr(Stdio::piped())
             .spawn()
             .expect("the adapter binary starts");
-        let mut served = Self {
+        Self {
             child,
             port,
             database,
             key,
             _directory: directory,
-        };
-        served.wait_until_listening();
-        served
+        }
     }
 
     fn wait_until_listening(&mut self) {

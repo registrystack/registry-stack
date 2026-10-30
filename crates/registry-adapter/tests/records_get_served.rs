@@ -179,18 +179,7 @@ async fn a_subject_the_journal_cannot_hold_is_refused_at_authentication() {
     assert_eq!(status, 200, "{body}");
 }
 
-/// A copy of the example project whose fetch route has no shaping step, so
-/// the route ends with the source's own body; the pack digest pin in the
-/// copied project is re-pinned to the edited bytes.
-fn project_without_the_shaping_step(directory: &std::path::Path) {
-    use sha2::{Digest, Sha256};
-    fn digest_of(bytes: &[u8]) -> String {
-        let hex: String = Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        format!("sha256:{hex}")
-    }
+fn copy_example_project(directory: &std::path::Path) {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).expect("create the copy directory");
         for entry in std::fs::read_dir(from).expect("read the example directory") {
@@ -204,6 +193,21 @@ fn project_without_the_shaping_step(directory: &std::path::Path) {
         }
     }
     copy(&Served::example_project(), directory);
+}
+
+/// A copy of the example project whose fetch route has no shaping step, so
+/// the route ends with the source's own body; the pack digest pin in the
+/// copied project is re-pinned to the edited bytes.
+fn project_without_the_shaping_step(directory: &std::path::Path) {
+    use sha2::{Digest, Sha256};
+    fn digest_of(bytes: &[u8]) -> String {
+        let hex: String = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("sha256:{hex}")
+    }
+    copy_example_project(directory);
     let pack_path = directory.join("pack.yaml");
     let pack = std::fs::read_to_string(&pack_path).expect("the pack is readable");
     let step = "      - setBody:\n          rhai:\n            file: scripts/to-record.rhai\n            entrypoint: to_record\n  - id: import-tracked-entity";
@@ -299,4 +303,22 @@ async fn an_exchange_finishes_and_journals_when_the_caller_disconnects() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+}
+
+#[tokio::test]
+async fn a_script_that_fails_its_pinned_digest_refuses_startup() {
+    let upstream = UpstreamDouble::start();
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    copy_example_project(directory.path());
+    let script = directory.path().join("scripts/to-record.rhai");
+    let mut text = std::fs::read_to_string(&script).expect("the script is readable");
+    text.push_str("\n// changed after the pack pinned it\n");
+    std::fs::write(&script, text).expect("write the changed script");
+
+    let stderr = Served::refusal_with_project(&upstream.url(""), directory.path()).await;
+
+    assert!(
+        stderr.contains("does not match its pinned digest"),
+        "the refusal names its cause: {stderr}"
+    );
 }

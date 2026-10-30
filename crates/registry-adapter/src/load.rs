@@ -43,6 +43,28 @@ const ATTEMPT: Duration = Duration::from_secs(10);
 /// The largest upstream reply body a send keeps.
 const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
 
+/// Why one binding is not compiled for serving.
+enum BindingRefusal {
+    /// The runtime does not serve the binding yet (a path it does not
+    /// implement, an unbound endpoint); startup warns and goes on.
+    NotServed(String),
+    /// The binding's own files are faulty (an unreadable, uninventoried,
+    /// digest-mismatched or uncompilable script); startup refuses.
+    Fault(String),
+}
+
+impl From<String> for BindingRefusal {
+    fn from(reason: String) -> Self {
+        Self::NotServed(reason)
+    }
+}
+
+impl From<&str> for BindingRefusal {
+    fn from(reason: &str) -> Self {
+        Self::NotServed(reason.to_owned())
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum LoadError {
     #[error("{path} could not be read")]
@@ -265,7 +287,15 @@ pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, Loa
         );
         match outcome {
             Ok(operation) => served.push(operation),
-            Err(reason) => unserved.push((binding.id.as_str().to_owned(), reason)),
+            Err(BindingRefusal::NotServed(reason)) => {
+                unserved.push((binding.id.as_str().to_owned(), reason));
+            }
+            Err(BindingRefusal::Fault(reason)) => {
+                return Err(LoadError::Runtime(format!(
+                    "binding {} was refused: {reason}",
+                    binding.id.as_str()
+                )));
+            }
         }
     }
     Ok(Loaded {
@@ -292,7 +322,7 @@ fn compile_binding(
     endpoint_refusals: &BTreeMap<String, String>,
     has_cursor_key: bool,
     scripts: &mut ScriptSet,
-) -> Result<ServedOperation, String> {
+) -> Result<ServedOperation, BindingRefusal> {
     let operation = profile
         .operations
         .get(binding.operation.as_str())
@@ -307,12 +337,12 @@ fn compile_binding(
     } else if let Some(route) = pack.routes.get(route_id) {
         route.steps.clone()
     } else {
-        return Err("the binding names no route".to_owned());
+        return Err("the binding names no route".into());
     };
     if operation.pagination.is_some() && !has_cursor_key {
         return Err(
             "a paginated operation needs cursorKeyRef in the runtime config to seal its cursors"
-                .to_owned(),
+                .into(),
         );
     }
     check_servable(&steps)?;
@@ -335,12 +365,12 @@ fn compile_binding(
         }
     });
     if let Some(reason) = refusal {
-        return Err(reason);
+        return Err(reason.into());
     }
     for (file, entrypoint) in script_uses {
         scripts
             .add(pack, project_directory, &file, &entrypoint)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| BindingRefusal::Fault(error.to_string()))?;
     }
     Ok(ServedOperation {
         operation: operation.id.as_str().to_owned(),
