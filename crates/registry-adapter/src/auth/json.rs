@@ -8,9 +8,14 @@
 //! ignored after their values are validated as JSON. This reader is
 //! adapter-local over no JSON dependency: it accepts exactly the grammar
 //! RFC 8259 defines, bounds the document before parsing, bounds nesting,
-//! and hands back only the members a caller names. It never allocates for
-//! a member it skips, and a skipped value's bytes are never copied into
-//! an error, a diagnostic, or a `Debug` rendering.
+//! and hands back only the members a caller names. Member names and
+//! string values are always decoded and allocated, and text values come
+//! back in zeroizing buffers so a credential that rode in one (as
+//! `access_token` does) is erased when the members drop; a skipped
+//! value's bytes are never copied into an error, a diagnostic, or a
+//! `Debug` rendering.
+
+use zeroize::Zeroizing;
 
 /// Why a document is not one readable JSON object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,8 +38,9 @@ pub(crate) enum JsonFault {
 /// to refuse both rather than round them.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum JsonMember {
-    /// A decoded JSON string.
-    Text(String),
+    /// A decoded JSON string, in a zeroizing buffer: a text value can
+    /// carry a credential, as `access_token` does.
+    Text(Zeroizing<String>),
     /// A number with no sign, fraction, or exponent.
     Unsigned(u64),
     /// Any other value: a signed or fractional number, a boolean, null,
@@ -54,7 +60,7 @@ pub(crate) const MAXIMUM_JSON_DEPTH: usize = 8;
 pub(crate) fn parse_object(
     bytes: &[u8],
     bound: usize,
-) -> Result<Vec<(String, JsonMember)>, JsonFault> {
+) -> Result<Vec<(Zeroizing<String>, JsonMember)>, JsonFault> {
     if bytes.is_empty() || bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
         return Err(JsonFault::Empty);
     }
@@ -103,9 +109,11 @@ fn escape_is_valid(bytes: &[u8], cursor: usize) -> Option<usize> {
     }
 }
 
-/// Decode a JSON string's contents, escapes included, into text; a lone
-/// surrogate half or invalid UTF-8 refuses.
-fn decode_string(raw: &[u8]) -> Option<String> {
+/// Decode a JSON string's contents, escapes included, into text in a
+/// zeroizing buffer; a lone surrogate half or invalid UTF-8 refuses. The
+/// decoded buffer is pre-sized to the raw length, so decoding never
+/// reallocates and never frees a copy of a decoded value.
+fn decode_string(raw: &[u8]) -> Option<Zeroizing<String>> {
     let mut text: Vec<u8> = Vec::with_capacity(raw.len());
     let mut index = 0;
     while index < raw.len() {
@@ -160,7 +168,7 @@ fn decode_string(raw: &[u8]) -> Option<String> {
         }
         index += 1;
     }
-    String::from_utf8(text).ok()
+    String::from_utf8(text).ok().map(Zeroizing::new)
 }
 
 /// Skip JSON whitespace.
@@ -174,9 +182,13 @@ fn skip_whitespace(bytes: &[u8], cursor: &mut usize) {
 }
 
 /// Read one string, opening quote at `cursor`, validating as it goes.
-fn read_string(bytes: &[u8], cursor: &mut usize) -> Result<String, JsonFault> {
+/// The raw bytes gather into one buffer pre-sized to the span up to the
+/// closing quote, so gathering never reallocates and never frees a copy
+/// of a value mid-read.
+fn read_string(bytes: &[u8], cursor: &mut usize) -> Result<Zeroizing<String>, JsonFault> {
     *cursor += 1;
-    let mut raw: Vec<u8> = Vec::new();
+    let close = closing_quote(bytes, *cursor).ok_or(JsonFault::Invalid)?;
+    let mut raw = Zeroizing::new(Vec::with_capacity(close - *cursor));
     loop {
         let byte = bytes.get(*cursor).copied().ok_or(JsonFault::Invalid)?;
         if byte == b'"' {
@@ -196,6 +208,23 @@ fn read_string(bytes: &[u8], cursor: &mut usize) -> Result<String, JsonFault> {
         *cursor += 1;
     }
     decode_string(&raw).ok_or(JsonFault::Invalid)
+}
+
+/// The index of the closing quote of the string whose contents start at
+/// `from`, treating a backslash as quoting the byte after it; `None`
+/// when the document ends inside the string. The span is a size bound
+/// only: the escape and byte rules still decide validity as the string
+/// is read.
+fn closing_quote(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut index = from;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => return Some(index),
+            b'\\' => index += 2,
+            _ => index += 1,
+        }
+    }
+    None
 }
 
 /// Read one JSON number at `cursor`, classifying it as an unsigned count
@@ -278,7 +307,7 @@ fn read_object(
     bytes: &[u8],
     cursor: &mut usize,
     depth: usize,
-) -> Result<Vec<(String, JsonMember)>, JsonFault> {
+) -> Result<Vec<(Zeroizing<String>, JsonMember)>, JsonFault> {
     *cursor += 1;
     skip_whitespace(bytes, cursor);
     let mut members = Vec::new();
@@ -299,7 +328,10 @@ fn read_object(
         *cursor += 1;
         skip_whitespace(bytes, cursor);
         let value = read_value(bytes, cursor, depth)?;
-        if members.iter().any(|(existing, _)| existing == &name) {
+        if members
+            .iter()
+            .any(|(existing, _)| existing.as_str() == name.as_str())
+        {
             return Err(JsonFault::DuplicateMember);
         }
         members.push((name, value));
@@ -356,8 +388,15 @@ fn expect_literal(
 mod tests {
     use super::*;
 
-    fn text(name: &str, value: &str) -> (String, JsonMember) {
-        (name.to_owned(), JsonMember::Text(value.to_owned()))
+    fn text(name: &str, value: &str) -> (Zeroizing<String>, JsonMember) {
+        (
+            Zeroizing::new(name.to_owned()),
+            JsonMember::Text(Zeroizing::new(value.to_owned())),
+        )
+    }
+
+    fn member(name: &str, value: JsonMember) -> (Zeroizing<String>, JsonMember) {
+        (Zeroizing::new(name.to_owned()), value)
     }
 
     /// The members a token response carries, read in document order, with
@@ -374,9 +413,9 @@ mod tests {
             vec![
                 text("access_token", "at"),
                 text("token_type", "Bearer"),
-                ("expires_in".to_owned(), JsonMember::Unsigned(3600)),
-                ("refresh_expires_in".to_owned(), JsonMember::Unsigned(0)),
-                ("not-before-policy".to_owned(), JsonMember::Unsigned(0)),
+                member("expires_in", JsonMember::Unsigned(3600)),
+                member("refresh_expires_in", JsonMember::Unsigned(0)),
+                member("not-before-policy", JsonMember::Unsigned(0)),
             ]
         );
     }
@@ -394,8 +433,8 @@ mod tests {
             members,
             vec![
                 text("known", "v"),
-                ("nested".to_owned(), JsonMember::Other),
-                ("tail".to_owned(), JsonMember::Unsigned(7)),
+                member("nested", JsonMember::Other),
+                member("tail", JsonMember::Unsigned(7)),
             ]
         );
     }
@@ -495,13 +534,7 @@ mod tests {
             1024,
         )
         .expect("escapes decode");
-        assert_eq!(
-            members,
-            vec![(
-                "a".to_owned(),
-                JsonMember::Text("line\nbreak A\u{1f600} / \"q\"".to_owned())
-            )]
-        );
+        assert_eq!(members, vec![text("a", "line\nbreak A\u{1f600} / \"q\"")]);
     }
 
     /// The byte bound refuses before parsing.

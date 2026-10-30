@@ -29,6 +29,7 @@ use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 /// One request the double received, headers and body complete.
 #[derive(Debug, Clone)]
@@ -427,6 +428,6 @@ fn read_token_wire(stream: &mut TcpStream) -> Result<TokenWire, TransportFailure
     Ok(TokenWire {
         status,
         media_type,
-        body,
+        body: Zeroizing::new(body),
     })
 }

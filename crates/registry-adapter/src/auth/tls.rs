@@ -22,6 +22,7 @@ use registry_platform_httputil::destination::{
     DestinationTlsMaterial, MAX_DESTINATION_CA_BUNDLE_BYTES,
 };
 use std::fmt;
+use zeroize::Zeroizing;
 
 /// Why a binding's outbound TLS material could not be resolved or
 /// built. Every rendering is fixed text; none carries a reference name,
@@ -114,7 +115,7 @@ impl EndpointTls {
                 joined.extend_from_slice(certificate.as_bytes());
                 joined.push(b'\n');
                 joined.extend_from_slice(key.as_bytes());
-                Some(ProtectedText::from_owned(joined))
+                Some(ProtectedText::from_owned(Zeroizing::new(joined)))
             }
             None => None,
         };

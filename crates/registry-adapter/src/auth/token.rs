@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
+use zeroize::Zeroizing;
 
 /// What a token request accepts, fixed.
 pub const TOKEN_REQUEST_ACCEPT: &str = "application/json";
@@ -169,8 +170,9 @@ impl fmt::Display for TokenFault {
 /// One rendered token request: the fixed destination, the optional
 /// Basic client authentication, and the form body, which carries every
 /// other credential. The transport adds the fixed `accept` and
-/// `content-type` headers and never logs the body.
-#[derive(Debug, PartialEq)]
+/// `content-type` headers and never logs the body. No `PartialEq`: the
+/// body is a secret buffer, and equality of secrets is never asked.
+#[derive(Debug)]
 pub struct TokenRequest {
     /// The fixed token endpoint, absolute.
     pub url: String,
@@ -184,16 +186,16 @@ pub struct TokenRequest {
 /// What came back from one token send. The body is the caller's to
 /// bound; this layer refuses one beyond
 /// [`MAXIMUM_TOKEN_RESPONSE_BYTES`]. Deliberately not `Clone`: the body
-/// carries an issued credential, and copies stay inside zeroizing
-/// buffers.
+/// carries an issued credential, and the one buffer it arrives in is
+/// zeroizing, erased the moment the answer is read.
 pub struct TokenWire {
     /// The HTTP status.
     pub status: u16,
     /// The media type without parameters, as the transport read it;
     /// `None` when the response carried no usable `content-type`.
     pub media_type: Option<String>,
-    /// The response body bytes.
-    pub body: Vec<u8>,
+    /// The response body bytes in a zeroizing buffer.
+    pub body: Zeroizing<Vec<u8>>,
 }
 
 /// Why a token send did not reach a response.
@@ -812,10 +814,10 @@ pub(crate) fn parse_token_response(
 /// One member read as text: absent is `None`, present but not a string is
 /// [`TokenFault::Invalid`].
 fn member_text<'a>(
-    members: &'a [(String, JsonMember)],
+    members: &'a [(Zeroizing<String>, JsonMember)],
     name: &str,
 ) -> Result<Option<&'a str>, TokenFault> {
-    match members.iter().find(|(member, _)| member == name) {
+    match members.iter().find(|(member, _)| member.as_str() == name) {
         Some((_, JsonMember::Text(value))) => Ok(Some(value.as_str())),
         Some((_, _)) => Err(TokenFault::Invalid),
         None => Ok(None),
@@ -824,10 +826,10 @@ fn member_text<'a>(
 
 /// One member read as an unsigned count, the same way.
 fn member_unsigned(
-    members: &[(String, JsonMember)],
+    members: &[(Zeroizing<String>, JsonMember)],
     name: &str,
 ) -> Result<Option<u64>, TokenFault> {
-    match members.iter().find(|(member, _)| member == name) {
+    match members.iter().find(|(member, _)| member.as_str() == name) {
         Some((_, JsonMember::Unsigned(value))) => Ok(Some(*value)),
         Some((_, _)) => Err(TokenFault::Invalid),
         None => Ok(None),
@@ -973,7 +975,7 @@ mod tests {
                 Ok(TokenWire {
                     status: self.status,
                     media_type: self.media_type.map(str::to_owned),
-                    body: self.body.as_bytes().to_vec(),
+                    body: Zeroizing::new(self.body.as_bytes().to_vec()),
                 })
             })
         }
@@ -1004,8 +1006,9 @@ mod tests {
                 br#"{"access_token":"at","token_type":"Bearer"}"#,
                 None,
                 None
-            ),
-            Err(TokenFault::NoLifetime),
+            )
+            .unwrap_err(),
+            TokenFault::NoLifetime,
             "the missing lifetime is a credential error, not a protocol one"
         );
         let (_, lifetime) = parse_token_response(
@@ -1031,8 +1034,8 @@ mod tests {
         ];
         for body in bodies {
             assert_eq!(
-                parse_token_response(body, None, Some(Duration::from_secs(60))),
-                Err(TokenFault::Invalid),
+                parse_token_response(body, None, Some(Duration::from_secs(60))).unwrap_err(),
+                TokenFault::Invalid,
                 "{} must refuse",
                 String::from_utf8_lossy(body)
             );
@@ -1054,8 +1057,8 @@ mod tests {
         ];
         for body in bodies {
             assert_eq!(
-                parse_token_response(body, None, None),
-                Err(TokenFault::Invalid),
+                parse_token_response(body, None, None).unwrap_err(),
+                TokenFault::Invalid,
                 "{} must refuse",
                 String::from_utf8_lossy(body)
             );
@@ -1065,8 +1068,8 @@ mod tests {
             "a".repeat(MAXIMUM_CREDENTIAL_BYTES + 1)
         );
         assert_eq!(
-            parse_token_response(long.as_bytes(), None, None),
-            Err(TokenFault::Invalid)
+            parse_token_response(long.as_bytes(), None, None).unwrap_err(),
+            TokenFault::Invalid
         );
     }
 
@@ -1080,8 +1083,9 @@ mod tests {
                 br#"{"access_token":"at","token_type":"Bearer","expires_in":60,"scope":"read"}"#,
                 Some("read write"),
                 None,
-            ),
-            Err(TokenFault::ScopeNarrowed)
+            )
+            .unwrap_err(),
+            TokenFault::ScopeNarrowed
         );
         parse_token_response(
             br#"{"access_token":"at","token_type":"Bearer","expires_in":60,"scope":"read write"}"#,
@@ -1094,16 +1098,17 @@ mod tests {
                 br#"{"access_token":"at","token_type":"Bearer","expires_in":60,"scope":""}"#,
                 None,
                 None,
-            ),
-            Err(TokenFault::Invalid)
+            )
+            .unwrap_err(),
+            TokenFault::Invalid
         );
         let long = format!(
             "{{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":60,\"scope\":\"{}\"}}",
             "s".repeat(513)
         );
         assert_eq!(
-            parse_token_response(long.as_bytes(), None, None),
-            Err(TokenFault::Invalid)
+            parse_token_response(long.as_bytes(), None, None).unwrap_err(),
+            TokenFault::Invalid
         );
     }
 
@@ -1113,16 +1118,16 @@ mod tests {
     fn unreadable_bodies_refuse() {
         let oversized = vec![b' '; MAXIMUM_TOKEN_RESPONSE_BYTES as usize + 1];
         assert_eq!(
-            parse_token_response(&oversized, None, None),
-            Err(TokenFault::Unreadable)
+            parse_token_response(&oversized, None, None).unwrap_err(),
+            TokenFault::Unreadable
         );
         assert_eq!(
-            parse_token_response(b"[]", None, None),
-            Err(TokenFault::Unreadable)
+            parse_token_response(b"[]", None, None).unwrap_err(),
+            TokenFault::Unreadable
         );
         assert_eq!(
-            parse_token_response(br#"{"a":1,"a":2}"#, None, None),
-            Err(TokenFault::Unreadable)
+            parse_token_response(br#"{"a":1,"a":2}"#, None, None).unwrap_err(),
+            TokenFault::Unreadable
         );
     }
 
@@ -1484,8 +1489,10 @@ mod tests {
                     Ok(TokenWire {
                         status: 200,
                         media_type: Some("application/json".to_owned()),
-                        body: br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
-                            .to_vec(),
+                        body: Zeroizing::new(
+                            br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
+                                .to_vec(),
+                        ),
                     })
                 })
             }
@@ -1633,8 +1640,8 @@ mod tests {
             },
         );
         assert_eq!(
-            plan.render(&resolver(), &FixedSigner),
-            Err(AuthError::Credential)
+            plan.render(&resolver(), &FixedSigner).unwrap_err(),
+            AuthError::Credential
         );
     }
 }

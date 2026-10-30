@@ -3,47 +3,52 @@
 //! Credential material: the zeroizing buffers and encodings the auth
 //! layer builds (`products/adapter/CONCEPT.md` section 10.2).
 //!
-//! Everything secret the layer holds lives in [`ProtectedText`], a buffer
-//! this layer erases with volatile writes when dropped. Nothing outside
+//! Everything secret the layer holds lives in [`ProtectedText`], a
+//! buffer the `zeroize` crate erases when dropped. Nothing outside
 //! this module renders a secret: `Debug` is redacted, there is no
 //! `Display`, and the only reader is the byte slice the outbound request
 //! builder copies while marking the header sensitive. Resolved source
 //! secrets stay in `registry-platform-config`'s `ProtectedSecret`, which
 //! erases the same way.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use std::fmt;
+use zeroize::Zeroizing;
 
-/// Secret bytes this layer erases when dropped.
+/// Secret bytes the `zeroize` crate erases when dropped.
 ///
-/// The buffer is written over in `Drop` behind a `black_box` barrier the
-/// compiler must treat as observable, the strongest erasure available
-/// under the workspace's `forbid(unsafe_code)` without the `zeroize`
-/// dependency this crate does not yet link; resolved source secrets
-/// additionally spend their whole resolved life inside
-/// `registry-platform-config`'s zeroizing `ProtectedSecret`. Swap the
-/// barrier for `zeroize::Zeroizing` when the manifest carries it. There
-/// is no `Display`, and `Debug` never carries the bytes.
-#[derive(Clone, PartialEq)]
-pub struct ProtectedText(Vec<u8>);
+/// The buffer is [`Zeroizing`]: its drop writes zeros through volatile
+/// stores the compiler cannot elide, behind barriers that defeat
+/// copy-propagation, so the secret cannot be recovered from released
+/// memory. Resolved source secrets additionally spend their whole
+/// resolved life inside `registry-platform-config`'s zeroizing
+/// `ProtectedSecret`. There is no `Display`, `Debug` never carries the
+/// bytes, and there is no `PartialEq`: equality of secret bytes is never
+/// asked, and a comparison would leak length by early exit.
+#[derive(Clone)]
+pub struct ProtectedText(Zeroizing<Vec<u8>>);
 
 impl ProtectedText {
-    /// Wrap text the layer will place in a request.
+    /// Wrap text the layer will place in a request. The caller's source
+    /// buffer is not erased.
     #[must_use]
     pub fn from_str_value(text: &str) -> Self {
-        Self(text.as_bytes().to_vec())
+        Self(Zeroizing::new(text.as_bytes().to_vec()))
     }
 
-    /// Wrap bytes the layer will place in a request.
+    /// Wrap bytes the layer will place in a request. The caller's source
+    /// buffer is not erased.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self(bytes.to_vec())
+        Self(Zeroizing::new(bytes.to_vec()))
     }
 
     /// Take ownership of bytes built inside this layer, so a derived
     /// credential is never copied into an unprotected buffer on its way
-    /// in.
+    /// in; the buffer is already zeroizing.
     #[must_use]
-    pub(crate) fn from_owned(bytes: Vec<u8>) -> Self {
+    pub(crate) fn from_owned(bytes: Zeroizing<Vec<u8>>) -> Self {
         Self(bytes)
     }
 
@@ -51,7 +56,7 @@ impl ProtectedText {
     /// reader; callers must not retain or render them.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0
+        self.0.as_slice()
     }
 
     /// The buffered byte count.
@@ -67,38 +72,17 @@ impl ProtectedText {
     }
 }
 
-impl Drop for ProtectedText {
-    fn drop(&mut self) {
-        erase(&mut self.0);
-    }
-}
-
 impl fmt::Debug for ProtectedText {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ProtectedText([REDACTED])")
     }
 }
 
-/// Erase a buffer before its memory returns to the allocator.
-///
-/// The plain stores sit behind a `black_box` barrier: the compiler must
-/// assume the buffer can be read through the pointer it observed, so it
-/// cannot elide the stores as dead. This is the barrier this crate can
-/// build under the workspace's `forbid(unsafe_code)`; `zeroize`'s
-/// volatile writes are stronger and replace this loop when the crate
-/// links that dependency.
-fn erase(bytes: &mut [u8]) {
-    for byte in bytes.iter_mut() {
-        *byte = 0;
-    }
-    std::hint::black_box(bytes);
-}
-
 /// One header the auth layer injects at send time: the fixed header name
 /// and the credential value in a zeroizing buffer. The value is copied
 /// into the outbound request and marked sensitive there; it never enters
 /// an exchange, a property, a diagnostic, or the journal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct AuthHeader {
     name: String,
     value: ProtectedText,
@@ -144,6 +128,8 @@ pub(crate) enum MaterialFault {
 /// Encode one `Authorization: Basic` value from the resolved pair, the
 /// way Evidence does: refuse an empty username or password, refuse a
 /// colon in the username, then base64 the `username:password` bytes.
+/// Every intermediate that holds the pair or its encoding is zeroizing
+/// and pre-sized, so no reallocation frees a copy.
 pub(crate) fn basic_value(
     username: &[u8],
     password: &[u8],
@@ -154,15 +140,24 @@ pub(crate) fn basic_value(
     if username.contains(&b':') {
         return Err(MaterialFault::UsernameColon);
     }
-    let mut joined = Vec::with_capacity(username.len() + 1 + password.len());
+    let mut joined = Zeroizing::new(Vec::with_capacity(username.len() + 1 + password.len()));
     joined.extend_from_slice(username);
     joined.push(b':');
     joined.extend_from_slice(password);
-    let encoded = base64_standard(&joined);
-    let mut value = Vec::with_capacity(6 + encoded.len());
+    let mut encoded = Zeroizing::new(vec![0_u8; encoded_len(&joined)]);
+    STANDARD
+        .encode_slice(joined.as_slice(), encoded.as_mut_slice())
+        .expect("the pre-sized buffer holds the standard encoding");
+    let mut value = Zeroizing::new(Vec::with_capacity(6 + encoded.len()));
     value.extend_from_slice(b"Basic ");
-    value.extend_from_slice(encoded.as_bytes());
+    value.extend_from_slice(encoded.as_slice());
     Ok(ProtectedText::from_owned(value))
+}
+
+/// The standard-base64 length of `bytes` with padding, so the encoding
+/// lands in one pre-sized buffer with no reallocation.
+fn encoded_len(bytes: &[u8]) -> usize {
+    bytes.len().div_ceil(3) * 4
 }
 
 /// Encode one `Authorization: <scheme> <token>` value; the token must be
@@ -174,7 +169,7 @@ pub(crate) fn scheme_value(scheme: &str, token: &[u8]) -> Result<ProtectedText, 
     if !token.iter().all(|byte| (0x21..=0x7e).contains(byte)) {
         return Err(MaterialFault::NotVisibleAscii);
     }
-    let mut value = Vec::with_capacity(scheme.len() + 1 + token.len());
+    let mut value = Zeroizing::new(Vec::with_capacity(scheme.len() + 1 + token.len()));
     value.extend_from_slice(scheme.as_bytes());
     value.push(b' ');
     value.extend_from_slice(token);
@@ -183,9 +178,18 @@ pub(crate) fn scheme_value(scheme: &str, token: &[u8]) -> Result<ProtectedText, 
 
 /// Encode one `application/x-www-form-urlencoded` body from ordered
 /// pairs. Values are encoded so no credential byte can cross into the
-/// request target or a header.
+/// request target or a header. The exact encoded length is computed
+/// first, so the body is built in one zeroizing buffer and no
+/// reallocation frees a copy of the client secret or assertion.
 pub(crate) fn form_body(pairs: &[(&str, &str)]) -> ProtectedText {
-    let mut body: Vec<u8> = Vec::new();
+    let mut capacity = 0;
+    for (index, (name, value)) in pairs.iter().enumerate() {
+        if index > 0 {
+            capacity += 1;
+        }
+        capacity += form_encoded_len(name.as_bytes()) + 1 + form_encoded_len(value.as_bytes());
+    }
+    let mut body = Zeroizing::new(Vec::with_capacity(capacity));
     for (index, (name, value)) in pairs.iter().enumerate() {
         if index > 0 {
             body.push(b'&');
@@ -195,6 +199,18 @@ pub(crate) fn form_body(pairs: &[(&str, &str)]) -> ProtectedText {
         form_encode_into(&mut body, value.as_bytes());
     }
     ProtectedText::from_owned(body)
+}
+
+/// The percent-encoded length of one member: unreserved bytes and space
+/// stay one byte, everything else becomes three hex bytes.
+fn form_encoded_len(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .map(|&byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b' ' => 1,
+            _ => 3,
+        })
+        .sum()
 }
 
 /// Percent-encode one form member: unreserved bytes as they are, space
@@ -214,30 +230,6 @@ fn form_encode_into(out: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
-/// Standard base64 with padding, as the Basic scheme specifies.
-pub(crate) fn base64_standard(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let triple = (u32::from(chunk[0]) << 16)
-            | (u32::from(chunk.get(1).copied().unwrap_or(0)) << 8)
-            | u32::from(chunk.get(2).copied().unwrap_or(0));
-        out.push(ALPHABET[(triple >> 18) as usize & 0x3f] as char);
-        out.push(ALPHABET[(triple >> 12) as usize & 0x3f] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(triple >> 6) as usize & 0x3f] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[triple as usize & 0x3f] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
 /// Whether the bytes can travel as one header value: visible ASCII,
 /// space, or an extension byte, never a control byte or DEL.
 pub(crate) fn is_header_value_bytes(bytes: &[u8]) -> bool {
@@ -248,7 +240,9 @@ pub(crate) fn is_header_value_bytes(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    /// The buffer is readable by the transport and never rendered.
+    /// The buffer is readable by the transport and never rendered; the
+    /// inner buffer is `Zeroizing`, whose drop performs the volatile
+    /// zeroize.
     #[test]
     fn protected_text_holds_and_redacts() {
         let text = ProtectedText::from_str_value("secret-canary");
@@ -261,39 +255,31 @@ mod tests {
         assert!(!format!("{clone:?}").contains("secret-canary"));
     }
 
-    /// The Basic value is the standard encoding of `user:password`, and
-    /// the split is refused where it would be ambiguous.
+    /// The Basic value is the standard encoding of `user:password`, with
+    /// and without base64 padding, and the split is refused where it
+    /// would be ambiguous.
     #[test]
     fn basic_values_encode_and_refuse() {
         let value = basic_value(b"user", b"pass").expect("a usable pair");
         assert_eq!(value.as_bytes(), b"Basic dXNlcjpwYXNz");
+        // "user:password" is 13 bytes, so the encoding pads with `==`.
+        let value = basic_value(b"user", b"password").expect("a usable pair");
+        assert_eq!(value.as_bytes(), b"Basic dXNlcjpwYXNzd29yZA==");
         assert_eq!(
-            basic_value(b"", b"pass"),
-            Err(MaterialFault::Empty),
+            basic_value(b"", b"pass").unwrap_err(),
+            MaterialFault::Empty,
             "an empty username is unusable"
         );
         assert_eq!(
-            basic_value(b"user", b""),
-            Err(MaterialFault::Empty),
+            basic_value(b"user", b"").unwrap_err(),
+            MaterialFault::Empty,
             "an empty password is unusable"
         );
         assert_eq!(
-            basic_value(b"us:er", b"pass"),
-            Err(MaterialFault::UsernameColon),
+            basic_value(b"us:er", b"pass").unwrap_err(),
+            MaterialFault::UsernameColon,
             "a colon in the username would move the split"
         );
-    }
-
-    /// Base64 vectors from RFC 4648.
-    #[test]
-    fn base64_matches_rfc_4648() {
-        assert_eq!(base64_standard(b""), "");
-        assert_eq!(base64_standard(b"f"), "Zg==");
-        assert_eq!(base64_standard(b"fo"), "Zm8=");
-        assert_eq!(base64_standard(b"foo"), "Zm9v");
-        assert_eq!(base64_standard(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_standard(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_standard(b"foobar"), "Zm9vYmFy");
     }
 
     /// A scheme value joins with one space and refuses a token that could
@@ -303,13 +289,16 @@ mod tests {
         let value = scheme_value("ApiToken", b"abc123").expect("a usable token");
         assert_eq!(value.as_bytes(), b"ApiToken abc123");
         assert_eq!(
-            scheme_value("Bearer", b"to ken"),
-            Err(MaterialFault::NotVisibleAscii)
+            scheme_value("Bearer", b"to ken").unwrap_err(),
+            MaterialFault::NotVisibleAscii
         );
-        assert_eq!(scheme_value("Bearer", b""), Err(MaterialFault::Empty));
         assert_eq!(
-            scheme_value("Bearer", b"line\nbreak"),
-            Err(MaterialFault::NotVisibleAscii)
+            scheme_value("Bearer", b"").unwrap_err(),
+            MaterialFault::Empty
+        );
+        assert_eq!(
+            scheme_value("Bearer", b"line\nbreak").unwrap_err(),
+            MaterialFault::NotVisibleAscii
         );
     }
 
@@ -323,6 +312,30 @@ mod tests {
             body.as_bytes(),
             b"grant_type=client_credentials&scope=a+b%26c%3Dd"
         );
+    }
+
+    /// The first pass pre-sizes the body exactly: the built length is
+    /// the length it computed, so the single zeroizing buffer never
+    /// reallocates and never frees a copy of a credential byte.
+    #[test]
+    fn form_body_capacity_is_exact() {
+        let pairs = [
+            ("grant_type", "client_credentials"),
+            ("client_secret", "s3cr3t & more=="),
+            ("scope", "a b&c=d"),
+        ];
+        let expected: usize = pairs
+            .iter()
+            .enumerate()
+            .map(|(index, (name, value))| {
+                let separator = if index > 0 { 1 } else { 0 };
+                separator
+                    + form_encoded_len(name.as_bytes())
+                    + 1
+                    + form_encoded_len(value.as_bytes())
+            })
+            .sum();
+        assert_eq!(form_body(&pairs).len(), expected);
     }
 
     /// Header-value bytes accept visible ASCII, space, and extension

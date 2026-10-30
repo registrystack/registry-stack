@@ -1116,6 +1116,7 @@ mod tests {
         use crate::auth::{TokenRequest, TokenWire};
         use std::future::Future;
         use std::pin::Pin;
+        use zeroize::Zeroizing;
 
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("CLIENT_SECRET", "csecret");
@@ -1133,8 +1134,10 @@ mod tests {
                     Ok(TokenWire {
                         status: 200,
                         media_type: Some("application/json".to_owned()),
-                        body: br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
-                            .to_vec(),
+                        body: Zeroizing::new(
+                            br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
+                                .to_vec(),
+                        ),
                     })
                 })
             }
@@ -1243,6 +1246,7 @@ mod tests {
         use crate::auth::{TokenRequest, TokenWire};
         use std::future::Future;
         use std::pin::Pin;
+        use zeroize::Zeroizing;
 
         std::env::set_var("ADAPTER_TEST_TWO_A_ID", "cid-a");
         std::env::set_var("ADAPTER_TEST_TWO_A_SECRET", "secret-a");
@@ -1269,10 +1273,12 @@ mod tests {
                     Ok(TokenWire {
                         status: 200,
                         media_type: Some("application/json".to_owned()),
-                        body: format!(
-                            r#"{{"access_token":"issued-{host}","token_type":"Bearer","expires_in":600}}"#
-                        )
-                        .into_bytes(),
+                        body: Zeroizing::new(
+                            format!(
+                                r#"{{"access_token":"issued-{host}","token_type":"Bearer","expires_in":600}}"#
+                            )
+                            .into_bytes(),
+                        ),
                     })
                 })
             }
