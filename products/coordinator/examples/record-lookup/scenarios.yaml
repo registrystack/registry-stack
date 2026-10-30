@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Synthetic replies. These cases do not prove BReg lookup selectors, profile
+# grants or access policy, and contact no product.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: one-record-found-and-read-with-provenance
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    nationalId: synthetic-1
+  replies:
+    lookup:
+    - type: success
+      value:
+        recordIdentifier: 00000000-0000-4000-8000-0000000000a1
+        revisionIdentifier: '7'
+        domainData:
+          name: Synthetic Registrant
+        provenance:
+          recordIdentifier: 00000000-0000-4000-8000-0000000000a1
+          revisionIdentifier: '7'
+          observedAt: '2026-10-09T09:00:00Z'
+    read:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: registry
+          datasetIdentifier: dataset
+          entityTypeIdentifier: registrant
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-0000000000a1
+          revisionIdentifier: '7'
+          domainData:
+            name: Synthetic Registrant
+        provenance:
+          recordIdentifier: 00000000-0000-4000-8000-0000000000a1
+          revisionIdentifier: '7'
+          etag: '"breg-record-000000000001"'
+          observedAt: '2026-10-09T09:00:01Z'
+  expect:
+    path: [lookup, read, registered]
+    state: completed
+    outcome: {type: named, value: registered}
+    output:
+      recordId: 00000000-0000-4000-8000-0000000000a1
+      revisionIdentifier: '7'
+      observedAt: '2026-10-09T09:00:01Z'
+- id: unresolved-finishes-without-a-change
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    nationalId: synthetic-unknown
+  replies:
+    lookup:
+    - type: declared-refusal
+      refusalCode: unresolved
+  expect:
+    path: [lookup, not-registered]
+    state: completed
+    outcome: {type: named, value: not-registered}
+- id: a-forbidden-lookup-is-a-failure-not-an-absence
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    nationalId: synthetic-1
+  replies:
+    lookup:
+    - type: refused
+      code: product-forbidden
+  expect:
+    path: [lookup]
+    state: refused
+    outcome: {type: none}

@@ -206,6 +206,46 @@ check` warns `coordinator.read-in-force.may-be-ambiguous` unless some `temporal-
 constraint on the entity is scoped only by fields the subject names, since otherwise BReg allows
 two records for the same subject on the same date.
 
+### Looking up a record and reading it with provenance
+
+`breg.lookup-record/v1` finds the one record that a set of identifier fields resolves to, through
+BReg's compiled `:lookup` selector. Its input is `entity` (the record-type route), `selector` (the
+compiled lookup name) and `values`, a nested `fields` mapping of one to sixteen identifier fields.
+Each value is text, a whole number or a flag. It never accepts a filter string, and `check`
+refuses an empty or oversized `values` mapping. Coordinator sends the `:lookup` request with no
+ETag. A selector that needs a verified claim and no field values cannot be reached by a service
+identity, so the request is refused as `invalid-command` before BReg is contacted.
+
+| BReg answer | Step result |
+|---|---|
+| One record | Success: `recordIdentifier`, string `revisionIdentifier`, `domainData` and `provenance`. |
+| `lookup.unresolved` | The declared refusal `unresolved`, which `onDeclaredRefusal` may route. An unrouted refusal stops the run as `product-refused`. |
+| 401, 403 or 404 (other than `lookup.unresolved`) | A failure of the lookup through the ordinary error path. It is never `unresolved`. |
+
+BReg answers one value-free `lookup.unresolved` whether no record matched, two matched, the row is
+hidden from the profile, or a claim was missing, so Coordinator cannot tell those apart and
+neither can the workflow. For that reason `check` refuses an `onDeclaredRefusal` that routes
+`unresolved` straight to a step whose operation changes data (`definition.unresolved-route`):
+"not found, so create" makes a duplicate when two records match or one is hidden. The builder
+cost is one extra step: route to a finish or another read, and change data from a later step
+once a person or that read has decided. Only the direct route is refused; a mutation later on
+the path is allowed.
+
+`breg.read-record/v2` takes the same input as `breg.read-record/v1` and returns the same record
+envelope plus a `provenance` member. `breg.read-record/v1` is unchanged, so existing bindings
+keep their exact input and output. A BReg answer that already carries a `provenance` member is
+refused as `invalid-response` rather than overwritten.
+
+`provenance` holds `recordIdentifier`, `revisionIdentifier`, `etag` where BReg sends one, and
+`observedAt`. `observedAt` is Coordinator's clock when the read returned, as an RFC 3339 instant
+in UTC. It says when the workflow looked, not when the fact became true. A lookup's provenance
+omits `etag`, because lookup sends and receives none.
+
+Grants: `breg.lookup-record/v1` needs the BReg profile operation `lookup` and
+`breg.read-record/v2` needs `get`. `coordinatorctl check` does not read BReg profiles, so a
+missing grant is not found offline. It shows at run time as the failure `product-forbidden`,
+never as `unresolved`.
+
 ### Connection, codes and catalog
 
 A `breg` connection gains two optional members. `resultCheckSeconds` spaces Proposal reads, with
@@ -226,6 +266,7 @@ carries its sentence as its `message`.
 | `coordinator.read-in-force.may-be-ambiguous` | `check` warning | "The register allows two records in force for this subject on one date, so this read can hold the run. Add a temporal-non-overlap constraint over these subject fields in BReg, or name every field the constraint is scoped by." |
 | `definition.proposal-not-run-owned` | `check` error | "Cancel only a request this run started or submitted: map proposalId from that step's output." |
 | `definition.read-in-force-entity` | `check` error | "This record type has no date validity interval, so no record can be in force on a date." |
+| `definition.unresolved-route` | `check` error | "A lookup is unresolved when no record matches, but also when two records match or a record is hidden from this profile, so creating a record from this route can make a duplicate. Route unresolved to a finish or to another read, and change data from a later step." |
 | `mapping.fields-depth` | `check` error | "This fields mapping nests deeper than 4 levels. Flatten it, or build the inner value in an earlier step." |
 | `mapping.fields-count` | `check` error | "This fields mapping builds more than 64 members across its levels. Remove members, or build part of the value in an earlier step." |
 | `proposal-unreadable` | run hold | "BReg refused or concealed the request. Check the connection profile's get grant and row boundary, then retry." |
@@ -247,9 +288,9 @@ takes `{entity, subject, date}` and returns one Registry Record (`recordIdentifi
 `revisionIdentifier`, `domainData`) with its provenance: `asOf`, the date BReg echoed in the
 response `meta`, and `observedAt`, Coordinator's clock when the read returned. The declared
 refusal is `none-in-force`. The completion kind list gains `breg-proposal`, whose catalog
-`minimumIntervalSeconds` is 30, as for Casework `result`. `breg.lookup-record/v1` and
-`breg.read-record/v2` are outside this contract; their own lane specifies them with the same
-`asOf` and `observedAt` provenance.
+`minimumIntervalSeconds` is 30, as for Casework `result`. The catalog also gains
+`breg.lookup-record/v1` and `breg.read-record/v2`, described under "Looking up a record and
+reading it with provenance".
 
 ## Standalone review and named completions
 
