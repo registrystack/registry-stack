@@ -465,6 +465,78 @@ async fn task_binding_requires_an_unexpired_approval_and_never_uses_standing_aut
 }
 
 #[tokio::test]
+async fn a_provenance_read_follows_the_same_authority_rules_as_a_plain_read() {
+    use registry_coordinator::runtime::TaskAuthorityConfig;
+    let issuer = issuer().await;
+    let authority = MockServer::start().await;
+    let breg = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(root.path(), &issuer, &breg.uri(), &breg.uri());
+    let grant = uuid::Uuid::new_v4();
+    let expiry = chrono::Utc::now().timestamp() + 120;
+    let mut request = CallRequest {
+        operation_contract: None,
+        connection: "applications".into(),
+        operation: Operation::ReadRecordV2,
+        input: json!({"collection":"applications","recordId":RECORD,
+            "grant":{"id":grant,"expiresAt":expiry}}),
+        idempotency_key: None,
+    };
+    // A standing connection takes no grant.
+    let standing = HttpAdapters::new(&config).unwrap();
+    assert!(
+        matches!(standing.call(&request).await, CallOutcome::Refused{code} if code == "invalid-command")
+    );
+    config
+        .connections
+        .get_mut("applications")
+        .unwrap()
+        .authorization_mut()
+        .unwrap()
+        .task_authority = Some(TaskAuthorityConfig {
+        base_url: authority.uri().parse().unwrap(),
+        issuer: "https://casework.example".into(),
+        subject: "coordinator-reader".into(),
+        exchange_audience: issuer.issuer(),
+        bootstrap_resource: "urn:example:applications".into(),
+    });
+    let task = HttpAdapters::new(&config).unwrap();
+    // A task connection needs a grant, and never falls back to the standing identity.
+    let mut without = request.clone();
+    without.input.as_object_mut().unwrap().remove("grant");
+    assert!(
+        matches!(task.call(&without).await, CallOutcome::Refused{code} if code == "invalid-command")
+    );
+    request.input["grant"] = json!({"id":"bearer-canary","expiresAt":123});
+    assert!(
+        matches!(task.call(&request).await, CallOutcome::Refused{code} if code == "invalid-command")
+    );
+    assert!(authority.received_requests().await.unwrap().is_empty());
+    // A well-formed grant goes to the authority; its answer here carries no
+    // usable assertion, so the read is refused before it reaches BReg.
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/task-grants/{grant}/assertion")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", TRACE)
+                .set_body_json(
+                    json!({"assertion":"sensitive-assertion-canary","expiresAt":expiry,
+                "grantExpiresAt":expiry+1}),
+                ),
+        )
+        .expect(1)
+        .mount(&authority)
+        .await;
+    request.input["grant"] = json!({"id":grant,"expiresAt":expiry});
+    assert!(
+        matches!(task.call(&request).await, CallOutcome::Refused{code} if code == "credential-refused")
+    );
+    authority.verify().await;
+    assert!(breg.received_requests().await.unwrap().is_empty());
+    issuer.stop().await;
+}
+
+#[tokio::test]
 async fn authority_deadline_mismatch_and_revocation_never_reach_breg() {
     use registry_coordinator::runtime::TaskAuthorityConfig;
     let issuer = issuer().await;

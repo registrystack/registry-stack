@@ -270,6 +270,50 @@ fn a_subject_field_outside_the_record_type_is_refused() {
 }
 
 #[test]
+fn a_subject_with_no_fields_or_more_than_sixteen_is_refused() {
+    let mut schema = record_schema(Some("date"), json!([["district"]]));
+    let names: Vec<String> = (0..17).map(|index| format!("f{index}")).collect();
+    for name in &names {
+        schema["properties"][name] = json!({"type": "string"});
+    }
+    let mut seventeen = serde_json::Map::new();
+    for name in &names {
+        seventeen.insert(name.clone(), json!({"type": "literal", "value": "x"}));
+    }
+    for (case, bound, subject) in [
+        (
+            "no fields",
+            "at least 1 members",
+            json!({"type": "fields", "fields": {}}),
+        ),
+        (
+            "more than sixteen fields",
+            "at most 16 members",
+            json!({"type": "fields", "fields": seventeen}),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), &project(subject, true), &schema);
+        let (exit, report) = cli(root.path(), &["check"]);
+        assert_eq!(exit, 1, "{case}: {report}");
+        assert!(
+            report["diagnostics"][0]["path"]
+                .as_str()
+                .unwrap()
+                .starts_with("/workflow/steps/call/input"),
+            "{case}: {report}"
+        );
+        assert!(
+            report["diagnostics"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains(bound),
+            "{case}: {report}"
+        );
+    }
+}
+
+#[test]
 fn a_subject_the_constraint_scope_covers_passes_without_a_warning() {
     let root = tempfile::tempdir().unwrap();
     // The scope is a subset of the subject fields, so one subject cannot
