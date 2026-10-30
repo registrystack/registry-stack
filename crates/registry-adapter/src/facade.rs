@@ -756,7 +756,10 @@ mod tests {
         for profile in value["accessProfiles"].as_array_mut().expect("profiles") {
             profile["scopes"] = scopes.clone();
         }
-        value.as_object_mut().expect("a mapping").retain(|key, _| key != "apiVersion" && key != "kind");
+        value
+            .as_object_mut()
+            .expect("a mapping")
+            .retain(|key, _| key != "apiVersion" && key != "kind");
         serde_json::from_value(value).expect("the project deserializes")
     }
 

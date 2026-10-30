@@ -481,6 +481,15 @@
   "additionalProperties": false,
   "description": "The operator runtime configuration artifact (`AdapterRuntimeConfig`).",
   "properties": {
+    "allowedClients": {
+      "description": "The OAuth clients whose access tokens the facade admits, matched\nagainst the token's client claim. At least one: a list that admits\nevery client the issuer verifies is an omission, not a policy.",
+      "items": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
     "allowedPrivateCidrs": {
       "description": "The private ranges egress may reach, at least one and at most the\nplatform bound (CFG-EMPTY-2).",
       "items": {
@@ -546,6 +555,7 @@
     }
   },
   "required": [
+    "allowedClients",
     "allowedPrivateCidrs",
     "apiVersion",
     "audit",

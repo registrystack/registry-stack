@@ -703,11 +703,18 @@ mod served_tests {
 
     #[test]
     fn a_path_slot_that_is_a_dot_segment_is_refused_anywhere_in_the_path() {
-        for template in ["/api/v1/patients/{{id}}", "/api/v1/patients/{{id}}/consents"] {
+        for template in [
+            "/api/v1/patients/{{id}}",
+            "/api/v1/patients/{{id}}/consents",
+        ] {
             for refused in ["", ".", ".."] {
                 let result = fill_path(template, |_| Ok(json!(refused)));
                 let failure = result.expect_err("refused");
-                assert_eq!(failure.class, ErrorClass::Validation, "{template} {refused}");
+                assert_eq!(
+                    failure.class,
+                    ErrorClass::Validation,
+                    "{template} {refused}"
+                );
             }
             let filled = fill_path(template, |_| Ok(json!("a.b/..c"))).expect("filled");
             assert!(filled.contains("a.b%2F..c"), "{filled}");

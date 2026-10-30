@@ -135,6 +135,8 @@ oidc:
   jwksSource:
     type: static
     documentRef: secret:env/TEST_JWKS
+allowedClients:
+  - synthetic-client
 allowedPrivateCidrs:
   - 127.0.0.0/8
 audit:
@@ -225,26 +227,31 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
 
     /// A token for `subject` holding `scope`.
     pub fn token_for(&self, subject: &str, scope: &str) -> String {
+        self.token_with(subject, scope, json!({}))
+    }
+
+    /// A token for `subject` holding `scope`, with `extra` claims written
+    /// over the standard ones (a client, an assertion issuer, a long `sub`).
+    pub fn token_with(&self, subject: &str, scope: &str, extra: Value) -> String {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("epoch")
             .as_secs();
-        sign_compact_jwt_with_key(
-            &self.key,
-            "at+jwt",
-            "canary-resource-key",
-            json!({
-                "iss": ISSUER,
-                "aud": AUDIENCE,
-                "sub": subject,
-                "client_id": "synthetic-client",
-                "scope": scope,
-                "iat": now,
-                "nbf": now,
-                "exp": now + 300,
-                "jti": format!("jti-{now}-{}", NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed)),
-            }),
-        )
+        let mut claims = json!({
+            "iss": ISSUER,
+            "aud": AUDIENCE,
+            "sub": subject,
+            "client_id": "synthetic-client",
+            "scope": scope,
+            "iat": now,
+            "nbf": now,
+            "exp": now + 300,
+            "jti": format!("jti-{now}-{}", NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed)),
+        });
+        for (name, value) in extra.as_object().expect("extra claims are an object") {
+            claims[name] = value.clone();
+        }
+        sign_compact_jwt_with_key(&self.key, "at+jwt", "canary-resource-key", claims)
     }
 
     /// One GET over a fresh connection: status, headers, JSON body.

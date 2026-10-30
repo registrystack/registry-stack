@@ -33,6 +33,10 @@ database:
 oidc:
   issuer: https://issuer.example.invalid
   audience: registry-adapter-example
+allowedClients:
+  # The OAuth clients whose access tokens the facade admits; a token from
+  # any other client is refused even when the issuer signed it.
+  - registry-adapter-example-client
 allowedPrivateCidrs:
   # The private ranges this deployment may call upstream. The example
   # range stands in for the deployment's own; private endpoints stay

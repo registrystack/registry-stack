@@ -1165,6 +1165,8 @@ database:
 oidc:
   issuer: https://issuer.example.invalid
   audience: ${{ADAPTERCTL_TEST_AUDIENCE:-case-api}}
+allowedClients:
+  - case-portal
 allowedPrivateCidrs:
   - 10.0.0.0/8
 audit:

@@ -821,6 +821,7 @@ mod outbound_tls {
                     "issuer": "https://issuer.example.invalid",
                     "audience": "case-api"
                 }},
+                "allowedClients": ["case-portal"],
                 "audit": {{ "retentionDays": 90 }}
             }}"#
         ))

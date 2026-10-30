@@ -8043,6 +8043,8 @@ mod tests {
                 r#"{ "issuer": "https://issuer.example.invalid", "audience": "case-api" }"#,
             )
             .expect("oidc"),
+            allowed_clients: UniqueList::new(vec![ExternalId::new("case-portal").expect("id")])
+                .expect("unique"),
             audit: AuditRetention {
                 retention_days: BoundedU32::<1, 3_650>::new(90).expect("retention"),
             },

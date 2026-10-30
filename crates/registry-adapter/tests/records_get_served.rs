@@ -131,3 +131,50 @@ async fn a_dot_segment_record_identifier_never_reaches_the_upstream() {
         "no dot segment was sent upstream"
     );
 }
+
+#[tokio::test]
+async fn a_token_from_an_unlisted_client_is_refused_before_any_upstream_call() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let served = Served::start(&upstream.url("")).await;
+
+    let stranger = served.token_with("subject", "records.read", json!({"client_id": "stranger"}));
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&stranger));
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
+async fn an_exchanged_token_is_refused_because_no_assertion_authority_is_declared() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let served = Served::start(&upstream.url("")).await;
+
+    let exchanged = served.token_with(
+        "subject",
+        "records.read",
+        json!({registry_platform_oidc::ASSERTION_ISSUER_CLAIM: "https://other.example.invalid"}),
+    );
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&exchanged));
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_subject_the_journal_cannot_hold_is_refused_at_authentication() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let served = Served::start(&upstream.url("")).await;
+
+    for subject in ["s".repeat(257), "nul\u{0}subject".to_owned()] {
+        let token = served.token_for(&subject, "records.read");
+        let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+        assert_eq!(status, 401, "{body}");
+    }
+    let ok = served.token_for(&"s".repeat(256), "records.read");
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&ok));
+    assert_eq!(status, 200, "{body}");
+}

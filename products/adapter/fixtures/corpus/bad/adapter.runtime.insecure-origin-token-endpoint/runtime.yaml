@@ -29,5 +29,7 @@ database:
 oidc:
   issuer: https://issuer.example.invalid
   audience: case-api
+allowedClients:
+  - registry-adapter-example-client
 audit:
   retentionDays: 90

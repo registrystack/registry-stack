@@ -170,6 +170,12 @@ pub struct AdapterRuntimeConfig {
     /// The OIDC issuer that authenticates facade callers, from the
     /// platform shared block (`products/adapter/CONCEPT.md` section 6).
     pub oidc: OidcIssuerConfig,
+    /// The OAuth clients whose access tokens the facade admits, matched
+    /// against the token's client claim. At least one: a list that admits
+    /// every client the issuer verifies is an omission, not a policy.
+    #[serde(deserialize_with = "at_least_one_client")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "at_least_one_client_schema"))]
+    pub allowed_clients: UniqueList<ExternalId>,
     /// The journal retention.
     pub audit: AuditRetention,
     /// The secret that seals pagination cursors: exactly 32 bytes. A
@@ -209,6 +215,31 @@ fn at_least_one_cidr_schema(generator: &mut schemars::SchemaGenerator) -> schema
         "minItems": 1,
         "uniqueItems": true,
         "items": generator.subschema_for::<Cidr>(),
+    })
+}
+
+/// The client list cannot be empty: a deployment that names no client
+/// admits none.
+fn at_least_one_client<'de, D>(deserializer: D) -> Result<UniqueList<ExternalId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let list = UniqueList::<ExternalId>::deserialize(deserializer)?;
+    if list.is_empty() {
+        return Err(serde::de::Error::custom(
+            "allowedClients carries at least one client identifier",
+        ));
+    }
+    Ok(list)
+}
+
+#[cfg(feature = "schema")]
+fn at_least_one_client_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": generator.subschema_for::<ExternalId>(),
     })
 }
 
@@ -274,6 +305,8 @@ mod tests {
                 }"#,
             )
             .expect("oidc"),
+            allowed_clients: UniqueList::new(vec![ExternalId::new("case-portal").expect("id")])
+                .expect("unique"),
             audit: AuditRetention {
                 retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
                     .expect("retention"),
@@ -306,6 +339,7 @@ mod tests {
                     "issuer": "https://issuer.example.invalid",
                     "audience": "case-api"
                 }},
+                "allowedClients": ["case-portal"],
                 "audit": {{ "retentionDays": 90 }}
             }}"#,
             serde_json::to_string(&binding()).expect("binding json"),
@@ -343,6 +377,7 @@ mod tests {
                     "issuer": "https://issuer.example.invalid",
                     "audience": "case-api"
                 },
+                "allowedClients": ["case-portal"],
                 "audit": { "retentionDays": 90 }
             }"#;
         assert!(serde_json::from_str::<AdapterRuntimeConfig>(json).is_err());
@@ -372,6 +407,7 @@ mod tests {
                     "issuer": "https://issuer.example.invalid",
                     "audience": "case-api"
                 },
+                "allowedClients": ["case-portal"],
                 "audit": { "retentionDays": 90 }
             }"#;
         let json = |cidrs: &str| {
@@ -385,6 +421,38 @@ mod tests {
         let read =
             serde_json::from_str::<AdapterRuntimeConfig>(&json(r#"["10.0.0.0/8"]"#)).expect("read");
         assert_eq!(read.allowed_private_cidrs.len(), 1);
+    }
+
+    /// The client list is required and cannot be empty: omission and an
+    /// explicit empty list are both refused.
+    #[test]
+    fn the_allowed_clients_carry_at_least_one_client() {
+        let head = r#"{
+                "id": "case-deployment",
+                "endpoints": [],
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "listener": { "bind": "127.0.0.1:8080" },
+                "database": {
+                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                    "migrationUrlRef": "secret:env/DB_MIGRATION"
+                },
+                "oidc": {
+                    "issuer": "https://issuer.example.invalid",
+                    "audience": "case-api"
+                },
+                "audit": { "retentionDays": 90 }
+            }"#;
+        let json = |clients: &str| {
+            head.replace(
+                r#""endpoints": [],"#,
+                &format!(r#""endpoints": [], "allowedClients": {clients},"#),
+            )
+        };
+        assert!(serde_json::from_str::<AdapterRuntimeConfig>(head).is_err());
+        assert!(serde_json::from_str::<AdapterRuntimeConfig>(&json("[]")).is_err());
+        let read = serde_json::from_str::<AdapterRuntimeConfig>(&json(r#"["case-portal"]"#))
+            .expect("read");
+        assert_eq!(read.allowed_clients.len(), 1);
     }
 
     /// Duplicate endpoint bindings are refused at the reader (CFG-ID-5).

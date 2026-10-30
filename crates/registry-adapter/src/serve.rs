@@ -17,9 +17,9 @@ use registry_platform_config::{
     DatabaseConfig, JwksSource, SecretReference as ConfigSecretReference, SecretResolver,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
-    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError, TokenVerifier,
-    TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AuthenticationStage,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use registry_platform_yaml::SecretReference;
 use thiserror::Error;
@@ -63,18 +63,30 @@ pub enum CallerRefusal {
     Unavailable,
 }
 
+/// The longest subject the journal's caller reference column holds.
+const MAXIMUM_SUBJECT_BYTES: usize = 256;
+
 pub struct Authenticator {
     verifier: TokenVerifier,
 }
 
 impl Authenticator {
     pub async fn authenticate(&self, token: &str) -> Result<Caller, CallerRefusal> {
-        validate_compact_access_token(token).map_err(|_| CallerRefusal::Unauthenticated)?;
-        let verified = self
-            .verifier
-            .verify(token)
-            .await
-            .map_err(|error| match error {
+        validate_compact_access_token(token).map_err(|_| {
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                AuthenticationStage::Header,
+                "Adapter authentication refused"
+            );
+            CallerRefusal::Unauthenticated
+        })?;
+        let verified = self.verifier.verify(token).await.map_err(|error| {
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                error.authentication_stage(),
+                "Adapter authentication refused"
+            );
+            match error {
                 OidcError::Transport(_)
                 | OidcError::BoundedRead(_)
                 | OidcError::FetchUrl(_)
@@ -86,13 +98,34 @@ impl Authenticator {
                 | OidcError::MissingIssuer
                 | OidcError::ConflictingEndpointConfiguration => CallerRefusal::Unavailable,
                 _ => CallerRefusal::Unauthenticated,
-            })?;
+            }
+        })?;
+        // An exchanged token names the authority whose assertion produced
+        // it. This runtime declares no assertion authority, so it admits
+        // no exchanged token.
+        if verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
+            tracing::debug!(
+                "an exchanged credential arrived at a deployment that declares no assertion authority"
+            );
+            return Err(CallerRefusal::Unauthenticated);
+        }
         let reference = verified
             .claims
             .sub
             .clone()
-            .filter(|subject| !subject.is_empty())
-            .ok_or(CallerRefusal::Unauthenticated)?;
+            .filter(|subject| {
+                !subject.is_empty()
+                    && subject.len() <= MAXIMUM_SUBJECT_BYTES
+                    && !subject.contains('\0')
+            })
+            .ok_or_else(|| {
+                registry_platform_oidc::log_authentication_refusal!(
+                    self.verifier,
+                    AuthenticationStage::Profile,
+                    "Adapter authentication refused: the subject is absent or unusable as a caller reference"
+                );
+                CallerRefusal::Unauthenticated
+            })?;
         Ok(Caller {
             reference,
             scopes: verified.scopes,
@@ -146,6 +179,13 @@ async fn authenticator(
         vec![oidc.audience.clone()],
         vec![Algorithm::RS256, Algorithm::ES256],
         access_token_typ_set(ACCESS_TOKEN_TYPE),
+    )
+    .with_allowed_clients(
+        runtime
+            .allowed_clients
+            .iter()
+            .map(|client| client.as_str().to_owned())
+            .collect(),
     );
     Ok(Authenticator {
         verifier: TokenVerifier::new(config, Arc::new(keys)),
