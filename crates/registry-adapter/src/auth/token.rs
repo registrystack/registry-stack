@@ -104,6 +104,10 @@ pub enum TokenFault {
         /// The coarse transport failure kind.
         kind: TransportKind,
     },
+    /// The platform's destination policy refused the token send before
+    /// it went out: the engine refusing to egress is never a transport
+    /// outcome and is never catchable.
+    EgressRefused,
     /// The token endpoint declined to issue a credential.
     Refused {
         /// The registered RFC 6749 or RFC 8707 code name, or the fixed
@@ -140,6 +144,9 @@ impl fmt::Display for TokenFault {
             Self::Transport { kind } => {
                 write!(formatter, "the token request did not complete: {kind}")
             }
+            Self::EgressRefused => formatter.write_str(
+                "the token request was refused by the destination policy before it was sent",
+            ),
             Self::Refused { code } => {
                 write!(
                     formatter,
@@ -200,18 +207,27 @@ pub struct TokenWire {
 
 /// Why a token send did not reach a response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransportFailure {
-    /// The coarse transport failure kind.
-    pub kind: TransportKind,
+pub enum TransportFailure {
+    /// A transport-level outcome: the send went out and the exchange
+    /// failed in one of the coarse ways [`TransportKind`] names.
+    Transport(TransportKind),
+    /// The platform's destination policy refused the send before it
+    /// went out: the engine refusing to egress is not a transport
+    /// outcome, and a `TokenSend` implementation must never fold it
+    /// into a transport kind.
+    PolicyRefused,
 }
 
 impl fmt::Display for TransportFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "the token request did not complete: {}",
-            self.kind
-        )
+        match self {
+            Self::Transport(kind) => {
+                write!(formatter, "the token request did not complete: {kind}")
+            }
+            Self::PolicyRefused => formatter.write_str(
+                "the token request was refused by the destination policy before it was sent",
+            ),
+        }
     }
 }
 
@@ -770,12 +786,17 @@ pub(crate) async fn acquire_token(
     let wire = match send.send(&request).await {
         Ok(wire) => wire,
         Err(failure) => {
-            events.push(AuthEvent::TokenTransportFailed {
-                kind: failure.kind.kind(),
-            });
-            return Err(AuthError::Token(TokenFault::Transport {
-                kind: failure.kind,
-            }));
+            let fault = match failure {
+                TransportFailure::Transport(kind) => {
+                    events.push(AuthEvent::TokenTransportFailed { kind: kind.kind() });
+                    TokenFault::Transport { kind }
+                }
+                TransportFailure::PolicyRefused => {
+                    events.push(AuthEvent::TokenEgressRefused);
+                    TokenFault::EgressRefused
+                }
+            };
+            return Err(AuthError::Token(fault));
         }
     };
     match read_answer(
@@ -807,6 +828,9 @@ pub(crate) async fn acquire_token(
                 }
                 TokenFault::Redirect => {
                     events.push(AuthEvent::TokenRedirected);
+                }
+                TokenFault::EgressRefused => {
+                    events.push(AuthEvent::TokenEgressRefused);
                 }
                 TokenFault::Unavailable { status } => {
                     events.push(AuthEvent::TokenUnavailable { status });
@@ -1517,6 +1541,56 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error, AuthError::Token(TokenFault::Unreadable));
+    }
+
+    /// A destination-policy refusal is not a transport outcome: the
+    /// fault is the uncatchable egress refusal, the journal keeps its
+    /// own value-free event, and nothing is issued.
+    #[tokio::test]
+    async fn a_policy_refused_send_is_egress_refused() {
+        use std::future::Future;
+        use std::pin::Pin;
+
+        struct PolicyRefuses;
+        impl TokenSend for PolicyRefuses {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async { Err(TransportFailure::PolicyRefused) })
+            }
+        }
+        std::env::set_var("ADAPTER_TEST_EGRESS_ID", "cid-egress");
+        std::env::set_var("ADAPTER_TEST_EGRESS_SECRET", "csecret-egress");
+        let mut events = Vec::new();
+        let error = acquire_token(
+            &client_secret_plan(
+                CredentialPlacement::BasicHeader,
+                3600,
+                None,
+                "ADAPTER_TEST_EGRESS_ID",
+                "ADAPTER_TEST_EGRESS_SECRET",
+            ),
+            &mut TokenBudget::new_exchange(),
+            &resolver(),
+            &PolicyRefuses,
+            &FixedSigner,
+            &mut events,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, AuthError::Token(TokenFault::EgressRefused));
+        assert_eq!(
+            error.class(),
+            "egress.refused",
+            "the engine refusing to egress is uncatchable"
+        );
+        assert_eq!(
+            events,
+            [AuthEvent::TokenRequested, AuthEvent::TokenEgressRefused],
+            "no token was issued and no transport kind was recorded"
+        );
     }
 
     /// The status decides the fault and its class before any body is

@@ -1299,11 +1299,7 @@ mod tests {
                 _request: &'a TokenRequest,
             ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
             {
-                Box::pin(async {
-                    Err(TransportFailure {
-                        kind: TransportKind::Connect,
-                    })
-                })
+                Box::pin(async { Err(TransportFailure::Transport(TransportKind::Connect)) })
             }
         }
 
@@ -1898,11 +1894,7 @@ mod tests {
                 _request: &'a TokenRequest,
             ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
             {
-                Box::pin(async {
-                    Err(TransportFailure {
-                        kind: TransportKind::Connect,
-                    })
-                })
+                Box::pin(async { Err(TransportFailure::Transport(TransportKind::Connect)) })
             }
         }
 

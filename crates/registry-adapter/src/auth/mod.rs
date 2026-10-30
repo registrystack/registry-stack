@@ -109,10 +109,17 @@ impl AuthError {
                     TransportKind::Connect | TransportKind::Exchange => "upstream.connection",
                     TransportKind::Timeout => "upstream.timeout",
                     TransportKind::ResponseTooLarge => "upstream.too-large",
-                    // A transport kind this build predates is still a
-                    // transport-level failure of the token send.
-                    _ => "upstream.connection",
+                    // A transport kind this build predates may be a
+                    // policy refusal in disguise: the engine did not get
+                    // an answer it understands, so the fault is the
+                    // uncatchable egress refusal, never a catchable
+                    // connection error a fallback could mask.
+                    _ => "egress.refused",
                 },
+                // The destination policy refused the send before it
+                // went out; the engine refusing to egress is
+                // uncatchable, like every other pre-send refusal.
+                TokenFault::EgressRefused => "egress.refused",
                 TokenFault::Refused { .. }
                 | TokenFault::ScopeNarrowed
                 | TokenFault::NoLifetime
@@ -175,6 +182,9 @@ pub enum AuthEvent {
         /// The coarse transport failure kind.
         kind: &'static str,
     },
+    /// The token request was refused by the destination policy before
+    /// it was sent; the engine refusing to egress is uncatchable.
+    TokenEgressRefused,
     /// A cached credential was discarded after an upstream 401.
     TokenInvalidatedAfterUnauthorized,
     /// The uncatchable credential rejection of section 10.2.
@@ -230,6 +240,11 @@ mod tests {
             transport(TransportKind::ResponseTooLarge).class(),
             "upstream.too-large"
         );
+        assert_eq!(
+            AuthError::Token(TokenFault::EgressRefused).class(),
+            "egress.refused",
+            "a policy refusal is the engine refusing to egress"
+        );
 
         assert_eq!(
             AuthError::Token(TokenFault::Refused {
@@ -277,6 +292,11 @@ mod tests {
             rendered,
             "the token endpoint must be an absolute http or https URL without userinfo, query, or fragment"
         );
+        let rendered = AuthError::Token(TokenFault::EgressRefused).to_string();
+        assert_eq!(
+            rendered,
+            "the token request was refused by the destination policy before it was sent"
+        );
         let rendered = AuthError::Tls(TlsFault::CaBundle).to_string();
         assert_eq!(rendered, "the endpoint's CA bundle could not be resolved");
         let rendered = AuthError::Credential.to_string();
@@ -290,6 +310,38 @@ mod tests {
             .to_string()
             .contains("secret"),
             "no rendering carries a value"
+        );
+    }
+
+    /// Every transport kind the platform knows is mapped explicitly in
+    /// `class`, and the fail-closed wildcard is the platform-addition
+    /// story: a kind a newer platform adds falls to the uncatchable
+    /// `egress.refused` until a reviewed change classifies it. This
+    /// test names all four current variants, so a renamed or removed
+    /// kind breaks this build instead of reclassifying silently.
+    #[test]
+    fn every_known_transport_kind_maps_its_class() {
+        let class_of =
+            |kind: TransportKind| AuthError::Token(TokenFault::Transport { kind }).class();
+        assert_eq!(class_of(TransportKind::Connect), "upstream.connection");
+        assert_eq!(class_of(TransportKind::Timeout), "upstream.timeout");
+        assert_eq!(class_of(TransportKind::Exchange), "upstream.connection");
+        assert_eq!(
+            class_of(TransportKind::ResponseTooLarge),
+            "upstream.too-large"
+        );
+        // The machine-readable spellings are pinned with the variants:
+        // a platform change to either half of a mapping is a review
+        // item, because the journal event carries the spelling.
+        let spelled = [
+            TransportKind::Connect.kind(),
+            TransportKind::Timeout.kind(),
+            TransportKind::Exchange.kind(),
+            TransportKind::ResponseTooLarge.kind(),
+        ];
+        assert_eq!(
+            spelled,
+            ["connect", "timeout", "exchange", "response-too-large"]
         );
     }
 }

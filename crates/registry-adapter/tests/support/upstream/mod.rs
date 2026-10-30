@@ -302,9 +302,7 @@ impl TokenSend for LoopbackSend {
                 send_blocking(&url, authorization.as_ref(), &body, timeout)
             })
             .await
-            .map_err(|_| TransportFailure {
-                kind: TransportKind::Exchange,
-            })?
+            .map_err(|_| TransportFailure::Transport(TransportKind::Exchange))?
         })
     }
 }
@@ -316,17 +314,13 @@ fn send_blocking(
     body: &ProtectedText,
     timeout: Duration,
 ) -> Result<TokenWire, TransportFailure> {
-    let (host, port, path) = split_http_url(url).ok_or(TransportFailure {
-        kind: TransportKind::Connect,
-    })?;
-    let mut stream = TcpStream::connect((host.as_str(), port)).map_err(|_| TransportFailure {
-        kind: TransportKind::Connect,
-    })?;
+    let (host, port, path) =
+        split_http_url(url).ok_or(TransportFailure::Transport(TransportKind::Connect))?;
+    let mut stream = TcpStream::connect((host.as_str(), port))
+        .map_err(|_| TransportFailure::Transport(TransportKind::Connect))?;
     stream
         .set_read_timeout(Some(timeout))
-        .map_err(|_| TransportFailure {
-            kind: TransportKind::Exchange,
-        })?;
+        .map_err(|_| TransportFailure::Transport(TransportKind::Exchange))?;
     let head = format!(
             "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: {TOKEN_REQUEST_ACCEPT}\r\nContent-Type: {TOKEN_REQUEST_CONTENT_TYPE}\r\nContent-Length: {}\r\nConnection: close\r\n",
             body.len()
@@ -344,9 +338,7 @@ fn send_blocking(
         .and_then(|_| stream.write_all(b"\r\n"))
         .and_then(|_| stream.write_all(body.as_bytes()))
         .and_then(|_| stream.flush())
-        .map_err(|_| TransportFailure {
-            kind: TransportKind::Exchange,
-        })?;
+        .map_err(|_| TransportFailure::Transport(TransportKind::Exchange))?;
     read_token_wire(&mut stream)
 }
 
@@ -372,33 +364,27 @@ fn read_token_wire(stream: &mut TcpStream) -> Result<TokenWire, TransportFailure
         if let Some(position) = find_head_end(&buffer) {
             break position;
         }
-        let read = stream.read(&mut chunk).map_err(|_| TransportFailure {
-            kind: TransportKind::Timeout,
-        })?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| TransportFailure::Transport(TransportKind::Timeout))?;
         if read == 0 {
-            return Err(TransportFailure {
-                kind: TransportKind::Exchange,
-            });
+            return Err(TransportFailure::Transport(TransportKind::Exchange));
         }
         buffer.extend_from_slice(&chunk[..read]);
         if buffer.len() > 64 * 1024 + 1024 {
-            return Err(TransportFailure {
-                kind: TransportKind::ResponseTooLarge,
-            });
+            return Err(TransportFailure::Transport(TransportKind::ResponseTooLarge));
         }
     };
     let head = String::from_utf8_lossy(&buffer[..head_end]).into_owned();
     let mut lines = head.split("\r\n");
-    let status_line = lines.next().ok_or(TransportFailure {
-        kind: TransportKind::Exchange,
-    })?;
+    let status_line = lines
+        .next()
+        .ok_or(TransportFailure::Transport(TransportKind::Exchange))?;
     let status: u16 = status_line
         .split(' ')
         .nth(1)
         .and_then(|code| code.parse().ok())
-        .ok_or(TransportFailure {
-            kind: TransportKind::Exchange,
-        })?;
+        .ok_or(TransportFailure::Transport(TransportKind::Exchange))?;
     let media_type = lines
         .filter_map(|line| line.split_once(':'))
         .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-type"))
@@ -411,17 +397,15 @@ fn read_token_wire(stream: &mut TcpStream) -> Result<TokenWire, TransportFailure
         .unwrap_or(0);
     let mut body = buffer[head_end + 4..].to_vec();
     while body.len() < content_length {
-        let read = stream.read(&mut chunk).map_err(|_| TransportFailure {
-            kind: TransportKind::Timeout,
-        })?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| TransportFailure::Transport(TransportKind::Timeout))?;
         if read == 0 {
             break;
         }
         body.extend_from_slice(&chunk[..read]);
         if body.len() > 16 * 1024 {
-            return Err(TransportFailure {
-                kind: TransportKind::ResponseTooLarge,
-            });
+            return Err(TransportFailure::Transport(TransportKind::ResponseTooLarge));
         }
     }
     body.truncate(content_length);
