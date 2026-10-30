@@ -107,7 +107,10 @@ fn error_code_name(wire: &str) -> &'static str {
 /// unregistered spelling collapses to one fixed name, never server
 /// text. The HTTP status decides the fault before any body is read, so
 /// no gateway error page can masquerade as a malformed response and no
-/// outage as a rejected credential.
+/// outage as a rejected credential, and every unusable 2xx (a page, an
+/// unparseable body, unusable token members) is the one credential
+/// fault, which no fallback may mask (`products/adapter/CONCEPT.md`
+/// section 10.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenFault {
     /// The token request did not complete on the transport.
@@ -139,8 +142,6 @@ pub enum TokenFault {
         /// The HTTP status.
         status: u16,
     },
-    /// The answer's body is not a JSON object this layer can read.
-    Unreadable,
     /// The token response stated a scope that does not include every
     /// scope the deployment requested.
     ScopeNarrowed,
@@ -149,7 +150,11 @@ pub enum TokenFault {
     /// which is a credential error, not a protocol one.
     NoLifetime,
     /// The credential in the answer is not presentable: missing, empty,
-    /// out of bounds, or not the visible ASCII a header carries.
+    /// out of bounds, not the visible ASCII a header carries, or inside
+    /// a 2xx body that is not a JSON object this layer can read. Every
+    /// unusable 2xx is this one credential fault, so no fallback can
+    /// mask a refused issuance as a catchable protocol hiccup
+    /// (`products/adapter/CONCEPT.md` section 10.2).
     Invalid,
 }
 
@@ -177,9 +182,6 @@ impl fmt::Display for TokenFault {
                     formatter,
                     "the token endpoint is unavailable: status {status}"
                 )
-            }
-            Self::Unreadable => {
-                formatter.write_str("the token response body is not a readable JSON object")
             }
             Self::ScopeNarrowed => {
                 formatter.write_str("the token response does not include every requested scope")
@@ -772,24 +774,6 @@ impl Default for TokenCache {
 /// ceiling bounds, and each waiter holds the lock for at most the
 /// cache's admission bound before refusing. The lifetime anchor is
 /// taken just before the send, the earliest moment the issuer could
-/// The one event a fault records: every journal line about a token
-/// fault comes from this total mapping, so the journal and the fault
-/// can never disagree about what happened.
-fn fault_event(fault: &TokenFault) -> AuthEvent {
-    match fault {
-        TokenFault::Transport { kind } => AuthEvent::TokenTransportFailed { kind: kind.kind() },
-        TokenFault::EgressRefused => AuthEvent::TokenEgressRefused,
-        TokenFault::AdmissionShed => AuthEvent::TokenAdmissionShed,
-        TokenFault::Refused { code } => AuthEvent::TokenRefused { code },
-        TokenFault::Redirect => AuthEvent::TokenRedirected,
-        TokenFault::Unavailable { status } => AuthEvent::TokenUnavailable { status: *status },
-        TokenFault::Unreadable
-        | TokenFault::ScopeNarrowed
-        | TokenFault::NoLifetime
-        | TokenFault::Invalid => AuthEvent::TokenProtocolRefused,
-    }
-}
-
 /// have issued, so a cached credential can never outlive its real
 /// expiry. An issuance that earns no cache lifetime is never stored,
 /// Evidence's rule, so the returned generation is `None` for it and a
@@ -900,6 +884,23 @@ pub(crate) async fn acquire_token(
     }
 }
 
+/// The one event a fault records: every journal line about a token
+/// fault comes from this total mapping, so the journal and the fault
+/// can never disagree about what happened.
+fn fault_event(fault: &TokenFault) -> AuthEvent {
+    match fault {
+        TokenFault::Transport { kind } => AuthEvent::TokenTransportFailed { kind: kind.kind() },
+        TokenFault::EgressRefused => AuthEvent::TokenEgressRefused,
+        TokenFault::AdmissionShed => AuthEvent::TokenAdmissionShed,
+        TokenFault::Refused { code } => AuthEvent::TokenRefused { code },
+        TokenFault::Redirect => AuthEvent::TokenRedirected,
+        TokenFault::Unavailable { status } => AuthEvent::TokenUnavailable { status: *status },
+        TokenFault::ScopeNarrowed | TokenFault::NoLifetime | TokenFault::Invalid => {
+            AuthEvent::TokenProtocolRefused
+        }
+    }
+}
+
 /// Read one answer: the status decides the fault class before any body
 /// is read, then the media type, then the body as Evidence reads it.
 fn read_answer(
@@ -943,7 +944,11 @@ fn read_answer(
         .and_then(|value| value.split(';').next())
         .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
     if !media_is_json {
-        return Err(TokenFault::Unreadable);
+        // A 2xx that is not a JSON answer (a WAF page, a captive
+        // portal) carries no credential: it is the same credential
+        // fault as any other unusable 2xx, uncatchable so a fallback
+        // cannot mask the refused issuance (CONCEPT 10.2).
+        return Err(TokenFault::Invalid);
     }
     parse_token_response(&wire.body, expected_scope, assumed_lifetime)
 }
@@ -954,8 +959,12 @@ pub(crate) fn parse_token_response(
     expected_scope: Option<&str>,
     assumed_lifetime: Option<Duration>,
 ) -> Result<(ProtectedText, Duration), TokenFault> {
+    // A 2xx body that is not a JSON object this layer can read carries
+    // no credential: the same credential fault as any other unusable
+    // 2xx, uncatchable so a fallback cannot mask the refused issuance
+    // (CONCEPT 10.2).
     let members = parse_object(bytes, MAXIMUM_TOKEN_RESPONSE_BYTES as usize)
-        .map_err(|_| TokenFault::Unreadable)?;
+        .map_err(|_| TokenFault::Invalid)?;
     let token = member_text(&members, "access_token")?.ok_or(TokenFault::Invalid)?;
     if token.is_empty()
         || token.len() > MAXIMUM_CREDENTIAL_BYTES
@@ -1286,22 +1295,23 @@ mod tests {
         );
     }
 
-    /// A body beyond the platform bound refuses, as does one that is
-    /// not one JSON object.
+    /// A 2xx body beyond the platform bound refuses, as does one that
+    /// is not one JSON object: both are the credential fault, the same
+    /// as any other unusable 2xx, never a catchable protocol class.
     #[test]
     fn unreadable_bodies_refuse() {
         let oversized = vec![b' '; MAXIMUM_TOKEN_RESPONSE_BYTES as usize + 1];
         assert_eq!(
             parse_token_response(&oversized, None, None).unwrap_err(),
-            TokenFault::Unreadable
+            TokenFault::Invalid
         );
         assert_eq!(
             parse_token_response(b"[]", None, None).unwrap_err(),
-            TokenFault::Unreadable
+            TokenFault::Invalid
         );
         assert_eq!(
             parse_token_response(br#"{"a":1,"a":2}"#, None, None).unwrap_err(),
-            TokenFault::Unreadable
+            TokenFault::Invalid
         );
     }
 
@@ -1572,6 +1582,7 @@ mod tests {
     /// failures that name only their status.
     #[tokio::test]
     async fn refusals_surface_fixed_names() {
+        use super::super::CREDENTIAL_REJECTED_CLASS;
         std::env::set_var("ADAPTER_TEST_REFUSED_ID", "cid-refused");
         std::env::set_var("ADAPTER_TEST_REFUSED_SECRET", "csecret-refused");
         let refused = ScriptedSend::always(
@@ -1653,7 +1664,16 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(error, AuthError::Token(TokenFault::Unreadable));
+        assert_eq!(
+            error,
+            AuthError::Token(TokenFault::Invalid),
+            "a 2xx that is not a JSON answer carries no credential"
+        );
+        assert_eq!(
+            error.class(),
+            CREDENTIAL_REJECTED_CLASS,
+            "the html form is rejected like every unusable 2xx, so no fallback can mask it"
+        );
     }
 
     /// A destination-policy refusal is not a transport outcome: the
@@ -1739,7 +1759,7 @@ mod tests {
             .await
             .unwrap_err()
         }
-        let cases: [(u16, Option<&'static str>, &'static str, TokenFault, &str); 10] = [
+        let cases: [(u16, Option<&'static str>, &'static str, TokenFault, &str); 11] = [
             // A 401 with an empty body is still the credential rejection.
             (
                 401,
@@ -1825,6 +1845,16 @@ mod tests {
                 200,
                 Some("application/json"),
                 r#"{"access_token":"at","token_type":"Bearer","expires_in":0}"#,
+                TokenFault::Invalid,
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            // A 2xx that is not a JSON answer at all (a WAF page or a
+            // captive portal) is the same credential fault, uncatchable
+            // like every unusable 2xx.
+            (
+                200,
+                Some("text/html"),
+                "<html>sign in first</html>",
                 TokenFault::Invalid,
                 CREDENTIAL_REJECTED_CLASS,
             ),

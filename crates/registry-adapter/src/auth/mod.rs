@@ -132,7 +132,6 @@ impl AuthError {
                 | TokenFault::Invalid => CREDENTIAL_REJECTED_CLASS,
                 TokenFault::Redirect => "upstream.redirect",
                 TokenFault::Unavailable { .. } => "upstream.http",
-                TokenFault::Unreadable => "upstream.malformed",
             },
         }
     }
@@ -290,10 +289,6 @@ mod tests {
         assert_eq!(
             AuthError::Token(TokenFault::Unavailable { status: 503 }).class(),
             "upstream.http"
-        );
-        assert_eq!(
-            AuthError::Token(TokenFault::Unreadable).class(),
-            "upstream.malformed"
         );
 
         let rendered = AuthError::Token(TokenFault::Refused {
