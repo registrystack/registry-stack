@@ -765,7 +765,10 @@ fn collect_call(
     if call.op_token.is_none() && !call.is_qualified() {
         calls.push((callee.to_owned(), position, is_method));
     }
-    let literals = if is_method && CALLBACK_METHODS.contains(&callee) {
+    // The argument after a `reduce` callback is its initial value.
+    let literals = if is_method && matches!(callee, "reduce" | "reduce_rev") {
+        call.args.first().into_iter().collect()
+    } else if is_method && CALLBACK_METHODS.contains(&callee) {
         call.args.iter().collect::<Vec<_>>()
     } else if !is_method && NAMING_CALLS.contains(&callee) {
         call.args.first().into_iter().collect()

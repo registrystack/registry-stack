@@ -574,3 +574,16 @@ fn probe(inputs) {
 "#;
     assert_eq!(unknown_call_names(source), Vec::<String>::new());
 }
+
+#[test]
+fn a_reduce_initial_value_is_not_read_as_a_function_name() {
+    let source = r#"fn join(sum, item) { sum + item }
+fn probe(inputs) {
+  [["a"].reduce(Fn("join"), ""), ["a"].reduce_rev("join", "seed")]
+}
+"#;
+    assert_eq!(unknown_call_names(source), Vec::<String>::new());
+    // The callback itself is still checked.
+    let source = "fn probe(inputs) { [\"a\"].reduce(\"nope\", \"\") }\n";
+    assert_eq!(unknown_call_names(source), ["nope"]);
+}
