@@ -223,7 +223,14 @@ the facade HTTP path template of Camel's REST DSL (`rest get /{id}`) and
 OpenAPI path templating, while `{{name}}` is the pack layer's substitution
 syntax (Camel property placeholders, the port table in section 8.10); the
 profile check resolves each `{name}` in an operation path against that
-operation's path parameters. The first profile, `breg-records` v1, is a starting target, not
+operation's path parameters. An operation names, among its path
+parameters, the one carrying the record type (`recordTypeParameter`) and,
+for get, update, and patch, the one carrying the record identifier
+(`recordIdParameter`); no rule reads meaning from a parameter's position.
+`adapterctl compile` substitutes the bound record type into the path, so
+the contract carries concrete paths (`/v1/records/persons`), as BReg's
+per-package OpenAPI does. An operation also declares its `successStatus`
+(default 200; the `breg-records` create answers 201, as BReg does). The first profile, `breg-records` v1, is a starting target, not
 the only one: it mirrors the Base Registry Engine's public read surface
 (`/v1/records/{type}`, `/v1/records/{type}/{record_id}`) plus write
 operations (`records-search`, `records-get`, `records-create`,
@@ -280,7 +287,14 @@ schema before the engine places it in the profile's envelope. Fixture values
 are checked against declared field types at check time (CFG-VAL-9).
 
 `adapterctl compile` emits the deployment's concrete OpenAPI document into the
-built package, held byte-identical by a drift gate. When the GovStack profile
+built package, held byte-identical by a drift gate: by default
+`<project-dir>/generated/openapi.json`, pretty-printed with sorted keys and
+a trailing newline so its diff is the contract review, for any project
+directory and not only the repository's. One concrete operation per bound
+(profile operation, record type) pair, `operationId`
+`<operation>.<recordType>`. A parameterized part is a deployment value the
+contract cannot know, so the schema types it as a string, never as the
+stand-in literal. When the GovStack profile
 lands it may require its full operation set, served by a conformance mode
 that fails a deployment whose contract is incomplete; that mode arrives with
 the profile, not before.
@@ -824,7 +838,7 @@ pack never learns a profile's path or parameter names:
 | Record type | header `recordType` | every operation |
 | Record identifier | header `recordId` | get, update, patch |
 | Page size | header `pageSize`, an integer inside the profile's bounds, the profile's default when absent | search |
-| Filters | property `AdapterFilters`, an object from declared field name to typed value, holding only the filters the caller sent | search |
+| Filters | property `AdapterFilters`, an object from declared field name to typed value, holding only the filters the caller sent; a search binding declares the fields it filters on (`filters`), the contract offers exactly those as typed equality query parameters, and any other query parameter is refused by request validation, so a route never silently ignores a filter | search |
 | Continuation | property `AdapterContinuation`, absent on the first page (8.11.2) | search |
 | Request record | the body, extracted through the profile's request envelope and validated against the declared model | create, update, patch |
 | Idempotency key | header `Idempotency-Key`, the one caller header that enters | write operations, read by `idempotentConsumer` |
