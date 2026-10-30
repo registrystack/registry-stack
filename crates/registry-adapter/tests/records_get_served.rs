@@ -111,3 +111,23 @@ async fn a_request_without_a_valid_token_is_refused_before_any_upstream_call() {
         "no refused call reached the upstream"
     );
 }
+
+#[tokio::test]
+async fn a_dot_segment_record_identifier_never_reaches_the_upstream() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let served = Served::start(&upstream.url("")).await;
+    let token = served.token("records.read");
+
+    for spelling in ["..", "%2E%2E", "%2e%2e", ".", "%2E", ".%2e"] {
+        let (status, _, body) = served.get(&format!("/v1/records/person/{spelling}"), Some(&token));
+        assert_eq!(status, 400, "{spelling}: {body}");
+        assert_eq!(body["code"], "facade.invalid-request", "{spelling}");
+    }
+    assert_eq!(
+        upstream.request_count(),
+        0,
+        "no dot segment was sent upstream"
+    );
+}

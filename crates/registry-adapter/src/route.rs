@@ -551,30 +551,42 @@ impl Run<'_, '_> {
     /// expression, percent-encoded as one path segment.
     fn render_path(&self, parameters: &ToParameters) -> Result<String, RouteFailure> {
         let template = parameters.path.as_deref().unwrap_or_default();
-        let mut path = String::new();
-        let mut rest = template;
-        while let Some(start) = rest.find("{{") {
-            path.push_str(&rest[..start]);
-            let after = &rest[start + 2..];
-            let end = after
-                .find("}}")
-                .ok_or_else(|| RouteFailure::of(ErrorClass::Validation))?;
-            let name = &after[..end];
+        fill_path(template, |name| {
             let expression = parameters
                 .path_parameters
                 .get(name)
                 .ok_or_else(|| RouteFailure::of(ErrorClass::Validation))?;
-            let text = match self.eval(expression)? {
-                Value::String(text) if !text.is_empty() => text,
-                Value::Number(number) => number.to_string(),
-                _ => return Err(RouteFailure::of(ErrorClass::Validation)),
-            };
-            path.push_str(&percent_encode(&text));
-            rest = &after[end + 2..];
-        }
-        path.push_str(rest);
-        Ok(path)
+            self.eval(expression)
+        })
     }
+}
+
+/// Fill a path template's `{{name}}` slots from `value`. A slot is one path
+/// segment value: it must be a non-empty string or a number, and never `.`
+/// or `..`, which the outbound URI parser would collapse into a different
+/// path once the request is built.
+fn fill_path(
+    template: &str,
+    mut value: impl FnMut(&str) -> Result<Value, RouteFailure>,
+) -> Result<String, RouteFailure> {
+    let mut path = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        path.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let end = after
+            .find("}}")
+            .ok_or_else(|| RouteFailure::of(ErrorClass::Validation))?;
+        let text = match value(&after[..end])? {
+            Value::String(text) if !text.is_empty() && text != "." && text != ".." => text,
+            Value::Number(number) => number.to_string(),
+            _ => return Err(RouteFailure::of(ErrorClass::Validation)),
+        };
+        path.push_str(&percent_encode(&text));
+        rest = &after[end + 2..];
+    }
+    path.push_str(rest);
+    Ok(path)
 }
 
 /// Percent-encode everything but the RFC 3986 unreserved set.
@@ -687,6 +699,19 @@ mod served_tests {
         ]));
         let refusal = check_servable(&refused).expect_err("refused");
         assert!(refusal.contains("jsonpath"), "{refusal}");
+    }
+
+    #[test]
+    fn a_path_slot_that_is_a_dot_segment_is_refused_anywhere_in_the_path() {
+        for template in ["/api/v1/patients/{{id}}", "/api/v1/patients/{{id}}/consents"] {
+            for refused in ["", ".", ".."] {
+                let result = fill_path(template, |_| Ok(json!(refused)));
+                let failure = result.expect_err("refused");
+                assert_eq!(failure.class, ErrorClass::Validation, "{template} {refused}");
+            }
+            let filled = fill_path(template, |_| Ok(json!("a.b/..c"))).expect("filled");
+            assert!(filled.contains("a.b%2F..c"), "{filled}");
+        }
     }
 
     #[test]

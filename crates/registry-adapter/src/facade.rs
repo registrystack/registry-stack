@@ -110,6 +110,18 @@ async fn handle(
         );
     }
 
+    if !is_path_segment_value(&record_id) {
+        return refuse_request(
+            state,
+            operation,
+            &caller,
+            &record_type,
+            &request_id,
+            "the record identifier is not a usable path value",
+        )
+        .await;
+    }
+
     let mut exchange = Exchange::new(request_id.clone());
     let mut search_binding: Option<SearchBinding> = None;
     if let Some(pagination) = &operation.pagination {
@@ -125,7 +137,7 @@ async fn handle(
                 search_binding = Some(search.binding);
             }
             Err(reason) => {
-                return refuse_search(
+                return refuse_request(
                     state,
                     operation,
                     &caller,
@@ -293,6 +305,14 @@ fn record_of(body: &Value) -> Value {
     }
 }
 
+/// Whether a caller-supplied identifier can stand as one path segment of the
+/// source call: a `.` or `..` would be collapsed by the outbound URI parser
+/// into a different path. A record id the operation does not take is empty
+/// and passes.
+fn is_path_segment_value(record_id: &str) -> bool {
+    record_id != "." && record_id != ".."
+}
+
 /// What a search request carries once validated.
 struct SearchInputs {
     page_size: u64,
@@ -404,9 +424,9 @@ fn seal_next(
         .map_err(|error| error.to_string())
 }
 
-/// Answer a refused search as `facade.invalid-request`, journaling the
+/// Answer a refused request as `facade.invalid-request`, journaling the
 /// refusal first with its value-free reason.
-async fn refuse_search(
+async fn refuse_request(
     state: &FacadeState,
     operation: &ServedOperation,
     caller: &Caller,
