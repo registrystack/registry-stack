@@ -586,10 +586,7 @@ impl Provider for AdapterProvider {
 }
 
 fn decode_response_value(bytes: &[u8]) -> Result<Value, ProviderFailure> {
-    Reader::new("adapter response")
-        .scan(bytes)
-        .map_err(|_| refused())?;
-    serde_json::from_slice(bytes).map_err(|_| refused())
+    registry_platform_canonical_json::parse_json_preserving_integers(bytes).map_err(|_| refused())
 }
 
 #[cfg(test)]
