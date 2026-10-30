@@ -212,15 +212,10 @@ fn a_record_import_is_refused_on_an_operation_that_returns_no_record() {
         report["diagnostics"][0]["path"],
         "/operations/request/record"
     );
-    let message = report["diagnostics"][0]["message"].as_str().unwrap();
-    for operation in [
-        "breg.read-record/v1",
-        "breg.read-record/v2",
-        "breg.lookup-record/v1",
-        "breg.read-in-force/v1",
-    ] {
-        assert!(message.contains(operation), "{message}");
-    }
+    assert_eq!(
+        report["diagnostics"][0]["message"],
+        "only breg.read-record/v1, breg.read-record/v2, breg.lookup-record/v1 or breg.read-in-force/v1 accept a record contract selection"
+    );
 }
 
 #[test]

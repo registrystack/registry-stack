@@ -1046,6 +1046,19 @@ fn project_integrity_diagnostics(
     errors
 }
 
+/// Operation identifiers as a comma-separated list ending in "or".
+fn join_alternatives(operations: &[Operation]) -> String {
+    let names: Vec<&str> = operations
+        .iter()
+        .map(|operation| operation.as_str())
+        .collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        Some((only, _)) => (*only).to_string(),
+        None => String::new(),
+    }
+}
+
 fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     let mut imported = BTreeMap::new();
@@ -1150,12 +1163,13 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                     return Err(schema_error(
                         format!("/operations/{id}/{field}"),
                         &format!(
-                            "only {} accepts a {field} contract selection",
-                            expected
-                                .iter()
-                                .map(|operation| operation.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" and ")
+                            "only {} {} a {field} contract selection",
+                            join_alternatives(expected),
+                            if expected.len() == 1 {
+                                "accepts"
+                            } else {
+                                "accept"
+                            }
                         ),
                     ));
                 }
