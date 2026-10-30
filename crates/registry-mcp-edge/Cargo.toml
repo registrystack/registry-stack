@@ -1,0 +1,44 @@
+[package]
+name = "registry-mcp-edge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Product-neutral authenticated MCP edge for Registry Stack supporting services."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+http.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-ratelimit.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+reqwest.workspace = true
+tokio.workspace = true
+tower.workspace = true
+

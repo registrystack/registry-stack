@@ -11,7 +11,7 @@ use registry_breg_client::{
     BRegActionError, BRegMetadataSelectionError, BRegMutationRequestError, BRegProblemCode,
     BRegRequestError, BaseRegistryClientError, TokenError,
 };
-use rmcp::model::CallToolResult;
+#[cfg(test)]
 use serde_json::{json, Value};
 
 use crate::{contract::ContractError, idempotency::IdempotencyError, tools::ArgumentError};
@@ -53,7 +53,7 @@ impl ToolErrorCode {
         }
     }
 
-    const fn message(self) -> &'static str {
+    pub(crate) const fn message(self) -> &'static str {
         match self {
             Self::InvalidArguments => "The arguments do not match what this tool accepts.",
             Self::RecordNotResolved => {
@@ -123,10 +123,7 @@ impl ToolError {
         self
     }
 
-    pub(crate) fn into_result(self) -> CallToolResult {
-        CallToolResult::structured_error(self.to_value())
-    }
-
+    #[cfg(test)]
     pub(crate) fn to_value(&self) -> Value {
         let mut error = json!({
             "code": self.code.as_str(),

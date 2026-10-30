@@ -411,6 +411,17 @@ class ConfigureTests(unittest.TestCase):
             (ROOT / "products/manifest/schemas/profile.schema.json").read_bytes(),
         )
 
+    def test_mcp_maps_its_runtime_and_offline_check(self):
+        project = self.project("mcp", "runtime.yaml", "products/platform/examples/mcp-runtime/runtime.example.yaml")
+        configure.configure("mcp", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(schemas[(managed / "mcp-runtime.schema.json").as_uri()], [str(project / "runtime.yaml"), str(project / "runtime.example.yaml")])
+        self.assertEqual((managed / "mcp-runtime.schema.json").read_bytes(), (ROOT / "products/platform/generated/mcp-runtime/mcp-runtime.schema.json").read_bytes())
+        task = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"][0]
+        self.assertEqual(task["command"], "registry-mcp")
+        self.assertEqual(task["args"], ["--runtime-config", str(project / "runtime.yaml"), "check"])
+
     def test_platform_maps_task_and_cli_connection_files(self):
         project = self.project(
             "platform", "task-connection.yaml", "products/platform/examples/task-connection.yaml"
@@ -421,6 +432,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             schemas,
             {
+                (managed / "mcp-runtime.schema.json").as_uri(): [str(project / "runtime.yaml"), str(project / "runtime.example.yaml")],
                 (managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")],
                 (managed / "connections.schema.json").as_uri(): [str(project / "connections.yaml")],
                 (managed / "check-acceptances.schema.json").as_uri(): [

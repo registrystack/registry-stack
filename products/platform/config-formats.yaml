@@ -100,6 +100,83 @@ formats:
     securityMembers: []
     restrictingMembers: []
 
+  - id: platform/mcp-runtime
+    product: platform
+    title: Configurable MCP gateway runtime configuration
+    files: [runtime.yaml, runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/mcp-runtime/v1alpha1
+      kind: PlatformMcpRuntimeConfig
+      checkedBy:
+        file: crates/registry-mcp/src/config.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/mcp-runtime/v1alpha1
+      kind: PlatformMcpRuntimeConfig
+    schema:
+      path: products/platform/generated/mcp-runtime/mcp-runtime.schema.json
+      id: https://id.registrystack.org/schemas/platform/mcp-runtime/mcp-runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-mcp --features schema --example runtime-schema -- --output products/platform/generated/mcp-runtime
+      driftCheck: crates/registry-mcp/src/schema.rs
+    reader:
+      crate: registry-mcp
+      file: crates/registry-mcp/src/config.rs
+      function: check
+      type: RuntimeConfig
+    check: registry-mcp --runtime-config {file} check
+    example: products/platform/examples/mcp-runtime/runtime.example.yaml
+    conformance:
+      requiredText: /name
+      optionalText: /bindings/0/provider/exchange/assertionAudience
+      integer: /rateLimits/perPrincipal/requestsPerMinute
+      boolean: /resourceServer/allowInsecureHttp
+      idList: none
+      set: /bindings/0/tools
+      reference: none
+      operand: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /resourceServer/algorithms
+        whenOmitted: refused
+      - pointer: /resourceServer/resource
+        whenOmitted: refused
+      - pointer: /resourceServer/issuer
+        whenOmitted: refused
+      - pointer: /resourceServer/jwksSource
+        whenOmitted: refused
+      - pointer: /resourceServer/allowedClients
+        whenOmitted: refused
+      - pointer: /resourceServer/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /resourceServer/requiredScopes
+        whenOmitted: refused
+      - pointer: /bindings/*/tools
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/registry/scopes
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/authorization/scopes
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/machineTokenRef
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/baseUrl
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/contractDigest
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/audience
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/operations
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/dataClass
+        whenOmitted: refused
+      - pointer: /rateLimits
+        whenOmitted: refused
+    restrictingMembers: [/resourceServer/resource, /resourceServer/issuer, /resourceServer/jwksSource, /resourceServer/algorithms, /resourceServer/allowedClients, /resourceServer/requiredScopes, /bindings/*/tools, /bindings/*/provider/registry/scopes, /bindings/*/provider/authorization/scopes, /bindings/*/provider/baseUrl, /bindings/*/provider/contractDigest, /bindings/*/provider/audience, /bindings/*/provider/operations, /bindings/*/provider/dataClass]
+
   # breg
   - id: breg/project
     product: breg

@@ -35,7 +35,7 @@ if [[ ! -f "$configuration" ]]; then
 fi
 
 workspace=$(mktemp -d)
-trap 'rm -rf "$workspace"' EXIT
+trap 'printf "Boundary probe scratch retained at %s\n" "$workspace"' EXIT
 
 printf 'Linting registry-breg-mcp against %s\n' "${configuration#"$repository_root"/}"
 
@@ -207,9 +207,10 @@ RUST
 
 lint_probe credential
 
-# A token provider handed to the client configuration directly. The gateway
-# attaches its exchange through one wrapper that takes nothing else, so any
-# other call would let a provider that is not the exchange reach the registry.
+# A token provider handed to the client configuration directly. The BReg
+# provider has one reviewed wrapper that accepts only the edge's opaque
+# per-call authorization, so any other call would let an unrelated provider
+# reach the registry.
 cat >"$probe/provider.rs" <<'RUST'
 use std::sync::Arc;
 

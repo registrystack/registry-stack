@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Startup: resolve the configured secrets and assemble both halves.
+//! Startup: preserve the BReg configuration facade over the shared MCP edge.
 //!
 //! The inbound resource server and the outbound exchange are built from their
 //! own configuration sections and their own secrets. Every failure names the
@@ -9,6 +9,11 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use axum::Router;
+use registry_mcp_edge::{
+    router, token_verifier, AccessTokenAlgorithm as EdgeAlgorithm, AuditOptions, GatewayCore,
+    GatewayInfo, ProviderBinding, RateLimitOptions, ResourceServer, ResourceServerOptions,
+    ServerOptions, TokenBucketOptions, ToolAuditLog,
+};
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
 use registry_platform_config::{JwksSource, ProtectedSecret, SecretResolver};
 use registry_platform_crypto::PrivateJwk;
@@ -19,14 +24,15 @@ use registry_platform_oidc::{
 use zeroize::Zeroizing;
 
 use crate::{
-    audit::ToolAuditLog,
-    config::{describe_secret_failure, RuntimeConfig},
-    contract::ContractSpec,
-    gateway::{Gateway, ServiceDescription},
-    inbound::{verifier, ResourceServer, ResourceServerError},
-    outbound::{Outbound, OutboundError},
-    server,
+    breg_binding,
+    config::{describe_secret_failure, AccessTokenAlgorithm, RuntimeConfig},
+    BRegBindingError, BREG_TOOL_NAMES,
 };
+
+const PRINCIPAL_CLASS: &str = "breg-mcp-principal-v1";
+const CLIENT_CLASS: &str = "breg-mcp-client-v1";
+const AUDIT_SCHEMA: &str = "registry-breg-mcp.tool-call/v1";
+const AUDIT_EVENT: &str = "breg_mcp.tool_call";
 
 /// Why the gateway could not start. No variant carries a secret value.
 #[derive(Debug, thiserror::Error)]
@@ -39,24 +45,14 @@ pub enum StartupError {
     ResourceServer(String),
     #[error("the outbound registry exchange could not be configured: {0}")]
     Outbound(String),
+    #[error("the BReg MCP edge could not be configured: {0}")]
+    Edge(String),
     #[error("the audit log could not be opened: {0}")]
     Audit(String),
     #[error("the listener could not be bound: {0}")]
     Bind(#[source] std::io::Error),
     #[error("the listener failed: {0}")]
     Serve(#[source] std::io::Error),
-}
-
-impl From<ResourceServerError> for StartupError {
-    fn from(error: ResourceServerError) -> Self {
-        Self::ResourceServer(error.to_string())
-    }
-}
-
-impl From<OutboundError> for StartupError {
-    fn from(error: OutboundError) -> Self {
-        Self::Outbound(error.to_string())
-    }
 }
 
 impl From<AuditError> for StartupError {
@@ -68,8 +64,7 @@ impl From<AuditError> for StartupError {
 /// Everything startup builds before it opens the audit log.
 struct Parts {
     resource_server: ResourceServer,
-    outbound: Outbound,
-    profile: AuditProfile,
+    binding: ProviderBinding,
 }
 
 fn resolver(config: &RuntimeConfig) -> Result<SecretResolver, StartupError> {
@@ -150,13 +145,48 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
             JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())
         }
     };
+    let resource_options = ResourceServerOptions {
+        resource: server.resource.as_str().to_owned(),
+        issuer: server.issuer.as_str().to_owned(),
+        algorithms: server
+            .algorithms
+            .iter()
+            .copied()
+            .map(edge_algorithm)
+            .collect(),
+        allowed_clients: server
+            .allowed_clients
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        required_scopes: server
+            .required_scopes
+            .iter()
+            .map(|scope| scope.as_str().to_owned())
+            .collect(),
+        scope_claim: server.scope_claim.to_string(),
+        maximum_token_lifetime: Duration::from_secs(server.maximum_token_lifetime_seconds.get()),
+        allow_insecure_http: server.allow_insecure_http,
+        resource_name: config.service.name.as_str().to_owned(),
+        principal_audit_namespace: PRINCIPAL_CLASS.to_owned(),
+        client_audit_namespace: CLIENT_CLASS.to_owned(),
+    };
     let resource_server = ResourceServer::new(
-        server,
-        config.service.name.as_str(),
-        verifier(server, Arc::new(fetcher)),
+        &resource_options,
+        token_verifier(&resource_options, Arc::new(fetcher)),
         profile.key_hasher(),
-        config.rate_limits.clone(),
-    )?;
+        RateLimitOptions {
+            per_principal: TokenBucketOptions {
+                requests_per_minute: config.rate_limits.per_citizen.requests_per_minute.get(),
+                burst: config.rate_limits.per_citizen.burst.get(),
+            },
+            per_client: TokenBucketOptions {
+                requests_per_minute: config.rate_limits.per_client.requests_per_minute.get(),
+                burst: config.rate_limits.per_client.burst.get(),
+            },
+        },
+    )
+    .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
     let private_key = resolve(
         &secrets,
         "exchange.privateKeyRef",
@@ -164,17 +194,33 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
     )?;
     let key = PrivateJwk::parse(&text(&private_key, "exchange.privateKeyRef")?)
         .map_err(|_| StartupError::Key("exchange.privateKeyRef"))?;
-    let outbound = Outbound::new(
+    let binding = breg_binding(
         &config.registry,
         &config.exchange,
+        &config.service,
         server.resource.as_str(),
         key,
-    )?;
+        profile.key_hasher(),
+        BREG_TOOL_NAMES.into_iter().map(str::to_owned),
+    )
+    .map_err(|error| match error {
+        BRegBindingError::Authorization => StartupError::Outbound(error.to_string()),
+        BRegBindingError::Client | BRegBindingError::Tools => StartupError::Edge(error.to_string()),
+    })?;
     Ok(Parts {
         resource_server,
-        outbound,
-        profile,
+        binding,
     })
+}
+
+const fn edge_algorithm(algorithm: AccessTokenAlgorithm) -> EdgeAlgorithm {
+    match algorithm {
+        AccessTokenAlgorithm::RS256 => EdgeAlgorithm::RS256,
+        AccessTokenAlgorithm::RS384 => EdgeAlgorithm::RS384,
+        AccessTokenAlgorithm::ES256 => EdgeAlgorithm::ES256,
+        AccessTokenAlgorithm::ES384 => EdgeAlgorithm::ES384,
+        AccessTokenAlgorithm::EdDSA => EdgeAlgorithm::EdDSA,
+    }
 }
 
 /// Build the gateway's HTTP application.
@@ -186,31 +232,28 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         .destination()
         .map_err(|error| StartupError::Audit(error.to_string()))?;
     let audit = ToolAuditLog::new(AuditWriter::open(destination).await?);
-    let review_base_url = config.service.review_base_url.to_url();
     let resource = config.resource_server.resource.to_url();
-    let gateway = Gateway::new(
-        parts.outbound,
-        ContractSpec {
-            access_profile: config.registry.access_profile.to_string(),
-            details_record_type: config.service.details.record_type.to_string(),
-            action: config.service.application.action.to_string(),
-            target_input: config.service.application.target_input.to_string(),
-        },
-        ServiceDescription {
-            name: config.service.name.as_str().to_owned(),
-            description: config.service.description.as_str().to_owned(),
-            disclosure: config.service.disclosure.as_str().to_owned(),
-        },
-        review_base_url,
-        audit,
-        parts.profile.key_hasher(),
-    );
-    Ok(server::router(
+    let info = GatewayInfo::new(
+        "breg-mcp",
+        config.service.name.as_str(),
+        format!(
+            "{}\n\n{}\n\nThe citizen is always the signed-in user. Applications are \
+             submitted only on the review page prepare_review returns.",
+            config.service.name.as_str(),
+            config.service.description.as_str()
+        ),
+    )
+    .map_err(|error| StartupError::Edge(error.to_string()))?;
+    let audit_options = AuditOptions::new(AUDIT_SCHEMA, AUDIT_EVENT)
+        .map_err(|error| StartupError::Edge(error.to_string()))?;
+    let gateway = GatewayCore::new([parts.binding], audit, audit_options, info)
+        .map_err(|error| StartupError::Edge(error.to_string()))?;
+    Ok(router(
         Arc::new(gateway),
         Arc::new(parts.resource_server),
-        &server::ServerOptions {
-            resource: &resource,
-            max_request_body_bytes: config.limits.request_bytes(),
+        &ServerOptions {
+            resource,
+            maximum_request_bytes: config.limits.request_bytes(),
             hsts: !config.development_loopback(),
         },
     ))

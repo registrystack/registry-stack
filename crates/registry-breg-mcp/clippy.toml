@@ -28,11 +28,11 @@ disallowed-methods = [
   { path = "registry_platform_httputil::client::BearerToken::new", reason = "outbound calls authenticate only through the per-call token exchange" },
 
   # A credential attached some other way than the exchange. The one call that
-  # attaches the exchange to the client is `outbound::delegated`, which takes
-  # nothing but an exchange and allows this lint there alone. A bearer header
-  # written out of a token, or an HTTP client built beside the registry client,
-  # would carry a request to the registry around the client altogether.
-  { path = "registry_breg_client::BaseRegistryClientConfig::with_token_provider", reason = "only outbound::delegated attaches a credential, and only the exchange" },
+  # attaches authorization to the client is `client::authorized`, which takes
+  # only the edge's opaque per-call authorization and allows this lint there
+  # alone. A bearer header written out of a token, or an HTTP client built beside
+  # the registry client, would carry a request around the client altogether.
+  { path = "registry_breg_client::BaseRegistryClientConfig::with_token_provider", reason = "only client::authorized attaches the edge's opaque per-call authorization" },
   { path = "registry_platform_httputil::client::BearerToken::authorization_header_value", reason = "outbound requests carry a credential only through the registry client" },
   { path = "registry_platform_httputil::client::build_client", reason = "outbound requests go only through the registry client the exchange configured" },
 

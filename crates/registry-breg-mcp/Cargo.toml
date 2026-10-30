@@ -39,6 +39,7 @@ clap.workspace = true
 http.workspace = true
 jsonwebtoken.workspace = true
 registry-breg-client.workspace = true
+registry-mcp-edge.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
@@ -74,6 +75,7 @@ jsonschema.workspace = true
 registry-breg-review.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
 reqwest.workspace = true
+registry-mcp-edge = { workspace = true, features = ["test-support"] }
 # The test client reaches the gateway over plain loopback HTTP. rmcp's
 # `reqwest` feature would add reqwest's aws-lc-rs rustls provider beside the
 # workspace's ring one, and rustls then refuses to pick either at runtime.

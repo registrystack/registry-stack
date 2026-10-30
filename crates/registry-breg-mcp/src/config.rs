@@ -1107,6 +1107,24 @@ rateLimits:
         (registry, exchange)
     }
 
+    pub(crate) fn service() -> ServiceConfig {
+        ServiceConfig {
+            name: ServiceText::new("Address correction").expect("service name"),
+            description: ServiceText::new("Correct the postal address the registry holds for you.")
+                .expect("service description"),
+            disclosure: ServiceText::new("The assistant will see your current address.")
+                .expect("service disclosure"),
+            details: DetailsConfig {
+                record_type: LocalId::new("person-address").expect("details record type"),
+            },
+            application: ApplicationConfig {
+                action: LocalId::new("correct-address").expect("application action"),
+                target_input: LocalId::new("address").expect("application target input"),
+            },
+            review_base_url: Url::new("https://review.example.test/").expect("review base URL"),
+        }
+    }
+
     /// Write `text` as a runtime file in a fresh directory the loader
     /// accepts: absolute, and with no symbolic link on its path.
     fn written(text: &str) -> (tempfile::TempDir, PathBuf) {

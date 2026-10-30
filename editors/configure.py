@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MANAGED = ".registry-stack-editor"
 PRODUCT_FILES = {
     "breg": "registry.yaml",
+    "mcp": "runtime.yaml",
     "breg-mcp": "runtime.yaml",
     "breg-review": "runtime.yaml",
     "casework": "casework.yaml",
@@ -36,6 +37,10 @@ PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
 # A pattern ending in `.json` names a JSON format, mapped through the JSON
 # language server; every other pattern is YAML.
 SCHEMAS = {
+    "mcp": (
+        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),
+        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.example.yaml"),
+    ),
     "breg": (
         ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/breg/generated/authoring/registry-project.schema.json", "registry.yaml"),
@@ -130,6 +135,8 @@ SCHEMAS = {
         ("products/manifest/schemas/profile.schema.json", "**/profile.yaml"),
     ),
     "platform": (
+        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),
+        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.example.yaml"),
         ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
         ("crates/registry-cli-api/schema/connections.schema.json", "connections.yaml"),
@@ -197,6 +204,7 @@ SCHEMAS = {
     ),
 }
 CHECKS = {
+    "mcp": ("registry-mcp", "--runtime-config", "{entry}", "check"),
     "breg": ("bregctl", "check", "{project}"),
     "breg-mcp": ("breg-mcp", "--runtime-config", "{entry}", "check"),
     "breg-review": ("breg-review", "--runtime-config", "{entry}", "check"),

@@ -480,3 +480,34 @@ exceptions:
   class: protocol-constant
   reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
+
+- rule: CFG-NAME-2
+  format: platform/mcp-runtime
+  location: products/platform/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/mcp-runtime
+  location: products/platform/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES384
+  class: protocol-constant
+  reason: ES384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/mcp-runtime
+  location: products/platform/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/EdDSA
+  class: protocol-constant
+  reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/mcp-runtime
+  location: products/platform/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS256
+  class: protocol-constant
+  reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/mcp-runtime
+  location: products/platform/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS384
+  class: protocol-constant
+  reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.

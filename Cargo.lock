@@ -5142,6 +5142,7 @@ dependencies = [
  "jsonwebtoken",
  "registry-breg-client",
  "registry-breg-review",
+ "registry-mcp-edge",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
@@ -6214,6 +6215,72 @@ dependencies = [
  "serde_path_to_error",
  "sha2 0.11.1",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "registry-mcp"
+version = "0.45.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "clap",
+ "jsonschema",
+ "registry-breg-mcp",
+ "registry-casework-client",
+ "registry-mcp-edge",
+ "registry-platform-audit",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-testing",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-mcp-edge"
+version = "0.45.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "http",
+ "jsonwebtoken",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-ratelimit",
+ "registry-platform-testing",
+ "reqwest 0.12.28",
+ "rmcp",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tracing",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
