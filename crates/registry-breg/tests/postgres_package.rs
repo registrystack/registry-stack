@@ -3535,6 +3535,7 @@ fn temporal_policy_module_bytes(snapshot: bool) -> Vec<u8> {
     temporal_policy_module_bytes_with(snapshot, "", "")
 }
 
+#[cfg(feature = "tooling")]
 fn timer_preview_project_bytes(at_field: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
@@ -3580,6 +3581,7 @@ fn timer_preview_project_bytes(at_field: &str) -> Vec<u8> {
     .expect("timer preview source serializes")
 }
 
+#[cfg(feature = "tooling")]
 fn publish_timer_preview_package(
     prior_revision: Option<&str>,
     schema_fingerprint: String,

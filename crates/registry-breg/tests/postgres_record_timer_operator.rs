@@ -2,7 +2,7 @@
 
 //! Public operator-read acceptance over a native BReg process and real PostgreSQL.
 
-#![cfg(feature = "postgres-test")]
+#![cfg(all(feature = "postgres-test", feature = "tooling"))]
 
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
