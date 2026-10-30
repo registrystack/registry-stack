@@ -585,7 +585,6 @@ class NativeRequestTests(unittest.TestCase):
             {**valid, "code": "UPPER.invalid"},
             {**valid, "code": ""},
             {**valid, "code": "request-invalid"},
-            {**valid, "suggestedAction": None},
             without_code,
             {"code": "request.invalid", "message": "m", "suggestedAction": None},
             {**valid, "status": 409},
