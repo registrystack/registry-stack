@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "LookupValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "A value BReg's lookup accepts: text, a whole number or a flag."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "description": "The BReg record-type route, for example `registrants`.",
+      "type": "string"
+    },
+    "selector": {
+      "description": "The compiled lookup selector, for example `by-national-id`.",
+      "type": "string"
+    },
+    "values": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LookupValue"
+      },
+      "description": "The identifier fields the selector matches, each by equality.",
+      "maxProperties": 16,
+      "minProperties": 1,
+      "type": "object"
+    }
+  },
+  "required": [
+    "entity",
+    "selector",
+    "values"
+  ],
+  "title": "breg.lookup-record/v1 input",
+  "type": "object"
+}

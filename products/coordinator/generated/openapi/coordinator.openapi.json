@@ -386,7 +386,9 @@
               "breg.read-proposal/v1",
               "breg.start-proposal/v1",
               "breg.submit-proposal/v1",
-              "breg.cancel-proposal/v1"
+              "breg.cancel-proposal/v1",
+              "breg.lookup-record/v1",
+              "breg.read-record/v2"
             ],
             "type": "string"
           },

@@ -477,6 +477,20 @@ async fn read_record(
     }
 }
 
+async fn read_record_v2(
+    client: &BaseRegistryClient,
+    options: &BRegRecordOptions,
+    input: &ReadRequest,
+) -> CallOutcome {
+    match client
+        .get_record(&input.collection, &input.record_id, options)
+        .await
+    {
+        Ok(answer) => crate::record_read::with_provenance(answer),
+        Err(error) => read_failure(error),
+    }
+}
+
 /// How a failed BReg read reaches a step. A refused or missing read is a
 /// failure; it is never mistaken for an empty answer.
 pub(crate) fn read_failure(error: BaseRegistryClientError) -> CallOutcome {
@@ -647,6 +661,27 @@ impl AdapterSet for HttpAdapters {
                 Some(Connection::Breg {
                     client, options, ..
                 }),
+                Operation::ReadRecordV2,
+            ) => {
+                let input: ReadRequest = match serde_json::from_value(request.input.clone()) {
+                    Ok(input) => input,
+                    Err(_) => return refused("invalid-command"),
+                };
+                if input.grant.is_some() {
+                    return refused("invalid-command");
+                }
+                read_record_v2(client, options, &input).await
+            }
+            (
+                Some(Connection::Breg {
+                    client, options, ..
+                }),
+                Operation::LookupRecord,
+            ) => crate::record_read::lookup_record(client, options, &request.input).await,
+            (
+                Some(Connection::Breg {
+                    client, options, ..
+                }),
                 Operation::ReadInForce,
             ) => crate::read_in_force::read_in_force(client, options, &request.input).await,
             (
@@ -668,6 +703,20 @@ impl AdapterSet for HttpAdapters {
                     Err(outcome) => return outcome,
                 };
                 read_record(&client, &connection.options, &input).await
+            }
+            (Some(Connection::BregTask(connection)), Operation::ReadRecordV2) => {
+                let input: ReadRequest = match serde_json::from_value(request.input.clone()) {
+                    Ok(input) => input,
+                    Err(_) => return refused("invalid-command"),
+                };
+                let Some(grant) = &input.grant else {
+                    return refused("invalid-command");
+                };
+                let client = match connection.client(grant) {
+                    Ok(client) => client,
+                    Err(outcome) => return outcome,
+                };
+                read_record_v2(&client, &connection.options, &input).await
             }
             (Some(Connection::Scheduling(connection)), operation)
                 if operation.product() == "scheduling" =>

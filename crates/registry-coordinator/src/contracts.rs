@@ -915,7 +915,9 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
             .expect("every catalog operation derives a contract");
         derived::finish(&mut input, &format!("{} input", descriptor.id));
         derived::finish(&mut output, &format!("{} output", descriptor.id));
-        if descriptor.id == Operation::ReadRecord.as_str() {
+        if descriptor.id == Operation::ReadRecord.as_str()
+            || descriptor.id == Operation::ReadRecordV2.as_str()
+        {
             output["$defs"]["RegistryRecord"]["properties"]["domainData"]["description"] =
                 Value::from(
                     "Project-defined record data. An imported BReg record schema limits member \
@@ -954,6 +956,12 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         } else {
             format!("{} declared-refusal output", descriptor.id)
         };
+        if descriptor.id == Operation::LookupRecord.as_str() {
+            refusal["properties"]["refusalCode"] = serde_json::json!({
+                "type": "string",
+                "const": crate::record_read::UNRESOLVED
+            });
+        }
         derived::finish(&mut refusal, &title);
         let mut text = serde_json::to_string_pretty(&refusal)?;
         text.push('\n');
@@ -1003,6 +1011,7 @@ mod derived {
         decision::DecisionResult,
         external_http::{ExternalResponse, GetRequest},
         read_in_force::{InForceRecord, InForceRequest, MAX_SUBJECT_FIELDS},
+        record_read::{LookedUpRecord, LookupRequest, MAX_LOOKUP_VALUES},
         review::CancelReviewInput,
     };
     use registry_breg_client::{BRegActionReceipt, RegistryRecordSingleResponse};
@@ -1112,6 +1121,36 @@ mod derived {
         record["properties"]["asOf"]["format"] = json!("date");
         record["properties"]["observedAt"]["format"] = json!("date-time");
         (request, record)
+    }
+
+    pub(super) fn lookup_record() -> (Value, Value) {
+        let mut request = input::<LookupRequest>();
+        request["properties"]["values"]["minProperties"] = json!(1);
+        request["properties"]["values"]["maxProperties"] = json!(MAX_LOOKUP_VALUES);
+        let mut record = output::<LookedUpRecord>();
+        set_observed_at_format(&mut record);
+        (request, record)
+    }
+
+    /// The v1 record envelope with the provenance of the read added.
+    pub(super) fn read_record_v2() -> (Value, Value) {
+        let mut envelope = output::<RegistryRecordSingleResponse>();
+        let mut provenance = output::<LookedUpRecord>();
+        set_observed_at_format(&mut provenance);
+        envelope["description"] = json!(
+            "One Registry Record v1 single-response envelope with the provenance of this read."
+        );
+        envelope["$defs"]["Provenance"] = provenance["$defs"]["Provenance"].clone();
+        envelope["properties"]["provenance"] = json!({"$ref": "#/$defs/Provenance"});
+        envelope["required"]
+            .as_array_mut()
+            .expect("the record envelope lists its required members")
+            .push(json!("provenance"));
+        (input::<ReadRequest>(), envelope)
+    }
+
+    fn set_observed_at_format(record: &mut Value) {
+        record["$defs"]["Provenance"]["properties"]["observedAt"]["format"] = json!("date-time");
     }
 
     pub(super) fn read_proposal() -> (Value, Value) {

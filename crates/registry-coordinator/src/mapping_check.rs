@@ -383,6 +383,24 @@ fn members_fit(
             &format!("Add a {missing} field with a reference or a literal."),
         ));
     }
+    let bound = |keyword: &str| schema.get(keyword).and_then(Value::as_u64);
+    let set = u64::try_from(fields.len()).unwrap_or(u64::MAX);
+    if let Some(least) = bound("minProperties").filter(|least| set < *least) {
+        return Err(authored(
+            "mapping.field",
+            &format!("{base}{prefix}.fields"),
+            &format!("expected at least {least} members, as {name} declares; fields sets {set}"),
+            &format!("Add fields until at least {least} are set."),
+        ));
+    }
+    if let Some(most) = bound("maxProperties").filter(|most| set > *most) {
+        return Err(authored(
+            "mapping.field",
+            &format!("{base}{prefix}.fields"),
+            &format!("expected at most {most} members, as {name} declares; fields sets {set}"),
+            &format!("Remove fields until at most {most} are set."),
+        ));
+    }
     Ok(())
 }
 

@@ -41,6 +41,22 @@
   `coordinator.read-in-force.may-be-ambiguous` when no `temporal-non-overlap`
   constraint is scoped only by fields the subject names. It needs a BReg
   record schema that carries the `x-registry-temporal` marker.
+- Add `breg.lookup-record/v1`: one BReg `:lookup` for the record that a
+  structured set of `values` (one to sixteen text, number or flag fields)
+  resolves to under a compiled `selector`, with the record's provenance and
+  `observedAt`. BReg's single value-free `lookup.unresolved` is the declared
+  refusal `unresolved`. Check refuses `unresolved` routed straight to a step
+  that changes data (`definition.unresolved-route`), because no match, two
+  matches and a hidden row look alike.
+- Add `breg.read-record/v2`: the input and record envelope of
+  `breg.read-record/v1` plus a `provenance` member with the record and
+  revision identifiers, the ETag and `observedAt`, the Coordinator's clock when
+  the read returned. `breg.read-record/v1` is unchanged. The BReg profile must
+  grant `lookup` and `get`; check does not read profiles, so a missing grant
+  shows at run time as `product-forbidden`.
+- `coordinatorctl check` now refuses a `fields` mapping that sets fewer or more members than the
+  schema's `minProperties` or `maxProperties` allow, instead of leaving the
+  mismatch to the run.
 - Add Check now: `POST /v1/runs/{run}/check` and `coordinatorctl check-now`
   bring forward the next read of a step's open wait. It keeps the read floor,
   counts against the wait's read budget, needs only the inspect grant, is

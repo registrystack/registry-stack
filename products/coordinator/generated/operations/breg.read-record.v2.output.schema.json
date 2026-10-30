@@ -1,0 +1,126 @@
+{
+  "$defs": {
+    "Provenance": {
+      "description": "Where a record came from and when the workflow looked at it.\n\n`observedAt` is the Coordinator's clock when the read returned. It says when\nthe workflow looked, not when the fact became true.",
+      "properties": {
+        "etag": {
+          "description": "The entity tag BReg sent with the record, where it sends one.",
+          "type": "string"
+        },
+        "observedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "recordIdentifier": {
+          "type": "string"
+        },
+        "revisionIdentifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordIdentifier",
+        "revisionIdentifier",
+        "observedAt"
+      ],
+      "type": "object"
+    },
+    "RegistryRecord": {
+      "additionalProperties": true,
+      "description": "One Registry Record v1 member.",
+      "properties": {
+        "domainData": {
+          "additionalProperties": true,
+          "description": "Project-defined record data. An imported BReg record schema limits member names to the record type's API names. Fields may be hidden by access policy; value types remain open. Without a record import, any member name is accepted.",
+          "type": "object"
+        },
+        "recordIdentifier": {
+          "type": "string"
+        },
+        "revisionIdentifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordIdentifier",
+        "revisionIdentifier",
+        "domainData"
+      ],
+      "type": "object"
+    },
+    "RegistryRecordJsonLdContext": {
+      "oneOf": [
+        {
+          "const": "https://id.registrystack.org/contexts/registry-record/v1"
+        },
+        {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[hH][tT][tT][pP][sS]://[^/?#\\s]+(?:[/?#][^\\s]*)?$",
+            "type": "string"
+          },
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "https://id.registrystack.org/contexts/registry-record/v1"
+            }
+          ],
+          "type": "array",
+          "uniqueItems": true
+        }
+      ]
+    },
+    "RegistryRecordMeta": {
+      "additionalProperties": true,
+      "description": "The homogeneous Registry, primary dataset, and entity context shared by a\nsingle response or every member of a collection.",
+      "properties": {
+        "datasetIdentifier": {
+          "type": "string"
+        },
+        "entityTypeIdentifier": {
+          "type": "string"
+        },
+        "registryIdentifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "registryIdentifier",
+        "datasetIdentifier",
+        "entityTypeIdentifier"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "One Registry Record v1 single-response envelope with the provenance of this read.",
+  "properties": {
+    "@context": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RegistryRecordJsonLdContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "data": {
+      "$ref": "#/$defs/RegistryRecord"
+    },
+    "meta": {
+      "$ref": "#/$defs/RegistryRecordMeta"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    }
+  },
+  "required": [
+    "data",
+    "meta",
+    "provenance"
+  ],
+  "title": "breg.read-record/v2 output",
+  "type": "object"
+}
