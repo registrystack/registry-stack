@@ -128,6 +128,8 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
 - [Deferred appointment](examples/deferred-appointment/README.md) retains explicit deferred
   Casework task authority across a wait before a Scheduling commitment.
 - [Approved record check](examples/approved-record-check/README.md) reads Base Registry Engine (BReg) under task authority.
+- [Record lookup](examples/record-lookup/README.md) finds one BReg record by identifier, routes
+  `unresolved` to a finish, and reads the record again with provenance.
 - [Governed action follow-up](examples/governed-action-follow-up/README.md) uses an exact imported
   immediate BReg Action contract, then submits a separate notice.
 - [Decision follow-up](examples/decision-follow-up/README.md) interprets a typed evaluation before
@@ -275,6 +277,18 @@ successful read with no record is the declared refusal `none-in-force`, which mu
 from BReg is a failure of the read, never "none in force". The record comes with `asOf`, the
 date BReg read at, and `observedAt`, when Coordinator read it, for any Action that must record
 where a fact came from.
+
+`breg.lookup-record/v1` finds the one record a structured set of identifier fields resolves
+to, and `breg.read-record/v2` reads a record by identifier with provenance. A lookup takes
+`entity`, the compiled `selector` and a nested `fields` mapping `values` of one to sixteen text,
+number or flag fields; it never takes a filter string. BReg answers one value-free
+`lookup.unresolved` for no match, two matches, a hidden row and a missing claim alike, and that
+is the declared refusal `unresolved`. Check refuses a direct `onDeclaredRefusal` route from a
+lookup to a step that mutates (`definition.unresolved-route`), because "not found, so create"
+creates a duplicate when two records match. Route it to a finish or to another read. Both return
+a `provenance` member with `observedAt`, the Coordinator's clock when the read returned. The
+`breg` profile must grant the BReg operations `lookup` and `get`; `check` does not read the
+profile, so a missing grant shows at run time as `product-forbidden`.
 
 A `choose` can also compare values without a Function:
 

@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: record-lookup
+  version: '1'
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required:
+    - nationalId
+    properties:
+      nationalId:
+        type: string
+        minLength: 1
+        maxLength: 64
+operations:
+  find-registrant:
+    uses: breg.lookup-record/v1
+    connection: register
+  read-registrant:
+    uses: breg.read-record/v2
+    connection: register
+workflow:
+  input:
+    typeRef: workflow-input
+  deadlineSeconds: 300
+  start: lookup
+  steps:
+    lookup:
+      type: call
+      operation: find-registrant
+      input:
+        type: fields
+        fields:
+          entity:
+            type: literal
+            value: registrants
+          selector:
+            type: literal
+            value: by-national-id
+          values:
+            type: fields
+            fields:
+              nationalId:
+                type: input
+                path: /nationalId
+      next: read
+      # Zero matches, two matches, a row this profile cannot see and a missing
+      # claim all arrive as the same refusal. Route it to a finish, never to a
+      # step that creates or changes data.
+      onDeclaredRefusal: not-registered
+    read:
+      type: call
+      operation: read-registrant
+      input:
+        type: fields
+        fields:
+          collection:
+            type: literal
+            value: registrants
+          recordId:
+            type: step
+            step: lookup
+            path: /recordIdentifier
+      next: registered
+    registered:
+      type: finish
+      outcome: registered
+      output:
+        type: fields
+        fields:
+          recordId:
+            type: step
+            step: read
+            path: /provenance/recordIdentifier
+          revisionIdentifier:
+            type: step
+            step: read
+            path: /provenance/revisionIdentifier
+          observedAt:
+            type: step
+            step: read
+            path: /provenance/observedAt
+    not-registered:
+      type: finish
+      outcome: not-registered
+  outcomes:
+    registered:
+      type: object
+      additionalProperties: false
+      required:
+      - recordId
+      - revisionIdentifier
+      - observedAt
+      properties:
+        recordId:
+          type: string
+        revisionIdentifier:
+          type: string
+        observedAt:
+          type: string
+          format: date-time
+    not-registered:
+      type: 'null'
