@@ -277,8 +277,12 @@ serialize_tagged_union!(AggregationStrategy, tag = "type");
 /// (`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest
 /// class across the error and its cause; the five uncatchable classes name
 /// the boundary no `onException` or `doCatch` may handle.
+///
+/// The wire form is the class string (`upstream`, `breaker.open`), which
+/// the serde impls of this enum carry, so the schema impl enumerates the
+/// same strings by hand: a derive would render the Rust variant names and
+/// admit nothing the reader accepts.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ErrorClass {
     Upstream,
     UpstreamHttp,
@@ -504,6 +508,25 @@ impl<'de> serde::Deserialize<'de> for ErrorClass {
                 "an error class from the closed Adapter hierarchy",
                 "Name one class of the error hierarchy in CONCEPT.md section 8.7.",
             ))
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ErrorClass {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ErrorClass".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let wire_names = ErrorClass::ALL
+            .iter()
+            .map(|class| class.class())
+            .collect::<Vec<_>>();
+        schemars::json_schema!({
+            "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+            "type": "string",
+            "enum": wire_names,
         })
     }
 }
@@ -819,6 +842,41 @@ mod tests {
         }
         assert_eq!(ErrorClass::from_class("upstream.exploded"), None);
         assert!(serde_json::from_str::<ErrorClass>("\"upstream.exploded\"").is_err());
+    }
+
+    /// The generated schema enumerates the wire class strings, not the
+    /// Rust variant names a `schemars` derive renders: the schema admits
+    /// exactly what the reader accepts, so no authored class validates
+    /// against one and fails the other (CFG-SCHEMA).
+    #[cfg(feature = "schema")]
+    #[test]
+    fn the_error_class_schema_enumerates_the_wire_names() {
+        let schema = serde_json::to_value(schemars::schema_for!(ErrorClass)).expect("schema");
+        let enum_values = schema
+            .get("enum")
+            .or_else(|| {
+                schema
+                    .get("$defs")
+                    .and_then(|definitions| definitions.get("ErrorClass"))
+                    .and_then(|entry| entry.get("enum"))
+            })
+            .and_then(|values| values.as_array())
+            .expect("the ErrorClass schema carries an enum");
+        let names: Vec<&str> = enum_values
+            .iter()
+            .map(|value| value.as_str().expect("a string enum entry"))
+            .collect();
+        let expected: Vec<&str> = ErrorClass::ALL.iter().map(|class| class.class()).collect();
+        assert_eq!(
+            names, expected,
+            "the schema enumerates exactly the wire class strings"
+        );
+        for leaked in ["Upstream", "BreakerOpen", "Outcome", "Facade"] {
+            assert!(
+                !names.contains(&leaked),
+                "the Rust variant name {leaked} leaks into the schema"
+            );
+        }
     }
 
     #[test]
