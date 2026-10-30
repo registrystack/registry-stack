@@ -113,6 +113,29 @@ impl Served {
             .join("../../products/adapter/profiles/breg-records/profile.yaml")
     }
 
+    /// The committed GovStack example project: the same DHIS2 pack under the
+    /// govstack-consultation profile.
+    pub fn govstack_project() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter/examples/dhis2-govstack")
+    }
+
+    /// The maintained govstack-consultation profile.
+    pub fn govstack_profile() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/profiles/govstack-consultation/profile.yaml")
+    }
+
+    /// The maintained profile the project at `project` pins by id.
+    fn profile_for(project: &Path) -> std::path::PathBuf {
+        let text =
+            std::fs::read_to_string(project.join("project.yaml")).expect("the project is readable");
+        if text.contains("id: govstack-consultation") {
+            Self::govstack_profile()
+        } else {
+            Self::example_profile()
+        }
+    }
+
     /// The maintained pack the example project pins.
     pub fn example_pack() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -255,7 +278,7 @@ audit:
             command.arg("--pack").arg(Self::example_pack());
         }
         if !project.join("profile.yaml").exists() {
-            command.arg("--profile").arg(Self::example_profile());
+            command.arg("--profile").arg(Self::profile_for(project));
         }
         command
             .env("TEST_UPSTREAM_USERNAME", USERNAME)
@@ -356,6 +379,22 @@ audit:
             .collect()
     }
 
+    /// Every journal event's detail, as one text.
+    pub async fn journal_text(&self) -> String {
+        let (client, connection) = tokio_postgres::connect(&self.database, tokio_postgres::NoTls)
+            .await
+            .expect("connect the journal schema");
+        tokio::spawn(connection);
+        client
+            .query("SELECT detail::text FROM adapter_journal_events", &[])
+            .await
+            .expect("read the journal")
+            .iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// The `detail` of every journal event of `kind`, oldest first.
     pub async fn journal_details(&self, kind: &str) -> Vec<Value> {
         let (client, connection) = tokio_postgres::connect(&self.database, tokio_postgres::NoTls)
@@ -433,17 +472,49 @@ audit:
 
     /// One GET over a fresh connection: status, headers, JSON body.
     pub fn get(&self, path: &str, bearer: Option<&str>) -> (u16, String, Value) {
+        self.request("GET", path, bearer, &[], b"")
+    }
+
+    /// One POST of a JSON body over a fresh connection.
+    pub fn post(&self, path: &str, bearer: Option<&str>, body: &Value) -> (u16, String, Value) {
+        self.request(
+            "POST",
+            path,
+            bearer,
+            &[("Content-Type", "application/json")],
+            body.to_string().as_bytes(),
+        )
+    }
+
+    /// One request over a fresh connection: status, headers, JSON body (the
+    /// body text as a string when it is not JSON). A body adds its
+    /// Content-Length.
+    pub fn request(
+        &self,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> (u16, String, Value) {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).expect("connect");
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("timeout");
         let mut request =
-            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
+            format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
         if let Some(token) = bearer {
             request.push_str(&format!("Authorization: Bearer {token}\r\n"));
         }
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        if !body.is_empty() {
+            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
         request.push_str("\r\n");
         stream.write_all(request.as_bytes()).expect("write");
+        stream.write_all(body).expect("write the body");
         let mut raw = Vec::new();
         stream.read_to_end(&mut raw).expect("read");
         let text = String::from_utf8(raw).expect("utf8");
@@ -467,6 +538,23 @@ pub fn expected_basic() -> String {
 }
 
 pub fn copy_example_project(directory: &std::path::Path) {
+    copy_project(
+        &Served::example_project(),
+        &Served::example_profile(),
+        directory,
+    );
+}
+
+/// The govstack example in a copy a test can edit.
+pub fn copy_govstack_project(directory: &std::path::Path) {
+    copy_project(
+        &Served::govstack_project(),
+        &Served::govstack_profile(),
+        directory,
+    );
+}
+
+fn copy_project(project: &Path, profile: &Path, directory: &std::path::Path) {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).expect("create the copy directory");
         for entry in std::fs::read_dir(from).expect("read the example directory") {
@@ -479,13 +567,12 @@ pub fn copy_example_project(directory: &std::path::Path) {
             }
         }
     }
-    copy(&Served::example_project(), directory);
+    copy(project, directory);
     // The example folder holds only the project: the copy carries its own
     // pack, scripts and profile beside it, so a test can edit them.
     let packs = Served::example_pack();
     copy(packs.parent().expect("the pack directory"), directory);
-    std::fs::copy(Served::example_profile(), directory.join("profile.yaml"))
-        .expect("copy the profile");
+    std::fs::copy(profile, directory.join("profile.yaml")).expect("copy the profile");
 }
 
 /// The digest string the pins use for `bytes`.

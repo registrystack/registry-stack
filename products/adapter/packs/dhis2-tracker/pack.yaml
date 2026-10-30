@@ -195,6 +195,85 @@ routeTemplates:
           rhai:
             file: scripts/shape-records.rhai
             entrypoint: shape_records
+  - id: search-tracked-entities-by-org-unit
+    parameters:
+      - name: program
+        type: string
+        required: true
+        description: The DHIS2 program the search narrows to.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: dhis2OrgUnit
+          value:
+            rhai:
+              file: scripts/org-unit-filter.rhai
+              entrypoint: org_unit_filter
+      - setProperty:
+          name: dhis2Program
+          value:
+            constant: "{{program}}"
+      # The page this run fetches: the engine restores the caller's
+      # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
+      # the first page; scripts/seed-page.rhai turns that into the DHIS2
+      # page number.
+      - setProperty:
+          name: dhis2Page
+          value:
+            rhai:
+              file: scripts/seed-page.rhai
+              entrypoint: seed_page
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program:
+                exchangeProperty: dhis2Program
+              # The search is scoped to the organisation unit the caller's
+              # org_unit filter names (scripts/org-unit-filter.rhai); the
+              # SELECTED mode restricts it to that unit.
+              orgUnits:
+                exchangeProperty: dhis2OrgUnit
+              orgUnitMode:
+                constant: SELECTED
+              page:
+                exchangeProperty: dhis2Page
+              # The caller's pageSize header (a facade input, CONCEPT
+              # 8.11.1; the bound profile bounds it) is the DHIS2 page
+              # size. totalPages=true adds total and pageCount to the
+              # always-present pager (which also carries nextPage and
+              # prevPage links); scripts/next-continuation.rhai reads
+              # pageCount.
+              pageSize:
+                header: pageSize
+              totalPages:
+                constant: true
+              order:
+                constant: "createdAt:desc"
+      # The continuation the engine seals into the caller's nextCursor:
+      # the next page number while pager.pageCount holds one more, absent
+      # on the last page (scripts/next-continuation.rhai). An absent or
+      # null AdapterNextContinuation at the end of the route is the last
+      # page.
+      - setProperty:
+          name: AdapterNextContinuation
+          value:
+            rhai:
+              file: scripts/next-continuation.rhai
+              entrypoint: next_continuation
+      - setBody:
+          rhai:
+            file: scripts/shape-records.rhai
+            entrypoint: shape_records
   - id: fetch-tracked-entity
     parameters:
       - name: id
@@ -294,6 +373,8 @@ routeTemplates:
                   file: scripts/accepted-record.rhai
                   entrypoint: accepted_record
 scripts:
+  - path: scripts/org-unit-filter.rhai
+    digest: sha256:046a19140b16378433f8afe999c633ec20a68257dffd60a216fba4ebd038ccc4
   - path: scripts/seed-page.rhai
     digest: sha256:3d1f10f861171fcff9f21c0e36aa7941d6bc327b5c510cf9127a7e8131c835ed
   - path: scripts/next-continuation.rhai

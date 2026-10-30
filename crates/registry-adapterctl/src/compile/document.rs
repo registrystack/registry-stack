@@ -250,7 +250,9 @@ fn concrete_path(path: &str, parameter: Option<&str>, record_type: &str) -> Stri
 /// parameters in their declared order, then the query parameters, the
 /// binding's declared filters beside the profile's pagination, sorted by
 /// name. The record-type parameter is substituted into the path, so it
-/// emits no parameter.
+/// emits no parameter. A read carried over POST takes its pagination and
+/// filters in the request body, and the runtime refuses a query string on
+/// it, so such an operation declares no query parameter.
 fn operation_parameters(
     operation: &ProfileOperation,
     binding: &Binding,
@@ -268,6 +270,9 @@ fn operation_parameters(
             "required": true,
             "schema": {"type": "string"},
         }));
+    }
+    if operation.read_only {
+        return parameters;
     }
     let mut query = Vec::new();
     if let Some(pagination) = &operation.pagination {
@@ -621,6 +626,21 @@ mod tests {
                 },
             ]),
             "the query parameters sort by name"
+        );
+    }
+
+    /// A read over POST carries its pagination and filters in the request
+    /// body, so the document declares no query parameter for it.
+    #[test]
+    fn a_read_over_post_declares_no_query_parameters() {
+        let mut profile = profile_value();
+        profile["operations"][1]["readOnly"] = json!(true);
+        let profile: AdapterProfile = serde_json::from_value(profile).expect("the profile decodes");
+        let document = assemble(&profile, &project(both_bindings())).expect("the assembly runs");
+        assert_eq!(
+            document["paths"]["/v2/cases/case"]["post"]["parameters"],
+            json!([]),
+            "the cursor and page size travel in the body"
         );
     }
 
