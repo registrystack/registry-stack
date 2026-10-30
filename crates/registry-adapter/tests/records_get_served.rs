@@ -15,7 +15,8 @@ mod served_harness;
 use serde_json::json;
 use served_harness::upstream::{Response, UpstreamDouble};
 use served_harness::{
-    capture, copy_example_project, digest_of, expected_basic, replace_profile_text, Served,
+    capture, copy_example_project, digest_of, expected_basic, replace_pack_text,
+    replace_profile_text, Served,
 };
 
 #[tokio::test]
@@ -535,4 +536,35 @@ async fn an_item_envelope_carries_the_record_identifier_beside_the_record() {
     assert_eq!(body["data"]["recordId"], "EeBJ3Sn9uLg");
     assert_eq!(body["data"]["data"]["org_unit"], "slSrf7H9lMf");
     assert_eq!(body["meta"]["entityTypeIdentifier"], "person");
+}
+
+#[tokio::test]
+async fn a_static_authorization_endpoint_sends_its_declared_scheme_and_token() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    copy_example_project(directory.path());
+    replace_pack_text(
+        directory.path(),
+        "    authentication:\n      type: basic\n",
+        "    authentication:\n      type: static-authorization\n      scheme: ApiToken\n",
+    );
+    let served = Served::start_with_credential(
+        &upstream.url(""),
+        directory.path(),
+        "      type: static-authorization\n      tokenRef: secret:env/TEST_UPSTREAM_PASSWORD\n",
+    )
+    .await;
+
+    let token = served.token("records.read");
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+
+    assert_eq!(status, 200, "{body}");
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some("ApiToken synthetic-password")
+    );
 }

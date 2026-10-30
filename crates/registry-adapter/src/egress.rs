@@ -428,7 +428,7 @@ pub struct EndpointEgress {
 
 impl EndpointEgress {
     /// Compile one endpoint binding against its declared endpoint.
-    fn compile(
+    pub(crate) fn compile(
         binding: &EndpointBinding,
         declared: &Endpoint,
         config: &AdapterRuntimeConfig,

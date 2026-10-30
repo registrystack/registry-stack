@@ -31,6 +31,13 @@ const CURSOR_KEY: &str = "synthetic-cursor-key-0123456789!";
 /// The subject the default token carries.
 pub const SUBJECT: &str = "synthetic-caller";
 
+/// The runtime config's endpoint credential lines for the Basic kind the
+/// example pack declares.
+const BASIC_CREDENTIAL: &str = "      type: basic
+      usernameRef: secret:env/TEST_UPSTREAM_USERNAME
+      passwordRef: secret:env/TEST_UPSTREAM_PASSWORD
+";
+
 static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
 
 /// The committed fixture directory for the DHIS2 Tracker pack. A fixture is
@@ -153,6 +160,27 @@ impl Served {
         served
     }
 
+    /// Start over `project` with the runtime config's endpoint credential
+    /// written as `credential` (the lines under `credential:`, indented six
+    /// spaces, each ending in a newline).
+    pub async fn start_with_credential(
+        upstream_url: &str,
+        project: &Path,
+        credential: &str,
+    ) -> Self {
+        let mut served = Self::spawn_config(
+            upstream_url,
+            project,
+            CURSOR_KEY,
+            &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            credential,
+        )
+        .await;
+        served.wait_until_listening();
+        served
+    }
+
     /// Start over `project` and return the stderr of an adapter that
     /// refuses to start; panics when it starts, or never exits.
     pub async fn refusal_with_project(upstream_url: &str, project: &Path) -> String {
@@ -190,8 +218,15 @@ impl Served {
         project: &Path,
         cursor_lines: &str,
     ) -> String {
-        let mut served =
-            Self::spawn_config(upstream_url, project, CURSOR_KEY, &[], cursor_lines).await;
+        let mut served = Self::spawn_config(
+            upstream_url,
+            project,
+            CURSOR_KEY,
+            &[],
+            cursor_lines,
+            BASIC_CREDENTIAL,
+        )
+        .await;
         served.await_refusal()
     }
 
@@ -211,6 +246,7 @@ impl Served {
             cursor_key,
             omitted_env,
             "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            BASIC_CREDENTIAL,
         )
         .await
     }
@@ -222,6 +258,7 @@ impl Served {
         cursor_key: &str,
         omitted_env: &[&str],
         cursor_lines: &str,
+        credential: &str,
     ) -> Self {
         let database = schema_url().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
@@ -239,10 +276,7 @@ endpoints:
   - endpoint: tracker
     baseUrl: {upstream_url}
     credential:
-      type: basic
-      usernameRef: secret:env/TEST_UPSTREAM_USERNAME
-      passwordRef: secret:env/TEST_UPSTREAM_PASSWORD
-listener:
+{credential}listener:
   bind: 127.0.0.1:{port}
 database:
   runtimeUrlRef: secret:env/TEST_DB_URL
@@ -258,7 +292,7 @@ oidc:
 allowedClients:
   - synthetic-client
 allowedPrivateCidrs:
-  - 127.0.0.0/8
+  - 192.168.0.0/16
 audit:
   retentionDays: 90
 {cursor_lines}"#
@@ -644,6 +678,28 @@ pub fn replace_profile_text(directory: &Path, from: &str, to: &str) {
         "the project pins the committed profile"
     );
     std::fs::write(&profile_path, &edited).expect("write the profile");
+    std::fs::write(
+        &project_path,
+        project.replace(&pinned, &digest_of(edited.as_bytes())),
+    )
+    .expect("write the project");
+}
+
+/// Replace `from` with `to` in a copied project's pack and re-pin it: the
+/// project pins the pack's digest.
+pub fn replace_pack_text(directory: &Path, from: &str, to: &str) {
+    let pack_path = directory.join("pack.yaml");
+    let pack = std::fs::read_to_string(&pack_path).expect("the pack is readable");
+    assert!(pack.contains(from), "the pack carries the text");
+    let edited = pack.replacen(from, to, 1);
+    let project_path = directory.join("project.yaml");
+    let project = std::fs::read_to_string(&project_path).expect("the project is readable");
+    let pinned = digest_of(pack.as_bytes());
+    assert!(
+        project.contains(&pinned),
+        "the project pins the committed pack"
+    );
+    std::fs::write(&pack_path, &edited).expect("write the pack");
     std::fs::write(
         &project_path,
         project.replace(&pinned, &digest_of(edited.as_bytes())),

@@ -30,10 +30,8 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::auth::{AuthPlan, StaticCredential};
-use crate::component::http::header_filter::HeaderFilter;
-use crate::component::http::uri::PinnedOrigin;
+use crate::egress::EndpointEgress;
 use crate::envelope::CompiledEnvelope;
-use crate::interim_loopback::LoopbackSender;
 use crate::read_request::{ReadRequestTemplate, ServedFilter};
 use crate::route::{check_servable, is_served_auth, EndpointRuntime};
 use crate::scripts::ScriptSet;
@@ -353,23 +351,21 @@ pub fn load(
             );
             continue;
         }
-        resolve_static_credential(&id, &plan, &resolver)?;
-        let origin = PinnedOrigin::new(binding.base_url.as_str())
-            .map_err(|_| LoadError::Runtime(format!("endpoint {id} baseUrl was refused")))?;
-        let filter = HeaderFilter::for_endpoint(declared).map_err(|_| {
-            LoadError::Runtime(format!("endpoint {id} header allowlist was refused"))
-        })?;
+        let egress =
+            EndpointEgress::compile(binding, declared, &runtime, &resolver).map_err(|fault| {
+                LoadError::Runtime(format!("endpoint {id} outbound state was refused: {fault}"))
+            })?;
+        resolve_static_credential(&id, egress.plan(), &resolver)?;
         let base = format!(
             "{}{}",
-            origin.origin_url().trim_end_matches('/'),
-            origin.base_path()
+            egress.origin().origin_url().trim_end_matches('/'),
+            egress.origin().base_path()
         );
         endpoints.insert(
             id,
             EndpointRuntime {
-                plan,
+                egress,
                 base,
-                sender: Box::new(LoopbackSender::new(origin, filter)),
                 attempt: ATTEMPT,
                 maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
             },

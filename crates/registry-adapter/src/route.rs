@@ -29,17 +29,17 @@ use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
 
 use crate::auth::{
-    AuthError, AuthEvent, AuthKind, AuthPlan, AuthorizeContext, ClientAssertion,
-    ClientAssertionSigner, ProtectedText, TokenBudget, TokenRequest, TokenSend, TokenWire,
-    TransportFailure, UpstreamStatusAction,
+    AuthError, AuthEvent, AuthKind, AuthorizeContext, ClientAssertion, ClientAssertionSigner,
+    ProtectedText, TokenBudget, TokenRequest, TokenSend, TokenWire, TransportFailure,
+    UpstreamStatusAction,
 };
 use crate::component::http::uri::{encode_path_segment, percent_encode};
+use crate::egress::{EgressError, EndpointEgress, OutboundSend, SendShape};
 use crate::exchange::{
     Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
     REDELIVERY_MAX_COUNTER_HEADER, RESERVED_PROPERTY_PREFIX,
 };
 use crate::scripts::ScriptSet;
-use crate::upstream::{EgressError, OutboundSend, SendMethod, UpstreamSend};
 
 /// The step kinds this runtime interprets. Every other kind of the route
 /// model is refused at load by [`check_servable`], by name.
@@ -191,10 +191,11 @@ fn parse_ok_range(parameters: &ToParameters) -> Result<(u16, u16), String> {
 
 /// One upstream endpoint as the interpreter reaches it.
 pub struct EndpointRuntime {
-    pub plan: AuthPlan,
+    /// The endpoint's compiled outbound state: the authentication plan, the
+    /// origin pin, the header filter and the frozen destination policy.
+    pub egress: EndpointEgress,
     /// The origin and base path every link of this endpoint starts with.
     pub base: String,
-    pub sender: Box<dyn UpstreamSend>,
     pub attempt: Duration,
     pub maximum_response_bytes: usize,
 }
@@ -468,7 +469,8 @@ impl Run<'_, '_> {
         let mut budget = TokenBudget::new_exchange();
         let mut auth_events: Vec<AuthEvent> = Vec::new();
         let authorized = endpoint
-            .plan
+            .egress
+            .plan()
             .authorize(&mut AuthorizeContext {
                 resolver: self.context.resolver,
                 budget: &mut budget,
@@ -495,11 +497,11 @@ impl Run<'_, '_> {
         let headers = self.exchange.message.string_headers();
         let started = Instant::now();
         let reply = endpoint
-            .sender
+            .egress
             .send(OutboundSend {
                 link: &link,
                 exchange_headers: &headers,
-                method: SendMethod::Get,
+                shape: SendShape::Get,
                 authorization: credential.as_ref().map(|c| &c.header),
                 attempt: endpoint.attempt,
                 maximum_response_bytes: endpoint.maximum_response_bytes,
@@ -516,7 +518,8 @@ impl Run<'_, '_> {
         if let Some(status) = status {
             let mut refreshed = true;
             let action = endpoint
-                .plan
+                .egress
+                .plan()
                 .on_upstream_status(
                     status,
                     credential.as_ref().and_then(|c| c.generation),
@@ -557,8 +560,8 @@ impl Run<'_, '_> {
                 let message = &mut self.exchange.message;
                 message.body = reply.body;
                 message.set_header("CamelHttpResponseCode", json!(reply.status));
-                for (name, value) in reply.headers {
-                    message.set_header(&name, Value::String(value));
+                for (name, value) in reply.headers.iter() {
+                    message.set_header(name, Value::String(value.to_owned()));
                 }
                 Ok(())
             }
@@ -568,6 +571,9 @@ impl Run<'_, '_> {
                     tracing::warn!(endpoint = %to.uri.id, reason = %reason, "an upstream send was refused");
                 }
                 let mut sent = json!({ "endpoint": to.uri.id, "class": class.class(), "status": status, "durationMs": elapsed });
+                if let EgressError::Upstream(failure) = &error {
+                    sent["certainty"] = json!(failure.certainty_journal_name());
+                }
                 if !auth_events.is_empty() {
                     sent["auth"] = auth_events_detail(&auth_events);
                 }
