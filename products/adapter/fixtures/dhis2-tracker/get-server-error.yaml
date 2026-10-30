@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): the source's server error. The
+# tracker API answers a failed request with 500, and DHIS2 writes every
+# error body in its consistent web API envelope (httpStatus,
+# httpStatusCode, status, message; DHIS2 documentation, "Introduction",
+# Error and info messages). No onException clause of the fetch route
+# handles upstream.http generally, so the class propagates as itself and
+# the bound profile maps it to the facade's upstream-error problem.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-get-server-error
+pack: dhis2-tracker
+upstreamVersion: "2.41"
+provenance:
+  type: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/introduction.html
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/person/Uid00000005
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/Uid00000005
+        response:
+          status: 500
+          body:
+            httpStatus: Internal Server Error
+            httpStatusCode: 500
+            status: ERROR
+            message: An unexpected error occurred while processing the request.
+    expected:
+      type: problem
+      class: upstream.http
+      code: source.upstream-error
