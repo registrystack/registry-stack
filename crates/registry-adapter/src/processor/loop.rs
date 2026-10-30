@@ -120,6 +120,9 @@ async fn iterate(
         // The iteration's exchange stands: the next predicate test, and
         // on completion the route, see the last iteration's result.
         flow @ (Ok(Flow::Continue) | Ok(Flow::Stop)) => flow,
+        // `run_steps` never yields `Handled`; a body it ended stands as
+        // a stop.
+        Ok(Flow::Handled) => Ok(Flow::Stop),
         Err(failure) => {
             run.exchange = standing;
             Err(failure)

@@ -18,7 +18,7 @@ use registry_adapter::exchange::Exchange;
 use registry_adapter::resilience::ResilienceRuntime;
 use registry_adapter::route::{
     check_servable, run_route, run_route_within, EndpointRuntime, RouteContext, RouteFailure,
-    RouteOutcome,
+    RouteOutcome, RouteTable,
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
@@ -192,11 +192,13 @@ impl Lane {
     }
 
     async fn run(&self) -> RouteOutcome {
+        let routes = RouteTable::new();
         let context = RouteContext {
             endpoints: &self.endpoints,
             scripts: &self.scripts,
             resolver: &self.resolver,
             resilience: &self.resilience,
+            routes: &routes,
             maximum_upstream_calls: 12,
         };
         run_route(
@@ -210,11 +212,13 @@ impl Lane {
     /// One run under an explicit exchange deadline, the way a caller
     /// bounds the whole exchange.
     async fn run_within(&self, deadline: Duration) -> RouteOutcome {
+        let routes = RouteTable::new();
         let context = RouteContext {
             endpoints: &self.endpoints,
             scripts: &self.scripts,
             resolver: &self.resolver,
             resilience: &self.resilience,
+            routes: &routes,
             maximum_upstream_calls: 12,
         };
         run_route_within(

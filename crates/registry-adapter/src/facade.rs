@@ -436,6 +436,7 @@ async fn answer(
         scripts: &state.loaded.scripts,
         resolver: &state.loaded.resolver,
         resilience: &operation.resilience,
+        routes: &state.loaded.routes,
         maximum_upstream_calls: operation.maximum_upstream_calls,
     };
     let outcome = run_route(&context, &operation.steps, exchange).await;
@@ -1304,7 +1305,7 @@ mod tests {
             binding: String::new(),
             record_type: record_type.to_owned(),
             route_id: String::new(),
-            steps: Vec::new(),
+            steps: std::sync::Arc::new(Vec::new()),
             resilience: crate::resilience::ResilienceRuntime::empty(),
             maximum_upstream_calls: 1,
             item_envelope: None,

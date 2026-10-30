@@ -77,7 +77,9 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
         std::mem::swap(&mut run.exchange, &mut item);
         match flow {
             Ok(Flow::Continue) => {}
-            Ok(Flow::Stop) => {
+            // `run_steps` never yields `Handled`; a body it ended folds
+            // into the stop arm.
+            Ok(Flow::Stop | Flow::Handled) => {
                 processed += 1;
                 let merged =
                     aggregation::fold(run.context.scripts, &strategy, &accumulated, &item)?;

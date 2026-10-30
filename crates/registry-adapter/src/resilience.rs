@@ -92,14 +92,19 @@ impl ConcurrentGovernor {
     }
 }
 
+#[derive(Clone)]
 enum NodeState {
     Breaker(Arc<CircuitBreaker>),
     Throttle(Arc<ThrottlePacer>),
 }
 
-/// The resilience state of one served operation: one node per
-/// `circuitBreaker` and `throttle` step its tree holds, built once at
-/// load. An empty runtime serves a route with no resilience steps.
+/// The resilience state of a deployment's route table: one node per
+/// `circuitBreaker` and `throttle` step the table holds, built once at
+/// load. Every served operation runs over a clone of the same runtime,
+/// so the nodes a route shares with a `direct:` target's own steps are
+/// the same process-local state. An empty runtime serves a tree with no
+/// resilience steps.
+#[derive(Clone)]
 pub struct ResilienceRuntime {
     nodes: HashMap<NodeKey, NodeState>,
 }
@@ -111,6 +116,12 @@ impl ResilienceRuntime {
         let mut nodes = HashMap::new();
         walk(steps, &mut nodes);
         Self { nodes }
+    }
+
+    /// Add the nodes of one more route's tree, the way a load assembles
+    /// the whole table's state before serving any of it.
+    pub fn absorb(&mut self, steps: &[Step]) {
+        walk(steps, &mut self.nodes);
     }
 
     /// The runtime of a tree with no resilience steps.

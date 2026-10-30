@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use registry_adapter::exchange::Exchange;
 use registry_adapter::route::{
-    check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome,
+    check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
@@ -116,11 +116,13 @@ async fn run_over(step_list: Value, replies: Vec<upstream::Response>) -> (RouteO
         .expect("the environment resolver builds");
     let endpoints = error_endpoints(&double.url("/"), &resolver);
     let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
         scripts: &ScriptSet::default(),
         resolver: &resolver,
         resilience: &resilience,
+        routes: &routes,
         maximum_upstream_calls: 12,
     };
     let mut exchange = Exchange::new("error-cluster".to_owned());

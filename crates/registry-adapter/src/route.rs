@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use registry_adapter_core::{
@@ -379,6 +380,12 @@ fn check_policy(site: &str, policy: &RedeliveryOptions) -> Result<(), String> {
 }
 
 fn check_to(to: &ToStep) -> Result<(), String> {
+    if to.uri.component == SendComponent::Direct {
+        if to.parameters.is_some() {
+            return Err("a direct send carries no parameters".into());
+        }
+        return Ok(());
+    }
     if to.uri.component != SendComponent::Http {
         return Err("a to step is served for the http component only".into());
     }
@@ -388,20 +395,33 @@ fn check_to(to: &ToStep) -> Result<(), String> {
     if !matches!(parameters.http_method, None | Some(HttpMethod::Get)) {
         return Err("a to step is served for GET only".into());
     }
-    if parameters.path.is_none() {
-        return Err("a to step without a path is not served".into());
+    if parameters.body.is_some() || !parameters.resume_bindings.is_empty() {
+        return Err("a to step with a body or resumeBindings is not served".into());
     }
-    if parameters.http_uri.is_some()
-        || parameters.body.is_some()
-        || !parameters.resume_bindings.is_empty()
-    {
-        return Err("a to step with httpUri, body or resumeBindings is not served".into());
-    }
-    for expression in parameters.query.values() {
-        check_expression("query", expression)?;
-    }
-    for expression in parameters.path_parameters.values() {
-        check_expression("pathParameters", expression)?;
+    if let Some(expression) = &parameters.http_uri {
+        // The one dynamic form (section 8.11.5): exactly one of `path`
+        // and `httpUri`, and nothing that would build a second address
+        // beside the link.
+        if parameters.path.is_some() {
+            return Err("a to step with both a path and an httpUri is not served".into());
+        }
+        if !parameters.query.is_empty() {
+            return Err("a to step with a query beside an httpUri is not served".into());
+        }
+        if !parameters.path_parameters.is_empty() {
+            return Err("a to step with pathParameters beside an httpUri is not served".into());
+        }
+        check_expression("httpUri", expression)?;
+    } else {
+        if parameters.path.is_none() {
+            return Err("a to step without a path is not served".into());
+        }
+        for expression in parameters.query.values() {
+            check_expression("query", expression)?;
+        }
+        for expression in parameters.path_parameters.values() {
+            check_expression("pathParameters", expression)?;
+        }
     }
     parse_ok_range(parameters)?;
     Ok(())
@@ -528,11 +548,54 @@ pub struct RouteContext<'a> {
     pub endpoints: &'a BTreeMap<String, EndpointRuntime>,
     pub scripts: &'a ScriptSet,
     pub resolver: &'a SecretResolver,
-    /// The process-local breaker and throttle state of the served
-    /// operation's step tree, built at load.
+    /// The process-local breaker and throttle state of the deployment's
+    /// routes, built at load and shared by every exchange.
     pub resilience: &'a crate::resilience::ResilienceRuntime,
+    /// Every route the deployment declares, pack routes and instantiated
+    /// templated routes, keyed by route id: the table a `to: direct:`
+    /// send resolves against (section 8.11.7).
+    pub routes: &'a RouteTable,
     /// The binding's `maximumUpstreamCalls`.
     pub maximum_upstream_calls: u64,
+}
+
+/// The deployment's declared routes by id, each entry the route's whole
+/// step list, clauses and error handler included, so a direct call runs
+/// its target under the target's own error handling. One route holds one
+/// list for its whole lifetime: the binding that serves it and every
+/// direct call into it run the same steps, so a breaker or throttler the
+/// route guards with is the same node either way.
+pub type RouteTable = BTreeMap<String, Arc<Vec<Step>>>;
+
+/// Every `direct:` send the table holds resolves against the table
+/// itself, so a route that calls a route the deployment never declared
+/// is refused at load, not at the first exchange (section 8.11.7). The
+/// authoring checks bound the call graph statically; this holds the
+/// runtime's table to the same name discipline.
+///
+/// # Errors
+///
+/// The first undeclared `direct:` target, by route id.
+pub fn check_direct_targets(routes: &RouteTable) -> Result<(), String> {
+    let mut missing: Vec<&str> = Vec::new();
+    for steps in routes.values() {
+        registry_adapter_core::walk_steps(steps, &mut |step, _pointer| {
+            if let Step::To(sent) = step {
+                if sent.uri.component == SendComponent::Direct
+                    && !routes.contains_key(&sent.uri.id)
+                    && !missing.contains(&sent.uri.id.as_str())
+                {
+                    missing.push(sent.uri.id.as_str());
+                }
+            }
+        });
+    }
+    if let Some(id) = missing.first() {
+        return Err(format!(
+            "the direct route {id} is declared by no route in the deployment"
+        ));
+    }
+    Ok(())
 }
 
 /// A value-free journal fact the run produced, for the caller to append.
@@ -622,11 +685,15 @@ pub struct RouteOutcome {
 
 /// How a step body ended: `stop` ends the route without failing the
 /// exchange (`products/adapter/CONCEPT.md` section 8.6), so it is not an
-/// error.
+/// error. A clause that `handled` its failure ends the route's own
+/// remaining steps the same way, with one difference a `direct:` call
+/// sees (section 8.11.7): the caller continues after a handled failure
+/// and stops for a `stop`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Flow {
     Continue,
     Stop,
+    Handled,
 }
 
 /// Run `steps` over `exchange` within the exchange deadline.
@@ -653,50 +720,10 @@ pub async fn run_route_within(
         exchange,
         events: Vec::new(),
         sends: 0,
+        direct_depth: 0,
         deadline: tokio::time::Instant::now() + deadline,
     };
-    // The route's error handler (section 8.7): `noErrorHandler`
-    // withdraws every clause, `defaultErrorHandler` supplies the
-    // redelivery policy for a failing send no clause claims. The
-    // handler is held to one by check_servable.
-    let clauses_enabled = !steps.iter().any(
-        |step| matches!(step, Step::ErrorHandler(handler) if handler.no_error_handler.is_some()),
-    );
-    let handler_policy = steps.iter().find_map(|step| match step {
-        Step::ErrorHandler(handler) => handler
-            .default_error_handler
-            .as_ref()
-            .and_then(|handler| handler.redelivery_policy.as_ref()),
-        _ => None,
-    });
-    let clauses: Vec<&OnExceptionStep> = if clauses_enabled {
-        steps
-            .iter()
-            .filter_map(|step| match step {
-                Step::OnException(clause) => Some(clause),
-                _ => None,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let body = async {
-        for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
-            // A breaker and its steps run bare (section 8.7): the route
-            // error handler does not wrap them, so no clause claims
-            // their failures and no policy redelivers them.
-            let attempted = match step {
-                Step::CircuitBreaker(_) => run.step(step).await,
-                other => run.step_with_clauses(other, &clauses, handler_policy).await,
-            };
-            match attempted {
-                Ok(Flow::Continue) => {}
-                Ok(Flow::Stop) => break,
-                Err(failure) => return Err(failure),
-            }
-        }
-        Ok(())
-    };
+    let body = run.run_route_body(steps);
     let result = tokio::time::timeout(deadline, body)
         .await
         .unwrap_or_else(|_| Err(RouteFailure::of(ErrorClass::BudgetExhausted)));
@@ -704,7 +731,7 @@ pub async fn run_route_within(
         exchange, events, ..
     } = run;
     RouteOutcome {
-        result: result.map(|()| exchange),
+        result: result.map(|_| exchange),
         events,
     }
 }
@@ -714,11 +741,69 @@ pub(crate) struct Run<'a, 'c> {
     pub(crate) exchange: Exchange,
     events: Vec<RouteEvent>,
     sends: u64,
+    /// How many `direct:` calls deep this run is. The authoring checks
+    /// bound the call graph statically; this holds the same bound at
+    /// run for a table that never saw them.
+    direct_depth: u32,
     /// The instant the whole run must end by: a step that waits (the
     /// throttler's pause, a redelivery delay) refuses with its own class
     /// when the wait cannot finish before this, instead of letting the
     /// run's budget expire it as `budget.exhausted`.
     pub(crate) deadline: tokio::time::Instant,
+}
+
+impl Run<'_, '_> {
+    /// Run one route's step list under that route's own error handling
+    /// (section 8.7): the clauses and handler policy its top level
+    /// declares, with a breaker block bare. The route the facade
+    /// dispatches and the route a `to: direct:` send calls run through
+    /// here alike; a `stop` anywhere in the body ends that route and is
+    /// carried out as the flow.
+    async fn run_route_body(&mut self, steps: &[Step]) -> Result<Flow, RouteFailure> {
+        // The route's error handler: `noErrorHandler` withdraws every
+        // clause, `defaultErrorHandler` supplies the redelivery policy
+        // for a failing send no clause claims. The handler is held to
+        // one by check_servable.
+        let clauses_enabled = !steps.iter().any(
+            |step| matches!(step, Step::ErrorHandler(handler) if handler.no_error_handler.is_some()),
+        );
+        let handler_policy = steps.iter().find_map(|step| match step {
+            Step::ErrorHandler(handler) => handler
+                .default_error_handler
+                .as_ref()
+                .and_then(|handler| handler.redelivery_policy.as_ref()),
+            _ => None,
+        });
+        let clauses: Vec<&OnExceptionStep> = if clauses_enabled {
+            steps
+                .iter()
+                .filter_map(|step| match step {
+                    Step::OnException(clause) => Some(clause),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
+            // A breaker and its steps run bare (section 8.7): the route
+            // error handler does not wrap them, so no clause claims
+            // their failures and no policy redelivers them.
+            let attempted = match step {
+                Step::CircuitBreaker(_) => self.step(step).await,
+                other => {
+                    self.step_with_clauses(other, &clauses, handler_policy)
+                        .await
+                }
+            };
+            match attempted {
+                Ok(Flow::Continue) => {}
+                ended @ (Ok(Flow::Stop) | Ok(Flow::Handled)) => return ended,
+                Err(failure) => return Err(failure),
+            }
+        }
+        Ok(Flow::Continue)
+    }
 }
 
 impl Run<'_, '_> {
@@ -745,9 +830,14 @@ impl Run<'_, '_> {
                 Err(failure) => failure,
             };
             let clause = self.select_clause(&failure, clauses);
-            let policy = match (clause, step) {
-                (Some(clause), Step::To(_)) => clause.redelivery_policy.as_ref().or(handler_policy),
-                (None, Step::To(_)) => handler_policy,
+            // Redelivery reaches only a failing upstream send, never a
+            // direct call (section 8.11.7): the target's own sends carry
+            // their redelivery inside the target.
+            let endpoint_send =
+                matches!(step, Step::To(sent) if sent.uri.component != SendComponent::Direct);
+            let policy = match (clause, endpoint_send) {
+                (Some(clause), true) => clause.redelivery_policy.as_ref().or(handler_policy),
+                (None, true) => handler_policy,
                 _ => None,
             };
             if let Some(policy) = policy {
@@ -787,17 +877,24 @@ impl Run<'_, '_> {
                 "exchangeFailureHandled",
                 json!({ "class": failure.class.class() }),
             );
+            let mut stopped = false;
             for clause_step in &clause.steps {
                 // An error inside a clause replaces the failure and is final.
                 if self.step(clause_step).await? == Flow::Stop {
+                    stopped = true;
                     break;
                 }
             }
             // `handled` ends the exchange successfully with the clause's
             // result and `continued` resumes the route after the failure
             // point; with neither, the failure surfaces (section 8.7).
-            if clause.handled == Some(true) {
+            // A `stop` inside the clause's steps outranks both: it ends
+            // the whole route, a `direct:` caller included.
+            if stopped {
                 return Ok(Flow::Stop);
+            }
+            if clause.handled == Some(true) {
+                return Ok(Flow::Handled);
             }
             if clause.continued == Some(true) {
                 return Ok(Flow::Continue);
@@ -836,8 +933,12 @@ impl Run<'_, '_> {
     ) -> Pin<Box<dyn Future<Output = Result<Flow, RouteFailure>> + Send + 'r>> {
         Box::pin(async move {
             for step in steps {
-                if self.step(step).await? == Flow::Stop {
-                    return Ok(Flow::Stop);
+                match self.step(step).await? {
+                    Flow::Continue => {}
+                    // A nested body holds no clauses of its own, so it
+                    // only ever sees a `stop`; should a deeper clause's
+                    // `handled` reach here, the body ends the same way.
+                    Flow::Stop | Flow::Handled => return Ok(Flow::Stop),
                 }
             }
             Ok(Flow::Continue)
@@ -1003,6 +1104,9 @@ impl Run<'_, '_> {
     }
 
     async fn send(&mut self, to: &ToStep) -> Result<Flow, RouteFailure> {
+        if to.uri.component == SendComponent::Direct {
+            return self.direct(to).await;
+        }
         let parameters = to
             .parameters
             .as_ref()
@@ -1016,16 +1120,21 @@ impl Run<'_, '_> {
         if self.sends > self.context.maximum_upstream_calls {
             return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
         }
-        let path = self.render_path(parameters)?;
-        let query = self.render_query(parameters)?;
-        let link = format!("{}{path}{query}", endpoint.base);
-        // A link the destination's URL bound cannot hold names nothing the
-        // source can serve: it is answered as no such record, before any
-        // credential is acquired and with no send.
-        if endpoint.egress.origin().pin(&link) == Err(LinkRefusal::TooLong) {
-            return Err(RouteFailure::of(ErrorClass::OutcomeNotFound));
-        }
         let ok_range = parse_ok_range(parameters).unwrap_or(DEFAULT_OK_RANGE);
+        let link = if let Some(expression) = &parameters.http_uri {
+            self.pinned_link(&endpoint.egress, expression)?
+        } else {
+            let path = self.render_path(parameters)?;
+            let query = self.render_query(parameters)?;
+            let link = format!("{}{path}{query}", endpoint.base);
+            // A link the destination's URL bound cannot hold names nothing the
+            // source can serve: it is answered as no such record, before any
+            // credential is acquired and with no send.
+            if endpoint.egress.origin().pin(&link) == Err(LinkRefusal::TooLong) {
+                return Err(RouteFailure::of(ErrorClass::OutcomeNotFound));
+            }
+            link
+        };
 
         let mut budget = TokenBudget::new_exchange();
         let mut auth_events: Vec<AuthEvent> = Vec::new();
@@ -1171,6 +1280,67 @@ impl Run<'_, '_> {
     /// The query string of the send: each declared parameter in name
     /// order, its value rendered from the expression and percent-encoded.
     /// A null value leaves the parameter out.
+    /// One synchronous in-process call (section 8.11.7): the target
+    /// route runs on this same exchange under its own clauses, an
+    /// unhandled error propagates unchanged to the caller's clauses, and
+    /// the call is never redelivered. The authoring checks hold the call
+    /// graph acyclic and bounded; the depth counter holds the bound at
+    /// run for a table that never saw them.
+    async fn direct(&mut self, to: &ToStep) -> Result<Flow, RouteFailure> {
+        if to.parameters.is_some() {
+            return Err(RouteFailure::of(ErrorClass::EgressRefused));
+        }
+        let Some(target) = self.context.routes.get(&to.uri.id) else {
+            return Err(RouteFailure::of(ErrorClass::EgressRefused));
+        };
+        if self.direct_depth >= registry_adapter_core::MAX_DIRECT_DEPTH as u32 {
+            return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+        }
+        self.direct_depth += 1;
+        // One boxed edge holds the cycle this call closes (direct to a
+        // route body to a step to a send back to direct); the call graph
+        // is bounded, so the box is bounded with it.
+        let outcome = Box::pin(self.run_route_body(target)).await;
+        self.direct_depth -= 1;
+        // A `stop` in the target ends the caller's route too, the way a
+        // stop in any nested body does; a failure the target's own
+        // clause handled ends only the target, and the caller continues
+        // (section 8.11.7).
+        match outcome {
+            Ok(Flow::Handled) => Ok(Flow::Continue),
+            outcome => outcome,
+        }
+    }
+
+    /// One origin-pinned link (section 8.11.5): the expression must
+    /// yield a string, the parsed link must stay inside the endpoint's
+    /// origin and base path, and the parsed value is what the engine
+    /// sends, never a reparse. Every pin refusal is the uncatchable
+    /// `egress.refused`, raised before any credential is acquired or
+    /// send announced.
+    fn pinned_link(
+        &self,
+        egress: &EndpointEgress,
+        expression: &Expression,
+    ) -> Result<String, RouteFailure> {
+        let link = match self.eval(expression)? {
+            Value::String(link) => link,
+            _ => {
+                return Err(RouteFailure {
+                    class: ErrorClass::Validation,
+                    message: Some("an httpUri must yield a string".to_owned()),
+                    auth: None,
+                })
+            }
+        };
+        match egress.origin().pin(&link) {
+            // The parsed link's own serialization is the value sent;
+            // the sender never sees the expression's raw text.
+            Ok(pinned) => Ok(pinned.as_url().as_str().to_owned()),
+            Err(_) => Err(RouteFailure::of(ErrorClass::EgressRefused)),
+        }
+    }
+
     fn render_query(&self, parameters: &ToParameters) -> Result<String, RouteFailure> {
         let mut pairs = Vec::new();
         for (name, expression) in &parameters.query {
@@ -1502,11 +1672,13 @@ testedVersions: []
         let endpoints = compiled("http://127.0.0.1:9/", key_env, &resolver);
         let scripts = ScriptSet::default();
         let resilience = crate::resilience::ResilienceRuntime::empty();
+        let routes = RouteTable::new();
         let context = RouteContext {
             endpoints: &endpoints,
             scripts: &scripts,
             resolver: &resolver,
             resilience: &resilience,
+            routes: &routes,
             maximum_upstream_calls: 4,
         };
         // The key resolved at compile time; it is gone when the send needs it.
@@ -1547,11 +1719,13 @@ testedVersions: []
         let endpoints = compiled(&format!("http://127.0.0.1:{port}/"), key_env, &resolver);
         let scripts = ScriptSet::default();
         let resilience = crate::resilience::ResilienceRuntime::empty();
+        let routes = RouteTable::new();
         let context = RouteContext {
             endpoints: &endpoints,
             scripts: &scripts,
             resolver: &resolver,
             resilience: &resilience,
+            routes: &routes,
             maximum_upstream_calls: 4,
         };
 

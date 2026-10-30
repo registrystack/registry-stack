@@ -11,10 +11,11 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, AggregationStrategy, Step, ToParameters, Workspace,
+    AdapterRuntimeConfig, AggregationStrategy, SendComponent, Step, ToParameters, Workspace,
     ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
     ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
     ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
@@ -33,7 +34,9 @@ use crate::auth::{AuthPlan, StaticCredential};
 use crate::egress::EndpointEgress;
 use crate::envelope::CompiledEnvelope;
 use crate::read_request::{ReadRequestTemplate, ServedFilter};
-use crate::route::{check_servable, is_served_auth, EndpointRuntime};
+use crate::route::{
+    check_direct_targets, check_servable, is_served_auth, EndpointRuntime, RouteTable,
+};
 use crate::scripts::ScriptSet;
 use registry_adapter_core::{Expression, RouteTemplate};
 use serde_json::Value;
@@ -99,9 +102,14 @@ pub struct ServedOperation {
     pub binding: String,
     pub record_type: String,
     pub route_id: String,
-    pub steps: Vec<Step>,
-    /// The breaker and throttle state of this operation's step tree,
-    /// built once here and addressed by node for the process lifetime.
+    /// The route this operation runs, the one list the deployment's
+    /// table holds: a `to: direct:` call into the same route runs these
+    /// same steps.
+    pub steps: Arc<Vec<Step>>,
+    /// The breaker and throttle state of the whole route table, shared
+    /// by every served operation so a route and a direct call into it
+    /// pace and break on the same nodes, addressed by node for the
+    /// process lifetime.
     pub resilience: crate::resilience::ResilienceRuntime,
     pub maximum_upstream_calls: u64,
     pub response_envelope: CompiledEnvelope,
@@ -144,6 +152,10 @@ pub struct Loaded {
     pub runtime: AdapterRuntimeConfig,
     pub scripts: ScriptSet,
     pub endpoints: BTreeMap<String, EndpointRuntime>,
+    /// Every route the deployment declares, pack routes and templated
+    /// instantiations alike: what the facade serves and what a
+    /// `to: direct:` call resolves against.
+    pub routes: RouteTable,
     pub served: Vec<ServedOperation>,
     /// `(binding id, why)` for every binding left unserved.
     pub unserved: Vec<(String, String)>,
@@ -376,6 +388,72 @@ pub fn load(
         );
     }
 
+    let mut scripts = ScriptSet::default();
+
+    // The deployment's route table: every pack route, then every
+    // templated instantiation shadowing a pack route of the same id, the
+    // way a binding resolves its route id. A template that fails to
+    // instantiate leaves its route undeclared; the binding that names it
+    // carries the refusal.
+    let mut routes: RouteTable = BTreeMap::new();
+    let mut route_refusals: BTreeMap<String, String> = BTreeMap::new();
+    for route in &pack.routes {
+        routes.insert(route.id.as_str().to_owned(), Arc::new(route.steps.clone()));
+    }
+    for templated in &project.templated_routes {
+        let id = templated.route_id.as_str();
+        let built = match pack.route_templates.get(templated.route_template.as_str()) {
+            Some(template) => instantiate(template, &templated.parameters)
+                .map(|steps| routes.insert(id.to_owned(), Arc::new(steps))),
+            None => Err("the templated route names no pack template".to_owned()),
+        };
+        if let Err(reason) = built {
+            routes.remove(id);
+            route_refusals.insert(id.to_owned(), reason);
+        }
+    }
+    // A direct send to a route the deployment never declared is refused
+    // here, not at the first exchange (section 8.11.7).
+    check_direct_targets(&routes).map_err(LoadError::Runtime)?;
+
+    // One resilience runtime for the whole table, so the nodes a route
+    // guards with are the same nodes a direct call into that route hits.
+    let mut deployment_resilience = crate::resilience::ResilienceRuntime::empty();
+    for steps in routes.values() {
+        deployment_resilience.absorb(steps);
+    }
+
+    // Every route's scripts compile once, whichever binding serves it
+    // and whichever direct call reaches it.
+    let mut table_script_uses: Vec<(String, String)> = Vec::new();
+    let mut table_strategy_uses: Vec<(String, String)> = Vec::new();
+    for steps in routes.values() {
+        registry_adapter_core::walk_steps(steps, &mut |step, _pointer| {
+            for expression in step_expressions(step) {
+                if let Expression::Rhai(script) = expression {
+                    table_script_uses.push((script.file.clone(), script.entrypoint.clone()));
+                }
+            }
+            for strategy in step_aggregation_strategies(step) {
+                if let AggregationStrategy::Rhai { expression: script } = strategy {
+                    table_strategy_uses.push((script.file.clone(), script.entrypoint.clone()));
+                }
+            }
+        });
+    }
+    for (file, entrypoint) in table_script_uses {
+        scripts
+            .add(&pack, pack_directory, &file, &entrypoint)
+            .map_err(|error| LoadError::Runtime(error.to_string()))?;
+    }
+    // A strategy script answers the old and new bodies, so it compiles as
+    // a two-parameter function.
+    for (file, entrypoint) in table_strategy_uses {
+        scripts
+            .add_aggregation(&pack, pack_directory, &file, &entrypoint)
+            .map_err(|error| LoadError::Runtime(error.to_string()))?;
+    }
+
     let deployment = sha256_uri(
         &[project_bytes.as_slice(), &profile_bytes, &pack_bytes]
             .iter()
@@ -394,7 +472,6 @@ pub fn load(
         ));
     }
 
-    let mut scripts = ScriptSet::default();
     let mut served = Vec::new();
     let mut unserved = Vec::new();
     for binding in project.bindings.iter() {
@@ -406,6 +483,9 @@ pub fn load(
             pack_directory,
             &endpoints,
             &endpoint_refusals,
+            &routes,
+            &route_refusals,
+            &deployment_resilience,
             has_cursor_key,
             &mut scripts,
         );
@@ -442,6 +522,7 @@ pub fn load(
         runtime,
         scripts,
         endpoints,
+        routes,
         served,
         unserved,
         resolver,
@@ -458,6 +539,9 @@ fn compile_binding(
     pack_directory: &Path,
     endpoints: &BTreeMap<String, EndpointRuntime>,
     endpoint_refusals: &BTreeMap<String, String>,
+    routes: &RouteTable,
+    route_refusals: &BTreeMap<String, String>,
+    deployment_resilience: &crate::resilience::ResilienceRuntime,
     has_cursor_key: bool,
     scripts: &mut ScriptSet,
 ) -> Result<ServedOperation, BindingRefusal> {
@@ -521,14 +605,10 @@ fn compile_binding(
         return Err("a served operation answers 200; a successStatus other than 200 is not served by this runtime yet".into());
     }
     let route_id = binding.route.as_str();
-    let steps: Vec<Step> = if let Some(templated) = project.templated_routes.get(route_id) {
-        let template = pack
-            .route_templates
-            .get(templated.route_template.as_str())
-            .ok_or("the templated route names no pack template")?;
-        instantiate(template, &templated.parameters)?
-    } else if let Some(route) = pack.routes.get(route_id) {
-        route.steps.clone()
+    let steps = if let Some(steps) = routes.get(route_id) {
+        Arc::clone(steps)
+    } else if let Some(reason) = route_refusals.get(route_id) {
+        return Err(reason.clone().into());
     } else {
         return Err("the binding names no route".into());
     };
@@ -539,18 +619,28 @@ fn compile_binding(
         );
     }
     check_servable(&steps)?;
-    let resilience = crate::resilience::ResilienceRuntime::compile(&steps);
 
     let mut refusal: Option<String> = None;
     let mut script_uses: Vec<(String, String)> = Vec::new();
     let mut strategy_uses: Vec<(String, String)> = Vec::new();
     registry_adapter_core::walk_steps(&steps, &mut |step, _pointer| {
         if let Step::To(to) = step {
-            let id = &to.uri.id;
-            if let Some(reason) = endpoint_refusals.get(id) {
-                refusal.get_or_insert(format!("endpoint {id}: {reason}"));
-            } else if !endpoints.contains_key(id) {
-                refusal.get_or_insert(format!("endpoint {id} is not bound by the runtime"));
+            // A direct send resolves against the route table, not the
+            // endpoints; every other send goes to a bound endpoint.
+            if to.uri.component == SendComponent::Direct {
+                if !routes.contains_key(&to.uri.id) {
+                    refusal.get_or_insert(format!(
+                        "the direct route {} is declared by no route in the deployment",
+                        to.uri.id
+                    ));
+                }
+            } else if let Some(reason) = endpoint_refusals.get(&to.uri.id) {
+                refusal.get_or_insert(format!("endpoint {}: {reason}", to.uri.id));
+            } else if !endpoints.contains_key(&to.uri.id) {
+                refusal.get_or_insert(format!(
+                    "endpoint {} is not bound by the runtime",
+                    to.uri.id
+                ));
             }
         }
         for expression in step_expressions(step) {
@@ -599,7 +689,7 @@ fn compile_binding(
         record_type: binding.record_type.as_str().to_owned(),
         route_id: route_id.to_owned(),
         steps,
-        resilience,
+        resilience: deployment_resilience.clone(),
         maximum_upstream_calls: binding.maximum_upstream_calls.get(),
         response_envelope: CompiledEnvelope::compile(
             operation.response_envelope.text(),
@@ -823,7 +913,7 @@ mod tests {
             binding: "person-get".to_owned(),
             record_type: "person".to_owned(),
             route_id: "route".to_owned(),
-            steps: Vec::new(),
+            steps: Arc::new(Vec::new()),
             resilience: crate::resilience::ResilienceRuntime::empty(),
             maximum_upstream_calls: 1,
             item_envelope: None,

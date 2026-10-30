@@ -38,7 +38,9 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &DoTryStep) -> Result<Flow,
     if let Some(finally) = &step.do_finally {
         match run.run_steps(&finally.steps).await {
             Ok(Flow::Continue) => {}
-            Ok(Flow::Stop) => {
+            // `run_steps` never yields `Handled`; a body it ended folds
+            // into the stop arm.
+            Ok(Flow::Stop | Flow::Handled) => {
                 if outcome.is_ok() {
                     outcome = Ok(Flow::Stop);
                 }

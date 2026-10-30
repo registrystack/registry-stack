@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use registry_adapter::exchange::Exchange;
 use registry_adapter::route::{
-    check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome,
+    check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
@@ -33,11 +33,13 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> RouteOutcome {
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
     let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
         scripts,
         resolver: &resolver,
         resilience: &resilience,
+        routes: &routes,
         maximum_upstream_calls: 8,
     };
     let mut exchange = Exchange::new("test".to_owned());
@@ -938,11 +940,13 @@ async fn run_enrich(
         .expect("the environment resolver builds");
     let endpoints = enrich_endpoints(&double.url("/"), "SPLIT_LOOP_KEY", &resolver);
     let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
         scripts,
         resolver: &resolver,
         resilience: &resilience,
+        routes: &routes,
         maximum_upstream_calls: 8,
     };
     let mut exchange = Exchange::new("enrich".to_owned());

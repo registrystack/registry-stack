@@ -249,6 +249,30 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_resilience.rs:a_non_integer_limit_fails_the_exchange",
         "platform:registry-platform-ratelimit/src/rolling_window.rs:acquire",
     ],
+    "direct": [
+        "engine:tests/camel_direct.rs:a_direct_call_shares_the_exchange_and_its_changes",
+        "engine:tests/camel_direct.rs:the_targets_own_clauses_handle_the_target_first",
+        "engine:tests/camel_direct.rs:an_unhandled_target_error_reaches_the_callers_clauses",
+        "engine:tests/camel_direct.rs:a_direct_send_is_never_redelivered",
+        "engine:tests/camel_direct.rs:the_targets_own_sends_carry_their_redelivery",
+        "engine:tests/camel_direct.rs:a_stop_in_the_target_ends_the_whole_route",
+        "engine:tests/camel_direct.rs:a_direct_send_to_an_undeclared_route_fails_the_exchange",
+        "engine:tests/camel_direct.rs:an_undeclared_direct_target_is_refused_at_load",
+        "engine:tests/camel_direct.rs:a_direct_chain_past_the_bounded_depth_is_refused_at_run",
+        "engine:tests/camel_direct.rs:a_direct_send_with_parameters_is_not_served",
+    ],
+    "to": [
+        "engine:tests/camel_origin_link.rs:an_http_uri_send_follows_the_source_link_as_written",
+        "engine:tests/camel_origin_link.rs:a_link_off_the_endpoint_origin_is_refused_without_a_send",
+        "engine:tests/camel_origin_link.rs:a_link_on_another_host_is_refused",
+        "engine:tests/camel_origin_link.rs:a_link_outside_the_base_path_is_refused",
+        "engine:tests/camel_origin_link.rs:a_link_with_a_fragment_or_userinfo_is_refused",
+        "engine:tests/camel_origin_link.rs:a_link_the_parser_would_repair_is_refused",
+        "engine:tests/camel_origin_link.rs:a_non_string_link_fails_the_exchange_as_validation",
+        "engine:tests/camel_origin_link.rs:a_query_beside_an_http_uri_is_not_served",
+        "engine:tests/camel_origin_link.rs:a_path_and_an_http_uri_together_are_not_served",
+        "engine:tests/camel_error_cluster.rs:the_error_handler_shapes_the_attempts_and_clause_reach",
+    ],
 }
 
 SECTION = "### 8.10 The Camel port table"

@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use registry_adapter::exchange::Exchange;
-use registry_adapter::route::{check_servable, run_route, RouteContext};
+use registry_adapter::route::{check_servable, run_route, RouteContext, RouteTable};
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{AdapterPack, ErrorClass, Step};
 use registry_platform_config::{sha256_uri, SecretProvider, SecretResolver};
@@ -26,11 +26,13 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> registry_adapter::rou
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
     let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
         scripts,
         resolver: &resolver,
         resilience: &resilience,
+        routes: &routes,
         maximum_upstream_calls: 4,
     };
     let mut exchange = Exchange::new("test".to_owned());
