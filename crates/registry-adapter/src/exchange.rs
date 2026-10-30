@@ -105,6 +105,10 @@ impl Exchange {
         self.properties.insert(name.to_owned(), value);
     }
 
+    pub fn remove_property(&mut self, name: &str) {
+        self.properties.remove(name);
+    }
+
     #[must_use]
     pub fn property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)

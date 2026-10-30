@@ -329,6 +329,12 @@ pub struct FilterStep {
     /// The `rhai` language member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rhai: Option<RhaiExpression>,
+    /// The exchange property that records the boolean outcome, absent by
+    /// default: Camel 4's `statusPropertyName`. Camel 4 sets no fixed
+    /// filter property, and neither does the port
+    /// (`products/adapter/CONCEPT.md` section 8.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_property_name: Option<String>,
     /// The steps that run only on match.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
