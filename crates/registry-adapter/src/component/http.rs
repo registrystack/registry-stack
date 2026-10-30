@@ -22,3 +22,6 @@
 //! Authentication is one of the closed kinds of section 10.2, declared
 //! on the endpoint and injected at send time, after the allowlist is
 //! applied. Redirects are never followed.
+
+pub mod header_filter;
+pub mod uri;

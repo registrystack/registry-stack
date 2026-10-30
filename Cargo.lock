@@ -5073,6 +5073,7 @@ dependencies = [
  "deadpool-postgres",
  "getrandom 0.4.3",
  "hmac",
+ "http",
  "jsonpath-rust",
  "pest",
  "registry-adapter-core",
@@ -5090,6 +5091,7 @@ dependencies = [
  "sha2 0.11.1",
  "tokio",
  "tokio-postgres",
+ "url",
  "zeroize",
 ]
 
