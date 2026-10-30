@@ -2,7 +2,7 @@
 //
 // The engine evaluates the route's final setBody expression on the
 // exchange (CONCEPT 8.11.3). A 200 import accepted exactly the submitted
-// payload (in 2.41 a 200 is status OK or WARNING, both acceptance; a
+// payload (a 200 carries status OK or WARNING, both acceptance; a
 // refusal arrives as a 409 and raises through the rejection clause), and
 // the record's own identifier is the DHIS2 UID, so the accepted record
 // is the submitted record. The send replaces the body with the import

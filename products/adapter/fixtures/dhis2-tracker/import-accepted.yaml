@@ -1,17 +1,25 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
-# Documented fixture (NOT captured): reconstructed from the DHIS2 tracker
-# import documentation (synchronous import, POST /api/tracker?async=false;
-# the summary carries status OK/WARNING/ERROR). The accepted case echoes
-# the submitted record, whose own identifier is the DHIS2 UID.
+# Captured fixture: an accepted synchronous import, from the DHIS2
+# 2.43.2.1 test server (registry test server, 2026-10-30, scrubbed). The
+# reply carries status OK, empty error and warning reports, the stats,
+# and a bundleReport whose typeReportMap carries all four tracker types
+# (RELATIONSHIP, EVENT, TRACKED_ENTITY, ENROLLMENT); the pack reads only
+# the status. The request is what the pack sends for the captured
+# entity: the bundle keyed by the record's identifier with an empty
+# attribute list (the capture's own request carried an attribute row;
+# scripts/to-bundle.rhai carries none). The expected facade body echoes
+# the submitted record, and the meta registry and dataset identifiers
+# are deployment values the engine writes at instantiation, so the
+# replay expectation carries the envelope template's stand-in literals.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-import-accepted
 pack: dhis2-tracker
-upstreamVersion: "2.41"
+upstreamVersion: "2.43.2.1"
 provenance:
-  type: documented
-  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/tracker.html
+  type: captured
+  reference: registry test server, 2026-10-30, scrubbed
 intercepts:
   - type: endpoint
     endpoint: tracker
@@ -27,9 +35,9 @@ entries:
           query: async=false
           body:
             trackedEntities:
-              - trackedEntity: Uid00000003
-                trackedEntityType: person
-                orgUnit: OqVpUaAYv2B
+              - trackedEntity: wk4JlTuVO9o
+                trackedEntityType: cQWYtUfH6Vx
+                orgUnit: qfg4XUDJtgS
                 attributes: []
         response:
           status: 200
@@ -46,6 +54,24 @@ entries:
               total: 1
             bundleReport:
               typeReportMap:
+                RELATIONSHIP:
+                  trackerType: RELATIONSHIP
+                  stats:
+                    created: 0
+                    updated: 0
+                    deleted: 0
+                    ignored: 0
+                    total: 0
+                  objectReports: []
+                EVENT:
+                  trackerType: EVENT
+                  stats:
+                    created: 0
+                    updated: 0
+                    deleted: 0
+                    ignored: 0
+                    total: 0
+                  objectReports: []
                 TRACKED_ENTITY:
                   trackerType: TRACKED_ENTITY
                   stats:
@@ -56,15 +82,24 @@ entries:
                     total: 1
                   objectReports:
                     - trackerType: TRACKED_ENTITY
-                      uid: Uid00000003
+                      uid: wk4JlTuVO9o
                       errorReports: []
+                ENROLLMENT:
+                  trackerType: ENROLLMENT
+                  stats:
+                    created: 0
+                    updated: 0
+                    deleted: 0
+                    ignored: 0
+                    total: 0
+                  objectReports: []
     expected:
       type: response
       status: 201
       body:
         data:
-          tracked_entity_type: person
-          org_unit: OqVpUaAYv2B
+          tracked_entity_type: cQWYtUfH6Vx
+          org_unit: qfg4XUDJtgS
           created_at: "2026-03-01T12:00:00.000"
           updated_at: "2026-03-01T12:00:00.000"
         meta:

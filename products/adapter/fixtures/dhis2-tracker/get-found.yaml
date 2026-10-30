@@ -1,48 +1,70 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
-# Documented fixture (NOT captured): reconstructed from the DHIS2 tracker
-# export documentation (single tracked entity GET). A capture from a live
-# or containerized DHIS2 2.41 replaces this reference once run.
+# Captured fixture: one tracked-entity GET from the DHIS2 2.43.2.1 test
+# server (registry test server, 2026-10-30, scrubbed). The reply carries
+# the server stamps, the client stamps, the inactive, deleted, and
+# potentialDuplicate flags, and the entity's attribute rows; the pack
+# maps only the scalar properties the bound project declares, so the
+# expected facade body carries the type UID, the org unit, and the
+# stamps. The meta registry and dataset identifiers are deployment
+# values the engine writes at instantiation, so the replay expectation
+# carries the envelope template's stand-in literals.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-get-found
 pack: dhis2-tracker
-upstreamVersion: "2.41"
+upstreamVersion: "2.43.2.1"
 provenance:
-  type: documented
-  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/tracker.html
+  type: captured
+  reference: registry test server, 2026-10-30, scrubbed
 intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
   - facadeRequest:
       operation: records-get
-      path: /v1/records/person/Uid00000001
+      path: /v1/records/person/EeBJ3Sn9uLg
     upstream:
       - request:
           endpoint: tracker
           method: GET
-          path: /api/tracker/trackedEntities/Uid00000001
+          path: /api/tracker/trackedEntities/EeBJ3Sn9uLg
         response:
           status: 200
           body:
-            trackedEntity: Uid00000001
-            trackedEntityType: person
-            orgUnit: OqVpUaAYv2B
-            createdAt: "2026-01-05T10:00:00.000"
-            updatedAt: "2026-02-11T09:30:00.000"
-            deleted: false
+            trackedEntity: EeBJ3Sn9uLg
+            trackedEntityType: cQWYtUfH6Vx
+            createdAt: '2017-01-20T10:44:02.770'
+            createdAtClient: '2017-01-20T10:44:02.770'
+            updatedAt: '2017-05-26T11:46:22.372'
+            updatedAtClient: '2017-05-26T11:46:22.372'
+            orgUnit: slSrf7H9lMf
             inactive: false
-            attributes: []
+            deleted: false
+            potentialDuplicate: false
+            attributes:
+              - attribute: rmeJVy1Rl5V
+                code: SYNTHETIC_CODE_01
+                displayName: Synthetic displayName 01
+                createdAt: '2017-05-26T11:46:22.369'
+                updatedAt: '2017-05-26T11:46:22.369'
+                valueType: TEXT
+                value: Synthetic text 01
+              - attribute: XQwFPP7o2yd
+                displayName: Synthetic displayName 02
+                createdAt: '2017-05-26T11:46:22.371'
+                updatedAt: '2017-05-26T11:46:22.371'
+                valueType: TEXT
+                value: Synthetic text 02
     expected:
       type: response
       status: 200
       body:
         data:
-          tracked_entity_type: person
-          org_unit: OqVpUaAYv2B
-          created_at: "2026-01-05T10:00:00.000"
-          updated_at: "2026-02-11T09:30:00.000"
+          tracked_entity_type: cQWYtUfH6Vx
+          org_unit: slSrf7H9lMf
+          created_at: "2017-01-20T10:44:02.770"
+          updated_at: "2017-05-26T11:46:22.372"
         meta:
           registryIdentifier: registryIdentifier
           datasetIdentifier: datasetIdentifier

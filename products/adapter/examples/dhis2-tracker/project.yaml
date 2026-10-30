@@ -5,6 +5,12 @@
 # program UID is the deployment's own DHIS2 program; every secret travels
 # through the runtime config as a secret reference, never here.
 #
+# Deployment precondition of the pack's idempotency claim: this
+# deployment's account must reach a program of the person tracked-entity
+# type. Without such a program an accepted import's repeat is refused
+# with E1323 (fixture no-program-type-import-repeat) and the entity
+# reads back 404; the pack header carries the full captured behavior.
+#
 # Upstream-call budgets, under the worst-case rule (route body plus the
 # widest exception-clause body; every send counts one plus the widest
 # declared maximumRedeliveries; token requests none, the endpoint is
@@ -41,7 +47,8 @@
 #     --fixtures products/adapter/fixtures/dhis2-tracker/get-server-error.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/import-accepted.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/import-rejected.yaml \
-#     --fixtures products/adapter/fixtures/dhis2-tracker/import-server-error.yaml
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-server-error.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/no-program-type-import-repeat.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:
@@ -54,7 +61,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:7539c9a1da404fb5151bea3d75f4cbf5eaed66a49807e7733b1cdb69b7fd7b2c
+  digest: sha256:c2eac1eb6e466c5d58a153d67e953864ec6d5d7638fcc1cd3d649f3b170a232b
 recordTypes:
   - name: person
     fields:

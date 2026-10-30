@@ -1,8 +1,8 @@
 // One DHIS2 tracked entity, mapped to the record slot object the
 // facade's response envelope wraps.
 //
-// The engine evaluates the choice step's `otherwise` setBody expression
-// on the exchange (CONCEPT 8.11.3), whose body is the fetched entity.
+// The engine evaluates the route's final setBody expression on the
+// exchange (CONCEPT 8.11.3), whose body is the fetched entity.
 // The record maps `recordIdentifier` from the DHIS2 UID,
 // `revisionIdentifier` from the entity's last-update stamp, and
 // `domainData` carrying the scalar tracker properties the bound project

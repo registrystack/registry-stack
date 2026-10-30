@@ -4,7 +4,7 @@
 // exchange (CONCEPT 8.11.3). The search route answers one facade page
 // from one upstream page (CONCEPT 8.11.2), so the body carries exactly
 // the entities of the fetched page, the reply's `trackedEntities`
-// member in 2.41. Scripts are per-file units, so this file carries the
+// member. Scripts are per-file units, so this file carries the
 // per-entity mapping itself; it mirrors the `to_record` mapping in
 // scripts/to-record.rhai and the two change together. A reply with no
 // `trackedEntities` member is an unexpected shape and throws; an

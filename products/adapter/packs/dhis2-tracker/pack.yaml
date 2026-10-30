@@ -2,7 +2,10 @@
 #
 # The dhis2-tracker pack: DHIS2 tracker export and import, ported from the
 # DHIS2 Web API documentation (https://docs.dhis2.org/en/develop/using-the-api/
-# dhis-core-version-241/), tested against DHIS2 2.41 documented behavior.
+# dhis-core-version-243/) and captured from a DHIS2 2.43.2.1 test server
+# (registry test server, 2026-10-30, scrubbed). The fixtures carrying
+# those captured bytes name the same source; behavior this pack states
+# without one is documentation-derived and says so.
 #
 # Authentication (cited choices):
 #   - User accounts authenticate over `Authorization: Basic
@@ -19,7 +22,9 @@
 #     refresh token, authorization code) and the pack declares no OAuth2
 #     endpoint; a deployment that needs one declares it against those
 #     grants. Whether a client-credentials client works is unsettled (the
-#     documentation lists no such grant and does not refuse one).
+#     documentation lists no such grant and does not refuse one; the
+#     capture server had no OAuth2 client configured, so no grant was
+#     observed).
 #
 # Upstream responses and their declared headers: the tracker endpoints'
 # documented behavior carries no response header the facade consumes, so
@@ -27,26 +32,33 @@
 #
 # Idempotency basis for `tracker-import` (idempotentUpstream: true): the
 # tracker importer treats a payload object whose UID already exists as an
-# update (the default importStrategy is CREATE_AND_UPDATE), so repeating
-# an import whose objects carry client-supplied UIDs lands every object
-# on the same one. Error E1002, the create-strategy collision refusal,
-# fires only under importStrategy=CREATE, which this pack never sends.
-# A repeat over the UID of a soft-deleted entity is refused with E1114,
-# which arrives as a 409 import report and so raises `outcome.rejected`
-# through the clause below; recreating the entity is a deployment action,
-# not a retry. What a repeat does to existing attribute values when the
-# bundle carries an empty attribute list is unsettled and awaits a
-# captured answer. Imports without client-supplied UIDs are NOT
-# idempotent (each repeat would mint new UIDs), so the claim holds only
-# for the client-supplied-UID payload this pack's to-bundle mapping
-# produces, and the script throws when a record carries no
-# recordIdentifier.
+# update, so repeating an import whose objects carry client-supplied UIDs
+# lands every object on the same one; the capture answers such a repeat
+# with 200 and stats.updated 1. Deployment precondition: this holds only
+# while the deployment's account reaches a program of the entity's
+# tracked-entity type. Without such a program the first import still
+# creates (200, created 1), but the repeat, an update, and a delete are
+# refused with E1323 (a 409 import report, so `outcome.rejected`) and the
+# entity reads back 404; the fixtures pin the refused repeat. On a repeat
+# the end state is the same but updatedAt moves, so the record's
+# revisionIdentifier moves with it. The bundle carries an empty attribute
+# list, and a captured empty list updates an existing entity's stamps
+# only, changing no attribute value (scripts/to-bundle.rhai). A repeat
+# over the UID of a soft-deleted entity is refused with E1114, which
+# arrives as a 409 import report and so raises `outcome.rejected` through
+# the clause below (captured); recreating the entity is a deployment
+# action, not a retry. The documentation's E1002 create-strategy
+# collision refusal fires only under importStrategy=CREATE, which this
+# pack never sends; the capture never observed it. Imports without
+# client-supplied UIDs are NOT idempotent (each repeat would mint new
+# UIDs), so the claim holds only for the client-supplied-UID payload this
+# pack's to-bundle mapping produces, and the script throws when a record
+# carries no recordIdentifier.
 #
 # Rejection: a failed synchronous import is an HTTP 409. The import
 # controller answers CONFLICT with the import report as the body when the
-# report's status is ERROR, and OK or WARNING with a 200 (read from the
-# 2.41 source; the documentation states the ERROR status but no HTTP
-# code). The route's first exception clause matches upstream.http whose
+# report's status is ERROR, and OK or WARNING with a 200 (captured). The
+# route's first exception clause matches upstream.http whose
 # body is that report and raises `outcome.rejected`; a WebMessage error,
 # which also carries status ERROR, carries no validationReport member and
 # stays upstream.http.
@@ -73,26 +85,30 @@
 # AdapterContinuation property the engine restores from the caller's
 # cursor (absent on the first page), fetches that one page, and sets
 # AdapterNextContinuation to the next page number while the reply's pager
-# holds one more. In 2.41 the reply carries the entities under
-# `trackedEntities` and a `pager` object that is always present with
-# `page` and `pageSize`; `totalPages=true` adds `total` and `pageCount`,
-# and `pageCount` is the only another-page signal, so the search route
-# always sends it (flagged expensive in the documentation). A missing
-# pager or pageCount is an unexpected shape and throws; a pageCount of 0
-# is a legitimate empty result with no cursor. Version dependence is
-# stated: 2.40 answered `instances` with flat page fields and no pager
-# object, 2.42 keeps only the pager, and this pack targets 2.41 only.
-# A pageSize above the server's KeyTrackedEntityMaxLimit system setting,
-# when that setting is non-zero, is refused with a 400; the bound
-# profile's pageSize maximum must respect the deployment's setting. An
-# absent or null AdapterNextContinuation at the end of the route is the
-# last page, so the engine seals no cursor.
+# holds one more. Captured (2.43.2.1): the reply carries the entities
+# under `trackedEntities` and a `pager` object that is always present
+# with `page` and `pageSize`; `totalPages=true` adds `total` and
+# `pageCount`, and without it the pager carries neither. The pager also
+# carries `nextPage` and `prevPage` links, so `pageCount` is not the only
+# another-page signal; the route reads `pageCount` because the count is
+# all it needs, and it still sends `totalPages=true` (flagged expensive
+# in the documentation) so the count is present. A missing pager or
+# pageCount is an unexpected shape and throws; a pageCount of 0 is a
+# legitimate empty result with no cursor. This pack targets 2.43, tested
+# against 2.43.2.1; earlier tracker versions answered different shapes
+# and are not targeted. A pageSize above the server's
+# KeyTrackedEntityMaxLimit system setting, when that setting is non-zero,
+# is refused with a 400 (documentation; the capture server caps page
+# sizes at 5 and never answered one); the bound profile's pageSize
+# maximum must respect the deployment's setting. An absent or null
+# AdapterNextContinuation at the end of the route is the last page, so
+# the engine seals no cursor.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: dhis2-tracker
 version: "1"
 testedVersions:
-  - "2.41"
+  - "2.43"
 endpoints:
   - id: tracker
     component: http
@@ -103,7 +119,7 @@ endpoints:
       - id: tracker-import
         idempotentUpstream: true
     testedVersions:
-      - "2.41"
+      - "2.43"
 routeTemplates:
   - id: search-tracked-entities
     parameters:
@@ -143,10 +159,11 @@ routeTemplates:
               program:
                 exchangeProperty: dhis2Program
               # The documentation states the default orgUnitMode is SELECTED
-              # and requires an org unit or orgUnitMode=ALL, while the 2.41
-              # source defaults to ACCESSIBLE when no org unit is sent; the
-              # two disagree, so the route sends ACCESSIBLE explicitly and
-              # the search scope is a decision, not an accident.
+              # and requires an org unit or orgUnitMode=ALL, while the
+              # captured server answers a search with no orgUnitMode 200 and
+              # the same total as ACCESSIBLE; the two disagree, so the route
+              # sends ACCESSIBLE explicitly and the search scope is a
+              # decision, not an accident.
               orgUnitMode:
                 constant: ACCESSIBLE
               page:
@@ -154,9 +171,9 @@ routeTemplates:
               # The caller's pageSize header (a facade input, CONCEPT
               # 8.11.1; the bound profile bounds it) is the DHIS2 page
               # size. totalPages=true adds total and pageCount to the
-              # always-present pager; pageCount is the only another-page
-              # signal in 2.41, which scripts/next-continuation.rhai
-              # reads.
+              # always-present pager (which also carries nextPage and
+              # prevPage links); scripts/next-continuation.rhai reads
+              # pageCount.
               pageSize:
                 header: pageSize
               totalPages:
@@ -212,9 +229,9 @@ routeTemplates:
               id:
                 header: recordId
             operation: tracker-export
-      # In 2.41 a soft-deleted entity answers 404 like an absent one, so
-      # the not-found clause above already covers it; `inactive` is not a
-      # deletion and hides nothing from this route.
+      # Captured: a soft-deleted entity answers 404 like an absent one,
+      # so the not-found clause above already covers it; `inactive` is not
+      # a deletion and hides nothing from this route.
       - setBody:
           rhai:
             file: scripts/to-record.rhai
@@ -270,8 +287,8 @@ routeTemplates:
                       file: scripts/to-bundle.rhai
                       entrypoint: to_bundle
                   operation: tracker-import
-            # A 200 is OK or WARNING in 2.41, both acceptance, so the
-            # accepted path is unconditional after the send.
+            # A 200 is OK or WARNING, both acceptance, so the accepted
+            # path is unconditional after the send.
             - setBody:
                 rhai:
                   file: scripts/accepted-record.rhai
@@ -280,19 +297,19 @@ scripts:
   - path: scripts/seed-page.rhai
     digest: sha256:3d1f10f861171fcff9f21c0e36aa7941d6bc327b5c510cf9127a7e8131c835ed
   - path: scripts/next-continuation.rhai
-    digest: sha256:5abfc2fb0d5c3bbe073abbe5cb693de534ee28092c77ee5f1948000f8bd39b7e
+    digest: sha256:c2ebb867b498a019f6c41190890d91ea61d76833c15bb2567bb2b9d634e959bb
   - path: scripts/import-rejected.rhai
-    digest: sha256:cb4946280489c6827f39a58eb7a0dc300c6ba64488d06f8b194e4dbf86425401
+    digest: sha256:ddbb54a6b67c09db81952cf8c5d5c2b54db4e842cb31996ebf8072e30014b104
   - path: scripts/is-not-found.rhai
     digest: sha256:8f738dc51ecbd1641f8f512ff5d2edcc48408e438814179ea360cd4267dd34b0
   - path: scripts/to-record.rhai
-    digest: sha256:2971163431db3510392b631edcf245baded3aa78ad2fcf187e9863b5c482cb30
+    digest: sha256:4a728a56abeb6e25ea3d13868dd5a0a5fdba81bbdb20fe21269f596e7557ec9d
   - path: scripts/shape-records.rhai
-    digest: sha256:edf24b5caecd5cd137866182cea50810020f79dcab382d2f99719fc8b0fc68c5
+    digest: sha256:e0a6e93ba6a66d5a62b217915f588c0ad4ef0f6b07ff59930d74bd884a6355ee
   - path: scripts/to-bundle.rhai
-    digest: sha256:38bc0110f19cf0c69890105b37af5f704cb166bd2a008e28f807ceb529b88110
+    digest: sha256:5a9aba0582ce70cb35b104a13fadba9662584ba34e46a7596b98475476c9ea01
   - path: scripts/accepted-record.rhai
-    digest: sha256:6e18faccbddafbdf8676ad4480f056df92eb3344517c4e2c141d4e55abbb4e99
+    digest: sha256:5396a7d32709ba5d7938ef69eeb58b1689aa68f1452b229149fc95744aec15f0
 capabilities:
   components:
     - http

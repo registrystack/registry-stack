@@ -4,19 +4,21 @@
 # DHIS2 writes every error body in its consistent web API envelope
 # (httpStatus, httpStatusCode, status, message; DHIS2 documentation,
 # "Introduction", Error and info messages); the exact body of an
-# uncaught exception is unsettled and the capture may correct it. What
-# this fixture pins is the routing: a WebMessage error carries status
-# ERROR but no validationReport member, so the import route's rejection
-# predicate does not match and the failure propagates as upstream.http
-# instead of the refused-write problem.
+# uncaught exception is unsettled, and no 500 was observed in the
+# 2026-10-30 capture (the capture proves the report-shaped 409 rejection;
+# the WebMessage routing stays documentation-derived). What this fixture
+# pins is the routing: a WebMessage error carries status ERROR but no
+# validationReport member, so the import route's rejection predicate does
+# not match and the failure propagates as upstream.http instead of the
+# refused-write problem.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-import-server-error
 pack: dhis2-tracker
-upstreamVersion: "2.41"
+upstreamVersion: "2.43"
 provenance:
   type: documented
-  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/introduction.html
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-243/introduction.html
 intercepts:
   - type: endpoint
     endpoint: tracker

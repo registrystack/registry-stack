@@ -1,42 +1,40 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
-# Documented fixture (NOT captured): the source's hard not-found answer.
-# The tracker API answers a GET for an absent tracked entity with 404, and
-# DHIS2 writes every error body in its consistent web API envelope
-# (httpStatus, httpStatusCode, status, message; DHIS2 documentation,
-# "Introduction", Error and info messages, which shows the format on a
-# 403). The tracker page itself documents no 404 body, so the message
-# text here is reconstructed from that envelope. The pack's
-# not-found clause maps exactly this answer (upstream.http narrowed by
-# scripts/is-not-found.rhai) to the facade's not-found problem; other
-# upstream HTTP outcomes map to source.upstream-error.
+# Captured fixture: the source's hard not-found answer, from the DHIS2
+# 2.43.2.1 test server (registry test server, 2026-10-30, scrubbed). The
+# WebMessage envelope carries errorCode E1005 next to httpStatus,
+# httpStatusCode, status, and message. The pack's not-found clause maps
+# exactly this answer (upstream.http narrowed by scripts/is-not-found.rhai,
+# which reads the envelope's httpStatusCode) to the facade's not-found
+# problem; other upstream HTTP outcomes map to source.upstream-error.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-get-missing
 pack: dhis2-tracker
-upstreamVersion: "2.41"
+upstreamVersion: "2.43.2.1"
 provenance:
-  type: documented
-  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/introduction.html
+  type: captured
+  reference: registry test server, 2026-10-30, scrubbed
 intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
   - facadeRequest:
       operation: records-get
-      path: /v1/records/person/Uid00000004
+      path: /v1/records/person/TV7SRzsjKQi
     upstream:
       - request:
           endpoint: tracker
           method: GET
-          path: /api/tracker/trackedEntities/Uid00000004
+          path: /api/tracker/trackedEntities/TV7SRzsjKQi
         response:
           status: 404
           body:
             httpStatus: Not Found
             httpStatusCode: 404
             status: ERROR
-            message: The requested tracked entity does not exist.
+            message: TrackedEntity with id TV7SRzsjKQi could not be found.
+            errorCode: E1005
     expected:
       type: problem
       class: outcome.not-found

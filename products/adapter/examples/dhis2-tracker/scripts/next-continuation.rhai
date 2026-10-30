@@ -6,9 +6,11 @@
 // the caller's nextCursor, and absent or null means the last page, so
 // the engine seals no cursor. `dhis2Page` is the page this run fetched
 // (scripts/seed-page.rhai); the reply's `pager.pageCount` counts the
-// pages (in 2.41 the pager is always present and totalPages=true, which
-// the route always sends, adds total and pageCount). A reply with no
-// pager or no pageCount is an unexpected shape and throws rather than
+// pages (captured: the pager is always present, and totalPages=true,
+// which the route always sends, adds total and pageCount; the pager also
+// carries nextPage and prevPage links, so pageCount is not the only
+// another-page signal, but the count is all this route needs). A reply
+// with no pager or no pageCount is an unexpected shape and throws rather than
 // ending the paging silently; a pageCount of 0 is a legitimate empty
 // result with no cursor. Pure and deterministic; no I/O.
 fn next_continuation(exchange) {
