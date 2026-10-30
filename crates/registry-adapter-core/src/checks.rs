@@ -9,7 +9,7 @@
 use crate::auth::{is_reserved_header_name, EndpointAuthentication, RuntimeCredential};
 use crate::diagnostics::{finding, CheckCode};
 use crate::fixture::{AdapterFixture, Intercept};
-use crate::model::{Expression, SendComponent};
+use crate::model::{Expression, HttpMethod, SendComponent};
 use crate::pack::{AdapterPack, GraphQlOperationKind};
 use crate::profile::{
     AdapterProfile, EnvelopeTemplate, ProfileOperation, SLOT_PROBLEM_CODE, SLOT_RECORD,
@@ -234,6 +234,43 @@ fn route_bodies_by_id<'a>(
         }
     }
     bodies
+}
+
+/// The authored pointer prefix of every route body a `direct:` can
+/// reach: a pack route carries `/routes/{from}`, the name Camel
+/// connects it by, and a template and the instantiations whose body it
+/// authors carry the template's own `/routeTemplates/{index}`, because
+/// a template body is authored once and its defects report there.
+fn authored_body_prefixes<'a>(
+    pack: &'a AdapterPack,
+    project: &'a AdapterProject,
+) -> HashMap<&'a str, String> {
+    let mut prefixes: HashMap<&str, String> = pack
+        .routes
+        .iter()
+        .map(|route| {
+            (
+                route.from.uri.id.as_str(),
+                format!("/routes/{}", route.from.uri.id.as_str()),
+            )
+        })
+        .collect();
+    for (index, template) in pack.route_templates.iter().enumerate() {
+        prefixes.insert(template.id.as_str(), format!("/routeTemplates/{index}"));
+    }
+    for instantiated in &project.templated_routes {
+        if let Some(index) = pack
+            .route_templates
+            .iter()
+            .position(|template| template.id.as_str() == instantiated.route_template.as_str())
+        {
+            prefixes.insert(
+                instantiated.route_id.as_str(),
+                format!("/routeTemplates/{index}"),
+            );
+        }
+    }
+    prefixes
 }
 
 /// Run every check over one composed workspace.
@@ -934,12 +971,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
     // A template body is authored once: its defects report at the
     // template's own /routeTemplates/N position, never again under each
     // instantiation id, whose body is the same authored steps.
-    let template_positions: HashMap<&str, usize> = pack
-        .route_templates
-        .iter()
-        .enumerate()
-        .map(|(index, template)| (template.id.as_str(), index))
-        .collect();
+    let body_prefixes = authored_body_prefixes(pack, project);
     let instantiated_ids: HashSet<&str> = project
         .templated_routes
         .iter()
@@ -976,13 +1008,13 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             // the template's defects already report at /routeTemplates/N.
             continue;
         }
-        let prefix = template_positions
+        let prefix = body_prefixes
             .get(id)
-            .map(|index| format!("/routeTemplates/{index}"))
+            .cloned()
             .unwrap_or_else(|| format!("/routes/{id}"));
         let steps: &[Step] = steps;
         let mut route_findings = Vec::new();
-        let sends = collect_non_safe_sends(steps, &bodies, pack);
+        let sends = collect_non_safe_sends(steps, &bodies, &body_prefixes, &prefix, pack);
         walk_steps(steps, &mut |step, path| match step {
             Step::To(to) => {
                 let target = &to.uri;
@@ -1557,9 +1589,15 @@ fn is_non_safe_to(to: &crate::route::ToStep, pack: &AdapterPack) -> bool {
 }
 
 /// Whether a send or enrichment to the component is a non-safe upstream
-/// send: an `http:` destination carrying an unsafe method, or a `graphql:`
-/// destination whose operation the pack does not declare a query
-/// (`products/adapter/CONCEPT.md` section 8.8).
+/// send: an `http:` destination whose effective method is unsafe, or a
+/// `graphql:` destination whose operation the pack does not declare a
+/// query (`products/adapter/CONCEPT.md` section 8.8). An `http:` send
+/// that declares no method sends a POST body, Camel's default, so it
+/// counts as one; a POST escapes only when the operation it names is
+/// declared `safeUpstream` on its endpoint, the reviewed claim that the
+/// upstream serves that POST as its safe search form. The claim never
+/// rescues a PUT or PATCH, and a graphql send's safety comes from its
+/// declared query kind alone.
 fn is_non_safe_upstream(
     component: SendComponent,
     endpoint: &str,
@@ -1568,14 +1606,40 @@ fn is_non_safe_upstream(
 ) -> bool {
     match component {
         SendComponent::Direct => false,
-        SendComponent::Http => parameters.is_some_and(|parameters| {
-            parameters
-                .http_method
-                .as_ref()
-                .is_some_and(|method| !method.is_safe())
-        }),
+        SendComponent::Http => {
+            let method = parameters
+                .and_then(|parameters| parameters.http_method)
+                .unwrap_or(HttpMethod::Post);
+            // Unsafe unless the method itself is safe, or the POST names
+            // an operation carrying the reviewed `safeUpstream` claim.
+            !(method.is_safe()
+                || method == HttpMethod::Post
+                    && operation_claims_safe_upstream(endpoint, parameters, pack))
+        }
         SendComponent::GraphQl => !is_declared_graphql_query(endpoint, parameters, pack),
     }
+}
+
+/// Whether the send names an operation the pack declares on that
+/// endpoint with `safeUpstream`, the reviewed claim that the upstream
+/// serves the operation's POST as its safe search form
+/// (`products/adapter/CONCEPT.md` section 8.8). A send naming no
+/// operation claims nothing.
+fn operation_claims_safe_upstream(
+    endpoint: &str,
+    parameters: Option<&crate::route::ToParameters>,
+    pack: &AdapterPack,
+) -> bool {
+    let Some(operation) = parameters.and_then(|parameters| parameters.operation.as_ref()) else {
+        return false;
+    };
+    let Some(endpoint) = pack.endpoints.get(endpoint) else {
+        return false;
+    };
+    endpoint
+        .operations
+        .iter()
+        .any(|declared| declared.id.as_str() == operation.as_str() && declared.safe_upstream)
 }
 
 /// Whether the send names an operation the pack declares on that endpoint
@@ -1833,21 +1897,31 @@ struct NonSafeSend {
     /// Whether the send runs per item or iteration (inside a `split` or
     /// `loop`).
     repeated: bool,
+    /// The pointer of the send step inside its authored body, in the
+    /// `/routes/{from}` and `/routeTemplates/{index}` space the route
+    /// checks report.
+    at: String,
 }
 
 /// Every non-safe upstream send a body can reach, with its enclosing
-/// `idempotentConsumer` context.
+/// `idempotentConsumer` context and each send's pointer inside its
+/// authored body. `prefixes` maps every direct-reachable body id to its
+/// authored prefix; `prefix` is the starting body's own.
 fn collect_non_safe_sends(
     steps: &[Step],
     bodies: &HashMap<&str, &[Step]>,
+    prefixes: &HashMap<&str, String>,
+    prefix: &str,
     pack: &AdapterPack,
 ) -> Vec<NonSafeSend> {
     #[allow(clippy::too_many_arguments)]
     fn walk<'a>(
         steps: &'a [Step],
+        prefix: &str,
         inside_idempotency: bool,
         repeated: bool,
         bodies: &HashMap<&'a str, &'a [Step]>,
+        prefixes: &HashMap<&str, String>,
         pack: &AdapterPack,
         visiting: &mut Vec<&'a str>,
         depth: usize,
@@ -1859,13 +1933,14 @@ fn collect_non_safe_sends(
         if depth > MAX_DIRECT_DEPTH {
             return;
         }
-        for step in steps {
+        for (index, step) in steps.iter().enumerate() {
             match step {
                 Step::To(to) if is_non_safe_to(to, pack) => sends.push(NonSafeSend {
                     endpoint: to.uri.id.clone(),
                     operation: to.parameters.as_ref().and_then(|p| p.operation.clone()),
                     inside_idempotency,
                     repeated,
+                    at: format!("{prefix}/{index}"),
                 }),
                 Step::Enrich(enrich)
                     if is_non_safe_upstream(
@@ -1883,12 +1958,14 @@ fn collect_non_safe_sends(
                             .and_then(|parameters| parameters.operation.clone()),
                         inside_idempotency,
                         repeated,
+                        at: format!("{prefix}/{index}"),
                     });
                 }
                 Step::To(to) if to.uri.component == SendComponent::Direct => {
                     expand_direct(
                         &to.uri,
                         bodies,
+                        prefixes,
                         pack,
                         visiting,
                         depth,
@@ -1901,6 +1978,7 @@ fn collect_non_safe_sends(
                     expand_direct(
                         &enrich.uri,
                         bodies,
+                        prefixes,
                         pack,
                         visiting,
                         depth,
@@ -1912,9 +1990,11 @@ fn collect_non_safe_sends(
                 Step::IdempotentConsumer(idempotent) => {
                     walk(
                         &idempotent.steps,
+                        &format!("{prefix}/{index}/steps"),
                         true,
                         repeated,
                         bodies,
+                        prefixes,
                         pack,
                         visiting,
                         depth,
@@ -1922,12 +2002,14 @@ fn collect_non_safe_sends(
                     );
                 }
                 Step::Choice(choice) => {
-                    for when in &choice.when {
+                    for (when_index, when) in choice.when.iter().enumerate() {
                         walk(
                             &when.steps,
+                            &format!("{prefix}/{index}/when/{when_index}/steps"),
                             inside_idempotency,
                             repeated,
                             bodies,
+                            prefixes,
                             pack,
                             visiting,
                             depth,
@@ -1937,9 +2019,11 @@ fn collect_non_safe_sends(
                     if let Some(otherwise) = &choice.otherwise {
                         walk(
                             &otherwise.steps,
+                            &format!("{prefix}/{index}/otherwise/steps"),
                             inside_idempotency,
                             repeated,
                             bodies,
+                            prefixes,
                             pack,
                             visiting,
                             depth,
@@ -1949,9 +2033,11 @@ fn collect_non_safe_sends(
                 }
                 Step::Filter(filter) => walk(
                     &filter.steps,
+                    &format!("{prefix}/{index}/steps"),
                     inside_idempotency,
                     repeated,
                     bodies,
+                    prefixes,
                     pack,
                     visiting,
                     depth,
@@ -1959,9 +2045,11 @@ fn collect_non_safe_sends(
                 ),
                 Step::Split(split) => walk(
                     &split.steps,
+                    &format!("{prefix}/{index}/steps"),
                     inside_idempotency,
                     true,
                     bodies,
+                    prefixes,
                     pack,
                     visiting,
                     depth,
@@ -1969,9 +2057,11 @@ fn collect_non_safe_sends(
                 ),
                 Step::Loop(loop_step) => walk(
                     &loop_step.steps,
+                    &format!("{prefix}/{index}/steps"),
                     inside_idempotency,
                     true,
                     bodies,
+                    prefixes,
                     pack,
                     visiting,
                     depth,
@@ -1980,9 +2070,11 @@ fn collect_non_safe_sends(
                 Step::CircuitBreaker(breaker) => {
                     walk(
                         &breaker.steps,
+                        &format!("{prefix}/{index}/steps"),
                         inside_idempotency,
                         repeated,
                         bodies,
+                        prefixes,
                         pack,
                         visiting,
                         depth,
@@ -1991,9 +2083,11 @@ fn collect_non_safe_sends(
                     if let Some(fallback) = &breaker.on_fallback {
                         walk(
                             &fallback.steps,
+                            &format!("{prefix}/{index}/onFallback/steps"),
                             inside_idempotency,
                             repeated,
                             bodies,
+                            prefixes,
                             pack,
                             visiting,
                             depth,
@@ -2003,9 +2097,11 @@ fn collect_non_safe_sends(
                 }
                 Step::Throttle(throttle) => walk(
                     &throttle.steps,
+                    &format!("{prefix}/{index}/steps"),
                     inside_idempotency,
                     repeated,
                     bodies,
+                    prefixes,
                     pack,
                     visiting,
                     depth,
@@ -2014,20 +2110,24 @@ fn collect_non_safe_sends(
                 Step::DoTry(do_try) => {
                     walk(
                         &do_try.steps,
+                        &format!("{prefix}/{index}/steps"),
                         inside_idempotency,
                         repeated,
                         bodies,
+                        prefixes,
                         pack,
                         visiting,
                         depth,
                         sends,
                     );
-                    for catch in &do_try.do_catch {
+                    for (catch_index, catch) in do_try.do_catch.iter().enumerate() {
                         walk(
                             &catch.steps,
+                            &format!("{prefix}/{index}/doCatch/{catch_index}/steps"),
                             inside_idempotency,
                             repeated,
                             bodies,
+                            prefixes,
                             pack,
                             visiting,
                             depth,
@@ -2037,9 +2137,11 @@ fn collect_non_safe_sends(
                     if let Some(do_finally) = &do_try.do_finally {
                         walk(
                             &do_finally.steps,
+                            &format!("{prefix}/{index}/doFinally/steps"),
                             inside_idempotency,
                             repeated,
                             bodies,
+                            prefixes,
                             pack,
                             visiting,
                             depth,
@@ -2049,9 +2151,11 @@ fn collect_non_safe_sends(
                 }
                 Step::OnException(clause) => walk(
                     &clause.steps,
+                    &format!("{prefix}/{index}/steps"),
                     inside_idempotency,
                     repeated,
                     bodies,
+                    prefixes,
                     pack,
                     visiting,
                     depth,
@@ -2065,6 +2169,7 @@ fn collect_non_safe_sends(
     fn expand_direct<'a>(
         uri: &'a crate::model::SendUri,
         bodies: &HashMap<&'a str, &'a [Step]>,
+        prefixes: &HashMap<&str, String>,
         pack: &AdapterPack,
         visiting: &mut Vec<&'a str>,
         depth: usize,
@@ -2076,12 +2181,18 @@ fn collect_non_safe_sends(
             return;
         }
         if let Some(target) = bodies.get(uri.id.as_str()) {
+            let prefix = prefixes
+                .get(uri.id.as_str())
+                .map(|at| format!("{at}/steps"))
+                .unwrap_or_else(|| format!("/routes/{}/steps", uri.id.as_str()));
             visiting.push(uri.id.as_str());
             walk(
                 target,
+                &prefix,
                 inside_idempotency,
                 repeated,
                 bodies,
+                prefixes,
                 pack,
                 visiting,
                 depth + 1,
@@ -2091,11 +2202,14 @@ fn collect_non_safe_sends(
         }
     }
     let mut sends = Vec::new();
+    let top = format!("{prefix}/steps");
     walk(
         steps,
+        &top,
         false,
         false,
         bodies,
+        prefixes,
         pack,
         &mut Vec::new(),
         0,
@@ -2638,6 +2752,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     let pack = workspace.pack;
     let bodies = route_bodies(pack, project);
     let bodies_by_id = route_bodies_by_id(pack, project);
+    let body_prefixes = authored_body_prefixes(pack, project);
 
     for (index, instantiated) in project.templated_routes.iter().enumerate() {
         let prefix = format!("/templatedRoutes/{index}");
@@ -2717,6 +2832,9 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
         }
     }
 
+    // Two bindings of one body report once: the finding belongs to the
+    // authored send, not to a binding.
+    let mut reported: HashSet<String> = HashSet::new();
     for (index, binding) in project.bindings.iter().enumerate() {
         let prefix = format!("/bindings/{index}");
         let operation = workspace.profile.operations.get(binding.operation.as_str());
@@ -2853,8 +2971,35 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     "Raise maximumUpstreamCalls, or bound the sends the route can make.",
                 ));
             }
+            let body_prefix = body_prefixes
+                .get(binding.route.as_str())
+                .map(String::as_str)
+                .unwrap_or_default();
             if !operation.method.is_safe() {
-                findings.extend(write_route_checks(&prefix, route_steps, &bodies, pack));
+                findings.extend(write_route_checks(
+                    &prefix,
+                    body_prefix,
+                    route_steps,
+                    &bodies,
+                    &body_prefixes,
+                    pack,
+                ));
+            } else {
+                // A read operation reaches only safe sends
+                // (`products/adapter/CONCEPT.md` section 8.8): every
+                // non-safe send its route can reach refuses at the send.
+                for send in
+                    collect_non_safe_sends(route_steps, &bodies, &body_prefixes, body_prefix, pack)
+                {
+                    if reported.insert(send.at.clone()) {
+                        findings.push(finding(
+                            CheckCode::RouteReadUnsafeSend,
+                            &send.at,
+                            "the read operation's route reaches a non-safe upstream send",
+                            "Read operations reach only safe sends: an http send declares GET, a graphql send names a declared query, and a POST names an operation whose endpoint declares safeUpstream. Move the send to a write operation's route, or claim the search form.",
+                        ));
+                    }
+                }
             }
         }
     }
@@ -2901,12 +3046,14 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
 /// Increment 3.
 fn write_route_checks(
     prefix: &str,
+    body_prefix: &str,
     steps: &[Step],
     bodies: &HashMap<&str, &[Step]>,
+    prefixes: &HashMap<&str, String>,
     pack: &AdapterPack,
 ) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    let sends = collect_non_safe_sends(steps, bodies, pack);
+    let sends = collect_non_safe_sends(steps, bodies, prefixes, body_prefix, pack);
     if sends.iter().any(|send| !send.inside_idempotency) {
         findings.push(finding(
             CheckCode::RouteWriteWithoutIdempotency,
@@ -3771,6 +3918,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: local("cases-create"),
                 idempotent_upstream: true,
+                safe_upstream: false,
                 graphql: None,
             }],
             tested_versions: vec!["2.7".to_string()],
@@ -3790,6 +3938,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: local("cases-find"),
                 idempotent_upstream: true,
+                safe_upstream: false,
                 graphql: None,
             }],
             tested_versions: vec!["2.7".to_string()],
@@ -5535,6 +5684,7 @@ mod tests {
         unclaimed.operations = vec![EndpointOperation {
             id: local("cases-create"),
             idempotent_upstream: false,
+            safe_upstream: false,
             graphql: None,
         }];
         let pack = pack_builder(vec![unclaimed], vec![writer.clone(), caller.clone()]);
@@ -6132,6 +6282,7 @@ mod tests {
         unclaimed.operations = vec![EndpointOperation {
             id: local("cases-create"),
             idempotent_upstream: false,
+            safe_upstream: false,
             graphql: None,
         }];
         let pack = pack_builder(vec![unclaimed], vec![route.clone()]);
@@ -7223,6 +7374,421 @@ mod tests {
         );
     }
 
+    /// A project binding the `cases-find` read operation to the
+    /// `find-cases` route, the shape every read-rule test composes on.
+    fn read_binding_project(pack: &AdapterPack) -> AdapterProject {
+        let mut project = project_builder(pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("find-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("find-cases"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+        }])
+        .expect("unique");
+        project
+    }
+
+    /// An `http:` send to the case endpoint with the method and operation
+    /// given; a send declaring no method is its own case, because the
+    /// runtime sends a POST body for it (Camel's default).
+    fn read_send(method: Option<HttpMethod>, operation: Option<ExternalId>) -> Step {
+        Step::To(ToStep {
+            uri: send("case-api"),
+            parameters: Some(ToParameters {
+                http_method: method,
+                path: None,
+                path_parameters: BTreeMap::new(),
+                query: BTreeMap::new(),
+                body: None,
+                operation,
+                throw_exception_on_failure: true,
+                ok_status_code_range: None,
+                http_uri: None,
+                resume_bindings: Vec::new(),
+            }),
+        })
+    }
+
+    fn read_send_path(findings: &[Diagnostic]) -> Option<&str> {
+        findings
+            .iter()
+            .find(|finding| finding.code.as_str() == CheckCode::RouteReadUnsafeSend.code())
+            .map(|finding| finding.path.as_str())
+    }
+
+    /// A read operation's route reaches only safe sends
+    /// (`products/adapter/CONCEPT.md` section 8.8): a POST send refuses
+    /// at the send itself.
+    #[test]
+    fn project_refuses_a_read_route_reaching_a_post_send_at_the_send() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let route = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![read_send(Some(HttpMethod::Post), Some(id("cases-find")))],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let findings = check_project(&workspace(&profile, &pack, &read_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteReadUnsafeSend);
+        assert_eq!(
+            read_send_path(&findings),
+            Some("/routes/find-cases/steps/0"),
+            "the finding points at the send: {findings:?}"
+        );
+    }
+
+    /// Two read bindings over one defective route report the send once:
+    /// the finding belongs to the authored send, not to a binding.
+    #[test]
+    fn project_reports_a_defective_send_once_across_two_read_bindings() {
+        let profile = profile_builder(vec![
+            operation("cases-find", HttpMethod::Get),
+            operation("cases-search", HttpMethod::Get),
+        ]);
+        let route = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![read_send(Some(HttpMethod::Post), Some(id("cases-find")))],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![
+            Binding {
+                id: local("find-cases"),
+                operation: id("cases-find"),
+                record_type: local("case"),
+                route: id("find-cases"),
+                filters: UniqueList::new(Vec::new()).expect("unique"),
+                maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+            },
+            Binding {
+                id: local("search-cases"),
+                operation: id("cases-search"),
+                record_type: local("case"),
+                route: id("find-cases"),
+                filters: UniqueList::new(Vec::new()).expect("unique"),
+                maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+            },
+        ])
+        .expect("unique");
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        let read_refusals = findings
+            .iter()
+            .filter(|finding| finding.code.as_str() == CheckCode::RouteReadUnsafeSend.code())
+            .count();
+        assert_eq!(
+            read_refusals, 1,
+            "two bindings of one defective route report the send once: {findings:?}"
+        );
+    }
+
+    /// The read rule walks past a `direct:` hop: the send refuses at its
+    /// own body's position.
+    #[test]
+    fn project_refuses_a_read_route_reaching_a_post_send_through_a_direct_hop() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let outer = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: direct("inner"),
+                parameters: None,
+            })],
+        };
+        let inner = RouteDefinition {
+            id: local("inner"),
+            from: RouteFrom {
+                uri: direct("inner"),
+            },
+            steps: vec![read_send(Some(HttpMethod::Post), Some(id("cases-find")))],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![outer, inner]);
+        let findings = check_project(&workspace(&profile, &pack, &read_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteReadUnsafeSend);
+        assert_eq!(
+            read_send_path(&findings),
+            Some("/routes/inner/steps/0"),
+            "the finding points at the send's own body: {findings:?}"
+        );
+    }
+
+    /// An enrichment POST classifies like a send on a read route.
+    #[test]
+    fn project_refuses_a_read_route_reaching_a_post_enrichment() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let route = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![Step::Enrich(EnrichStep {
+                uri: send("case-api"),
+                aggregation_strategy: None,
+                aggregate_on_exception: false,
+                parameters: Some(ToParameters {
+                    http_method: Some(HttpMethod::Post),
+                    path: None,
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::new(),
+                    body: None,
+                    operation: Some(id("cases-find")),
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    http_uri: None,
+                    resume_bindings: Vec::new(),
+                }),
+            })],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let findings = check_project(&workspace(&profile, &pack, &read_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteReadUnsafeSend);
+        assert_eq!(
+            read_send_path(&findings),
+            Some("/routes/find-cases/steps/0"),
+            "the finding points at the enrichment: {findings:?}"
+        );
+    }
+
+    /// The read rule reaches a send inside a `doTry` catch clause, and
+    /// the pointer carries the step-kind segments.
+    #[test]
+    fn project_refuses_a_read_send_inside_a_do_try_catch() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let route = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![Step::DoTry(DoTryStep {
+                steps: vec![to_get("case-api")],
+                do_catch: vec![DoCatch {
+                    exception: UniqueList::new(vec![crate::model::ErrorClass::from_class(
+                        "validation",
+                    )
+                    .expect("class")])
+                    .expect("unique"),
+                    on_when: None,
+                    steps: vec![read_send(Some(HttpMethod::Post), Some(id("cases-find")))],
+                }],
+                do_finally: None,
+            })],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let findings = check_project(&workspace(&profile, &pack, &read_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteReadUnsafeSend);
+        assert_eq!(
+            read_send_path(&findings),
+            Some("/routes/find-cases/steps/0/doCatch/0/steps/0"),
+            "the finding points through the catch clause: {findings:?}"
+        );
+    }
+
+    /// A send declaring no method sends a POST body (Camel's default),
+    /// so the read rule judges the wire, not the absent member.
+    #[test]
+    fn project_refuses_a_read_send_that_declares_no_method_as_a_post() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let route = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![read_send(None, Some(id("cases-find")))],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let findings = check_project(&workspace(&profile, &pack, &read_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteReadUnsafeSend);
+        assert_eq!(
+            read_send_path(&findings),
+            Some("/routes/find-cases/steps/0"),
+            "the finding points at the send: {findings:?}"
+        );
+    }
+
+    /// The claim is the reviewed exception: a POST send to an operation
+    /// whose endpoint declares `safeUpstream` sits on a read route,
+    /// declared or defaulted, and a GET-only route stays clean.
+    #[test]
+    fn project_accepts_a_read_route_whose_post_claims_safe_upstream() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let mut claimed = basic_endpoint();
+        claimed.operations[0].safe_upstream = true;
+        let declared = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![read_send(Some(HttpMethod::Post), Some(id("cases-find")))],
+        };
+        let pack = pack_builder(vec![claimed.clone()], vec![declared]);
+        assert_clean(check_project(&workspace(
+            &profile,
+            &pack,
+            &read_binding_project(&pack),
+        )));
+
+        let defaulted = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![read_send(None, Some(id("cases-find")))],
+        };
+        let pack = pack_builder(vec![claimed], vec![defaulted]);
+        assert_clean(check_project(&workspace(
+            &profile,
+            &pack,
+            &read_binding_project(&pack),
+        )));
+
+        let safe_only = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![to_get("case-api")],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![safe_only]);
+        assert_clean(check_project(&workspace(
+            &profile,
+            &pack,
+            &read_binding_project(&pack),
+        )));
+    }
+
+    /// The claim names POST only: a PUT send to the claimed operation
+    /// refuses, and so does a graphql mutation to a claimed operation,
+    /// whose safety comes from its declared query kind alone.
+    #[test]
+    fn project_refuses_a_read_route_whose_put_and_mutation_ignore_the_claim() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let mut claimed = basic_endpoint();
+        claimed.operations[0].safe_upstream = true;
+        let route = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![read_send(Some(HttpMethod::Put), Some(id("cases-find")))],
+        };
+        let pack = pack_builder(vec![claimed], vec![route]);
+        let findings = check_project(&workspace(&profile, &pack, &read_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteReadUnsafeSend);
+
+        let mutation_endpoint = Endpoint {
+            id: local("graph-api"),
+            component: ComponentKind::GraphQl,
+            authentication: EndpointAuthentication::None {},
+            response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
+            operations: vec![EndpointOperation {
+                id: local("person-find"),
+                idempotent_upstream: false,
+                safe_upstream: true,
+                graphql: Some(GraphQlOperationKind::Mutation),
+            }],
+            tested_versions: vec!["1.0".to_string()],
+            query_file: Some("queries/person.graphql".to_string()),
+            operation_name: None,
+            variables: None,
+        };
+        let mutation_route = RouteDefinition {
+            id: local("find-cases"),
+            from: RouteFrom {
+                uri: direct("find-cases"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: SendUri::parse("graphql:graph-api").expect("uri"),
+                parameters: Some(ToParameters {
+                    http_method: None,
+                    path: None,
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::new(),
+                    body: None,
+                    operation: Some(id("person-find")),
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    http_uri: None,
+                    resume_bindings: Vec::new(),
+                }),
+            })],
+        };
+        // The graphql send carries no method; the mutation refuses
+        // because its declared kind is not a query, claim or no claim.
+        let pack = pack_builder(vec![mutation_endpoint], vec![mutation_route]);
+        let findings = check_project(&workspace(&profile, &pack, &read_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteReadUnsafeSend);
+    }
+
+    /// One predicate serves both consumers: with `safeUpstream` on the
+    /// endpoint operation, the claimed POST is no longer a non-safe
+    /// send, so a write route whose only send it is no longer demands
+    /// the idempotentConsumer wrapper; without the claim the write rules
+    /// hold as before.
+    #[test]
+    fn a_claimed_safe_upstream_post_no_longer_counts_as_a_non_safe_send_on_a_write_route() {
+        let profile = profile_builder(vec![ProfileOperation {
+            id: local("cases-create"),
+            method: HttpMethod::Post,
+            path: "/v2/cases/{type}".to_string(),
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
+            record_type_parameter: local("type"),
+            record_id_parameter: None,
+            success_status: BoundedU32::new(200).expect("status"),
+            request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
+            response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            pagination: None,
+        }]);
+        let bare = RouteDefinition {
+            id: local("create-case"),
+            from: RouteFrom {
+                uri: direct("create-case"),
+            },
+            steps: vec![read_send(Some(HttpMethod::Post), Some(id("cases-create")))],
+        };
+        let write_binding_project = |pack: &AdapterPack| {
+            let mut project = project_builder(pack);
+            project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+            project.bindings = UniqueIdList::new(vec![Binding {
+                id: local("create-cases"),
+                operation: id("cases-create"),
+                record_type: local("case"),
+                route: id("create-case"),
+                filters: UniqueList::new(Vec::new()).expect("unique"),
+                maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+            }])
+            .expect("unique");
+            project
+        };
+        let unclaimed = oauth_endpoint();
+        let pack = pack_builder(vec![unclaimed], vec![bare.clone()]);
+        let findings = check_project(&workspace(&profile, &pack, &write_binding_project(&pack)));
+        assert_has(&findings, CheckCode::RouteWriteWithoutIdempotency);
+
+        let mut claimed = oauth_endpoint();
+        claimed.operations[0].safe_upstream = true;
+        let pack = pack_builder(vec![claimed], vec![bare]);
+        let findings = check_project(&workspace(&profile, &pack, &write_binding_project(&pack)));
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteWriteWithoutIdempotency.code()),
+            "a claimed safeUpstream POST is not a non-safe send: {findings:?}"
+        );
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteMultipleNonSafeSends.code()),
+            "the claimed POST is the route's one send and it is safe: {findings:?}"
+        );
+    }
+
     #[test]
     fn project_refuses_access_profiles_beyond_the_declared_model() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
@@ -7631,6 +8197,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: local("person-find"),
                 idempotent_upstream: false,
+                safe_upstream: false,
                 graphql,
             }],
             tested_versions: vec!["1.0".to_string()],
@@ -7712,6 +8279,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: local("person-find"),
                 idempotent_upstream: false,
+                safe_upstream: false,
                 graphql: Some(GraphQlOperationKind::Query),
             }],
             tested_versions: vec!["1.0".to_string()],
@@ -7919,6 +8487,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: local("person-find"),
                 idempotent_upstream: false,
+                safe_upstream: false,
                 graphql: Some(GraphQlOperationKind::Query),
             }],
             tested_versions: vec!["1.0".to_string()],

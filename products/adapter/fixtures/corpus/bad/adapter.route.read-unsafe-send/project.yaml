@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.read-unsafe-send: this artifact set must be refused with
+# exactly adapter.route.read-unsafe-send. The read binding dispatches to the template route whose
+# POST send reaches upstream, and no operation claims safeUpstream.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.read-unsafe-send/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:44a9c2eba03f77918121bd167764b68f57866e133a14bec8c6f73f9c65026097
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:cf42ec3010cd43c56b1e944afc83df78470a115ba580378bb4ea55b9002c529e
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

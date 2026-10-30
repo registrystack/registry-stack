@@ -66,7 +66,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 86 members.
+finding per code. The corpus holds 87 members.
 
 ### Profile members
 
@@ -167,6 +167,7 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.route.retry-while-without-redeliveries` | `retryWhile` on a policy with `maximumRedeliveries` 0 | `adapter.route.retry-while-without-redeliveries` | checks |
 | `adapter.route.predicate-ambiguous` | `when` clause carries `constant` and `jsonpath` | `adapter.route.predicate-ambiguous` | checks |
 | `adapter.route.predicate-language-required` | `when` clause carries no language key | `adapter.route.predicate-language-required` | checks |
+| `adapter.route.read-unsafe-send` | Read operation's route reaches a POST send whose endpoint claims no `safeUpstream` | `adapter.route.read-unsafe-send` | checks |
 | `adapter.route.error-handler-shape` | `errorHandler` step carries no handler | `adapter.route.error-handler-shape` | checks |
 | `adapter.route.empty-exception-list` | onException clause names no error class | `adapter.route.empty-exception-list` | checks |
 | `adapter.route.handled-and-continued` | onException clause sets `handled: true` and `continued: true` | `adapter.route.handled-and-continued` | checks |

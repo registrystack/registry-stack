@@ -97,6 +97,7 @@ pub enum CheckCode {
     RoutePathParameterMismatch,
     RoutePredicateAmbiguous,
     RoutePredicateLanguageRequired,
+    RouteReadUnsafeSend,
     RouteRedeliveryOverNonSafeSend,
     RouteRedeliveryWithoutUpstreamSend,
     RouteReservedHeaderName,
@@ -194,6 +195,7 @@ impl CheckCode {
         Self::RoutePathParameterMismatch,
         Self::RoutePredicateAmbiguous,
         Self::RoutePredicateLanguageRequired,
+        Self::RouteReadUnsafeSend,
         Self::RouteRedeliveryOverNonSafeSend,
         Self::RouteRedeliveryWithoutUpstreamSend,
         Self::RouteReservedHeaderName,
@@ -302,6 +304,7 @@ impl CheckCode {
             Self::RouteNonSafeSendInSplit => "adapter.route.non-safe-send-in-split",
             Self::RoutePredicateAmbiguous => "adapter.route.predicate-ambiguous",
             Self::RoutePredicateLanguageRequired => "adapter.route.predicate-language-required",
+            Self::RouteReadUnsafeSend => "adapter.route.read-unsafe-send",
             Self::RouteRedeliveryOverNonSafeSend => "adapter.route.redelivery-over-non-safe-send",
             Self::RouteRedeliveryWithoutUpstreamSend => {
                 "adapter.route.redelivery-without-upstream-send"
@@ -396,6 +399,7 @@ impl CheckCode {
             | Self::RouteNonSafeSendInSplit
             | Self::RoutePredicateAmbiguous
             | Self::RoutePredicateLanguageRequired
+            | Self::RouteReadUnsafeSend
             | Self::RouteRedeliveryOverNonSafeSend
             | Self::RouteRedeliveryWithoutUpstreamSend
             | Self::RouteReservedHeaderName

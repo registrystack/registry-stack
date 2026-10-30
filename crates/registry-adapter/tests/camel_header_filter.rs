@@ -590,6 +590,7 @@ fn check_pack_and_the_filter_build_refuse_the_same_allowlists() {
             operations: vec![EndpointOperation {
                 id: local("cases-find"),
                 idempotent_upstream: true,
+                safe_upstream: false,
                 graphql: None,
             }],
             tested_versions: Vec::new(),

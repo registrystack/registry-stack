@@ -580,6 +580,10 @@
         "idempotentUpstream": {
           "description": "The reviewed claim that repeating this operation's send is safe,\nfor example an upstream create with client-supplied UIDs.",
           "type": "boolean"
+        },
+        "safeUpstream": {
+          "description": "The reviewed claim that the upstream serves this operation's POST\nas its safe search form, as FHIR servers serve `POST _search`\n(`products/adapter/CONCEPT.md` section 8.8): a route of a read\noperation may then reach the send. The claim names POST only; a\nPUT, PATCH, or graphql mutation send never reads it.",
+          "type": "boolean"
         }
       },
       "required": [

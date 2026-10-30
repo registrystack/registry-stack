@@ -81,6 +81,13 @@ pub struct EndpointOperation {
     /// for example an upstream create with client-supplied UIDs.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_upstream: bool,
+    /// The reviewed claim that the upstream serves this operation's POST
+    /// as its safe search form, as FHIR servers serve `POST _search`
+    /// (`products/adapter/CONCEPT.md` section 8.8): a route of a read
+    /// operation may then reach the send. The claim names POST only; a
+    /// PUT, PATCH, or graphql mutation send never reads it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub safe_upstream: bool,
     /// The GraphQL operation kind the pinned query file declares, on a
     /// `graphql` endpoint; a send naming this operation is safe only for
     /// a query (`products/adapter/CONCEPT.md` section 8.8).
@@ -211,6 +218,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: LocalId::new("cases-upsert").expect("op"),
                 idempotent_upstream: true,
+                safe_upstream: false,
                 graphql: None,
             }],
             tested_versions: vec!["2.7".to_string()],
@@ -347,6 +355,33 @@ mod tests {
         let json = serde_json::to_string(&pack).expect("serialize");
         assert!(json.contains("idempotentUpstream"));
         assert_eq!(serde_json::from_str::<AdapterPack>(&json).ok(), Some(pack));
+    }
+
+    /// The safe-upstream claim round trips under its camelCase name and
+    /// stays default-off: an operation that does not claim it decodes
+    /// without the member, and an unknown member beside the claim still
+    /// refuses (CFG-VAL-2).
+    #[test]
+    fn safe_upstream_claim_round_trips_and_defaults_off() {
+        let claimed: EndpointOperation =
+            serde_json::from_str(r#"{"id": "cases-find", "safeUpstream": true}"#).expect("decode");
+        assert!(claimed.safe_upstream);
+        let json = serde_json::to_string(&claimed).expect("serialize");
+        assert!(json.contains("safeUpstream"));
+        assert_eq!(
+            serde_json::from_str::<EndpointOperation>(&json).ok(),
+            Some(claimed)
+        );
+        let unclaimed: EndpointOperation =
+            serde_json::from_str(r#"{"id": "cases-find"}"#).expect("decode");
+        assert!(!unclaimed.safe_upstream);
+        assert!(
+            serde_json::from_str::<EndpointOperation>(
+                r#"{"id": "cases-find", "safeUpstreamTypo": true}"#
+            )
+            .is_err(),
+            "an unknown member beside the claim refuses"
+        );
     }
 
     /// GraphQL operation kinds spell lowercase on the wire: the
