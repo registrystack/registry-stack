@@ -4,8 +4,9 @@
 # govstack-consultation profile. The upstream exchange is the captured one in
 # fixtures/dhis2-tracker/search-page.yaml; the page is page 1 of many, so
 # the route seals the next page into `pageInfo.nextCursor`. The org-unit
-# search route takes its filter from a request body, which a fixture
-# facade request does not carry; the engine tests cover it.
+# search route takes its filter from a request body; a fixture facade
+# request can carry one, and this entry exercises the collection read
+# without it, leaving the body-borne filter to the engine tests.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-govstack-list-page

@@ -21,8 +21,11 @@ an authorized caller, from a reviewed template through an operator-configured
 provider), **Registry Coordinator** (finite, reviewed workflows of product
 API calls separated by durable waits), **Document Store** (document bytes held
 in custody for an owning system, with an exact, verified version released to
-the recipient a document grant names; held out of releases), and **Registry
-Discovery** (a curated, immutable index over public provider descriptions).
+the recipient a document grant names; held out of releases), **Registry
+Discovery** (a curated, immutable index over public provider descriptions),
+and **Registry Adapter** (a governed facade exposing a standard registry API
+over a source an institution already operates, from reviewed, digest-pinned
+packs as a bounded port of Apache Camel concepts).
 Registry Manifest describes sources portably; `registry-platform-*` crates are
 shared primitives. Integration maintainers own `registry-mcp`, a supporting
 composition service over explicit product bindings and the Live Adapter HTTP
@@ -295,6 +298,20 @@ narrow publication contract Evidence implements and carries no runtime,
 source access, trust, or native-client behavior. The clients may search,
 resolve, validate, and persist inert exact selections, but never turn catalog
 metadata into trust or credentials.
+
+**Registry Adapter** (`registry-adapter-core`, `registry-adapter`,
+`registry-adapterctl`) exposes a compiled, standard registry API over a
+source an institution already operates, from a reviewed, digest-pinned
+pack. The core is the source-neutral model and authoring checks; the
+runtime is a bounded port of Apache Camel concepts whose port table is
+the contract (`products/adapter/CONCEPT.md` section 8.10); `adapterctl`
+is authoring and operator tooling. The adapter inherits no authorization
+from any product and grants none to any source: upstream calls run under
+the deployment's own credential, the caller's token is never forwarded,
+and the facade serves trusted machine clients only, because an admitted
+client with a matching scope sees every record the deployment credential
+reaches (record-level authorization is planned, not built). Its audit
+journal records no values.
 
 The adopter demo is maintained separately in
 [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).

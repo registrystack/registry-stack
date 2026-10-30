@@ -2,8 +2,12 @@
 
 Status: concept, direction accepted 2026-10-30; engine model revised the same
 night into a bounded port of Apache Camel (decisions D7 to D15; section 16
-records the status of each). The crate trio is scaffolded;
-no engine code exists yet. This document is the plan of record for the
+records the status of each). The engine exists and serves the read
+operations of the `breg-records` profile (search, get, and read-only POST
+reads) over the compiled contract, with wrapped cursors and the value-free
+journal; the write operations and the remaining ported EIP set are
+contract-only until their increments land (section 8.10 carries the
+per-concept status). This document is the plan of record for the
 product's shape, boundaries, and verification. Decisions are recorded in
 section 16.
 
@@ -235,9 +239,10 @@ the contract carries concrete paths (`/v1/records/persons`), as BReg's
 per-package OpenAPI does. An operation also declares its `successStatus`
 (default 200; the `breg-records` create answers 201, as BReg does). The first profile, `breg-records` v1, is a starting target, not
 the only one: it mirrors the Base Registry Engine's public read surface
-(`/v1/records/{type}`, `/v1/records/{type}/{record_id}`) plus write
-operations (`records-search`, `records-get`, `records-create`,
-`records-update`, `records-patch`), answering in Registry Record v1 shape.
+(`/v1/records/{type}`, `/v1/records/{type}/{record_id}`, operations
+`records-search` and `records-get`) plus write operations
+(`records-create`, `records-update`, `records-patch`), answering in
+Registry Record v1 shape.
 GovStack, or a contract a ministry already publishes, is another profile
 file.
 
@@ -570,8 +575,9 @@ fires at all, whatever the other causes are.
 
 Facade classes, raised by the `rest` consumer outside any route, so neither
 catchable nor raisable: `facade.unauthenticated`, `facade.forbidden`,
-`facade.invalid-request` (contract validation, a cursor that fails section
-8.11.2), `facade.not-found` (no record path matched), `facade.method-not-allowed`,
+`facade.invalid-request` (contract validation), `facade.invalid-cursor`
+(a cursor that fails section 8.11.2, answered 400), `facade.not-found` (no
+record path matched), `facade.method-not-allowed`,
 `facade.unsupported-media-type` (a request `Content-Type` the operation does
 not accept), `facade.not-acceptable` (no acceptable response media type in
 `Accept`),
@@ -851,8 +857,8 @@ pack never learns a profile's path or parameter names:
 |---|---|---|
 | Record type | header `recordType` | every operation |
 | Record identifier | header `recordId` | get, update, patch |
-| Page size | header `pageSize`, an integer inside the profile's bounds, the profile's default when absent | search |
-| Filters | property `AdapterFilters`, an object from declared field name to typed value, holding only the filters the caller sent; a search binding declares the fields it filters on (`filters`), the contract offers exactly those as typed equality query parameters, and any other query parameter is refused by request validation, so a route never silently ignores a filter; a filter never reuses the bound operation's cursor, page-size, or path parameter name (`adapter.project.filter-parameter-collision`), so one caller-facing name means one thing | search |
+| Page size | header `pageSize`, an integer inside the profile's bounds, the profile's default when absent; the sealed cursor binds the effective page size, so an omitted `pageSize` on a continued request reuses the cursor's and a different one is refused with `facade.invalid-cursor` | search |
+| Filters | property `AdapterFilters`, an object from declared field name to typed value, holding only the filters the caller sent; a search binding declares the fields it filters on (`filters`), the contract offers exactly those as typed equality query parameters, and any other query parameter is refused by request validation, so a route never silently ignores a filter; a filter never reuses the bound operation's cursor, page-size, or path parameter name (`adapter.project.filter-parameter-collision`), so one caller-facing name means one thing; in this slice every filter a binding declares is required, and a request missing one is refused with `facade.invalid-field` (422) | search |
 | Continuation | property `AdapterContinuation`, absent on the first page (8.11.2) | search |
 | Request record | the body, extracted through the profile's request envelope and validated against the declared model | create, update, patch |
 | Idempotency key | header `Idempotency-Key`, the one caller header that enters | write operations, read by `idempotentConsumer` |
@@ -874,7 +880,8 @@ The route owns the upstream position; the engine owns the caller's cursor.
 - The engine encodes it as the opaque `nextCursor` slot of section 7 with
   authenticated encryption under the runtime secret `cursorKeyRef`, bound
   to the concrete operation, the binding id, the caller's subject, the
-  deployment the runtime serves (the project lock digest, so a redeploy
+  deployment the runtime serves (the deployment digest, a SHA-256 over
+  the project, profile, and pack bytes the runtime loaded, so a redeploy
   that changes route meaning invalidates outstanding cursors), a digest
   of the filters and page size, and an expiry (`cursorTtlSeconds`, default
   900). An optional `previousCursorKeyRef` keeps cursors valid across one
@@ -882,7 +889,7 @@ The route owns the upstream position; the engine owns the caller's cursor.
 - On the next request the engine verifies and decrypts the cursor and
   places the value as `AdapterContinuation`. A cursor that fails
   authentication, has expired, or was minted for another operation,
-  caller, or filter set raises `facade.invalid-request` before any route
+  caller, or filter set raises `facade.invalid-cursor` before any route
   step runs.
 - Details: `cursorKeyRef` resolves to exactly 32 bytes or the runtime
   refuses to start, and `previousCursorKeyRef` only decrypts; the caller's
@@ -892,7 +899,7 @@ The route owns the upstream position; the engine owns the caller's cursor.
   to 86400; the cursor is verified after authentication and authorization,
   so an unauthenticated caller with a forged cursor gets
   `facade.unauthenticated`; an oversize cursor raises
-  `facade.invalid-request`.
+  `facade.invalid-cursor`.
 - Algorithm: XChaCha20-Poly1305 with a random 192-bit nonce, keyed by
   HKDF-Expand of `cursorKeyRef` under a domain label, with the binding in
   the associated data so a mismatch is an authentication failure, and a
@@ -1126,9 +1133,17 @@ calls on the facade. The adapter inherits no authorization from any product
 and grants none to any source. The caller's token is never forwarded
 upstream: upstream calls run under the deployment's own credential for that
 source (section 10.2), and the journal records which caller asked (D19).
-The runtime config's required, non-empty `clients` list names the OAuth
-clients the deployment admits; a token from any other client is refused
-even when its scopes match an access profile (D33).
+The runtime config's required, non-empty `allowedClients` list names the
+OAuth clients the deployment admits; a token from any other client is
+refused even when its scopes match an access profile (D33).
+
+Client admission is not record-level authorization. The facade serves
+trusted machine clients only: any admitted client with a matching scope
+sees every record the deployment's upstream credential reaches, because
+the scopes gate operations and record types, not individual records.
+Record-level authorization is planned, not built; until it is, admitting
+a client means trusting it with the full reach of the deployment
+credential.
 
 ### 10.2 Upstream authentication
 
@@ -1548,7 +1563,7 @@ one that decides a row.
 | D30 | Increment 1's gate requires `captured` DHIS2 fixtures for get, missing, and search page, taken from a real server | 2026-10-30, accepted by Jeremi (P6) |
 | D31 | Circuit breaker and throttle stay in Increment 1 as its last slice | 2026-10-30, accepted by Jeremi (P6) |
 | D32 | No declarative field map until a real source needs one; field mapping stays in routes and scripts | 2026-10-30, accepted by Jeremi (P5) |
-| D33 | The runtime config requires a non-empty `clients` list on the facade, as Messaging does; scopes alone leave the issuer's mint policy as the only client gate | 2026-10-30, accepted by Jeremi |
+| D33 | The runtime config requires a non-empty `allowedClients` list on the facade, as Messaging does; scopes alone leave the issuer's mint policy as the only client gate | 2026-10-30, accepted by Jeremi |
 | D34 | A verified caller's refused call is a `callRefused` journal row; a 401 is logged only | 2026-10-30, accepted by Jeremi |
 | D35 | After the real proof (P6), the facade contract is authored as a closed subset of OpenAPI with `x-` extensions for slots and problems, as Camel's contract-first REST DSL takes OpenAPI as input; until then `AdapterProfile` stands. Confidence is medium until a real ministry or GovStack specification has been tried | 2026-10-30, accepted by Jeremi |
 | D36 | Plain HTTP to an address inside `allowedPrivateCidrs` is allowed for every authentication kind, including credential-bearing ones; the operator's explicit declaration is the consent, and `adapterctl check` agrees with the runtime load | 2026-10-30, accepted by Jeremi |

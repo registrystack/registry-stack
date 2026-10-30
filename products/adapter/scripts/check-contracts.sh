@@ -114,8 +114,9 @@ done
 printf 'Example check passed\n'
 
 # The same contract replays offline (CONCEPT 13.1: fixture replay for every
-# maintained pack and example; 13.3: until the route engine drives sends,
-# replay checks the fixture contracts and reports `drive: not-run`).
+# maintained pack and example; 13.3: replay checks the fixture contracts
+# and reports `drive: not-run`, because send-by-send driving is the
+# runtime engine's, not adapterctl's).
 "$adapterctl_bin" fixtures replay products/adapter/examples/dhis2-tracker/project.yaml \
   --profile products/adapter/profiles/breg-records/profile.yaml \
   --pack products/adapter/packs/dhis2-tracker/pack.yaml \
