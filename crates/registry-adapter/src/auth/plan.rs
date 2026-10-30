@@ -694,11 +694,11 @@ mod tests {
         }
     }
 
-    fn oauth_credential(token_endpoint: &str) -> RuntimeCredential {
+    fn oauth_credential(token_endpoint: &str, id_env: &str, secret_env: &str) -> RuntimeCredential {
         RuntimeCredential::Oauth2ClientCredentials {
             token_endpoint: Url::new(token_endpoint).expect("url"),
-            client_id_ref: secret("CLIENT_ID"),
-            client_secret_ref: secret("CLIENT_SECRET"),
+            client_id_ref: secret(id_env),
+            client_secret_ref: secret(secret_env),
             scope: None,
             audience: None,
             resource: None,
@@ -760,7 +760,11 @@ mod tests {
             ),
             (
                 EndpointAuthentication::Oauth2ClientCredentials {},
-                oauth_credential("https://token.example.invalid/token"),
+                oauth_credential(
+                    "https://token.example.invalid/token",
+                    "CLIENT_ID",
+                    "CLIENT_SECRET",
+                ),
                 AuthKind::Oauth2ClientCredentials,
             ),
             (
@@ -975,7 +979,7 @@ mod tests {
         ] {
             let binding = binding(
                 "https://cases.example.invalid",
-                Some(oauth_credential(endpoint)),
+                Some(oauth_credential(endpoint, "CLIENT_ID", "CLIENT_SECRET")),
             );
             AuthPlan::compile(
                 &EndpointAuthentication::Oauth2ClientCredentials {},
@@ -992,7 +996,7 @@ mod tests {
         ] {
             let binding = binding(
                 "https://cases.example.invalid",
-                Some(oauth_credential(endpoint)),
+                Some(oauth_credential(endpoint, "CLIENT_ID", "CLIENT_SECRET")),
             );
             assert_eq!(
                 AuthPlan::compile(
@@ -1010,7 +1014,11 @@ mod tests {
     /// without fragment or userinfo.
     #[test]
     fn resources_follow_evidence() {
-        let mut credential = oauth_credential("https://token.example.invalid/token");
+        let mut credential = oauth_credential(
+            "https://token.example.invalid/token",
+            "CLIENT_ID",
+            "CLIENT_SECRET",
+        );
         if let RuntimeCredential::Oauth2ClientCredentials { resource, .. } = &mut credential {
             *resource = Some("not a uri".to_owned());
         }
@@ -1032,7 +1040,11 @@ mod tests {
     #[test]
     fn scopes_follow_evidence() {
         for scope in ["", &"s".repeat(513), "read\0write"] {
-            let mut credential = oauth_credential("https://token.example.invalid/token");
+            let mut credential = oauth_credential(
+                "https://token.example.invalid/token",
+                "CLIENT_ID",
+                "CLIENT_SECRET",
+            );
             if let RuntimeCredential::Oauth2ClientCredentials {
                 scope: configured, ..
             } = &mut credential
@@ -1052,7 +1064,11 @@ mod tests {
         }
         let binding = binding(
             "https://cases.example.invalid",
-            Some(oauth_credential("https://token.example.invalid/token")),
+            Some(oauth_credential(
+                "https://token.example.invalid/token",
+                "CLIENT_ID",
+                "CLIENT_SECRET",
+            )),
         );
         assert!(AuthPlan::compile(
             &EndpointAuthentication::Oauth2ClientCredentials {},
@@ -1066,7 +1082,11 @@ mod tests {
     #[test]
     fn audiences_follow_evidence() {
         for audience in ["", "   ", &"a".repeat(513)] {
-            let mut credential = oauth_credential("https://token.example.invalid/token");
+            let mut credential = oauth_credential(
+                "https://token.example.invalid/token",
+                "CLIENT_ID",
+                "CLIENT_SECRET",
+            );
             if let RuntimeCredential::Oauth2ClientCredentials {
                 audience: configured,
                 ..
@@ -1085,7 +1105,11 @@ mod tests {
                 "audience {audience:?} must refuse"
             );
         }
-        let mut credential = oauth_credential("https://token.example.invalid/token");
+        let mut credential = oauth_credential(
+            "https://token.example.invalid/token",
+            "CLIENT_ID",
+            "CLIENT_SECRET",
+        );
         if let RuntimeCredential::Oauth2ClientCredentials {
             audience: configured,
             ..
@@ -1358,8 +1382,8 @@ mod tests {
         use std::pin::Pin;
         use zeroize::Zeroizing;
 
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_401_ID", "cid-401");
+        std::env::set_var("ADAPTER_TEST_401_SECRET", "csecret-401");
 
         /// Issues one fixed readable token response, so the cache holds a
         /// credential the rule can be seen to invalidate.
@@ -1400,7 +1424,11 @@ mod tests {
         let mut events = Vec::new();
         let oauth_binding = binding(
             "https://cases.example.invalid",
-            Some(oauth_credential("https://token.example.invalid/token")),
+            Some(oauth_credential(
+                "https://token.example.invalid/token",
+                "ADAPTER_TEST_401_ID",
+                "ADAPTER_TEST_401_SECRET",
+            )),
         );
         let plan = AuthPlan::compile(
             &EndpointAuthentication::Oauth2ClientCredentials {},
@@ -1493,8 +1521,8 @@ mod tests {
         use std::pin::Pin;
         use zeroize::Zeroizing;
 
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_STALE_ID", "cid-stale");
+        std::env::set_var("ADAPTER_TEST_STALE_SECRET", "csecret-stale");
 
         /// Answers the first ask with one token and every later ask with
         /// another, so the test can tell which issuance serves.
@@ -1547,7 +1575,11 @@ mod tests {
             &EndpointAuthentication::Oauth2ClientCredentials {},
             &binding(
                 "https://cases.example.invalid",
-                Some(oauth_credential("https://token.example.invalid/token")),
+                Some(oauth_credential(
+                    "https://token.example.invalid/token",
+                    "ADAPTER_TEST_STALE_ID",
+                    "ADAPTER_TEST_STALE_SECRET",
+                )),
             ),
         )
         .expect("a usable plan");

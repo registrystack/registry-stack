@@ -1000,12 +1000,14 @@ mod tests {
         placement: CredentialPlacement,
         cache_seconds: u64,
         assumed: Option<u64>,
+        id_env: &str,
+        secret_env: &str,
     ) -> TokenEndpointPlan {
         TokenEndpointPlan::client_secret(
             endpoint_id("case-api"),
             "https://token.example.invalid/token".to_owned(),
-            secret("CLIENT_ID"),
-            secret("CLIENT_SECRET"),
+            secret(id_env),
+            secret(secret_env),
             placement,
             TokenRequestParameters::default(),
             CacheBounds {
@@ -1289,14 +1291,20 @@ mod tests {
     /// plan's cache asks the endpoint nothing.
     #[tokio::test]
     async fn the_cache_answers_the_second_send() {
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_CACHE_ID", "cid-cache");
+        std::env::set_var("ADAPTER_TEST_CACHE_SECRET", "csecret-cache");
         let send = ScriptedSend::always(
             200,
             Some("application/json"),
             r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
         );
-        let plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
+        let plan = client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+            "ADAPTER_TEST_CACHE_ID",
+            "ADAPTER_TEST_CACHE_SECRET",
+        );
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let (first, _) = acquire_token(
@@ -1330,8 +1338,8 @@ mod tests {
     /// no issuance is stored to linger already expired.
     #[tokio::test]
     async fn a_zero_ceiling_never_caches() {
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_ZERO_ID", "cid-zero");
+        std::env::set_var("ADAPTER_TEST_ZERO_SECRET", "csecret-zero");
         let send = ScriptedSend::always(
             200,
             Some("application/json"),
@@ -1339,7 +1347,13 @@ mod tests {
         );
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
-        let plan = client_secret_plan(CredentialPlacement::FormBody, 0, None);
+        let plan = client_secret_plan(
+            CredentialPlacement::FormBody,
+            0,
+            None,
+            "ADAPTER_TEST_ZERO_ID",
+            "ADAPTER_TEST_ZERO_SECRET",
+        );
         let (_, generation) = acquire_token(
             &plan,
             &mut budget,
@@ -1421,8 +1435,8 @@ mod tests {
     /// failures that name only their status.
     #[tokio::test]
     async fn refusals_surface_fixed_names() {
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_REFUSED_ID", "cid-refused");
+        std::env::set_var("ADAPTER_TEST_REFUSED_SECRET", "csecret-refused");
         let refused = ScriptedSend::always(
             401,
             Some("application/json"),
@@ -1430,7 +1444,13 @@ mod tests {
         );
         let mut events = Vec::new();
         let error = acquire_token(
-            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
+            &client_secret_plan(
+                CredentialPlacement::BasicHeader,
+                3600,
+                None,
+                "ADAPTER_TEST_REFUSED_ID",
+                "ADAPTER_TEST_REFUSED_SECRET",
+            ),
             &mut TokenBudget::new_exchange(),
             &resolver(),
             &refused,
@@ -1458,7 +1478,13 @@ mod tests {
 
         let redirect = ScriptedSend::always(302, Some("application/json"), "");
         let error = acquire_token(
-            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
+            &client_secret_plan(
+                CredentialPlacement::BasicHeader,
+                3600,
+                None,
+                "ADAPTER_TEST_REFUSED_ID",
+                "ADAPTER_TEST_REFUSED_SECRET",
+            ),
             &mut TokenBudget::new_exchange(),
             &resolver(),
             &redirect,
@@ -1475,7 +1501,13 @@ mod tests {
             r#"{"access_token":"at","token_type":"Bearer","expires_in":60}"#,
         );
         let error = acquire_token(
-            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
+            &client_secret_plan(
+                CredentialPlacement::BasicHeader,
+                3600,
+                None,
+                "ADAPTER_TEST_REFUSED_ID",
+                "ADAPTER_TEST_REFUSED_SECRET",
+            ),
             &mut TokenBudget::new_exchange(),
             &resolver(),
             &html,
@@ -1495,8 +1527,8 @@ mod tests {
     #[tokio::test]
     async fn statuses_decide_the_fault_and_class() {
         use super::super::CREDENTIAL_REJECTED_CLASS;
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_STATUS_ID", "cid-status");
+        std::env::set_var("ADAPTER_TEST_STATUS_SECRET", "csecret-status");
         async fn fault_of(
             status: u16,
             media_type: Option<&'static str>,
@@ -1504,7 +1536,13 @@ mod tests {
         ) -> AuthError {
             let send = ScriptedSend::always(status, media_type, body);
             acquire_token(
-                &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
+                &client_secret_plan(
+                    CredentialPlacement::BasicHeader,
+                    3600,
+                    None,
+                    "ADAPTER_TEST_STATUS_ID",
+                    "ADAPTER_TEST_STATUS_SECRET",
+                ),
                 &mut TokenBudget::new_exchange(),
                 &resolver(),
                 &send,
@@ -1616,8 +1654,8 @@ mod tests {
     /// plan share the one cache.
     #[tokio::test(flavor = "current_thread")]
     async fn acquisition_is_single_flight() {
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_FLIGHT_ID", "cid-flight");
+        std::env::set_var("ADAPTER_TEST_FLIGHT_SECRET", "csecret-flight");
         struct SlowSend {
             in_flight: AtomicUsize,
             peak: AtomicUsize,
@@ -1655,6 +1693,8 @@ mod tests {
             CredentialPlacement::BasicHeader,
             3600,
             None,
+            "ADAPTER_TEST_FLIGHT_ID",
+            "ADAPTER_TEST_FLIGHT_SECRET",
         ));
         let mut tasks = Vec::new();
         for _ in 0..4 {
@@ -1736,14 +1776,20 @@ mod tests {
     /// transport timeout, no request was sent, and no budget was spent.
     #[tokio::test]
     async fn waiters_give_up_at_the_admission_bound() {
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
+        std::env::set_var("ADAPTER_TEST_WAIT_ID", "cid-wait");
+        std::env::set_var("ADAPTER_TEST_WAIT_SECRET", "csecret-wait");
         let send = ScriptedSend::always(
             200,
             Some("application/json"),
             r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
         );
-        let mut plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
+        let mut plan = client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+            "ADAPTER_TEST_WAIT_ID",
+            "ADAPTER_TEST_WAIT_SECRET",
+        );
         plan.cache = Arc::new(TokenCache {
             state: Mutex::new(CacheState::default()),
             admission_timeout: Duration::from_millis(30),
@@ -1787,14 +1833,14 @@ mod tests {
     /// assertion.
     #[test]
     fn private_key_jwt_renders_its_assertion_in_the_body() {
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("ASSERTION_KEY", "key-pem");
+        std::env::set_var("ADAPTER_TEST_PKJWT_ID", "cid-pkjwt");
+        std::env::set_var("ADAPTER_TEST_PKJWT_KEY", "key-pem");
         let url = "https://token.example.invalid/token";
         let plan = TokenEndpointPlan::private_key_jwt(
             endpoint_id("case-api"),
             url.to_owned(),
-            secret("CLIENT_ID"),
-            secret("ASSERTION_KEY"),
+            secret("ADAPTER_TEST_PKJWT_ID"),
+            secret("ADAPTER_TEST_PKJWT_KEY"),
             url.to_owned(),
             TokenRequestParameters::default(),
             CacheBounds {
@@ -1812,9 +1858,9 @@ mod tests {
         );
         assert_eq!(
             str::from_utf8(request.body.as_bytes()).expect("form bytes"),
-            "grant_type=client_credentials&client_id=cid\
+            "grant_type=client_credentials&client_id=cid-pkjwt\
              &client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer\
-             &client_assertion=assertion.cid.https%3A%2F%2Ftoken.example.invalid%2Ftoken.key-pem"
+             &client_assertion=assertion.cid-pkjwt.https%3A%2F%2Ftoken.example.invalid%2Ftoken.key-pem"
         );
     }
 
@@ -1846,8 +1892,8 @@ mod tests {
         // The signed instant is pinned below by a signer that records
         // it.
         let before = unix_now().expect("a second reading");
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("ASSERTION_KEY", "key-pem");
+        std::env::set_var("ADAPTER_TEST_PKJWT_STAMP_ID", "cid-stamp");
+        std::env::set_var("ADAPTER_TEST_PKJWT_STAMP_KEY", "key-pem");
         struct StampsIat(std::sync::Mutex<Vec<i64>>);
         impl ClientAssertionSigner for StampsIat {
             fn sign_client_assertion(
@@ -1863,8 +1909,8 @@ mod tests {
         let plan = TokenEndpointPlan::private_key_jwt(
             endpoint_id("case-api"),
             url.to_owned(),
-            secret("CLIENT_ID"),
-            secret("ASSERTION_KEY"),
+            secret("ADAPTER_TEST_PKJWT_STAMP_ID"),
+            secret("ADAPTER_TEST_PKJWT_STAMP_KEY"),
             url.to_owned(),
             TokenRequestParameters::default(),
             CacheBounds {
@@ -1889,11 +1935,17 @@ mod tests {
     /// carries client_id beside the secret, with no header.
     #[test]
     fn the_body_carries_client_id_except_under_the_basic_placement() {
-        std::env::set_var("CLIENT_ID", "cid");
-        std::env::set_var("CLIENT_SECRET", "csecret");
-        let basic = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None)
-            .render(&resolver(), &FixedSigner)
-            .expect("a rendered request");
+        std::env::set_var("ADAPTER_TEST_BODY_ID", "cid-body");
+        std::env::set_var("ADAPTER_TEST_BODY_SECRET", "csecret-body");
+        let basic = client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+            "ADAPTER_TEST_BODY_ID",
+            "ADAPTER_TEST_BODY_SECRET",
+        )
+        .render(&resolver(), &FixedSigner)
+        .expect("a rendered request");
         assert!(
             basic.authorization.is_some(),
             "the Basic header carries the pair"
@@ -1905,16 +1957,22 @@ mod tests {
             "the Basic placement never repeats the client id in the body: {body}"
         );
 
-        let form = client_secret_plan(CredentialPlacement::FormBody, 3600, None)
-            .render(&resolver(), &FixedSigner)
-            .expect("a rendered request");
+        let form = client_secret_plan(
+            CredentialPlacement::FormBody,
+            3600,
+            None,
+            "ADAPTER_TEST_BODY_ID",
+            "ADAPTER_TEST_BODY_SECRET",
+        )
+        .render(&resolver(), &FixedSigner)
+        .expect("a rendered request");
         assert!(
             form.authorization.is_none(),
             "the form placement has no header"
         );
         let body = str::from_utf8(form.body.as_bytes()).expect("form bytes");
         assert!(
-            body.contains("client_id=cid&client_secret=csecret"),
+            body.contains("client_id=cid-body&client_secret=csecret-body"),
             "the form placement names the client beside its secret: {body}"
         );
     }
@@ -1922,12 +1980,12 @@ mod tests {
     /// A rendered body beyond the bound refuses rather than sends.
     #[test]
     fn oversized_renders_refuse() {
-        std::env::set_var("CLIENT_ID", "cid");
+        std::env::set_var("ADAPTER_TEST_OVERSIZE_ID", "cid");
         std::env::set_var("HUGE_CLIENT_SECRET", "k".repeat(20 * 1024));
         let plan = TokenEndpointPlan::client_secret(
             endpoint_id("case-api"),
             "https://token.example.invalid/token".to_owned(),
-            secret("CLIENT_ID"),
+            secret("ADAPTER_TEST_OVERSIZE_ID"),
             secret("HUGE_CLIENT_SECRET"),
             CredentialPlacement::FormBody,
             TokenRequestParameters::default(),
