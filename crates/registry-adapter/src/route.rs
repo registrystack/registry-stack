@@ -258,6 +258,9 @@ fn auth_events_detail(events: &[AuthEvent]) -> Value {
 pub struct RouteFailure {
     pub class: ErrorClass,
     pub message: Option<String>,
+    /// The value-free authentication events of a send that failed at its
+    /// credential, for the failure's own journal row.
+    pub auth: Option<Value>,
 }
 
 impl RouteFailure {
@@ -265,6 +268,7 @@ impl RouteFailure {
         Self {
             class,
             message: None,
+            auth: None,
         }
     }
 }
@@ -416,6 +420,7 @@ impl Run<'_, '_> {
             Step::ThrowException(throw) => Err(RouteFailure {
                 class: throw.exception_type,
                 message: throw.message.clone(),
+                auth: None,
             }),
             Step::To(to) => self.send(to).await,
             _ => Err(RouteFailure::of(ErrorClass::Script)),
@@ -489,16 +494,22 @@ impl Run<'_, '_> {
         if !auth_events.is_empty() {
             sending["auth"] = auth_events_detail(&auth_events);
         }
+        // The send is announced only once its credential is in hand; a
+        // credential failure never reads as a send that began.
+        let credential = authorized.map_err(|error| {
+            let mut failure = RouteFailure::of(
+                ErrorClass::from_class(error.class()).unwrap_or(ErrorClass::CredentialRejected),
+            );
+            if !auth_events.is_empty() {
+                failure.auth = Some(auth_events_detail(&auth_events));
+            }
+            failure
+        })?;
         self.events.push(RouteEvent {
             kind: "exchangeSending",
             at: SystemTime::now(),
             detail: sending,
         });
-        let credential = authorized.map_err(|error| {
-            RouteFailure::of(
-                ErrorClass::from_class(error.class()).unwrap_or(ErrorClass::CredentialRejected),
-            )
-        })?;
         auth_events.clear();
         let headers = self.exchange.message.string_headers();
         let started = Instant::now();
@@ -830,6 +841,112 @@ mod auth_journal_tests {
                 { "event": "tokenUnavailable", "status": 503 },
                 { "event": "credentialRejected" },
             ])
+        );
+    }
+}
+
+#[cfg(test)]
+mod credential_order_tests {
+    use super::*;
+    use registry_adapter_core::{AdapterRuntimeConfig, Endpoint};
+    use registry_platform_yaml::SecretProvider;
+
+    const KEY_ENV: &str = "ROUTE_CREDENTIAL_ORDER_KEY";
+
+    fn runtime_config() -> AdapterRuntimeConfig {
+        serde_norway::from_str(&format!(
+            r#"
+id: credential-order
+endpoints:
+  - endpoint: tracker
+    baseUrl: http://127.0.0.1:9/
+    credential:
+      type: static-api-key
+      valueRef: secret:env/{KEY_ENV}
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ROUTE_CREDENTIAL_ORDER_DB
+  migrationUrlRef: secret:env/ROUTE_CREDENTIAL_ORDER_DB
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: credential-order
+allowedClients: [credential-order-client]
+allowedPrivateCidrs: [192.168.0.0/16]
+audit:
+  retentionDays: 90
+"#
+        ))
+        .expect("the runtime config parses")
+    }
+
+    fn pack_endpoint() -> Endpoint {
+        serde_norway::from_str(
+            r#"
+id: tracker
+component: http
+authentication:
+  type: static-api-key
+  headerName: x-api-key
+responseHeaders: []
+requestHeaders: []
+operations: []
+testedVersions: []
+"#,
+        )
+        .expect("the pack endpoint parses")
+    }
+
+    /// A credential that cannot be produced fails the exchange before the
+    /// send is announced: the journal never says an exchange was sending
+    /// when no send could happen.
+    #[tokio::test]
+    async fn a_credential_failure_leaves_no_sending_event() {
+        std::env::set_var(KEY_ENV, "order-key");
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let config = runtime_config();
+        let binding = config.endpoints.iter().next().expect("binding");
+        let egress = EndpointEgress::compile(binding, &pack_endpoint(), &config, &resolver)
+            .expect("compiled");
+        let base = format!(
+            "{}{}",
+            egress.origin().origin_url().trim_end_matches('/'),
+            egress.origin().base_path()
+        );
+        let mut endpoints = BTreeMap::new();
+        endpoints.insert(
+            "tracker".to_owned(),
+            EndpointRuntime {
+                egress,
+                base,
+                attempt: Duration::from_secs(1),
+                maximum_response_bytes: 1024,
+            },
+        );
+        let scripts = ScriptSet::default();
+        let context = RouteContext {
+            endpoints: &endpoints,
+            scripts: &scripts,
+            resolver: &resolver,
+            maximum_upstream_calls: 4,
+        };
+        let steps: Vec<Step> = serde_json::from_value(json!([
+            {"to": {"uri": "http:tracker", "parameters": {"httpMethod": "GET", "path": "/x"}}}
+        ]))
+        .expect("the steps parse");
+        // The key resolved at compile time; it is gone when the send needs it.
+        std::env::remove_var(KEY_ENV);
+
+        let outcome = run_route(&context, &steps, Exchange::new("order".to_owned())).await;
+
+        assert!(outcome.result.is_err(), "the exchange fails");
+        assert!(
+            outcome
+                .events
+                .iter()
+                .all(|event| event.kind != "exchangeSending"),
+            "no exchangeSending precedes a credential failure: {:?}",
+            outcome.events
         );
     }
 }

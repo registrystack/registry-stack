@@ -490,6 +490,7 @@ async fn answer(
                 let failure = RouteFailure {
                     class: ErrorClass::DisclosureViolation,
                     message: None,
+                    auth: None,
                 };
                 events.push((
                     journal_event(
@@ -502,11 +503,12 @@ async fn answer(
             }
         },
         Err(failure) => {
+            let mut detail = json!({ "class": failure.class.class() });
+            if let Some(auth) = &failure.auth {
+                detail["auth"] = auth.clone();
+            }
             events.push((
-                journal_event(
-                    "exchangeFailed",
-                    Some(json!({ "class": failure.class.class() })),
-                ),
+                journal_event("exchangeFailed", Some(detail)),
                 SystemTime::now(),
             ));
             Finished::Route(failure)
