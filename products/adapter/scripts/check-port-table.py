@@ -20,10 +20,13 @@ What it checks, in order:
    example "(component docs)") are prose, not paths, and are ignored.
 3. Delivered rows have evidence. `INCREMENT_DELIVERED` is the highest
    increment this tree delivers. A row with `Inc` at or below it must map,
-   in `EVIDENCE` below, to at least one named core test function, and each
-   named function must exist in the mapped file of
-   `crates/registry-adapter-core/src/`. A row with a higher Inc is
-   reported as pending and never fails the run.
+   in `EVIDENCE` below, to at least one named test function, and each
+   named function must exist in the mapped file. Core rows map into
+   `crates/registry-adapter-core/src/`; runtime rows map through the
+   `engine:` form into the engine crate's conformance suites and unit
+   tests. A row with a higher Inc is reported as pending and never fails
+   the run for lacking evidence, but any evidence already recorded for it
+   must still resolve.
 4. Every accepted key has a row. The generated schemas under
    `products/adapter/schemas/` are the machine-readable form of what the
    core model accepts. Every step key (`Step`, `Expression`,
@@ -35,7 +38,11 @@ What it checks, in order:
    covers.
 
 Increment 0 evidence mapping (row concept -> the core tests that hold the
-row to the code). Extend this map when an increment lands:
+row to the code). Extend this map when an increment lands. The 2026-10-31
+port walk additionally recorded the engine conformance suites for the
+runtime rows the code already delivers (HeaderFilterStrategy, HTTP
+authentication, Languages); they stay pending until increment 1 lands as
+a whole.
 
 - "Route, YAML DSL": the route form, its `direct:`-only `from`, the acyclic
   graph, and the bounded depth
@@ -78,14 +85,36 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CONCEPT = REPO_ROOT / "products" / "adapter" / "CONCEPT.md"
 SCHEMAS = REPO_ROOT / "products" / "adapter" / "schemas"
 CORE_SRC = REPO_ROOT / "crates" / "registry-adapter-core" / "src"
+ENGINE_ROOT = REPO_ROOT / "crates" / "registry-adapter"
 PACK_SCHEMA = SCHEMAS / "pack.v1alpha1.schema.json"
 
 #: The highest increment this tree delivers. Rows above it are pending.
 INCREMENT_DELIVERED = 0
 
-#: Delivered row concept -> the core test functions that evidence it. Each
-#: entry is "file.rs:function_name" relative to crates/registry-adapter-core/src/.
+#: Delivered row concept -> the test functions that evidence it. An entry
+#: "file.rs:function_name" resolves against crates/registry-adapter-core/src/;
+#: "engine:file.rs:function_name" resolves against the engine crate's own
+#: tree (tests/ conformance suites and src/ unit tests), because the runtime
+#: rows are proven by the engine's suites, not by core authoring checks.
+#: Every entry is held to existence even while its row's increment is still
+#: pending, so the map cannot rot before the increment lands.
 EVIDENCE: dict[str, list[str]] = {
+    "HeaderFilterStrategy": [
+        "engine:tests/camel_header_filter.rs:every_reserved_name_is_refused_in_either_list",
+        "engine:tests/camel_header_filter.rs:only_listed_request_headers_are_sent",
+        "engine:tests/camel_header_filter.rs:only_declared_response_headers_are_copied_under_their_declared_names",
+    ],
+    "HTTP authentication": [
+        "engine:tests/camel_http_authentication.rs:basic_sends_one_preemptive_header",
+        "engine:tests/camel_http_authentication.rs:static_kinds_render_no_marker",
+        "engine:tests/camel_http_authentication.rs:a_401_with_an_unparseable_body_is_still_rejected",
+        "engine:src/auth/material.rs:basic_values_encode_and_refuse",
+    ],
+    "Languages": [
+        "engine:tests/language.rs:a_selector_over_the_length_bound_is_refused",
+        "engine:tests/language.rs:a_singular_query_yields_its_one_value",
+        "engine:tests/language.rs:any_other_query_yields_the_node_list",
+    ],
     "Route, YAML DSL": [
         "checks.rs:routes_accept_a_well_formed_direct_call",
         "checks.rs:routes_refuse_a_from_outside_direct",
@@ -169,27 +198,37 @@ def check_references(row: int, cells: list[str]) -> list[str]:
 
 
 def function_exists(relative: str) -> bool:
-    """Whether `file.rs` defines `function_name` as a `fn` item."""
+    """Whether the entry names a `fn` item that exists.
+
+    A plain `file.rs:function` resolves against the core sources; an
+    `engine:file.rs:function` resolves against the engine crate's own
+    tree, where the runtime conformance suites live.
+    """
+    engine = relative.startswith("engine:")
+    if engine:
+        relative = relative[len("engine:") :]
     file, _, function = relative.partition(":")
     if not file or not function:
         return False
-    source = CORE_SRC / file
+    source = (ENGINE_ROOT if engine else CORE_SRC) / file
     if not source.is_file():
         return False
     return re.search(rf"\bfn {re.escape(function)}\b", source.read_text(encoding="utf-8")) is not None
 
 
 def check_evidence(row: int, concept: str, inc: int) -> list[str]:
-    """A delivered row names core tests that exist; a later row is pending."""
-    if inc > INCREMENT_DELIVERED:
-        return []
+    """A delivered row names tests that exist; a pending row's recorded
+    evidence must still resolve, so the map cannot rot while its
+    increment waits."""
     mapped = EVIDENCE.get(concept)
     if not mapped:
+        if inc > INCREMENT_DELIVERED:
+            return []
         return [
             f"FAIL: {CONCEPT}:{row}: delivered row '{concept}' names no conformance tests"
         ]
     return [
-        f"FAIL: {CONCEPT}:{row}: evidence '{relative}' of '{concept}' is not a core test function"
+        f"FAIL: {CONCEPT}:{row}: evidence '{relative}' of '{concept}' is not a test function"
         for relative in mapped
         if not function_exists(relative)
     ]
