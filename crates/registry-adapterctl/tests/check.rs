@@ -999,8 +999,8 @@ fn the_runtime_file_without_environment_refuses_an_expression_in_an_integer_memb
 fn the_runtime_file_refuses_an_expression_in_a_reference_member() {
     let (_root, project) = mutated_project(|root| {
         let runtime = runtime_with_expressions("90").replace(
-            "    baseUrl: https://cases.example.invalid\n",
-            "    baseUrl: https://cases.example.invalid\n    caBundleRef: \"${ADAPTERCTL_TEST_CA}\"\n",
+            "      clientSecretRef: secret:env/CASE_API_CLIENT_SECRET\n",
+            "      clientSecretRef: \"${ADAPTERCTL_TEST_CA}\"\n",
         );
         std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
     });
@@ -1012,7 +1012,39 @@ fn the_runtime_file_refuses_an_expression_in_a_reference_member() {
         .iter()
         .find(|diagnostic| diagnostic["code"] == "config.substitution-not-allowed")
         .unwrap();
-    assert_eq!(reference["path"], "/endpoints/0/caBundleRef", "{report}");
+    assert_eq!(
+        reference["path"], "/endpoints/0/credential/clientSecretRef",
+        "{report}"
+    );
+}
+
+/// A runtime file carrying the removed `caBundleRef` key is refused with
+/// the reader's removed-key diagnostic at the key, naming the
+/// `tlsTrustProfile` replacement (CFG-CHANGE-2).
+#[test]
+fn the_runtime_file_refuses_the_removed_ca_bundle_ref_key() {
+    let (_root, project) = mutated_project(|root| {
+        let runtime = runtime_with_expressions("90").replace(
+            "    baseUrl: https://cases.example.invalid\n",
+            "    baseUrl: https://cases.example.invalid\n    caBundleRef: secret:file/households-ca.pem\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_refused(exit, &report, "config.removed-key");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    let removed = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.removed-key")
+        .unwrap();
+    assert_eq!(removed["path"], "/endpoints/0/caBundleRef", "{report}");
+    assert!(
+        removed["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("tlsTrustProfile")),
+        "{report}"
+    );
 }
 
 /// With `--environment` an expression naming an unset variable is refused

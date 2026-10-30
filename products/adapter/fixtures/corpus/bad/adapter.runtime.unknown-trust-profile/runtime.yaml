@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.unknown-trust-profile, runtime half: checked with
+# --runtime runtime.yaml. The runtime binding must be refused with
+# exactly adapter.runtime.unknown-trust-profile. The runtime binding carries the defect:
+# its tlsTrustProfile names a profile no outboundTls block declares.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.runtime.unknown-trust-profile/project.yaml --runtime runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: case-deployment
+endpoints:
+  - endpoint: cases
+    baseUrl: https://cases.example.invalid
+    tlsTrustProfile: private-ca
+    credential:
+      type: basic
+      usernameRef: secret:env/CASES_USER
+      passwordRef: secret:env/CASES_PASSWORD
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/DB_RUNTIME
+  migrationUrlRef: secret:env/DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: case-api
+audit:
+  retentionDays: 90

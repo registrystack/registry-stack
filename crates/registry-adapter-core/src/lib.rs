@@ -42,6 +42,7 @@ mod project;
 mod result_schema;
 mod route;
 mod runtime;
+mod typed;
 
 pub use auth::*;
 pub use checks::*;

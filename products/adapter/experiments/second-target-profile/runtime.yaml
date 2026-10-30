@@ -21,10 +21,14 @@ endpoints:
       clientAssertionAudience: https://auth.example.invalid/oauth2/token
       scope: households.read
       maximumCacheSeconds: 300
-    caBundleRef: secret:file/households-ca.pem
+    tlsTrustProfile: households-ca
     mtlsIdentity:
       certificateRef: secret:file/households-client.crt
       keyRef: secret:file/households-client.key
+outboundTls:
+  trustProfiles:
+    households-ca:
+      caBundleFile: /etc/registry-adapter/trust/households-ca.pem
 allowedPrivateCidrs:
   - 10.0.0.0/8
 listener:

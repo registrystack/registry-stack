@@ -15,7 +15,8 @@ from a JSON:API household registry:
 - A hard total cap: when `meta.total` exceeds the deployment's
   `maximum_total` (1000), the whole search is refused, never truncated.
 - Mutual TLS to the registry (`mtlsIdentity`), a private root bundle
-  (`caBundleRef`), and an OAuth 2.0 client-credentials grant authenticated
+  (`tlsTrustProfile` naming a profile under `outboundTls.trustProfiles`),
+  and an OAuth 2.0 client-credentials grant authenticated
   with a signed client assertion (`oauth2-private-key-jwt`, RFC 7523).
 - A circuit breaker around every send, whose rejection (`breaker.open`) maps
   to `source.unavailable` 503.
@@ -34,8 +35,8 @@ from a JSON:API household registry:
   refused (probe `e4-budget10`); the read's 2 is exact (probe
   `e4-budget-get1`).
 - `doCatch` naming a class outside the closed hierarchy is refused (probe
-  `e4-docatch-bogus`); a plain path as `caBundleRef` is refused (probe
-  `e4-plain-ca`).
+  `e4-docatch-bogus`); a relative path as a trust profile's `caBundleFile`
+  is refused (probe `e4-plain-ca`).
 - The runtime config can express mTLS plus private-key JWT on the upstream
   endpoint.
 
@@ -88,7 +89,7 @@ from a JSON:API household registry:
    placed only inside a quoted `constant`, so `page_size` and `maximum_total`
    reach the scripts as text and need `parse_int`.
 7. **Token endpoint transport.** RFC 8705 section 2 has the client
-   authenticate to the token endpoint over mTLS; `caBundleRef` and
+   authenticate to the token endpoint over mTLS; `tlsTrustProfile` and
    `mtlsIdentity` bind the upstream endpoint only, and nothing says whether
    the token request uses them. A token endpoint on a private CA cannot be
    reached.

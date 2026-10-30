@@ -111,8 +111,10 @@ pub enum CheckCode {
     RouteWriteWithoutIdempotency,
     // adapter.runtime.*
     RuntimeInsecureOrigin,
+    RuntimeInvalidOutboundTls,
     RuntimeMissingEndpoint,
     RuntimeUnknownEndpoint,
+    RuntimeUnknownTrustProfile,
 }
 
 impl CheckCode {
@@ -204,8 +206,10 @@ impl CheckCode {
         Self::RouteUnknownOperation,
         Self::RouteWriteWithoutIdempotency,
         Self::RuntimeInsecureOrigin,
+        Self::RuntimeInvalidOutboundTls,
         Self::RuntimeMissingEndpoint,
         Self::RuntimeUnknownEndpoint,
+        Self::RuntimeUnknownTrustProfile,
     ];
 
     #[must_use]
@@ -313,8 +317,10 @@ impl CheckCode {
             Self::RouteUnknownOperation => "adapter.route.unknown-operation",
             Self::RouteWriteWithoutIdempotency => "adapter.route.write-without-idempotency",
             Self::RuntimeInsecureOrigin => "adapter.runtime.insecure-origin",
+            Self::RuntimeInvalidOutboundTls => "adapter.runtime.invalid-outbound-tls",
             Self::RuntimeMissingEndpoint => "adapter.runtime.missing-endpoint",
             Self::RuntimeUnknownEndpoint => "adapter.runtime.unknown-endpoint",
+            Self::RuntimeUnknownTrustProfile => "adapter.runtime.unknown-trust-profile",
         }
     }
 
@@ -326,8 +332,10 @@ impl CheckCode {
             Self::AuthKindMismatch
             | Self::AuthNoneNotLoopback
             | Self::RuntimeInsecureOrigin
+            | Self::RuntimeInvalidOutboundTls
             | Self::RuntimeMissingEndpoint
-            | Self::RuntimeUnknownEndpoint => crate::naming::ADAPTER_RUNTIME_KIND,
+            | Self::RuntimeUnknownEndpoint
+            | Self::RuntimeUnknownTrustProfile => crate::naming::ADAPTER_RUNTIME_KIND,
             Self::EnvelopeInvalidPlaceholder
             | Self::ProfileInvalidPath
             | Self::ProfileProblemClassDuplicate

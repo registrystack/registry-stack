@@ -8,9 +8,10 @@
 //! and secrets live here and only here.
 
 use crate::auth::{MtlsIdentity, RuntimeCredential};
-use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig};
-use registry_platform_yaml::{ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url};
+use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey};
+use registry_platform_yaml::{ExternalId, LocalId, UniqueIdList, UniqueList, Url};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 /// One private network range the egress allowlist admits. A string form
@@ -79,10 +80,11 @@ pub struct EndpointBinding {
     /// The credential; its kind must match the endpoint's declared kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<RuntimeCredential>,
-    /// A private root-certificate bundle the upstream's TLS chain is
-    /// validated against.
+    /// A trust profile under `outboundTls.trustProfiles` whose CA bundle
+    /// the endpoint trusts beside the system roots; absent, the endpoint
+    /// trusts the system roots alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_bundle_ref: Option<SecretReference>,
+    pub tls_trust_profile: Option<LocalId>,
     /// The mTLS client identity, combinable with any authentication kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtls_identity: Option<MtlsIdentity>,
@@ -93,6 +95,43 @@ impl registry_platform_yaml::Identified for EndpointBinding {
         self.endpoint.as_str()
     }
 }
+
+/// The private certificate authorities endpoints may trust beside the
+/// system roots (`products/adapter/CONCEPT.md` section 10.2), in the shape
+/// Evidence ships: a named profile is a process-local PEM file. A CA
+/// bundle is not a secret, so the profile names a file, never a secret
+/// reference.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OutboundTls {
+    /// The named private CA bundles.
+    #[serde(default, deserialize_with = "crate::typed::local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::typed::local_id_map_schema::<TrustProfile>")
+    )]
+    pub trust_profiles: BTreeMap<String, TrustProfile>,
+}
+
+/// One named private CA bundle: the absolute path of the process-local PEM
+/// file the runtime reads.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TrustProfile {
+    /// The absolute path of the PEM file holding the bundle's certificates.
+    pub ca_bundle_file: String,
+}
+
+/// The keys the runtime configuration no longer accepts, each with what
+/// replaced it (CFG-CHANGE-2).
+pub const ADAPTER_REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
+    path: "endpoints.*.caBundleRef",
+    replacement: "Write tlsTrustProfile on the endpoint binding, naming a \
+                  profile declared under outboundTls.trustProfiles whose \
+                  caBundleFile is the absolute path of the bundle file.",
+}];
 
 /// The audit journal's retention (`products/adapter/CONCEPT.md` section
 /// 11), bounded by the platform access-log window.
@@ -113,6 +152,10 @@ pub struct AdapterRuntimeConfig {
     pub id: LocalId,
     /// One binding per configured endpoint.
     pub endpoints: UniqueIdList<EndpointBinding>,
+    /// The private CAs endpoints may trust beside the system roots;
+    /// absent, every endpoint trusts the system roots alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound_tls: Option<OutboundTls>,
     /// The private ranges egress may reach, at least one and at most the
     /// platform bound (CFG-EMPTY-2).
     #[serde(deserialize_with = "at_least_one_cidr")]
@@ -157,6 +200,7 @@ fn at_least_one_cidr_schema(generator: &mut schemars::SchemaGenerator) -> schema
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_yaml::SecretReference;
 
     fn binding() -> EndpointBinding {
         EndpointBinding {
@@ -175,9 +219,7 @@ mod tests {
                     .expect("cache"),
                 assumed_lifetime_seconds: None,
             }),
-            ca_bundle_ref: Some(
-                SecretReference::new("secret:file/private-ca.pem").expect("secret"),
-            ),
+            tls_trust_profile: Some(LocalId::new("private-ca").expect("id")),
             mtls_identity: None,
         }
     }
@@ -189,6 +231,14 @@ mod tests {
         let config = AdapterRuntimeConfig {
             id: LocalId::new("case-deployment").expect("id"),
             endpoints: UniqueIdList::new(vec![binding()]).expect("unique"),
+            outbound_tls: Some(OutboundTls {
+                trust_profiles: BTreeMap::from([(
+                    "private-ca".to_owned(),
+                    TrustProfile {
+                        ca_bundle_file: "/etc/registry-adapter/trust/private-ca.pem".to_owned(),
+                    },
+                )]),
+            }),
             allowed_private_cidrs: UniqueList::new(vec![
                 Cidr::new("10.0.0.0/8").expect("cidr"),
                 Cidr::new("192.168.1.0/24").expect("cidr"),
@@ -221,6 +271,13 @@ mod tests {
             r#"{{
                 "id": "case-deployment",
                 "endpoints": [{}],
+                "outboundTls": {{
+                    "trustProfiles": {{
+                        "private-ca": {{
+                            "caBundleFile": "/etc/registry-adapter/trust/private-ca.pem"
+                        }}
+                    }}
+                }},
                 "allowedPrivateCidrs": ["10.0.0.0/8", "192.168.1.0/24"],
                 "listener": {{ "bind": "127.0.0.1:8080" }},
                 "database": {{
@@ -238,11 +295,39 @@ mod tests {
         let read = serde_json::from_str::<AdapterRuntimeConfig>(&json).expect("read");
         assert_eq!(read.id, config.id);
         assert_eq!(read.endpoints.into_vec(), vec![binding()]);
+        assert_eq!(read.outbound_tls, config.outbound_tls);
         assert_eq!(
             read.allowed_private_cidrs.len(),
             config.allowed_private_cidrs.len()
         );
         assert_eq!(read.audit, config.audit);
+    }
+
+    /// A trust profile is keyed by a local identifier: a key outside the
+    /// grammar refuses.
+    #[test]
+    fn a_trust_profile_map_refuses_a_key_that_is_not_a_local_id() {
+        let json = r#"{
+                "id": "case-deployment",
+                "endpoints": [],
+                "outboundTls": {
+                    "trustProfiles": {
+                        "Private CA": { "caBundleFile": "/etc/trust/ca.pem" }
+                    }
+                },
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "listener": { "bind": "127.0.0.1:8080" },
+                "database": {
+                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                    "migrationUrlRef": "secret:env/DB_MIGRATION"
+                },
+                "oidc": {
+                    "issuer": "https://issuer.example.invalid",
+                    "audience": "case-api"
+                },
+                "audit": { "retentionDays": 90 }
+            }"#;
+        assert!(serde_json::from_str::<AdapterRuntimeConfig>(json).is_err());
     }
 
     /// A malformed CIDR is refused at the reader.

@@ -585,7 +585,7 @@ mod tests {
             endpoint: ExternalId::new("case-api").expect("id"),
             base_url: Url::new(base_url).expect("url"),
             credential,
-            ca_bundle_ref: None,
+            tls_trust_profile: None,
             mtls_identity: None,
         }
     }

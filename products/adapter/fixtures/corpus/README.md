@@ -66,7 +66,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 83 members.
+finding per code. The corpus holds 85 members.
 
 ### Profile members
 
@@ -192,6 +192,8 @@ These members ship `runtime.yaml`; check them with `--runtime runtime.yaml`.
 | `adapter.runtime.missing-endpoint` | Runtime binds no endpoint; the pack declares `cases` | `adapter.runtime.missing-endpoint` | checks |
 | `adapter.runtime.unknown-endpoint` | Runtime binds endpoint `nope` | `adapter.runtime.unknown-endpoint` | checks |
 | `adapter.runtime.insecure-origin-token-endpoint` | Credential `tokenEndpoint` on plain HTTP off the loopback exception (the binding's own base URL stays https) | `adapter.runtime.insecure-origin` | checks |
+| `adapter.runtime.unknown-trust-profile` | Binding's `tlsTrustProfile` names a profile no `outboundTls` block declares | `adapter.runtime.unknown-trust-profile` | checks |
+| `adapter.runtime.invalid-outbound-tls` | Trust profile's `caBundleFile` is a relative path, not an absolute operator path | `adapter.runtime.invalid-outbound-tls` | checks |
 
 ### Fixture members
 

@@ -2,9 +2,10 @@
 
 //! The orthogonal outbound TLS of one endpoint binding
 //! (`products/adapter/CONCEPT.md` section 10.2): the trust profile's
-//! CA bundle and the mTLS client identity, resolved from the binding's
-//! secret references into zeroizing buffers, and rebuilt into platform
-//! destination material for each client the engine builds.
+//! CA bundle, read from the profile's process-local file, and the mTLS
+//! client identity, resolved from the binding's secret references into
+//! zeroizing buffers, and rebuilt into platform destination material for
+//! each client the engine builds.
 //!
 //! TLS is orthogonal to the credential kinds: any kind may send under a
 //! private root, under a client identity, or both, and the material is
@@ -12,19 +13,25 @@
 //! which is why [`EndpointTls::material`] builds fresh material per
 //! call instead of holding one platform value.
 
-use crate::auth::token::{resolve_binary, resolve_protected};
+use crate::auth::token::resolve_binary;
 use crate::auth::{AuthError, ProtectedText};
-use registry_adapter_core::EndpointBinding;
+use registry_adapter_core::{AdapterRuntimeConfig, EndpointBinding};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::destination::DestinationTlsMaterial;
 use std::fmt;
 
+/// The most bytes a CA bundle file may hold, the shared bound Evidence
+/// puts on its own private CA bundles.
+const CA_BUNDLE_MAXIMUM_BYTES: usize = 1024 * 1024;
+
 /// Why a binding's outbound TLS material could not be resolved or
-/// built. Every rendering is fixed text; none carries a reference name
-/// or file content.
+/// built. Every rendering is fixed text; none carries a reference name,
+/// a profile name, a path, or file content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsFault {
-    /// The CA bundle reference did not resolve to usable text.
+    /// The binding's trust profile named no profile the runtime config
+    /// declares, or the profile's CA bundle file could not be read within
+    /// the bundle bound.
     CaBundle,
     /// The client identity's certificate or key reference did not
     /// resolve.
@@ -67,19 +74,18 @@ impl EndpointTls {
         }
     }
 
-    /// Resolve a binding's TLS material from its secret references: the
-    /// CA bundle as text, the client identity as the certificate chain
-    /// followed by exactly one private key, concatenated into one
-    /// zeroizing buffer.
+    /// Resolve a binding's TLS material: the CA bundle of the trust
+    /// profile the binding names, read from that profile's process-local
+    /// file, and the client identity resolved from its secret references
+    /// as the certificate chain followed by exactly one private key,
+    /// concatenated into one zeroizing buffer.
     pub fn resolve(
         binding: &EndpointBinding,
+        runtime: &AdapterRuntimeConfig,
         resolver: &SecretResolver,
     ) -> Result<Self, AuthError> {
-        let ca = match &binding.ca_bundle_ref {
-            Some(reference) => Some(
-                resolve_protected(resolver, reference)
-                    .map_err(|_| AuthError::Tls(TlsFault::CaBundle))?,
-            ),
+        let ca = match &binding.tls_trust_profile {
+            Some(profile) => Some(resolve_ca_bundle(runtime, profile.as_str())?),
             None => None,
         };
         let identity = match &binding.mtls_identity {
@@ -121,11 +127,33 @@ impl EndpointTls {
     }
 }
 
+/// Read the CA bundle of one named trust profile. Every failure is the
+/// one [`TlsFault::CaBundle`]: an undeclared profile, an unreadable or
+/// oversized file all refuse value-free, without naming the profile, the
+/// path, or the file's content.
+fn resolve_ca_bundle(
+    runtime: &AdapterRuntimeConfig,
+    profile: &str,
+) -> Result<ProtectedText, AuthError> {
+    let refuse = || AuthError::Tls(TlsFault::CaBundle);
+    let path = runtime
+        .outbound_tls
+        .as_ref()
+        .and_then(|tls| tls.trust_profiles.get(profile))
+        .map(|declared| declared.ca_bundle_file.as_str())
+        .ok_or_else(refuse)?;
+    let bytes = std::fs::read(path).map_err(|_| refuse())?;
+    if bytes.len() > CA_BUNDLE_MAXIMUM_BYTES {
+        return Err(refuse());
+    }
+    Ok(ProtectedText::from_owned(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use registry_adapter_core::{MtlsIdentity, RuntimeCredential};
-    use registry_platform_yaml::{ExternalId, SecretReference, Url};
+    use registry_platform_yaml::{ExternalId, LocalId, SecretReference, Url};
 
     /// Throwaway self-signed fixtures generated for these tests only;
     /// no deployment has ever trusted them.
@@ -143,16 +171,62 @@ mod tests {
     }
 
     fn binding(
-        ca_bundle_ref: Option<SecretReference>,
+        tls_trust_profile: Option<LocalId>,
         mtls_identity: Option<MtlsIdentity>,
     ) -> EndpointBinding {
         EndpointBinding {
             endpoint: ExternalId::new("case-api").expect("id"),
             base_url: Url::new("https://cases.example.invalid").expect("url"),
             credential: Some(RuntimeCredential::None {}),
-            ca_bundle_ref,
+            tls_trust_profile,
             mtls_identity,
         }
+    }
+
+    /// A unique scratch path for one test's CA bundle file: the tests
+    /// write and remove their own files.
+    fn bundle_path(name: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("registry-adapter-tls-{name}-{unique}.pem"))
+    }
+
+    /// A runtime config declaring the one trust profile `private-ca` whose
+    /// bundle file is `ca_bundle_file`; `None` declares no profiles.
+    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterRuntimeConfig {
+        let trust_profiles = ca_bundle_file.map_or_else(
+            || r#"{ "trustProfiles": {} }"#.to_owned(),
+            |file| {
+                format!(
+                    r#"{{ "trustProfiles": {{ "private-ca": {{ "caBundleFile": "{file}" }} }} }}"#
+                )
+            },
+        );
+        serde_json::from_str(&format!(
+            r#"{{
+                "id": "case-deployment",
+                "endpoints": [],
+                "outboundTls": {trust_profiles},
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "listener": {{ "bind": "127.0.0.1:8080" }},
+                "database": {{
+                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                    "migrationUrlRef": "secret:env/DB_MIGRATION"
+                }},
+                "oidc": {{
+                    "issuer": "https://issuer.example.invalid",
+                    "audience": "case-api"
+                }},
+                "audit": {{ "retentionDays": 90 }}
+            }}"#
+        ))
+        .expect("runtime config")
+    }
+
+    fn private_ca() -> LocalId {
+        LocalId::new("private-ca").expect("id")
     }
 
     fn identity_refs(certificate: &str, key: &str) -> MtlsIdentity {
@@ -166,7 +240,7 @@ mod tests {
     /// material is demanded of the platform.
     #[test]
     fn an_unconfigured_binding_resolves_nothing() {
-        let tls = EndpointTls::resolve(&binding(None, None), &resolver())
+        let tls = EndpointTls::resolve(&binding(None, None), &runtime_config(None), &resolver())
             .expect("an unconfigured binding resolves");
         assert!(!tls.is_configured());
         assert!(tls.material().expect("no material").is_none());
@@ -176,14 +250,16 @@ mod tests {
             .is_none());
     }
 
-    /// A CA bundle resolves through the resolver and builds platform
-    /// material; the debug rendering never carries the PEM.
+    /// A declared trust profile's CA bundle file resolves and builds
+    /// platform material; the debug rendering never carries the PEM.
     #[test]
-    fn trust_material_resolves_through_the_resolver() {
-        std::env::set_var("ADAPTER_TEST_CA", ROOT_CERTIFICATE_PEM);
-        let tls =
-            EndpointTls::resolve(&binding(Some(secret("ADAPTER_TEST_CA")), None), &resolver())
-                .expect("the bundle resolves");
+    fn a_declared_trust_profile_resolves_its_bundle_file() {
+        let path = bundle_path("root");
+        std::fs::write(&path, ROOT_CERTIFICATE_PEM).expect("write bundle");
+        let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
+        let tls = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
+            .expect("the bundle resolves");
+        std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
         let material = tls.material().expect("valid bundle material");
         assert!(material.is_some(), "a bundle alone configures TLS");
@@ -192,23 +268,28 @@ mod tests {
     }
 
     /// The mTLS identity resolves as the certificate chain followed by
-    /// one private key, and builds platform material.
+    /// one private key, beside a trust profile's bundle, and builds
+    /// platform material.
     #[test]
     fn mtls_identities_resolve_and_build() {
-        std::env::set_var("ADAPTER_TEST_CA", ROOT_CERTIFICATE_PEM);
+        let path = bundle_path("mtls-root");
+        std::fs::write(&path, ROOT_CERTIFICATE_PEM).expect("write bundle");
+        let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
         std::env::set_var("ADAPTER_TEST_CLIENT_CERT", CLIENT_CERTIFICATE_PEM);
         std::env::set_var("ADAPTER_TEST_CLIENT_KEY", CLIENT_PRIVATE_KEY_PEM);
         let tls = EndpointTls::resolve(
             &binding(
-                Some(secret("ADAPTER_TEST_CA")),
+                Some(private_ca()),
                 Some(identity_refs(
                     "ADAPTER_TEST_CLIENT_CERT",
                     "ADAPTER_TEST_CLIENT_KEY",
                 )),
             ),
+            &runtime,
             &resolver(),
         )
         .expect("the identity resolves");
+        std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
         assert!(tls.material().expect("valid identity material").is_some());
     }
@@ -217,12 +298,12 @@ mod tests {
     /// is not PEM, an identity whose certificate is not PEM.
     #[test]
     fn garbage_material_refuses() {
-        std::env::set_var("ADAPTER_TEST_BAD_CA", "not a pem bundle");
-        let tls = EndpointTls::resolve(
-            &binding(Some(secret("ADAPTER_TEST_BAD_CA")), None),
-            &resolver(),
-        )
-        .expect("any text resolves");
+        let path = bundle_path("garbage");
+        std::fs::write(&path, "not a pem bundle").expect("write bundle");
+        let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
+        let tls = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
+            .expect("any file content resolves");
+        std::fs::remove_file(&path).expect("remove bundle");
         assert_eq!(
             tls.material().unwrap_err(),
             AuthError::Tls(TlsFault::Material),
@@ -239,6 +320,7 @@ mod tests {
                     "ADAPTER_TEST_CLIENT_KEY",
                 )),
             ),
+            &runtime_config(None),
             &resolver(),
         )
         .expect("any bytes resolve");
@@ -249,20 +331,34 @@ mod tests {
         );
     }
 
-    /// Unavailable and oversized references refuse value-free: the
-    /// rendering names neither the variable nor the content.
+    /// Undeclared profiles and unreadable or oversized bundle files
+    /// refuse value-free: the rendering names neither the profile, the
+    /// path, nor the content.
     #[test]
-    fn unusable_references_refuse_value_free() {
+    fn unusable_profiles_refuse_value_free() {
         let fault = EndpointTls::resolve(
-            &binding(Some(secret("ADAPTER_TEST_NEVER_SET")), None),
+            &binding(Some(private_ca()), None),
+            &runtime_config(None),
             &resolver(),
         )
         .unwrap_err();
         assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
-        assert!(
-            !fault.to_string().contains("ADAPTER_TEST_NEVER_SET"),
-            "{fault}"
-        );
+        assert!(!fault.to_string().contains("private-ca"), "{fault}");
+
+        let missing = bundle_path("missing");
+        let runtime = runtime_config(Some(missing.to_str().expect("utf-8 path")));
+        let fault = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
+            .unwrap_err();
+        assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
+        assert!(!fault.to_string().contains("missing"), "{fault}");
+
+        let oversized = bundle_path("oversized");
+        std::fs::write(&oversized, vec![b'p'; CA_BUNDLE_MAXIMUM_BYTES + 1]).expect("write bundle");
+        let runtime = runtime_config(Some(oversized.to_str().expect("utf-8 path")));
+        let fault = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
+            .unwrap_err();
+        std::fs::remove_file(&oversized).expect("remove bundle");
+        assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
 
         let fault = EndpointTls::resolve(
             &binding(
@@ -272,17 +368,10 @@ mod tests {
                     "ADAPTER_TEST_NEVER_SET",
                 )),
             ),
+            &runtime_config(None),
             &resolver(),
         )
         .unwrap_err();
         assert_eq!(fault, AuthError::Tls(TlsFault::ClientIdentity));
-
-        std::env::set_var("ADAPTER_TEST_HUGE_CA", "p".repeat(65 * 1024));
-        let fault = EndpointTls::resolve(
-            &binding(Some(secret("ADAPTER_TEST_HUGE_CA")), None),
-            &resolver(),
-        )
-        .unwrap_err();
-        assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
     }
 }

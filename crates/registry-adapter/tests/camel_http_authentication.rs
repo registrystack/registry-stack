@@ -63,7 +63,7 @@ fn binding(base_url: &str, credential: Option<RuntimeCredential>) -> EndpointBin
         endpoint: ExternalId::new("case-api").expect("id"),
         base_url: Url::new(base_url).expect("url"),
         credential,
-        ca_bundle_ref: None,
+        tls_trust_profile: None,
         mtls_identity: None,
     }
 }
@@ -654,31 +654,83 @@ mod oauth2_private_key_jwt {
     }
 }
 
-/// The orthogonal outbound TLS resolves through the resolver into
-/// platform material, or refuses value-free.
+/// The orthogonal outbound TLS resolves the trust profile's bundle file
+/// into platform material, or refuses value-free.
 mod outbound_tls {
     use super::*;
     use registry_adapter::auth::{EndpointTls, TlsFault};
+    use registry_adapter_core::AdapterRuntimeConfig;
+    use registry_platform_yaml::LocalId;
 
     /// Throwaway self-signed fixtures generated for these tests only; no
     /// deployment has ever trusted them.
     const ROOT_CERTIFICATE_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBnzCCAUWgAwIBAgIUGSkZVSD93tTafMYk9zXkW+9N+VcwCgYIKoZIzj0EAwIw\nJTEjMCEGA1UEAwwaUmVnaXN0cnkgQWRhcHRlciBUZXN0IFJvb3QwHhcNMjYxMDMw\nMDQ1NDIwWhcNMzYxMDI3MDQ1NDIwWjAlMSMwIQYDVQQDDBpSZWdpc3RyeSBBZGFw\ndGVyIFRlc3QgUm9vdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIDV7zIjqChx\n97aw2DaQUGi02tuThFuNl5IKP4RFr+5lxRclqsvlNfhU0Y4JnNLDuxdToqXgVKz6\nDnA2hpkMqZyjUzBRMB0GA1UdDgQWBBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAfBgNV\nHSMEGDAWgBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAPBgNVHRMBAf8EBTADAQH/MAoG\nCCqGSM49BAMCA0gAMEUCIQDE6ceiEQLBfR3wcAbPoXkClwMWZCs+QRHpi9asKR6w\nGwIgG/WsmuvsVVNeDynYVj92+B5SNtyVRK2+p3eo97VtmF0=\n-----END CERTIFICATE-----\n";
 
-    /// A binding without TLS references resolves nothing; a bundle
-    /// resolves and builds platform material whose rendering carries no
-    /// PEM; unusable references refuse value-free.
+    /// A unique scratch path for one test's CA bundle file; the test
+    /// writes and removes its own file.
+    fn bundle_path(name: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("registry-adapter-it-tls-{name}-{unique}.pem"))
+    }
+
+    /// A runtime config declaring the one trust profile `private-ca` whose
+    /// bundle file is `ca_bundle_file`; `None` declares no profiles.
+    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterRuntimeConfig {
+        let trust_profiles = ca_bundle_file.map_or_else(
+            || r#"{ "trustProfiles": {} }"#.to_owned(),
+            |file| {
+                format!(
+                    r#"{{ "trustProfiles": {{ "private-ca": {{ "caBundleFile": "{file}" }} }} }}"#
+                )
+            },
+        );
+        serde_json::from_str(&format!(
+            r#"{{
+                "id": "case-deployment",
+                "endpoints": [],
+                "outboundTls": {trust_profiles},
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "listener": {{ "bind": "127.0.0.1:8080" }},
+                "database": {{
+                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                    "migrationUrlRef": "secret:env/DB_MIGRATION"
+                }},
+                "oidc": {{
+                    "issuer": "https://issuer.example.invalid",
+                    "audience": "case-api"
+                }},
+                "audit": {{ "retentionDays": 90 }}
+            }}"#
+        ))
+        .expect("runtime config")
+    }
+
+    /// A binding without a trust profile resolves nothing; a declared
+    /// profile's bundle file resolves and builds platform material whose
+    /// rendering carries no PEM; an undeclared profile refuses
+    /// value-free.
     #[test]
     fn trust_material_resolves_or_refuses_value_free() {
-        let plain =
-            EndpointTls::resolve(&binding("https://cases.example.invalid", None), &resolver())
-                .expect("an unconfigured binding resolves");
+        let plain = EndpointTls::resolve(
+            &binding("https://cases.example.invalid", None),
+            &runtime_config(None),
+            &resolver(),
+        )
+        .expect("an unconfigured binding resolves");
         assert!(!plain.is_configured());
         assert!(plain.material().expect("no material is demanded").is_none());
 
-        std::env::set_var("ADAPTER_IT_ROOT_CA", ROOT_CERTIFICATE_PEM);
+        let path = bundle_path("root");
+        std::fs::write(&path, ROOT_CERTIFICATE_PEM).expect("write bundle");
+        let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
         let mut tls_binding = binding("https://cases.example.invalid", None);
-        tls_binding.ca_bundle_ref = Some(secret("ADAPTER_IT_ROOT_CA"));
-        let tls = EndpointTls::resolve(&tls_binding, &resolver()).expect("the bundle resolves");
+        tls_binding.tls_trust_profile = Some(LocalId::new("private-ca").expect("local id"));
+        let tls =
+            EndpointTls::resolve(&tls_binding, &runtime, &resolver()).expect("the bundle resolves");
+        std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
         assert!(tls.material().expect("valid bundle material").is_some());
         assert!(
@@ -686,14 +738,10 @@ mod outbound_tls {
             "the rendering never carries the PEM"
         );
 
-        let mut bad_binding = binding("https://cases.example.invalid", None);
-        bad_binding.ca_bundle_ref = Some(secret("ADAPTER_IT_TLS_NEVER_SET"));
-        let fault = EndpointTls::resolve(&bad_binding, &resolver()).unwrap_err();
+        let fault =
+            EndpointTls::resolve(&tls_binding, &runtime_config(None), &resolver()).unwrap_err();
         assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
-        assert!(
-            !fault.to_string().contains("ADAPTER_IT_TLS_NEVER_SET"),
-            "{fault}"
-        );
+        assert!(!fault.to_string().contains("private-ca"), "{fault}");
     }
 }
 

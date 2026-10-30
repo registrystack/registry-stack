@@ -3286,6 +3286,20 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
                 "Serve the origin over TLS.",
             ));
         }
+        if let Some(profile) = &binding.tls_trust_profile {
+            if !runtime
+                .outbound_tls
+                .as_ref()
+                .is_some_and(|tls| tls.trust_profiles.contains_key(profile.as_str()))
+            {
+                findings.push(finding(
+                    CheckCode::RuntimeUnknownTrustProfile,
+                    &format!("{prefix}/tlsTrustProfile"),
+                    "the binding names no trust profile the runtime config declares",
+                    "Name a profile declared under outboundTls.trustProfiles, or remove the member to trust the system roots.",
+                ));
+            }
+        }
     }
     for endpoint in pack.endpoints.iter() {
         if runtime.endpoints.get(endpoint.id.as_str()).is_none() {
@@ -3305,7 +3319,53 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             "Reduce the allowlist to the platform bound.",
         ));
     }
+    check_outbound_tls(runtime, &mut findings);
     findings
+}
+
+/// The outbound TLS block answers the same rules Evidence puts on its
+/// own (`registry-evidence` `OutboundTlsConfig`): at most the shared
+/// bound of named profiles, and each profile's `caBundleFile` an
+/// absolute operator path the runtime may read.
+fn check_outbound_tls(runtime: &AdapterRuntimeConfig, findings: &mut Vec<Diagnostic>) {
+    let Some(tls) = &runtime.outbound_tls else {
+        return;
+    };
+    if tls.trust_profiles.len() > crate::naming::MAX_TLS_TRUST_PROFILES {
+        findings.push(finding(
+            CheckCode::RuntimeInvalidOutboundTls,
+            "/outboundTls/trustProfiles",
+            "the trust profiles carry more entries than the bound",
+            "Bind at most 64 trust profiles.",
+        ));
+    }
+    for (name, profile) in &tls.trust_profiles {
+        if !is_absolute_operator_path(&profile.ca_bundle_file) {
+            findings.push(finding(
+                CheckCode::RuntimeInvalidOutboundTls,
+                &format!("/outboundTls/trustProfiles/{name}/caBundleFile"),
+                "the trust profile's CA bundle is not an absolute operator path",
+                "Write an absolute path of at most 512 bytes, without . or .. segments.",
+            ));
+        }
+    }
+}
+
+/// Whether the text is an absolute operator path the runtime may read:
+/// `/`-rooted, at most 512 bytes, with no backslash and no `.` or `..`
+/// segment.
+fn is_absolute_operator_path(path: &str) -> bool {
+    if path.len() > 512 || !path.starts_with('/') || path.starts_with("//") || path.contains('\\') {
+        return false;
+    }
+    let path = std::path::Path::new(path);
+    path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
 }
 
 fn check_credential_pair(
@@ -3586,7 +3646,9 @@ mod tests {
         TemplateParameterType, TemplatedRoute, ThrottleStep, ThrowExceptionStep, ToParameters,
         ToStep, ValidateStep, When,
     };
-    use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
+    use crate::runtime::{
+        AdapterRuntimeConfig, AuditRetention, EndpointBinding, OutboundTls, TrustProfile,
+    };
     use registry_platform_yaml::Url;
     use registry_platform_yaml::{
         BoundedU32, BoundedU64, Digest, LocalId, SecretReference, UniqueIdList, UniqueList,
@@ -7168,6 +7230,7 @@ mod tests {
         AdapterRuntimeConfig {
             id: local("case-deployment"),
             endpoints: UniqueIdList::new(endpoints).expect("unique"),
+            outbound_tls: None,
             allowed_private_cidrs: UniqueList::new(Vec::new()).expect("empty"),
             listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
             database: serde_json::from_str(
@@ -7203,7 +7266,7 @@ mod tests {
                 maximum_cache_seconds: BoundedU64::<0, 86_400>::new(3600).expect("cache"),
                 assumed_lifetime_seconds: None,
             }),
-            ca_bundle_ref: None,
+            tls_trust_profile: None,
             mtls_identity: None,
         }
     }
@@ -7252,7 +7315,7 @@ mod tests {
             endpoint: id("case-api"),
             base_url: Url::new("https://cases.example.invalid").expect("url"),
             credential: Some(RuntimeCredential::None {}),
-            ca_bundle_ref: None,
+            tls_trust_profile: None,
             mtls_identity: None,
         };
         let runtime = runtime_builder(vec![public]);
@@ -7266,7 +7329,7 @@ mod tests {
             endpoint: id("case-api"),
             base_url: Url::new("https://cases.example.invalid").expect("url"),
             credential: Some(RuntimeCredential::None {}),
-            ca_bundle_ref: None,
+            tls_trust_profile: None,
             mtls_identity: Some(MtlsIdentity {
                 certificate_ref: SecretReference::new("secret:env/CERT").expect("secret"),
                 key_ref: SecretReference::new("secret:env/KEY").expect("secret"),
@@ -7297,6 +7360,124 @@ mod tests {
         ws.runtime = Some(&loopback);
         assert!(!codes(&check_runtime(&ws, &loopback))
             .contains(&CheckCode::RuntimeInsecureOrigin.code()));
+    }
+
+    /// A binding naming a trust profile the runtime config does not declare
+    /// is refused at the binding's `tlsTrustProfile` member.
+    #[test]
+    fn runtime_refuses_a_binding_whose_trust_profile_is_not_declared() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let mut binding = oauth_binding("https://cases.example.invalid");
+        binding.tls_trust_profile = Some(local("private-ca"));
+        let runtime = runtime_builder(vec![binding]);
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&runtime);
+        let findings = check_runtime(&ws, &runtime);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RuntimeUnknownTrustProfile.code()
+        );
+        assert_eq!(findings[0].path, "/endpoints/0/tlsTrustProfile");
+    }
+
+    /// A trust profile's `caBundleFile` is an absolute operator path: a
+    /// relative path and a path with a `..` segment are both refused.
+    #[test]
+    fn runtime_refuses_an_outbound_tls_bundle_path_that_is_not_absolute() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let runtime = runtime_builder(vec![oauth_binding("https://cases.example.invalid")]);
+        let mut runtime = runtime;
+        runtime.outbound_tls = Some(OutboundTls {
+            trust_profiles: BTreeMap::from([
+                (
+                    "private-ca".to_owned(),
+                    TrustProfile {
+                        ca_bundle_file: "private-ca.pem".to_owned(),
+                    },
+                ),
+                (
+                    "escape".to_owned(),
+                    TrustProfile {
+                        ca_bundle_file: "/etc/trust/../secrets/ca.pem".to_owned(),
+                    },
+                ),
+            ]),
+        });
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&runtime);
+        let findings = check_runtime(&ws, &runtime);
+        assert_eq!(findings.len(), 2);
+        assert!(findings
+            .iter()
+            .all(|finding| { finding.code == CheckCode::RuntimeInvalidOutboundTls.code() }));
+        assert_eq!(
+            findings[0].path,
+            "/outboundTls/trustProfiles/escape/caBundleFile"
+        );
+        assert_eq!(
+            findings[1].path,
+            "/outboundTls/trustProfiles/private-ca/caBundleFile"
+        );
+    }
+
+    /// The trust-profile mapping carries the shared bound of 64 named
+    /// profiles (CFG-BOUND-2); more are refused with one finding.
+    #[test]
+    fn runtime_refuses_more_trust_profiles_than_the_bound() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let profiles: BTreeMap<String, TrustProfile> = (0..65)
+            .map(|index| {
+                (
+                    format!("profile-{index}"),
+                    TrustProfile {
+                        ca_bundle_file: format!("/etc/registry-adapter/trust/ca-{index}.pem"),
+                    },
+                )
+            })
+            .collect();
+        let mut runtime = runtime_builder(vec![oauth_binding("https://cases.example.invalid")]);
+        runtime.outbound_tls = Some(OutboundTls {
+            trust_profiles: profiles,
+        });
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&runtime);
+        let findings = check_runtime(&ws, &runtime);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RuntimeInvalidOutboundTls.code()
+        );
+        assert_eq!(findings[0].path, "/outboundTls/trustProfiles");
+    }
+
+    /// A binding naming a declared trust profile with an absolute bundle
+    /// path passes the runtime checks.
+    #[test]
+    fn runtime_accepts_a_declared_trust_profile() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let mut binding = oauth_binding("https://cases.example.invalid");
+        binding.tls_trust_profile = Some(local("private-ca"));
+        let mut runtime = runtime_builder(vec![binding]);
+        runtime.outbound_tls = Some(OutboundTls {
+            trust_profiles: BTreeMap::from([(
+                "private-ca".to_owned(),
+                TrustProfile {
+                    ca_bundle_file: "/etc/registry-adapter/trust/private-ca.pem".to_owned(),
+                },
+            )]),
+        });
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&runtime);
+        assert_clean(check_runtime(&ws, &runtime));
     }
 
     /// A token endpoint answers to the same origin rule as a binding's

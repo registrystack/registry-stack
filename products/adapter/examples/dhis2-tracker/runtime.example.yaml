@@ -14,11 +14,17 @@ id: dhis2-tracker-example
 endpoints:
   - endpoint: tracker
     baseUrl: https://tracker.example.invalid
-    caBundleRef: secret:file/dhis2-private-ca.pem
+    tlsTrustProfile: dhis2-private-ca
     credential:
       type: basic
       usernameRef: secret:env/DHIS2_USERNAME
       passwordRef: secret:env/DHIS2_PASSWORD
+outboundTls:
+  trustProfiles:
+    dhis2-private-ca:
+      # The absolute path of the bundle file on the deployment's own host;
+      # a CA bundle is not a secret, so the profile names a file.
+      caBundleFile: /etc/registry-adapter/trust/dhis2-private-ca.pem
 listener:
   bind: 127.0.0.1:8080
 database:

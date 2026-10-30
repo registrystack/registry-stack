@@ -73,10 +73,6 @@
           "$ref": "#/$defs/Url",
           "description": "The upstream origin; a fixed destination the engine never derives\nfrom a response."
         },
-        "caBundleRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "A private root-certificate bundle the upstream's TLS chain is\nvalidated against."
-        },
         "credential": {
           "$ref": "#/$defs/RuntimeCredential",
           "description": "The credential; its kind must match the endpoint's declared kind."
@@ -88,6 +84,10 @@
         "mtlsIdentity": {
           "$ref": "#/$defs/MtlsIdentity",
           "description": "The mTLS client identity, combinable with any authentication kind."
+        },
+        "tlsTrustProfile": {
+          "$ref": "#/$defs/LocalId",
+          "description": "A trust profile under `outboundTls.trustProfiles` whose CA bundle\nthe endpoint trusts beside the system roots; absent, the endpoint\ntrusts the system roots alone."
         }
       },
       "required": [
@@ -232,6 +232,24 @@
         "issuer",
         "audience"
       ],
+      "type": "object"
+    },
+    "OutboundTls": {
+      "additionalProperties": false,
+      "description": "The private certificate authorities endpoints may trust beside the\nsystem roots (`products/adapter/CONCEPT.md` section 10.2), in the shape\nEvidence ships: a named profile is a process-local PEM file. A CA\nbundle is not a secret, so the profile names a file, never a secret\nreference.",
+      "properties": {
+        "trustProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TrustProfile"
+          },
+          "default": {},
+          "description": "The named private CA bundles.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
       "type": "object"
     },
     "RuntimeCredential": {
@@ -436,6 +454,20 @@
       "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
       "type": "string"
     },
+    "TrustProfile": {
+      "additionalProperties": false,
+      "description": "One named private CA bundle: the absolute path of the process-local PEM\nfile the runtime reads.",
+      "properties": {
+        "caBundleFile": {
+          "description": "The absolute path of the PEM file holding the bundle's certificates.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "caBundleFile"
+      ],
+      "type": "object"
+    },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
       "format": "uri",
@@ -492,6 +524,10 @@
     "oidc": {
       "$ref": "#/$defs/OidcIssuerConfig",
       "description": "The OIDC issuer that authenticates facade callers, from the\nplatform shared block (`products/adapter/CONCEPT.md` section 6)."
+    },
+    "outboundTls": {
+      "$ref": "#/$defs/OutboundTls",
+      "description": "The private CAs endpoints may trust beside the system roots;\nabsent, every endpoint trusts the system roots alone."
     }
   },
   "required": [

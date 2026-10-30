@@ -354,7 +354,8 @@ fn read_runtime(
     let loader = RuntimeConfigLoader::new(RuntimeEnvelope {
         api_version: ADAPTER_RUNTIME_API_VERSION,
         kind: ADAPTER_RUNTIME_KIND,
-    });
+    })
+    .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS);
     let check = loader.check_offline::<registry_adapter_core::AdapterRuntimeConfig>(
         &absolute,
         substitute,

@@ -66,6 +66,10 @@ pub const ADAPTER_PROBLEM_TYPE_BASE: &str =
 /// config that passes this check cannot be refused later by the platform.
 pub const MAX_ALLOWED_PRIVATE_CIDRS: usize = 16;
 
+/// The most named TLS trust profiles one runtime config may declare, the
+/// shared bound Evidence and Messaging put on the same mapping.
+pub const MAX_TLS_TRUST_PROFILES: usize = 64;
+
 /// The longest `upstream.<id>.baseUrl` text accepted. It bounds the URL the
 /// engine templates and journals; a longer origin does not exist in practice.
 pub const MAX_BASE_URL_CHARACTERS: usize = 2048;
