@@ -322,7 +322,12 @@ def write_environment(
     root = _require_root(root)
     report = _read_json_object(dev_report)
     project = (root / "project").resolve()
-    if Path(report.get("project", "")).resolve() != project or report.get("status") != "ready":
+    if (
+        Path(report.get("project", "")).resolve() != project
+        or report.get("ok") is not True
+        or report.get("status") != "complete"
+        or report.get("outcome") != "ready"
+    ):
         raise LoadtestError("evidencectl dev did not report the expected ready project")
     origin = urlparse(str(report.get("evidenceOrigin", "")))
     if origin.scheme != "http" or origin.hostname != "127.0.0.1" or origin.port is None:
@@ -429,7 +434,12 @@ def fresh_header(evidencectl: Path, project: Path, client: str) -> Path:
     report = json.loads(result.stdout)
     expected = project.resolve() / f".evidence/dev/generated/keys/{client}.header"
     reported = Path(report.get("headerFile", "")).resolve()
-    if report.get("status") != "ready" or reported != expected:
+    if (
+        report.get("ok") is not True
+        or report.get("status") != "complete"
+        or report.get("outcome") != "ready"
+        or reported != expected
+    ):
         raise LoadtestError("evidencectl dev token reported a header outside the owned session")
     _owner_only_regular(reported, "authorization header")
     value = reported.read_text(encoding="ascii")

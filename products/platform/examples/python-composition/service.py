@@ -80,12 +80,12 @@ def proposal_subject(verified):
         PROPOSAL_PAYLOAD.validate(data)
         if (
             not isinstance(envelope["subject"], dict)
-            or type(envelope["subject"].get("recordRevision")) is not int
+            or type(envelope["subject"].get("proposalRevision")) is not int
             or envelope["type"] != "proposal." + data["transition"]
             or envelope["subject"]
             != {
-                "recordReference": "/v1/proposals/" + data["proposalId"],
-                "recordRevision": data["revision"],
+                "proposalReference": "/v1/proposals/" + data["proposalId"],
+                "proposalRevision": data["revision"],
             }
         ):
             raise ValueError("subject differs")
@@ -148,13 +148,13 @@ class Inbox:
     ):
         from registry_client.breg import (
             BaseRegistryClientError,
-            verify_webhook_delivery,
+            verify_hook_delivery,
         )
 
         if not body or len(body) > MAXIMUM_BODY:
             raise WakeRefused("hook body was refused")
         try:
-            verified = verify_webhook_delivery(
+            verified = verify_hook_delivery(
                 method=method, path=path, headers=headers, body=body, key=key
             )
             delivered = datetime.fromisoformat(verified["delivery_time"])
@@ -343,15 +343,19 @@ class Composition:
         self.registry = breg.BaseRegistryClient(
             config["bregUrl"],
             authorization=self.tokens["breg"].breg_authorization(),
-            max_mutation_retries=0,
+            maximum_mutation_retries=0,
         )
         self.reviews = (
-            casework.CaseworkClient(config["caseworkUrl"], max_mutation_retries=0)
+            casework.CaseworkClient(
+                config["caseworkUrl"], maximum_mutation_retries=0
+            )
             if "caseworkUrl" in config
             else None
         )
         self.messages = (
-            messaging.MessagingClient(config["messagingUrl"], max_mutation_retries=0)
+            messaging.MessagingClient(
+                config["messagingUrl"], maximum_mutation_retries=0
+            )
             if "messagingUrl" in config
             else None
         )
@@ -637,13 +641,7 @@ def receiver(inbox, *, key, source, event_type, schema):
                 length = int(self.headers["Content-Length"])
                 if not 0 < length <= MAXIMUM_BODY:
                     raise WakeRefused("hook body exceeds its bound")
-                headers = {}
-                seen = set()
-                for name, value in self.headers.items():
-                    if name.lower() in seen:
-                        raise WakeRefused("a hook header is repeated")
-                    headers[name] = value
-                    seen.add(name.lower())
+                headers = list(self.headers.items())
                 inbox.accept(
                     "POST",
                     self.path,

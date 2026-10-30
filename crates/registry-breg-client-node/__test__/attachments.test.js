@@ -27,7 +27,7 @@ async function harness(mutateReceipt) {
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const client=new BaseRegistryClient({baseUrl:`http://127.0.0.1:${server.address().port}`});
- const metadata=await client.registryContract('writer');const proposal=await client.startProposal(metadata.selectAction('correct','writer'),'{}','start');
+ const metadata=await client.registryContract('writer');const proposal=await client.startProposal(metadata.selectAction('correct','writer'),{},'start');
  return {client,proposal,requests,close:()=>new Promise(resolve=>server.close(resolve))};
 }
 test('Proposal attachments expose served policy without Record slot constructors',async()=>{

@@ -313,6 +313,12 @@ fn valid_import_uuid(value: &str) -> bool {
         && Uuid::parse_str(value).is_ok_and(|identifier| identifier.get_version_num() == 4)
 }
 
+fn valid_revision_identifier(value: &str) -> bool {
+    value.parse::<u64>().is_ok_and(|revision| {
+        revision > 0 && revision <= i64::MAX as u64 && revision.to_string() == value
+    })
+}
+
 fn valid_strong_etag(value: &str) -> bool {
     value.len() > 7
         && value.len() <= MAX_BINDING_BYTES
@@ -645,10 +651,13 @@ fn validate_item(
             validate_create_data(entity, profile_id, data)?;
         }
         DataImportOperation::Patch => {
-            require_exact_keys(object, &["operation", "recordId", "ifMatch", "patch"])?;
+            require_exact_keys(
+                object,
+                &["operation", "recordIdentifier", "ifMatch", "patch"],
+            )?;
             if object.get("operation").and_then(Value::as_str) != Some("patch")
                 || !object
-                    .get("recordId")
+                    .get("recordIdentifier")
                     .and_then(Value::as_str)
                     .is_some_and(valid_uuid)
                 || !object
@@ -2069,23 +2078,35 @@ fn validate_import_response(
     }
     for (result, submitted) in results.iter().zip(&submitted) {
         let result = result.as_object().ok_or(DataError::InvalidResponse)?;
-        require_exact_keys(result, &["operation", "id", "revision", "etag", "data"])
-            .map_err(|_| DataError::InvalidResponse)?;
+        require_exact_keys(
+            result,
+            &[
+                "operation",
+                "recordIdentifier",
+                "revisionIdentifier",
+                "etag",
+                "domainData",
+            ],
+        )
+        .map_err(|_| DataError::InvalidResponse)?;
         let expected_operation = submitted["operation"]
             .as_str()
             .ok_or(DataError::InvalidResponse)?;
         if result["operation"].as_str() != Some(expected_operation)
-            || !result["id"].as_str().is_some_and(valid_uuid)
-            || result["revision"].as_u64().is_none_or(|value| value == 0)
+            || !result["recordIdentifier"].as_str().is_some_and(valid_uuid)
+            || !result["revisionIdentifier"]
+                .as_str()
+                .is_some_and(valid_revision_identifier)
             || !result["etag"].as_str().is_some_and(valid_strong_etag)
         {
             return Err(DataError::InvalidResponse);
         }
-        if expected_operation == "patch" && result["id"].as_str() != submitted["recordId"].as_str()
+        if expected_operation == "patch"
+            && result["recordIdentifier"].as_str() != submitted["recordIdentifier"].as_str()
         {
             return Err(DataError::InvalidResponse);
         }
-        let data = result["data"]
+        let data = result["domainData"]
             .as_object()
             .ok_or(DataError::InvalidResponse)?;
         if !valid_response_data(data, &plan.response_fields) {
@@ -2118,13 +2139,13 @@ fn validate_export_response(
         &[
             "registryIdentifier",
             "datasetIdentifier",
-            "entityTypeIdentifier",
+            "recordTypeIdentifier",
         ],
     )
     .map_err(|_| DataError::InvalidResponse)?;
     if meta["registryIdentifier"].as_str() != Some(plan.registry_id.as_str())
         || meta["datasetIdentifier"].as_str() != Some(plan.dataset_id.as_str())
-        || meta["entityTypeIdentifier"].as_str() != Some(plan.entity_id.as_str())
+        || meta["recordTypeIdentifier"].as_str() != Some(plan.entity_id.as_str())
     {
         return Err(DataError::InvalidResponse);
     }
@@ -2168,11 +2189,9 @@ fn validate_export_response(
         let revision_identifier = item["revisionIdentifier"]
             .as_str()
             .ok_or(DataError::InvalidResponse)?;
-        let revision = revision_identifier
-            .parse::<u64>()
-            .ok()
-            .filter(|value| *value > 0 && value.to_string() == revision_identifier)
-            .ok_or(DataError::InvalidResponse)?;
+        if !valid_revision_identifier(revision_identifier) {
+            return Err(DataError::InvalidResponse);
+        }
         let data = item["domainData"]
             .as_object()
             .ok_or(DataError::InvalidResponse)?;
@@ -2180,9 +2199,9 @@ fn validate_export_response(
             return Err(DataError::InvalidResponse);
         }
         records.push(json!({
-            "id": record_identifier,
-            "revision": revision,
-            "data": data,
+            "recordIdentifier": record_identifier,
+            "revisionIdentifier": revision_identifier,
+            "domainData": data,
         }));
     }
     Ok((records, next_cursor))

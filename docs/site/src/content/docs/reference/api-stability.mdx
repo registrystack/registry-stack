@@ -13,30 +13,24 @@ standards_referenced: []
 
 Use this page to decide which Registry Stack surfaces you can build on across releases. It names
 the promised products and surfaces, the experimental ones, the rules a change to a covered surface
-follows, and how state moves from one release to the next. The promise takes effect at each
-release unit's `1.0.0`.
+follows, and how state moves from one release to the next. The promise takes effect at Registry
+Stack `1.0.0`, when all five promised products reach 1.0 together.
 
 ## Versioning
 
-Registry Discovery and discoveryctl share one product version and the tag
-`discovery/vMAJOR.MINOR.PATCH`. They can ship independently of the recommended Stack distribution,
-whose tag remains `vMAJOR.MINOR.PATCH`. A distribution records the exact Discovery release,
-source, checksums, and image digest it selects. It does not change that product's version or
-provenance. Other products still ship through the Stack release train during this pilot.
+Registry Stack 1.0 is one release with one Stack version and the tag `vMAJOR.MINOR.PATCH`.
+Base Registry Engine, Registry Evidence, Registry Casework, Registry Discovery and Registry
+Manifest reach 1.0 together. Discovery remains on the Stack release train through 1.0;
+independent product releases are deferred until after that cut.
 
-Independently released products follow SemVer for their covered public surfaces from their own
-`1.0.0`: patches fix behavior, minors add compatible surface, and breaking changes require a
-major version. Deprecation does not permit a breaking minor release. A product reaching 1.0 does
-not graduate the other products or the unified SDK.
+Across Stack 1.x, patches do not break covered surface. A minor may remove HTTP or configuration
+surface deprecated in an earlier minor; removing deprecated SDK methods requires a major.
+Before 1.0, breaking changes require a minor release, a `BREAKING:` note and concrete migration
+steps. Patches remain compatible.
 
-Products still on the Stack release train retain the existing 1.x policy: patches do not break
-covered surface; a minor may remove HTTP or configuration surface deprecated in an earlier minor;
-removing deprecated SDK methods requires a major. Before a product's 1.0, breaking changes require
-a minor release, a `BREAKING:` note, and concrete migration steps. Patches remain compatible.
-
-The Node and Python SDKs remain one release unit, with one package version. Compatibility is
-specified per product namespace. A breaking change to any promised SDK namespace requires a
-major version of the whole package, even if other namespaces are unchanged.
+The Node and Python SDKs have one package version each. Compatibility is specified per product
+namespace. A breaking change to any promised SDK namespace requires a major version of the whole
+package, even if other namespaces are unchanged.
 
 {/* Evidence: release/units.yaml; release/scripts/release_distribution.py;
     crates/registry-discovery/Cargo.toml; crates/registry-discoveryctl/Cargo.toml. */}
@@ -79,12 +73,16 @@ the `casework` namespace. See the [client API reference](../client-api/).
 
 ## Experimental surfaces
 
-These surfaces ship in releases but stay outside the promise. Those with a `v1alpha1` version
-string keep it, and each may change or be removed in any minor release without deprecation:
+These surfaces stay outside the promise, including those whose release packaging is still held.
+Those with a `v1alpha1` version string keep it, and each may change or be removed in any minor
+release without deprecation:
 
 - Registry Scheduling, and the `scheduling` namespace of the client packages
 - Registry Messaging, and the `messaging` namespace the client packages carry from `v0.38.0`
-- Registry Render
+- Registry Render, and the `render` SDK namespace. Render client packages are held out of releases
+- Registry Coordinator, and the `coordinator` namespace of the client packages. Its binaries and
+  installer enter the Stack release roster from `v0.44.0`; its container image is not published yet
+- the shared `record` and `auth` SDK namespaces
 - `breg-mcp` and `breg-review`, the citizen services beside Base Registry Engine
 - `evidence-oid4vci`, the wallet-facing delivery service beside Registry Evidence, including its
   configuration, routes, and command-line flags
@@ -94,6 +92,8 @@ string keep it, and each may change or be removed in any minor release without d
 - calling Evidence from a Base Registry Engine governed action handler: the action's `evidence`
   declaration, and `evidence::resolve` inside the handler
 - the `scheduling` variant of a Casework task grant's bounds
+
+Registry Document Store is held out of the 1.0 release.
 
 Before `v1.0.0`, one breaking release moves the promised products' version strings from
 `v1alpha1` to stable versions, so a `v1alpha1` version string that a 1.x release reads or writes
@@ -107,7 +107,10 @@ experimental surface.
     products/breg/IMPLEMENTATION.md;
     products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL;
     products/discovery/README.md, the published registry-discovery-v1alpha1 profile resources;
-    crates/registry-discovery-profile/src/lib.rs, PROFILE_ID. */}
+    crates/registry-discovery-profile/src/lib.rs, PROFILE_ID;
+    release/scripts/release_roster.py, COORDINATOR_BINARY_FIRST_RELEASE,
+    COORDINATOR_FIRST_RELEASE, RENDER_CLIENT_FIRST_RELEASE and DOCUMENTS_FIRST_RELEASE;
+    crates/registry-stack-client/src/lib.rs, record, auth, coordinator and render. */}
 
 ## Outside the promise
 
@@ -177,8 +180,6 @@ release note repeats the migration steps.
 A security fix may tighten or remove surface without the full window when keeping the surface
 would leave deployments exploitable. The release notes document the removal, the shortened window,
 and the migration steps without details that put unpatched deployments at more risk.
-For independently released products, a breaking security fix still requires a major version;
-the exception shortens the notice window, not the versioning rule.
 
 Changes made before `v1.0.0`, including the
 [Registry Relay retirement](../../decisions/registry-relay-retirement-2026-10-03/), predate these
@@ -191,13 +192,17 @@ A client must ignore response members it does not recognize, and must not fail o
 it does not recognize; it handles that problem by its HTTP status. That rule is what lets a minor
 release add members and codes.
 
+Signed payloads and governed, digest-verified artifacts keep their own closed formats. Casework clients
+keep review policy closures and their dependencies intact for digest verification before use.
+
 {/* Evidence: crates/registry-breg-client/src/client.rs, breg_problem and valid_unrecognized_problem;
     crates/registry-breg-client/tests/http_boundary.rs,
     unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values;
     crates/registry-breg-client-node/__test__/binding.test.js;
     crates/registry-breg-client-py/tests/python/test_errors.py;
     crates/registry-discovery-client/src/wire.rs;
-    crates/registry-discovery-client/src/client.rs. */}
+    crates/registry-discovery-client/src/client.rs;
+    crates/registry-casework-core/src/review.rs, ReviewPolicyClosure, verify, and digest_with. */}
 
 For Base Registry Engine metadata, `requiredCapabilities` is the must-understand gate. An engine
 addition that changes how an existing member must be interpreted or executed must add a new

@@ -47,6 +47,8 @@ PUBLIC_SURFACE_NAMES = {
     "TransportError",
     "DeniedError",
     "NotAvailableError",
+    "InvalidRequestError",
+    "UnavailableError",
     "ProtocolError",
     "VerificationError",
     "verify_retained",

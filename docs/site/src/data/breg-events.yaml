@@ -30,7 +30,7 @@
     - ['`type`', 'String', 'Record events: the authored hook ID. Proposal events: `proposal.<transition>`. Equals `ce-type`.']
     - ['`source`', '`urn:registrystack:registry:<registry-id>:instance:<instance-id>`', 'Registry instance identity; equals `ce-source`.']
     - ['`time`', 'RFC 3339 timestamp, UTC, whole milliseconds', 'Mutation capture time; equals `ce-time`.']
-    - ['`subject`', 'Object with `recordReference` and `recordRevision`', 'Record events: `recordReference` is `hmac-sha256:<64-hex>`, never the raw record id, and `recordRevision` is the record revision the change produced. Proposal events: `recordReference` is the Proposal path `/v1/proposals/<proposal-id>` and `recordRevision` is the Proposal revision after the transition.']
+    - ['`subject`', 'Closed Record or Proposal subject object', 'Record events use `recordReference` and `recordRevision`; the reference is `hmac-sha256:<64-hex>`, never the raw record id. Proposal events use `proposalReference` and `proposalRevision`; the reference is the Proposal path `/v1/proposals/<proposal-id>`. Each revision is the resource revision the change produced.']
     - ['`dataschema`', '`urn:breg:event-schema:<registry-id>:<record-type-id>:<event-id>:sha256:<digest>`', 'Captured payload schema identity; equals `ce-dataschema`. Proposal events use their dedicated closed schema.']
     - ['`data`', 'Object', 'The captured event data, described below.']
     - ['`causation`', 'Object with `root`, `hop`, and optional `parent`', 'Chain position. A captured registry mutation is a root event: `root` equals `id`, `hop` is 0, and `parent` is absent.']

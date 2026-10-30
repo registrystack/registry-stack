@@ -297,43 +297,6 @@
       ],
       "type": "object"
     },
-    "ApplyData": {
-      "additionalProperties": false,
-      "properties": {
-        "activation": {
-          "$ref": "#/$defs/Activation"
-        },
-        "effects": {
-          "$ref": "#/$defs/ActivationEffects"
-        },
-        "runtimeConfig": {
-          "type": "string"
-        },
-        "schemaVersionsApplied": {
-          "items": {
-            "format": "int64",
-            "maximum": 9223372036854775807,
-            "minimum": -9223372036854775808,
-            "type": "integer"
-          },
-          "type": "array"
-        },
-        "singleRoleStatement": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "runtimeConfig",
-        "activation",
-        "schemaVersionsApplied",
-        "effects",
-        "singleRoleStatement"
-      ],
-      "type": "object"
-    },
     "CalendarPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -370,56 +333,6 @@
         "requester"
       ],
       "type": "string"
-    },
-    "CheckData": {
-      "additionalProperties": false,
-      "properties": {
-        "bregPackage": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProducerAgreementData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "databaseAccess": {
-          "type": "boolean"
-        },
-        "filesChecked": {
-          "format": "uint",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "networkAccess": {
-          "type": "boolean"
-        },
-        "policyBindings": {
-          "items": {
-            "$ref": "#/$defs/ReviewPolicyIdentity"
-          },
-          "type": "array"
-        },
-        "project": {
-          "type": "string"
-        },
-        "runtimeConfig": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "project",
-        "policyBindings",
-        "filesChecked",
-        "networkAccess",
-        "databaseAccess"
-      ],
-      "type": "object"
     },
     "CheckScope": {
       "additionalProperties": false,
@@ -636,82 +549,6 @@
       ],
       "type": "object"
     },
-    "DevData": {
-      "additionalProperties": false,
-      "properties": {
-        "audience": {
-          "type": "string"
-        },
-        "caseworkUrl": {
-          "$ref": "#/$defs/Url"
-        },
-        "clientAssertionAudience": {
-          "type": "string"
-        },
-        "clients": {
-          "items": {
-            "$ref": "#/$defs/DevClient"
-          },
-          "type": "array"
-        },
-        "contextProviders": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "directory": {
-          "$ref": "#/$defs/DevDirectory"
-        },
-        "issuer": {
-          "$ref": "#/$defs/Url"
-        },
-        "issuerProject": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "journal": {
-          "type": "string"
-        },
-        "operatorConfig": {
-          "type": "string"
-        },
-        "project": {
-          "type": "string"
-        },
-        "resource": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/DevState"
-        },
-        "stateFile": {
-          "type": "string"
-        },
-        "tokenEndpoint": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "state",
-        "project",
-        "stateFile",
-        "operatorConfig",
-        "caseworkUrl",
-        "tokenEndpoint",
-        "issuer",
-        "clientAssertionAudience",
-        "resource",
-        "audience",
-        "journal",
-        "contextProviders",
-        "clients",
-        "directory"
-      ],
-      "type": "object"
-    },
     "DevDirectory": {
       "additionalProperties": false,
       "properties": {
@@ -734,68 +571,6 @@
       ],
       "type": "object"
     },
-    "DevEventsData": {
-      "additionalProperties": false,
-      "properties": {
-        "events": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "journal": {
-          "type": "string"
-        },
-        "project": {
-          "type": "string"
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "project",
-        "journal",
-        "events",
-        "truncated"
-      ],
-      "type": "object"
-    },
-    "DevGrantData": {
-      "additionalProperties": false,
-      "properties": {
-        "grantExpiresAt": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "headerFile": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "headerFile",
-        "grantExpiresAt"
-      ],
-      "type": "object"
-    },
-    "DevIdentityData": {
-      "additionalProperties": false,
-      "properties": {
-        "clientId": {
-          "type": "string"
-        },
-        "subject": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "clientId",
-        "subject"
-      ],
-      "type": "object"
-    },
     "DevState": {
       "enum": [
         "starting",
@@ -805,18 +580,6 @@
         "failed"
       ],
       "type": "string"
-    },
-    "DevTokenData": {
-      "additionalProperties": false,
-      "properties": {
-        "headerFile": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "headerFile"
-      ],
-      "type": "object"
     },
     "Diagnostic": {
       "additionalProperties": false,
@@ -925,30 +688,6 @@
       ],
       "type": "object"
     },
-    "DoctorData": {
-      "additionalProperties": false,
-      "properties": {
-        "activation": {
-          "$ref": "#/$defs/ActivationPlan"
-        },
-        "checks": {
-          "$ref": "#/$defs/DoctorChecks"
-        },
-        "packageDigest": {
-          "$ref": "#/$defs/Digest"
-        },
-        "runtimeConfig": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "runtimeConfig",
-        "packageDigest",
-        "activation",
-        "checks"
-      ],
-      "type": "object"
-    },
     "ElapsedDuration": {
       "description": "An elapsed budget in exactly one unit; a day is 24 elapsed hours.",
       "oneOf": [
@@ -1039,61 +778,6 @@
       "required": [
         "requesterTags",
         "audience"
-      ],
-      "type": "object"
-    },
-    "ExplainData": {
-      "additionalProperties": false,
-      "properties": {
-        "authority": {
-          "type": "string"
-        },
-        "calendars": {
-          "items": {
-            "$ref": "#/$defs/CalendarPolicy"
-          },
-          "type": "array"
-        },
-        "clocks": {
-          "items": {
-            "$ref": "#/$defs/ClockPolicy"
-          },
-          "type": "array"
-        },
-        "contextProviders": {
-          "items": {
-            "$ref": "#/$defs/ReviewContextProviderPolicy"
-          },
-          "type": "array"
-        },
-        "project": {
-          "$ref": "#/$defs/ProjectIdentity"
-        },
-        "reviewPolicies": {
-          "items": {
-            "$ref": "#/$defs/ExplainPolicy"
-          },
-          "type": "array"
-        },
-        "staffing": {
-          "$ref": "#/$defs/ExplainStaffing"
-        },
-        "trustedProducers": {
-          "items": {
-            "$ref": "#/$defs/ReviewProducerPolicy"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "project",
-        "reviewPolicies",
-        "contextProviders",
-        "clocks",
-        "calendars",
-        "trustedProducers",
-        "staffing",
-        "authority"
       ],
       "type": "object"
     },
@@ -1348,41 +1032,6 @@
       ],
       "type": "object"
     },
-    "InitData": {
-      "additionalProperties": false,
-      "properties": {
-        "created": {
-          "type": "string"
-        },
-        "next": {
-          "type": "string"
-        },
-        "template": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "created",
-        "template",
-        "next"
-      ],
-      "type": "object"
-    },
-    "LifecycleData": {
-      "additionalProperties": false,
-      "properties": {
-        "lifecycles": {
-          "items": {
-            "$ref": "#/$defs/LifecycleDescription"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "lifecycles"
-      ],
-      "type": "object"
-    },
     "LifecycleDescription": {
       "additionalProperties": false,
       "properties": {
@@ -1488,51 +1137,6 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
-    "PackageData": {
-      "additionalProperties": false,
-      "properties": {
-        "dryRun": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "files": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "output": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "packageDigest": {
-          "$ref": "#/$defs/Digest"
-        },
-        "revision": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "secretsIncluded": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "packageDigest"
-      ],
-      "type": "object"
-    },
     "PinnedWorkEffect": {
       "additionalProperties": false,
       "description": "The pinned-work verdict an activation reaches.",
@@ -1551,22 +1155,6 @@
       "required": [
         "verdict",
         "stranded"
-      ],
-      "type": "object"
-    },
-    "PlanData": {
-      "additionalProperties": false,
-      "properties": {
-        "plan": {
-          "$ref": "#/$defs/ActivationPlan"
-        },
-        "runtimeConfig": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "runtimeConfig",
-        "plan"
       ],
       "type": "object"
     },
@@ -1718,111 +1306,6 @@
       ],
       "type": "object"
     },
-    "ProviderAddData": {
-      "additionalProperties": false,
-      "properties": {
-        "actionId": {
-          "type": "string"
-        },
-        "authorityId": {
-          "type": "string"
-        },
-        "bypassPaths": {
-          "items": {
-            "$ref": "#/$defs/ProviderAddBypass"
-          },
-          "type": "array"
-        },
-        "changes": {
-          "items": {
-            "$ref": "#/$defs/ProviderAddChange"
-          },
-          "type": "array"
-        },
-        "check": {
-          "x-registry-passthrough": "The existing typed caseworkctl check payload is embedded unchanged."
-        },
-        "contextFields": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "deployment": {
-          "items": {
-            "$ref": "#/$defs/ProviderAddChange"
-          },
-          "type": "array"
-        },
-        "inputsOnlyAlternative": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderAddNotice"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "next": {
-          "type": "string"
-        },
-        "package": {
-          "x-registry-passthrough": "The existing typed caseworkctl package payload is embedded unchanged."
-        },
-        "pairing": {
-          "x-registry-passthrough": "The existing typed caseworkctl provider-pair agreement payload is embedded unchanged."
-        },
-        "pattern": {
-          "type": "string"
-        },
-        "policyId": {
-          "type": "string"
-        },
-        "project": {
-          "type": "string"
-        },
-        "providerId": {
-          "type": "string"
-        },
-        "readGrant": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderAddNotice"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sourceNamespace": {
-          "type": "string"
-        },
-        "sourceWrites": {
-          "type": "boolean"
-        },
-        "state": {
-          "$ref": "#/$defs/ProviderAddState"
-        }
-      },
-      "required": [
-        "project",
-        "actionId",
-        "pattern",
-        "state",
-        "sourceNamespace",
-        "policyId",
-        "authorityId",
-        "providerId",
-        "contextFields",
-        "changes",
-        "deployment",
-        "bypassPaths",
-        "sourceWrites",
-        "next"
-      ],
-      "type": "object"
-    },
     "ProviderAddNotice": {
       "additionalProperties": false,
       "properties": {
@@ -1846,52 +1329,6 @@
         "in-agreement"
       ],
       "type": "string"
-    },
-    "ProviderPairData": {
-      "additionalProperties": false,
-      "properties": {
-        "applied": {
-          "type": "boolean"
-        },
-        "contract": {
-          "$ref": "#/$defs/ReviewContextContract"
-        },
-        "description": {
-          "type": "string"
-        },
-        "next": {
-          "type": "string"
-        },
-        "providerId": {
-          "type": "string"
-        },
-        "readerAuthority": {
-          "$ref": "#/$defs/ReaderAuthority"
-        },
-        "registryRevision": {
-          "type": "string"
-        },
-        "taskGrantAuthority": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReaderAuthority"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "applied",
-        "providerId",
-        "description",
-        "contract",
-        "registryRevision",
-        "readerAuthority",
-        "next"
-      ],
-      "type": "object"
     },
     "QueuePolicy": {
       "additionalProperties": false,
@@ -2548,29 +1985,6 @@
       ],
       "type": "string"
     },
-    "StatusData": {
-      "additionalProperties": false,
-      "properties": {
-        "activation": {
-          "$ref": "#/$defs/ActivationStatus"
-        },
-        "runtimeConfig": {
-          "type": "string"
-        },
-        "singleRoleStatement": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "runtimeConfig",
-        "activation",
-        "singleRoleStatement"
-      ],
-      "type": "object"
-    },
     "StrandedWork": {
       "additionalProperties": false,
       "properties": {
@@ -2962,66 +2376,12 @@
         }
       ]
     },
-    "TestData": {
-      "additionalProperties": false,
-      "properties": {
-        "databaseAccess": {
-          "type": "boolean"
-        },
-        "fixtures": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "networkAccess": {
-          "type": "boolean"
-        },
-        "productionClosure": {
-          "type": "boolean"
-        },
-        "proofBoundary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "fixtures",
-        "proofBoundary",
-        "productionClosure",
-        "networkAccess",
-        "databaseAccess"
-      ],
-      "type": "object"
-    },
-    "TypesData": {
-      "additionalProperties": false,
-      "properties": {
-        "files": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "output": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "output",
-        "files"
-      ],
-      "type": "object"
-    },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
       "format": "uri",
       "maxLength": 2048,
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
-    },
-    "UsageData": {
-      "additionalProperties": false,
-      "type": "object"
     },
     "WorkingDays": {
       "additionalProperties": false,
@@ -3078,10 +2438,7 @@
             "status": {
               "const": "complete"
             }
-          },
-          "required": [
-            "data"
-          ]
+          }
         },
         {
           "properties": {
@@ -3106,6 +2463,46 @@
   "oneOf": [
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "created"
+                ]
+              },
+              {
+                "required": [
+                  "next"
+                ]
+              },
+              {
+                "required": [
+                  "template"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "created",
+              "template",
+              "next"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3115,15 +2512,8 @@
           "const": "init",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/InitData"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "created": {
+          "type": "string"
         },
         "diagnostics": {
           "items": {
@@ -3135,11 +2525,20 @@
           "const": "CaseworkReport",
           "type": "string"
         },
+        "next": {
+          "type": "string"
+        },
         "ok": {
           "type": "boolean"
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "template": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3148,30 +2547,96 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "bregPackage"
+                ]
+              },
+              {
+                "required": [
+                  "databaseAccess"
+                ]
+              },
+              {
+                "required": [
+                  "filesChecked"
+                ]
+              },
+              {
+                "required": [
+                  "networkAccess"
+                ]
+              },
+              {
+                "required": [
+                  "policyBindings"
+                ]
+              },
+              {
+                "required": [
+                  "project"
+                ]
+              },
+              {
+                "required": [
+                  "runtimeConfig"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "project",
+              "policyBindings",
+              "filesChecked",
+              "networkAccess",
+              "databaseAccess"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
+        },
+        "bregPackage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProducerAgreementData"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "command": {
           "const": "check",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CheckData"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "databaseAccess": {
+          "type": "boolean"
         },
         "diagnostics": {
           "items": {
@@ -3179,15 +2644,42 @@
           },
           "type": "array"
         },
+        "filesChecked": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
         "kind": {
           "const": "CaseworkReport",
           "type": "string"
         },
+        "networkAccess": {
+          "type": "boolean"
+        },
         "ok": {
           "type": "boolean"
         },
+        "policyBindings": {
+          "items": {
+            "$ref": "#/$defs/ReviewPolicyIdentity"
+          },
+          "type": "array"
+        },
+        "project": {
+          "type": "string"
+        },
+        "runtimeConfig": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3196,30 +2688,112 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "authority"
+                ]
+              },
+              {
+                "required": [
+                  "calendars"
+                ]
+              },
+              {
+                "required": [
+                  "clocks"
+                ]
+              },
+              {
+                "required": [
+                  "contextProviders"
+                ]
+              },
+              {
+                "required": [
+                  "project"
+                ]
+              },
+              {
+                "required": [
+                  "reviewPolicies"
+                ]
+              },
+              {
+                "required": [
+                  "staffing"
+                ]
+              },
+              {
+                "required": [
+                  "trustedProducers"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "project",
+              "reviewPolicies",
+              "contextProviders",
+              "clocks",
+              "calendars",
+              "trustedProducers",
+              "staffing",
+              "authority"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
+        "authority": {
+          "type": "string"
+        },
+        "calendars": {
+          "items": {
+            "$ref": "#/$defs/CalendarPolicy"
+          },
+          "type": "array"
+        },
+        "clocks": {
+          "items": {
+            "$ref": "#/$defs/ClockPolicy"
+          },
+          "type": "array"
+        },
         "command": {
           "const": "explain",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExplainData"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "contextProviders": {
+          "items": {
+            "$ref": "#/$defs/ReviewContextProviderPolicy"
+          },
+          "type": "array"
         },
         "diagnostics": {
           "items": {
@@ -3234,8 +2808,29 @@
         "ok": {
           "type": "boolean"
         },
+        "project": {
+          "$ref": "#/$defs/ProjectIdentity"
+        },
+        "reviewPolicies": {
+          "items": {
+            "$ref": "#/$defs/ExplainPolicy"
+          },
+          "type": "array"
+        },
+        "staffing": {
+          "$ref": "#/$defs/ExplainStaffing"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "trustedProducers": {
+          "items": {
+            "$ref": "#/$defs/ReviewProducerPolicy"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3244,12 +2839,65 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "databaseAccess"
+                ]
+              },
+              {
+                "required": [
+                  "fixtures"
+                ]
+              },
+              {
+                "required": [
+                  "networkAccess"
+                ]
+              },
+              {
+                "required": [
+                  "productionClosure"
+                ]
+              },
+              {
+                "required": [
+                  "proofBoundary"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "fixtures",
+              "proofBoundary",
+              "productionClosure",
+              "networkAccess",
+              "databaseAccess"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3259,15 +2907,8 @@
           "const": "test",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TestData"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "databaseAccess": {
+          "type": "boolean"
         },
         "diagnostics": {
           "items": {
@@ -3275,15 +2916,33 @@
           },
           "type": "array"
         },
+        "fixtures": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "kind": {
           "const": "CaseworkReport",
           "type": "string"
         },
+        "networkAccess": {
+          "type": "boolean"
+        },
         "ok": {
           "type": "boolean"
         },
+        "productionClosure": {
+          "type": "boolean"
+        },
+        "proofBoundary": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3292,12 +2951,47 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "files"
+                ]
+              },
+              {
+                "required": [
+                  "output"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "output",
+              "files"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3307,19 +3001,15 @@
           "const": "types",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TypesData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "files": {
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },
@@ -3330,8 +3020,14 @@
         "ok": {
           "type": "boolean"
         },
+        "output": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3340,30 +3036,185 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "actionId"
+                ]
+              },
+              {
+                "required": [
+                  "authorityId"
+                ]
+              },
+              {
+                "required": [
+                  "bypassPaths"
+                ]
+              },
+              {
+                "required": [
+                  "changes"
+                ]
+              },
+              {
+                "required": [
+                  "check"
+                ]
+              },
+              {
+                "required": [
+                  "contextFields"
+                ]
+              },
+              {
+                "required": [
+                  "deployment"
+                ]
+              },
+              {
+                "required": [
+                  "inputsOnlyAlternative"
+                ]
+              },
+              {
+                "required": [
+                  "next"
+                ]
+              },
+              {
+                "required": [
+                  "outcome"
+                ]
+              },
+              {
+                "required": [
+                  "package"
+                ]
+              },
+              {
+                "required": [
+                  "pairing"
+                ]
+              },
+              {
+                "required": [
+                  "pattern"
+                ]
+              },
+              {
+                "required": [
+                  "policyId"
+                ]
+              },
+              {
+                "required": [
+                  "project"
+                ]
+              },
+              {
+                "required": [
+                  "providerId"
+                ]
+              },
+              {
+                "required": [
+                  "readGrant"
+                ]
+              },
+              {
+                "required": [
+                  "sourceNamespace"
+                ]
+              },
+              {
+                "required": [
+                  "sourceWrites"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "project",
+              "actionId",
+              "pattern",
+              "outcome",
+              "sourceNamespace",
+              "policyId",
+              "authorityId",
+              "providerId",
+              "contextFields",
+              "changes",
+              "deployment",
+              "bypassPaths",
+              "sourceWrites",
+              "next"
+            ]
+          }
+        }
+      ],
       "properties": {
+        "actionId": {
+          "type": "string"
+        },
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
+        },
+        "authorityId": {
+          "type": "string"
+        },
+        "bypassPaths": {
+          "items": {
+            "$ref": "#/$defs/ProviderAddBypass"
+          },
+          "type": "array"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ProviderAddChange"
+          },
+          "type": "array"
+        },
+        "check": {
+          "x-registry-passthrough": "The existing typed caseworkctl check payload is embedded unchanged."
         },
         "command": {
           "const": "provider-add",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderAddData"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "contextFields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deployment": {
+          "items": {
+            "$ref": "#/$defs/ProviderAddChange"
+          },
+          "type": "array"
         },
         "diagnostics": {
           "items": {
@@ -3371,15 +3222,68 @@
           },
           "type": "array"
         },
+        "inputsOnlyAlternative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAddNotice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "kind": {
           "const": "CaseworkReport",
+          "type": "string"
+        },
+        "next": {
           "type": "string"
         },
         "ok": {
           "type": "boolean"
         },
+        "outcome": {
+          "$ref": "#/$defs/ProviderAddState"
+        },
+        "package": {
+          "x-registry-passthrough": "The existing typed caseworkctl package payload is embedded unchanged."
+        },
+        "pairing": {
+          "x-registry-passthrough": "The existing typed caseworkctl provider-pair agreement payload is embedded unchanged."
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "policyId": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "readGrant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAddNotice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceNamespace": {
+          "type": "string"
+        },
+        "sourceWrites": {
+          "type": "boolean"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3388,30 +3292,99 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "applied"
+                ]
+              },
+              {
+                "required": [
+                  "contract"
+                ]
+              },
+              {
+                "required": [
+                  "description"
+                ]
+              },
+              {
+                "required": [
+                  "next"
+                ]
+              },
+              {
+                "required": [
+                  "providerId"
+                ]
+              },
+              {
+                "required": [
+                  "readerAuthority"
+                ]
+              },
+              {
+                "required": [
+                  "registryRevision"
+                ]
+              },
+              {
+                "required": [
+                  "taskGrantAuthority"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "applied",
+              "providerId",
+              "description",
+              "contract",
+              "registryRevision",
+              "readerAuthority",
+              "next"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
+        "applied": {
+          "type": "boolean"
+        },
         "command": {
           "const": "provider-pair",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderPairData"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "contract": {
+          "$ref": "#/$defs/ReviewContextContract"
+        },
+        "description": {
+          "type": "string"
         },
         "diagnostics": {
           "items": {
@@ -3423,11 +3396,36 @@
           "const": "CaseworkReport",
           "type": "string"
         },
+        "next": {
+          "type": "string"
+        },
         "ok": {
           "type": "boolean"
         },
+        "providerId": {
+          "type": "string"
+        },
+        "readerAuthority": {
+          "$ref": "#/$defs/ReaderAuthority"
+        },
+        "registryRevision": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "taskGrantAuthority": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReaderAuthority"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3436,12 +3434,41 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "lifecycles"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "lifecycles"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3451,16 +3478,6 @@
           "const": "lifecycle",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LifecycleData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
@@ -3471,11 +3488,20 @@
           "const": "CaseworkReport",
           "type": "string"
         },
+        "lifecycles": {
+          "items": {
+            "$ref": "#/$defs/LifecycleDescription"
+          },
+          "type": "array"
+        },
         "ok": {
           "type": "boolean"
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3484,12 +3510,66 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "dryRun"
+                ]
+              },
+              {
+                "required": [
+                  "files"
+                ]
+              },
+              {
+                "required": [
+                  "output"
+                ]
+              },
+              {
+                "required": [
+                  "packageDigest"
+                ]
+              },
+              {
+                "required": [
+                  "revision"
+                ]
+              },
+              {
+                "required": [
+                  "secretsIncluded"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "packageDigest"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3499,21 +3579,26 @@
           "const": "package",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackageData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
           },
           "type": "array"
+        },
+        "dryRun": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "kind": {
           "const": "CaseworkReport",
@@ -3522,8 +3607,32 @@
         "ok": {
           "type": "boolean"
         },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "packageDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secretsIncluded": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3532,31 +3641,74 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "activation"
+                ]
+              },
+              {
+                "required": [
+                  "checks"
+                ]
+              },
+              {
+                "required": [
+                  "packageDigest"
+                ]
+              },
+              {
+                "required": [
+                  "runtimeConfig"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "runtimeConfig",
+              "packageDigest",
+              "activation",
+              "checks"
+            ]
+          }
+        }
+      ],
       "properties": {
+        "activation": {
+          "$ref": "#/$defs/ActivationPlan"
+        },
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
+        },
+        "checks": {
+          "$ref": "#/$defs/DoctorChecks"
         },
         "command": {
           "const": "doctor",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DoctorData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
@@ -3570,8 +3722,17 @@
         "ok": {
           "type": "boolean"
         },
+        "packageDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "runtimeConfig": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3580,12 +3741,47 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "plan"
+                ]
+              },
+              {
+                "required": [
+                  "runtimeConfig"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "runtimeConfig",
+              "plan"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3595,16 +3791,6 @@
           "const": "plan",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PlanData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
@@ -3618,8 +3804,17 @@
         "ok": {
           "type": "boolean"
         },
+        "plan": {
+          "$ref": "#/$defs/ActivationPlan"
+        },
+        "runtimeConfig": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3628,13 +3823,69 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "activation"
+                ]
+              },
+              {
+                "required": [
+                  "effects"
+                ]
+              },
+              {
+                "required": [
+                  "runtimeConfig"
+                ]
+              },
+              {
+                "required": [
+                  "schemaVersionsApplied"
+                ]
+              },
+              {
+                "required": [
+                  "singleRoleStatement"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "runtimeConfig",
+              "activation",
+              "schemaVersionsApplied",
+              "effects",
+              "singleRoleStatement"
+            ]
+          }
+        }
+      ],
       "properties": {
+        "activation": {
+          "$ref": "#/$defs/Activation"
+        },
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
@@ -3643,21 +3894,14 @@
           "const": "apply",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ApplyData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
           },
           "type": "array"
+        },
+        "effects": {
+          "$ref": "#/$defs/ActivationEffects"
         },
         "kind": {
           "const": "CaseworkReport",
@@ -3666,8 +3910,29 @@
         "ok": {
           "type": "boolean"
         },
+        "runtimeConfig": {
+          "type": "string"
+        },
+        "schemaVersionsApplied": {
+          "items": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "singleRoleStatement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3676,13 +3941,57 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "activation"
+                ]
+              },
+              {
+                "required": [
+                  "runtimeConfig"
+                ]
+              },
+              {
+                "required": [
+                  "singleRoleStatement"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "runtimeConfig",
+              "activation",
+              "singleRoleStatement"
+            ]
+          }
+        }
+      ],
       "properties": {
+        "activation": {
+          "$ref": "#/$defs/ActivationStatus"
+        },
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
@@ -3691,16 +4000,6 @@
           "const": "status",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StatusData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
@@ -3714,8 +4013,20 @@
         "ok": {
           "type": "boolean"
         },
+        "runtimeConfig": {
+          "type": "string"
+        },
+        "singleRoleStatement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3724,36 +4035,174 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "audience"
+                ]
+              },
+              {
+                "required": [
+                  "caseworkUrl"
+                ]
+              },
+              {
+                "required": [
+                  "clientAssertionAudience"
+                ]
+              },
+              {
+                "required": [
+                  "clients"
+                ]
+              },
+              {
+                "required": [
+                  "contextProviders"
+                ]
+              },
+              {
+                "required": [
+                  "directory"
+                ]
+              },
+              {
+                "required": [
+                  "issuer"
+                ]
+              },
+              {
+                "required": [
+                  "issuerProject"
+                ]
+              },
+              {
+                "required": [
+                  "journal"
+                ]
+              },
+              {
+                "required": [
+                  "operatorConfig"
+                ]
+              },
+              {
+                "required": [
+                  "outcome"
+                ]
+              },
+              {
+                "required": [
+                  "project"
+                ]
+              },
+              {
+                "required": [
+                  "resource"
+                ]
+              },
+              {
+                "required": [
+                  "stateFile"
+                ]
+              },
+              {
+                "required": [
+                  "tokenEndpoint"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "outcome",
+              "project",
+              "stateFile",
+              "operatorConfig",
+              "caseworkUrl",
+              "tokenEndpoint",
+              "issuer",
+              "clientAssertionAudience",
+              "resource",
+              "audience",
+              "journal",
+              "contextProviders",
+              "clients",
+              "directory"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
+        "audience": {
+          "type": "string"
+        },
+        "caseworkUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "clientAssertionAudience": {
+          "type": "string"
+        },
+        "clients": {
+          "items": {
+            "$ref": "#/$defs/DevClient"
+          },
+          "type": "array"
+        },
         "command": {
           "const": "dev",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DevData"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "contextProviders": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
           },
           "type": "array"
+        },
+        "directory": {
+          "$ref": "#/$defs/DevDirectory"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "issuerProject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "journal": {
+          "type": "string"
         },
         "kind": {
           "const": "CaseworkReport",
@@ -3762,8 +4211,29 @@
         "ok": {
           "type": "boolean"
         },
+        "operatorConfig": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/DevState"
+        },
+        "project": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "stateFile": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "tokenEndpoint": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3772,12 +4242,59 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "events"
+                ]
+              },
+              {
+                "required": [
+                  "journal"
+                ]
+              },
+              {
+                "required": [
+                  "project"
+                ]
+              },
+              {
+                "required": [
+                  "truncated"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "project",
+              "journal",
+              "events",
+              "truncated"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3787,21 +4304,20 @@
           "const": "dev-events",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DevEventsData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
           },
           "type": "array"
+        },
+        "events": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "journal": {
+          "type": "string"
         },
         "kind": {
           "const": "CaseworkReport",
@@ -3810,8 +4326,17 @@
         "ok": {
           "type": "boolean"
         },
+        "project": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3820,12 +4345,41 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "headerFile"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "headerFile"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3835,21 +4389,14 @@
           "const": "dev-token",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DevTokenData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
           },
           "type": "array"
+        },
+        "headerFile": {
+          "type": "string"
         },
         "kind": {
           "const": "CaseworkReport",
@@ -3860,6 +4407,9 @@
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3868,12 +4418,47 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "grantExpiresAt"
+                ]
+              },
+              {
+                "required": [
+                  "headerFile"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "headerFile",
+              "grantExpiresAt"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3883,21 +4468,20 @@
           "const": "dev-grant",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DevGrantData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
           },
           "type": "array"
+        },
+        "grantExpiresAt": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "headerFile": {
+          "type": "string"
         },
         "kind": {
           "const": "CaseworkReport",
@@ -3908,6 +4492,9 @@
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3916,31 +4503,59 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "clientId"
+                ]
+              },
+              {
+                "required": [
+                  "subject"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "clientId",
+              "subject"
+            ]
+          }
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
+          "type": "string"
+        },
+        "clientId": {
           "type": "string"
         },
         "command": {
           "const": "dev-identity",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DevIdentityData"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/Diagnostic"
@@ -3956,6 +4571,12 @@
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -3964,12 +4585,48 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
     },
     {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": []
+          }
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "status": {
+              "const": "usage-error"
+            }
+          },
+          "required": [
+            "ok",
+            "status"
+          ]
+        }
+      ],
       "properties": {
         "apiVersion": {
           "const": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -3979,15 +4636,82 @@
           "const": "usage",
           "type": "string"
         },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/UsageData"
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "const": "CaseworkReport",
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "ok",
+        "status",
+        "apiVersion",
+        "kind",
+        "version",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": []
+          }
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": false
             },
-            {
-              "type": "null"
+            "status": {
+              "const": "operational-failure"
             }
+          },
+          "required": [
+            "ok",
+            "status"
           ]
+        }
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
+          "type": "string"
+        },
+        "command": {
+          "const": "internal",
+          "type": "string"
         },
         "diagnostics": {
           "items": {
@@ -4004,6 +4728,9 @@
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
@@ -4012,6 +4739,7 @@
         "status",
         "apiVersion",
         "kind",
+        "version",
         "diagnostics"
       ],
       "type": "object"
@@ -4026,8 +4754,13 @@
     }
   },
   "required": [
+    "ok",
+    "command",
+    "status",
     "apiVersion",
-    "kind"
+    "kind",
+    "version",
+    "diagnostics"
   ],
   "title": "Casework command report",
   "unevaluatedProperties": false

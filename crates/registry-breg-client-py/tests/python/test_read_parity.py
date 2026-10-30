@@ -9,7 +9,10 @@ from bootstrap import ensure_built
 
 ensure_built()
 
-from registry_breg_client import BaseRegistryClient  # noqa: E402
+from registry_breg_client import (  # noqa: E402
+    BaseRegistryClient,
+    BaseRegistryClientError,
+)
 
 RECORD_ID = "00000000-0000-4000-8000-000000000001"
 SNAPSHOT = "breg1_00000000-0000-4000-8000-000000000002"
@@ -32,7 +35,7 @@ def metadata() -> dict:
     return {
         "registryIdentifier": "registry",
         "datasetIdentifier": "dataset",
-        "entityTypeIdentifier": "company",
+        "recordTypeIdentifier": "company",
     }
 
 
@@ -54,6 +57,17 @@ class ReadParityTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 requests.append((self.path, self.headers.get("accept")))
+                if self.path == "/v1/schemas/company":
+                    self.respond({"type": "object"}, "application/json", False, False)
+                    return
+                if "/ingestion-runs" in self.path:
+                    self.respond(
+                        {"runs": [], "hasMore": False, "nextCursor": None},
+                        "application/json",
+                        False,
+                        False,
+                    )
+                    return
                 if self.headers.get("accept") == "application/geo+json":
                     if RECORD_ID in self.path:
                         self.respond(feature(), "application/geo+json", False, False)
@@ -91,8 +105,11 @@ class ReadParityTests(unittest.TestCase):
                     self.respond(value, "application/json", True, False)
                     return
                 revision_detail = "/revisions/" in self.path
+                response_meta = metadata()
+                if "/retired-meta/" in self.path:
+                    response_meta["entityTypeIdentifier"] = "company"
                 self.respond(
-                    {"data": record_data(), "meta": metadata()},
+                    {"data": record_data(), "meta": response_meta},
                     "application/json",
                     True,
                     not revision_detail,
@@ -183,11 +200,37 @@ class ReadParityTests(unittest.TestCase):
 
         revision = self.client.get_record_revision("companies", RECORD_ID, 1)
         self.assertEqual(json.loads(revision["body"])["data"]["recordIdentifier"], RECORD_ID)
+        with self.assertRaises(BaseRegistryClientError) as retired:
+            self.client.get_record("retired-meta", RECORD_ID)
+        self.assertEqual(retired.exception.kind, "protocol")
+        self.assertEqual(retired.exception.status, 200)
         count = len(self.requests)
         with self.assertRaises(TypeError):
             self.client.get_record(
                 "companies", RECORD_ID, request_history_after_proposal_version=2**32 - 1,
             )
+        self.assertEqual(len(self.requests), count)
+
+    def test_record_names_are_canonical_keywords_before_io(self) -> None:
+        schema = self.client.record_schema(record_type_identifier="company")
+        self.assertEqual(json.loads(schema["body"]), {"type": "object"})
+        with self.assertRaises(AttributeError):
+            getattr(self.client, "entity_schema")
+
+        record = self.client.get_record(
+            record_route="companies", record_identifier=RECORD_ID
+        )
+        self.assertEqual(record["value"]["data"]["recordIdentifier"], RECORD_ID)
+        runs = self.client.list_ingestion_runs(record_route="companies")
+        self.assertEqual(runs["value"]["runs"], [])
+
+        count = len(self.requests)
+        with self.assertRaises(TypeError):
+            self.client.get_record(
+                entity_route="companies", record_identifier=RECORD_ID
+            )
+        with self.assertRaises(TypeError):
+            self.client.list_ingestion_runs(entity_route="companies")
         self.assertEqual(len(self.requests), count)
 
 

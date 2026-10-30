@@ -13,6 +13,12 @@ pub(super) enum PairingFailure {
     ContractMismatch { path: String },
     UnservedCapability { path: String },
     VersionMismatch,
+    NativePackageRefused,
+    ActionIdInvalid,
+    ActionNotExported,
+    ProviderNotDeclared,
+    ProviderNotPaired { path: String },
+    DescriptionPathInvalid { path: String },
 }
 
 impl PairingFailure {
@@ -32,6 +38,36 @@ impl PairingFailure {
                 "casework.provider-pair.version-mismatch", "--bregctl-bin",
                 "bregctl must be the same Registry Stack release as caseworkctl",
                 "Select a bregctl executable from the same Registry Stack release with --bregctl-bin, then pair again.",
+            ),
+            Self::NativePackageRefused => (
+                "casework.provider-pair.native-package-refused", "--breg-package",
+                "bregctl refused the native producer package",
+                "Run bregctl check --package for the selected package, correct its reported refusal, then pair again.",
+            ),
+            Self::ActionIdInvalid => (
+                "casework.provider-pair.action-id-invalid", "--action-id",
+                "the native Action ID must be a local identifier",
+                "Select one local Action ID from the checked native producer package, then pair again.",
+            ),
+            Self::ActionNotExported => (
+                "casework.provider-pair.action-not-exported", "--action-id",
+                "the selected native Action exports no review-context schema",
+                "Select an Action with a native review-context export, or author that export in BReg and rebuild its package, then pair again.",
+            ),
+            Self::ProviderNotDeclared => (
+                "casework.provider-pair.provider-not-declared", "--provider-id",
+                "the selected context provider is not declared",
+                "Select one context provider declared by the Casework project, then pair again.",
+            ),
+            Self::ProviderNotPaired { path } => (
+                "casework.provider-pair.provider-not-paired", path,
+                "the selected context provider has no retained native export",
+                "Run caseworkctl provider pair --apply for this provider, then retry the comparison.",
+            ),
+            Self::DescriptionPathInvalid { path } => (
+                "casework.provider-pair.description-path-invalid", path,
+                "the provider description must stay below context-providers",
+                "Choose a normalized description path below context-providers, then pair again.",
             ),
         }
     }
@@ -59,7 +95,10 @@ fn verify(package: &Path, bregctl: &Path) -> Result<(Value, VerifiedPackage)> {
         .output()
         .context("checking the native BReg package")?;
     if !output.status.success() {
-        bail!("bregctl refused the native package; run bregctl check --package to inspect its diagnostics");
+        return Err(crate::child_report_failure(
+            output.status,
+            PairingFailure::NativePackageRefused,
+        ));
     }
     let report: Value = serde_json::from_slice(&output.stdout)?;
     if report["ok"] != true {
@@ -93,14 +132,17 @@ fn native_export(
     verified: &VerifiedPackage,
 ) -> Result<BregContextExport> {
     if registry_platform_yaml::LocalId::new(action).is_err() {
-        bail!("action ID must be a local identifier");
+        return Err(PairingFailure::ActionIdInvalid.into());
     }
     let index: Value = serde_json::from_slice(&captured_native_file(
         package,
         verified,
         "generated/review-context-schemas/index.json",
     )?)?;
-    let contract = &index[action];
+    let index = index
+        .as_object()
+        .context("native review-context index is not an object")?;
+    let contract = index.get(action).ok_or(PairingFailure::ActionNotExported)?;
     let path = contract["path"]
         .as_str()
         .context("native action exports no review-context schema")?;
@@ -150,10 +192,13 @@ pub(super) fn compare(
         if provider_id.is_some_and(|id| id != provider.id) {
             continue;
         }
-        let description = provider
-            .description
-            .as_deref()
-            .context("provider has no native export; run caseworkctl provider pair")?;
+        let description =
+            provider
+                .description
+                .as_deref()
+                .ok_or_else(|| PairingFailure::ProviderNotPaired {
+                    path: format!("/contextProviders/{}/description", provider.id),
+                })?;
         let export: BregContextExport =
             serde_json::from_slice(&crate::project::read_package_input(
                 &crate::project::project_input_path(project, description)?,
@@ -188,7 +233,7 @@ pub(super) fn compare(
         compared.push(json!({"providerId":provider.id,"contextContract":native.contract,"registryRevision":report["registryRevision"],"schemaDigest":sha256_uri(native.schema_bytes.as_bytes())}));
     }
     if compared.is_empty() {
-        bail!("no matching context provider is declared");
+        return Err(PairingFailure::ProviderNotDeclared.into());
     }
     Ok(
         json!({"package":package,"packageDigest":verified.digest(),"agreements":compared,"networkAccess":false,"databaseAccess":false}),
@@ -207,7 +252,7 @@ pub(super) fn pair(
         .context_providers
         .iter()
         .find(|p| p.id == id)
-        .context("context provider ID is not declared")?;
+        .ok_or(PairingFailure::ProviderNotDeclared)?;
     let (report, verified) = verify(package, bregctl)?;
     let export = native_export(package, action, &provider.source_namespace, &verified)?;
     for review in &policy.review_policies {
@@ -240,7 +285,10 @@ pub(super) fn pair(
         .unwrap_or_else(|| format!("context-providers/{id}.json"));
     let file = project.join(&relative);
     if !relative.starts_with("context-providers/") || relative.contains("..") {
-        bail!("provider description must be below context-providers");
+        return Err(PairingFailure::DescriptionPathInvalid {
+            path: format!("/contextProviders/{}/description", provider.id),
+        }
+        .into());
     }
     if apply {
         fs::create_dir_all(file.parent().context("export path has no parent")?)?;
@@ -504,8 +552,44 @@ mod tests {
             b"{}"
         );
         fs::write(path, b"{\"changed\":true}").unwrap();
-        assert!(captured_native_file(temporary.path(), &verified, relative).is_err());
+        let error = captured_native_file(temporary.path(), &verified, relative)
+            .expect_err("a verified native package cannot change before import");
+        let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Authoring, &error);
+        assert_eq!(exit, crate::OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "caseworkctl.internal-error");
+        assert!(!diagnostic.to_string().contains("changed"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_package_check_preserves_the_peer_exit_class() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = crate::canonical_tempdir();
+        let bregctl = temporary.path().join("bregctl");
+        for (child_exit, expected_exit) in [
+            (crate::DOMAIN_REFUSAL_EXIT, crate::DOMAIN_REFUSAL_EXIT),
+            (
+                crate::OPERATIONAL_FAILURE_EXIT,
+                crate::OPERATIONAL_FAILURE_EXIT,
+            ),
+        ] {
+            fs::write(
+                &bregctl,
+                format!(
+                    "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf '%s\\n' 'bregctl {}'\n  exit 0\nfi\nprintf '%s\\n' '{{\"ok\":false}}'\nexit {child_exit}\n",
+                    registry_platform_buildinfo::DISPLAY_VERSION
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+            let error = verify(temporary.path(), &bregctl)
+                .expect_err("the child package check was refused");
+            let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Authoring, &error);
+            assert_eq!(exit, expected_exit, "child exit {child_exit}: {diagnostic}");
+        }
+    }
+
     #[test]
     fn pairing_refusal_names_contract_mismatch() {
         pairing_refusal(
@@ -549,6 +633,36 @@ mod tests {
                 .try_get_matches_from(arguments)
                 .expect("both commands accept the diagnostic's suggested flag");
         }
+    }
+
+    #[test]
+    fn pairing_refuses_a_valid_action_id_without_a_native_context_export() {
+        pairing_refusal("action-not-exported", "--action-id", "export");
+    }
+
+    #[test]
+    fn pairing_an_undeclared_provider_is_a_typed_domain_refusal() {
+        let temporary = crate::canonical_tempdir();
+        let project = temporary.path().join("review");
+        crate::project::init(&project, "canonical-review").unwrap();
+        let error = pair(
+            &project,
+            "undeclared-provider",
+            &temporary.path().join("unused-package"),
+            "correct-address",
+            &temporary.path().join("unused-bregctl"),
+            false,
+        )
+        .expect_err("an undeclared provider is refused before package inspection");
+        let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Authoring, &error);
+        assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "casework.provider-pair.provider-not-declared"
+        );
+        assert_eq!(diagnostic["path"], "--provider-id");
+        assert_eq!(diagnostic["artifact"], "provider-pair");
+        assert!(!diagnostic.to_string().contains("undeclared-provider"));
     }
 
     fn pairing_refusal(cause: &str, pointer: &str, message: &str) {
@@ -622,14 +736,20 @@ mod tests {
                     )
                     .unwrap();
                 }
+                "action-not-exported" => {}
                 _ => unreachable!(),
             }
             fs::write(&policy_file, serde_norway::to_string(&authored).unwrap()).unwrap();
+            let action = if cause == "action-not-exported" {
+                "valid-unknown-action"
+            } else {
+                "correct-address"
+            };
             let error = pair(
                 &project,
                 "facility-proposal-context",
                 &package,
-                "correct-address",
+                action,
                 &bregctl,
                 false,
             )
@@ -638,6 +758,7 @@ mod tests {
                 "contract-mismatch" => "policy context contract does not match",
                 "unserved-capability" => "native BReg provider cannot expose",
                 "version-mismatch" => "bregctl must be the same",
+                "action-not-exported" => "exports no review-context schema",
                 _ => unreachable!(),
             };
             assert!(

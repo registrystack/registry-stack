@@ -86,7 +86,7 @@ assert_json() {
 }
 header_for() {
   run_json "$work/token-$1.json" "$caseworkctl" --format json dev token "$1" "$casework_project"
-  jq -r '.data.headerFile' "$work/token-$1.json"
+  jq -r '.headerFile' "$work/token-$1.json"
 }
 http() {
   local method=$1 url=$2 header_file=$3 output=$4
@@ -138,21 +138,21 @@ path.write_text(original.replace(before, f'issuer: http://127.0.0.1:{sys.argv[2]
 PY
 fi
 run_json "$work/check.json" "$caseworkctl" --format json check "$casework_project"
-assert_json "$work/check.json" '.data.policyBindings | length == 1' 'the starter did not compile one policy'
+assert_json "$work/check.json" '.policyBindings | length == 1' 'the starter did not compile one policy'
 run_json "$work/explain.json" "$caseworkctl" --format json explain "$casework_project"
 assert_json "$work/explain.json" \
-  '.data.contextProviders == [] and all(.data.reviewPolicies[]; .context.mode == "submitted" and .dependencies.taskTemplates == [])' \
+  '.contextProviders == [] and all(.reviewPolicies[]; .context.mode == "submitted" and .dependencies.taskTemplates == [])' \
   'the backup fixture inherited external context or task-grant authority'
 casework_started=1
 run_json "$work/dev-start.json" "$caseworkctl" --format json dev start "$casework_project" \
   --casework-port "$casework_port" --issuer-port "$issuer_port" --database-port "$database_port"
-operator_config=$(jq -r '.data.operatorConfig' "$work/dev-start.json")
+operator_config=$(jq -r '.operatorConfig' "$work/dev-start.json")
 container=$(jq -r '.containerId // empty' "$casework_project/.casework/dev/state.json")
 [[ -n "$container" ]] || fail 'the owned session names no database container'
 [[ -s "$audit_file" ]] || fail 'the Casework audit journal is missing'
 
 checkpoint 'creating and claiming a submitted review before the backup'
-policy=$(jq -c '.data.policyBindings[] | select(.id == "decision")' "$work/check.json")
+policy=$(jq -c '.policyBindings[] | select(.id == "decision")' "$work/check.json")
 [[ -n "$policy" ]] || fail 'the exact compiled policy binding is missing'
 subject_digest="sha256:$(printf 'backup-restore-batch-v1\n' | sha256sum | cut -d' ' -f1)"
 request=$(jq -cn --argjson policy "$policy" --arg digest "$subject_digest" \
@@ -172,7 +172,7 @@ status=$(call_as staff POST "/v1/review-tasks/$task_id/claim" "$work/claimed.jso
   "if-match: \"$revision\"" 'idempotency-key: backup-restore-claim')
 expect_status 200 "$status" "$work/claimed.json" 'claiming the review'
 run_json "$work/staff-identity.json" "$caseworkctl" --format json dev identity staff
-staff_subject=$(jq -r '.data.subject' "$work/staff-identity.json")
+staff_subject=$(jq -r '.subject' "$work/staff-identity.json")
 jq -e --arg subject "$staff_subject" \
   '.state.held.holder.subject == $subject' "$work/claimed.json" >/dev/null ||
   fail 'the review was not held by the staff caller'
@@ -181,7 +181,7 @@ jq -S '{taskId,requestId,revision,state}' "$work/claimed.json" >"$work/backup-ta
 checkpoint 'recording activation and taking a logical backup'
 casework_status "$work/status-backup.json"
 assert_json "$work/status-backup.json" \
-  '.data.activation.active.activationId != null and (.data.activation.history | length) == 1' \
+  '.activation.active.activationId != null and (.activation.history | length) == 1' \
   'the backup-point activation ledger does not name one active package'
 docker exec "$container" pg_dump -U postgres -Fc casework_dev >"$work/casework.dump"
 [[ -s "$work/casework.dump" ]] || fail 'pg_dump wrote no archive'
@@ -224,28 +224,28 @@ else
 fi
 psql_admin -d casework_dev -1 -c "$provision"
 casework_status "$work/status-empty.json"
-assert_json "$work/status-empty.json" '.data.activation.active == null' \
+assert_json "$work/status-empty.json" '.activation.active == null' \
   'the fresh database unexpectedly reported an active package'
 docker exec -i "$container" pg_restore -U postgres --exit-on-error --single-transaction \
   -d casework_dev <"$work/casework.dump"
 
 checkpoint 'verifying the restored activation and readiness'
 casework_status "$work/status-restored.json"
-diff <(jq -S '.data.activation' "$work/status-backup.json") \
-  <(jq -S '.data.activation' "$work/status-restored.json") >/dev/null ||
+diff <(jq -S '.activation' "$work/status-backup.json") \
+  <(jq -S '.activation' "$work/status-restored.json") >/dev/null ||
   fail 'the restored activation ledger differs from the backup point'
 run_json "$work/plan-restored.json" "$caseworkctl" --format json plan \
   --runtime-config "$operator_config"
 assert_json "$work/plan-restored.json" \
-  '.data.plan.changesPending == false and .data.plan.databaseIdCheck == "matches" and ([.data.plan.refusals[].code] == ["casework.activation.already-active"])' \
+  '.plan.changesPending == false and .plan.databaseIdCheck == "matches" and ([.plan.refusals[].code] == ["casework.activation.already-active"])' \
   'plan does not recognize the restored active package and database identity'
 run_json "$work/dev-restart.json" "$caseworkctl" --format json dev start "$casework_project" \
   --casework-port "$casework_port" --issuer-port "$issuer_port" --database-port "$database_port"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$casework_origin/ready")" == 200 ]] ||
   fail 'the restored service is not ready'
 casework_status "$work/status-serving.json"
-diff <(jq -S '.data.activation' "$work/status-backup.json") \
-  <(jq -S '.data.activation' "$work/status-serving.json") >/dev/null ||
+diff <(jq -S '.activation' "$work/status-backup.json") \
+  <(jq -S '.activation' "$work/status-serving.json") >/dev/null ||
   fail 'serving changed the restored activation ledger'
 
 checkpoint 'checking the held task and missing later decision'

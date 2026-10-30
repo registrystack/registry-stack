@@ -53,9 +53,12 @@ profile admits the caller when the token satisfies its `requiredScopes`, `requir
 
 An unknown route, an unsupported method, an unknown or ungranted profile, and an ungranted
 operation all answer the same `404 resource.not_found`. Reads conceal records outside the caller's
-boundary; see [Read refusals](#read-refusals). A mutation rechecks authority over its targets and
-prospective values and answers `412 precondition.failed` when that fails, with no protected values
-and no effects.
+boundary; see [Read refusals](#read-refusals). A direct Create, direct Batch item, or Patch that
+moves a visible Record outside the selected profile's row boundary answers
+`403 write.outside-boundary`. The fixed problem has no field, value, claim, or location extension,
+and no item commits. A hidden or absent Patch target and a stale condition remain the same value-free
+`412 precondition.failed`. Ingestion items, immediate Action effects, and Proposal targets and
+effects also retain their generic `412` boundary refusal.
 
 {/* Evidence: crates/registry-breg/src/auth.rs;
     crates/registry-breg/src/api/mod.rs, probe_routes(), authenticated_router(), not_found(), refuse_head();
@@ -75,7 +78,7 @@ probes also answer HEAD.
 A successful `GET /v1/registry` carries a `Registry-Engine-Version` header with the engine release
 that served it, the value `breg --version` prints. The concealed 404 does not carry it.
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, route_set(), probe_routes(), entity_schema() (the /v1/schemas handler), registry_metadata();
+{/* Evidence: crates/registry-breg/src/api/mod.rs, route_set(), probe_routes(), record_schema() (the /v1/schemas handler), registry_metadata();
     crates/registry-breg/src/compiler.rs, route_shape();
     crates/registry-breg/src/api/proposals.rs, list() and ProposalListQuery;
     crates/registry-breg/src/postgres/proposal.rs, list_proposals_in();
@@ -401,6 +404,11 @@ and checkpoint advance commit in one transaction. A chunk index below `nextChunk
 when its `digest` and `prefixDigest` equal the stored ones, the answer is the stored receipt with
 `replayed: true` and nothing is written. Any other mismatch of index, digest, prefix digest, count,
 or operation answers `409 ingestion.chunk_mismatch` and writes nothing.
+
+An item whose prospective row falls outside the run profile's row boundary answers the run
+protocol's value-free `412 precondition.failed`, records `lastAttempt.outcome` as `refused`, and
+leaves the checkpoint unchanged. The distinct `403 write.outside-boundary` belongs only to direct
+write routes.
 
 | Receipt member | Meaning |
 | --- | --- |

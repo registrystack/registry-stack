@@ -71,7 +71,7 @@ test('the metadata accessor and the creation-revision read follow the declared c
       createdAt: '2026-10-26T08:15:30.123456Z', actorReference: 'actor-ref-1',
       requestReference: 'request-ref-1',
     },
-    meta: { registryIdentifier: 'registry', datasetIdentifier: 'dataset', entityTypeIdentifier: 'incorporation' },
+    meta: { registryIdentifier: 'registry', datasetIdentifier: 'dataset', recordTypeIdentifier: 'incorporation' },
   };
   const requests = [];
   const server = http.createServer((request, response) => {

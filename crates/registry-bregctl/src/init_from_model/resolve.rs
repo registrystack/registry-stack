@@ -395,7 +395,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     }
     if selection.entities.is_empty() {
         return Err(diagnostic(
-            "init.selection.entities",
+            "init.selection.record-types",
             "/recordTypes",
             "a selection names at least one concept",
         ));
@@ -434,7 +434,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         validate_identifier(&id, &format!("{path}/id"), "an entity identifier")?;
         if !ids.insert(id.clone()) {
             return Err(diagnostic(
-                "init.selection.entity-duplicate",
+                "init.selection.record-type-duplicate",
                 &format!("{path}/id"),
                 &format!(
                     "an earlier entity already has the identifier `{id}`; set `id` to tell them apart"
@@ -466,7 +466,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         });
     }
     if let Some(refusal) = lookalike_id_refusal(
-        "init.selection.entity-id-collision",
+        "init.selection.record-type-id-collision",
         "record type",
         &sourced_ids,
     ) {
@@ -2272,7 +2272,7 @@ mod tests {
         );
         assert_eq!(
             refused("recordTypes:\n  - concept: Person\n  - concept: Person\n").code,
-            "init.selection.entity-duplicate"
+            "init.selection.record-type-duplicate"
         );
         assert_eq!(
             refused("recordTypes:\n  - concept: Person\n    route: people\n  - concept: Household\n    route: people\n").code,
@@ -2282,7 +2282,10 @@ mod tests {
             refused("recordTypes:\n  - concept: Person\n    properties:\n      - name: sex\n      - name: sex\n").code,
             "init.selection.property-duplicate"
         );
-        assert_eq!(refused("recordTypes: []\n").code, "init.selection.entities");
+        assert_eq!(
+            refused("recordTypes: []\n").code,
+            "init.selection.record-types"
+        );
         let plan = resolved(
             "recordTypes:\n  - concept: Person\n    id: citizen\n    route: citizenry\n    identifierField: national-number\n",
         );
@@ -2315,7 +2318,7 @@ mod tests {
             ),
         ] {
             let error = refused(body);
-            assert_eq!(error.code, "init.selection.entity-id-collision");
+            assert_eq!(error.code, "init.selection.record-type-id-collision");
             assert_eq!(error.path, path);
             assert_eq!(error.related.len(), 1);
             assert_eq!(error.related[0].path, related_path);

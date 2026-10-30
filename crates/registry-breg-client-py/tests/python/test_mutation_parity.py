@@ -108,7 +108,7 @@ def metadata() -> dict:
             "maximumItems": 20,
             "maximumBodyBytes": 16_384,
             "allowCreate": True,
-            "allowPatch": False,
+            "allowPatch": True,
             "schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -126,6 +126,16 @@ def metadata() -> dict:
                                         "operation": {"const": "create"},
                                         "data": {"type": "object"},
                                     },
+                                },
+                                {
+                                    "type": "object",
+                                    "required": ["operation", "recordIdentifier", "ifMatch", "patch"],
+                                    "properties": {
+                                        "operation": {"const": "patch"},
+                                        "recordIdentifier": {"type": "string", "format": "uuid"},
+                                        "ifMatch": {"type": "string"},
+                                        "patch": {"type": "array", "items": {"type": "object"}},
+                                    },
                                 }
                             ]
                         },
@@ -135,6 +145,7 @@ def metadata() -> dict:
         },
     )
     batch["createWritableFields"] = ["legal-name"]
+    batch["patchWritableFields"] = ["legal-name"]
     get = operation(
         "records.company.get",
         "GET",
@@ -291,12 +302,11 @@ def record() -> dict:
             "recordIdentifier": RECORD_ID,
             "revisionIdentifier": "2",
             "domainData": {"legalName": "Tombstoned Ltd"},
-            "snapshot": SNAPSHOT,
         },
         "meta": {
             "registryIdentifier": "business-registry",
             "datasetIdentifier": "legal-entities",
-            "entityTypeIdentifier": "company",
+            "recordTypeIdentifier": "company",
         },
     }
 
@@ -367,11 +377,11 @@ class MutationParityTests(unittest.TestCase):
                             "snapshot": SNAPSHOT,
                             "results": [
                                 {
-                                    "operation": "create",
-                                    "id": RECORD_ID,
-                                    "revision": 1,
+                                    "operation": json.loads(body)["items"][0]["operation"],
+                                    "recordIdentifier": RECORD_ID,
+                                    "revisionIdentifier": "1",
                                     "etag": ETAG,
-                                    "data": {"legalName": "Batch Ltd"},
+                                    "domainData": {"legalName": "Batch Ltd"},
                                 }
                             ],
                         },
@@ -444,7 +454,7 @@ class MutationParityTests(unittest.TestCase):
             if operation["id"] == "records.company.batch"
         )
         self.assertIs(batch_operation["request"]["allow_create"], True)
-        self.assertIs(batch_operation["request"]["allow_patch"], False)
+        self.assertIs(batch_operation["request"]["allow_patch"], True)
         get_operation = next(
             operation
             for operation in self.contract.operations
@@ -689,6 +699,16 @@ class MutationParityTests(unittest.TestCase):
             },
         )
         self.assertEqual(receipt["value"]["snapshot"], SNAPSHOT)
+        self.assertEqual(
+            receipt["value"]["results"][0],
+            {
+                "operation": "create",
+                "recordIdentifier": RECORD_ID,
+                "revisionIdentifier": "1",
+                "etag": ETAG,
+                "domainData": {"legalName": "Batch Ltd"},
+            },
+        )
         method, path, headers, body = self.requests[-1]
         self.assertEqual((method, path), ("POST", "/v1/records/companies:batch?accessProfile=company-writer"))
         self.assertEqual(headers["idempotency-key"], "batch-1")
@@ -704,6 +724,35 @@ class MutationParityTests(unittest.TestCase):
                 },
             },
         )
+        patch = [{"op": "replace", "field": "legalName", "value": "Renamed Batch Ltd"}]
+        receipt = self.client.batch_records(
+            batch,
+            [{"operation": "patch", "record_identifier": RECORD_ID, "if_match": ETAG, "patch": patch}],
+            "batch-patch-1",
+        )
+        self.assertEqual(receipt["value"]["results"][0]["operation"], "patch")
+        self.assertEqual(
+            json.loads(self.requests[-1][3]),
+            {
+                "items": [
+                    {
+                        "operation": "patch",
+                        "recordIdentifier": RECORD_ID,
+                        "ifMatch": ETAG,
+                        "patch": [{"op": "replace", "path": "/data/legalName", "value": "Renamed Batch Ltd"}],
+                    }
+                ]
+            },
+        )
+        count = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as refused:
+            self.client.batch_records(
+                batch,
+                [{"operation": "patch", "record_identifier": RECORD_ID, "etag": ETAG, "operations": patch}],
+                "batch-retired-1",
+            )
+        self.assertEqual(refused.exception.kind, "invalid-request")
+        self.assertEqual(len(self.requests), count)
 
 
 if __name__ == "__main__":

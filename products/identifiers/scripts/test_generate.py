@@ -437,14 +437,16 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.build()
 
     def test_reviewed_identifier_reference_exclusion_is_accepted(self) -> None:
+        uri = f"{generate.BASE_URL}/legacy/value"
         (self.root / "src" / "legacy.rs").write_text(
-            f'const URI: &str = "{generate.BASE_URL}/legacy/value";\n'
+            f'const URI: &str = "{uri}";\n'
         )
         self.track("src/legacy.rs")
         self.write_config(
             exclusions=[
                 {
-                    "glob": "src/legacy.rs",
+                    "path": "src/legacy.rs",
+                    "uri": uri,
                     "classification": "legacy-source",
                     "reason": "Legacy fixture retained for compatibility tests.",
                 }
@@ -452,9 +454,46 @@ class CatalogGeneratorTest(unittest.TestCase):
         )
         catalog = self.build()
         self.assertNotIn(
-            f"{generate.BASE_URL}/legacy/value",
+            uri,
             {entry["uri"] for entry in catalog["entries"]},
         )
+
+    def test_exact_reference_exclusion_does_not_hide_another_uri_in_the_file(self) -> None:
+        excluded = f"{generate.BASE_URL}/legacy/value"
+        unclassified = f"{generate.BASE_URL}/legacy/other"
+        (self.root / "src" / "legacy.rs").write_text(
+            f'const EXCLUDED: &str = "{excluded}";\n'
+            f'const UNCLASSIFIED: &str = "{unclassified}";\n'
+        )
+        self.track("src/legacy.rs")
+        self.write_config(
+            exclusions=[
+                {
+                    "path": "src/legacy.rs",
+                    "uri": excluded,
+                    "classification": "fixture",
+                    "reason": "One synthetic negative reference is retained.",
+                }
+            ]
+        )
+        with self.assertRaisesRegex(generate.CatalogError, "legacy/other"):
+            self.build()
+
+    def test_exact_reference_exclusion_must_match_the_uri_in_its_path(self) -> None:
+        (self.root / "src" / "legacy.rs").write_text("no identifier here\n")
+        self.track("src/legacy.rs")
+        self.write_config(
+            exclusions=[
+                {
+                    "path": "src/legacy.rs",
+                    "uri": f"{generate.BASE_URL}/legacy/missing",
+                    "classification": "fixture",
+                    "reason": "A stale exact exclusion must not survive silently.",
+                }
+            ]
+        )
+        with self.assertRaisesRegex(generate.CatalogError, "matched no identifier reference"):
+            self.build()
 
     def test_untracked_identifier_reference_is_ignored(self) -> None:
         (self.root / "src" / "scratch.rs").write_text(

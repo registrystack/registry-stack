@@ -106,7 +106,7 @@ assertionDefinitions:
             .find_map(|(path, text)| path.starts_with("selectors/").then_some(*text))
             .unwrap_or("synthetic selector");
         let source = format!(
-            "type: http-json\nposture: record-transformed\nconnection: {id}\nbehaviorRevision: {}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: {selector_id}}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.schema.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.schema.yaml\nextractScript: {}\nfactSchema: schemas/{id}-facts.schema.yaml\n",
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nposture: record-transformed\nconnection: {id}\nbehaviorRevision: {}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: {selector_id}}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.schema.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.schema.yaml\nextractScript: {}\nfactSchema: schemas/{id}-facts.schema.yaml\n",
             digest(source_revision.as_bytes()),
             extract.0
         );
@@ -120,7 +120,7 @@ assertionDefinitions:
             (
                 selector_path,
                 format!(
-                    "maximumAggregateBytes: 64\nfields: {{value: {{type: string, minimumBytes: 1, maximumBytes: 64, description: {}}}}}\n",
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 64\nfields: {{value: {{type: string, minimumBytes: 1, maximumBytes: 64, description: {}}}}}\n",
                     digest(selector_revision.as_bytes())
                 ),
             ),
@@ -260,6 +260,154 @@ fn canonical_block_project_imports_and_preserves_unowned_authored_text() {
         fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap(),
         candidate_text
     );
+}
+
+#[test]
+fn current_fragment_headers_are_checked_then_removed_during_normalization() {
+    let fixture = Fixture::new();
+    let export = fixture.export("current-fragments", "lookup", "v1", &[]);
+    let installed = load_export(&export).expect("current fragment headers are accepted");
+
+    let source: Value = serde_json::from_str(&installed.upstream["source-fragments/lookup.json"])
+        .expect("normalized source fragment is JSON");
+    assert!(source["source"].get("apiVersion").is_none());
+    assert!(source["source"].get("kind").is_none());
+
+    let selector: Value =
+        serde_json::from_str(&installed.upstream["selector-fragments/imported-reference.json"])
+            .expect("normalized selector fragment is JSON");
+    assert!(selector.get("apiVersion").is_none());
+    assert!(selector.get("kind").is_none());
+}
+
+#[test]
+fn import_refuses_invalid_source_and_selector_headers_without_leaking_values() {
+    const PRIVATE_MARKER: &str = "private-fragment-marker-must-not-leak";
+    const SOURCE_VERSION: &str = "id.registrystack.org/formats/evidence/source/v1alpha1";
+    const SELECTOR_VERSION: &str = "id.registrystack.org/formats/evidence/selector/v1alpha1";
+
+    for (fragment, field, replacement, expected_code, expected_path) in [
+        (
+            "source",
+            "apiVersion",
+            format!("apiVersion: {PRIVATE_MARKER}"),
+            "config.unsupported-api-version",
+            "/apiVersion",
+        ),
+        (
+            "source",
+            "apiVersion",
+            String::new(),
+            "config.missing-envelope",
+            "",
+        ),
+        (
+            "source",
+            "apiVersion",
+            format!("apiVersion: {{private: {PRIVATE_MARKER}}}"),
+            "config.expected-string",
+            "/apiVersion",
+        ),
+        (
+            "source",
+            "kind",
+            format!("kind: {PRIVATE_MARKER}"),
+            "config.wrong-kind",
+            "/kind",
+        ),
+        (
+            "source",
+            "kind",
+            String::new(),
+            "config.missing-envelope",
+            "",
+        ),
+        (
+            "source",
+            "kind",
+            format!("kind: [{PRIVATE_MARKER}]"),
+            "config.expected-string",
+            "/kind",
+        ),
+        (
+            "selector",
+            "apiVersion",
+            format!("apiVersion: {PRIVATE_MARKER}"),
+            "config.unsupported-api-version",
+            "/apiVersion",
+        ),
+        (
+            "selector",
+            "apiVersion",
+            String::new(),
+            "config.missing-envelope",
+            "",
+        ),
+        (
+            "selector",
+            "apiVersion",
+            format!("apiVersion: {{private: {PRIVATE_MARKER}}}"),
+            "config.expected-string",
+            "/apiVersion",
+        ),
+        (
+            "selector",
+            "kind",
+            format!("kind: {PRIVATE_MARKER}"),
+            "config.wrong-kind",
+            "/kind",
+        ),
+        (
+            "selector",
+            "kind",
+            String::new(),
+            "config.missing-envelope",
+            "",
+        ),
+        (
+            "selector",
+            "kind",
+            format!("kind: [{PRIVATE_MARKER}]"),
+            "config.expected-string",
+            "/kind",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let export = fixture.export(
+            &format!("invalid-{fragment}-{field}-{expected_code}"),
+            "lookup",
+            "v1",
+            &[],
+        );
+        let path = match fragment {
+            "source" => "sources/lookup.yaml",
+            "selector" => "selectors/imported-reference.yaml",
+            _ => unreachable!(),
+        };
+        let expected = match (fragment, field) {
+            ("source", "apiVersion") => format!("apiVersion: {SOURCE_VERSION}"),
+            ("source", "kind") => "kind: EvidenceSource".to_owned(),
+            ("selector", "apiVersion") => format!("apiVersion: {SELECTOR_VERSION}"),
+            ("selector", "kind") => "kind: EvidenceSelector".to_owned(),
+            _ => unreachable!(),
+        };
+        let text = fs::read_to_string(export.join(path)).unwrap();
+        let changed = text.replacen(&expected, &replacement, 1);
+        assert_ne!(changed, text, "the test must replace the selected header");
+        replace_export_artifact(&export, path, &changed);
+
+        let error = load_export(&export).expect_err("an invalid fragment header is refused");
+        let refused = error
+            .downcast_ref::<DocumentRefused>()
+            .expect("the shared reader's structured refusal is retained");
+        assert_eq!(refused.report.diagnostics().len(), 1);
+        let diagnostic = &refused.report.diagnostics()[0];
+        assert_eq!(diagnostic.code, expected_code);
+        assert_eq!(diagnostic.path, expected_path);
+        assert_eq!(diagnostic.source.as_ref().unwrap().file, path);
+        let rendered = refused.report.render_human();
+        assert!(!rendered.contains(PRIVATE_MARKER), "{rendered}");
+    }
 }
 
 #[test]
@@ -1161,7 +1309,7 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
     replace_export_artifact(
         &selector_next,
         "selectors/imported-reference.yaml",
-        "maximumAggregateBytes: 65\nfields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}\n",
+        "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 65\nfields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}\n",
     );
     let candidate = prepare(&lock, &[selector_next], &BTreeMap::new()).unwrap();
     assert_eq!(candidate.report().affected_definitions, ["other"]);

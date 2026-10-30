@@ -17,6 +17,53 @@ use std::{
 };
 pub(crate) const LOCAL_PACKAGE_DIRECTORY: &str = ".casework/package";
 const MAXIMUM_HOLIDAY_SET_FILES: usize = 1024;
+
+#[derive(Debug)]
+pub(crate) enum ProjectRefusal {
+    DestinationExists,
+    AuxiliaryInputInvalid(PathBuf),
+    FixtureInputInvalid,
+    ProjectInputPathInvalid,
+    ProjectInputOutside,
+    PackageInputInvalid,
+    ContextSchemaTooDeep,
+    ProviderExportInvalid,
+    ProviderNamespaceMismatch,
+    ProviderContractMismatch,
+}
+
+impl std::fmt::Display for ProjectRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::DestinationExists => {
+                "destination already exists; init never overwrites a project"
+            }
+            Self::AuxiliaryInputInvalid(path) => {
+                return write!(
+                    formatter,
+                    "{} must be a regular file of at most four MiB",
+                    path.display()
+                );
+            }
+            Self::FixtureInputInvalid => "fixture input must be a regular file",
+            Self::ProjectInputPathInvalid => "input must be a normalized relative project path",
+            Self::ProjectInputOutside => "input leaves the project",
+            Self::PackageInputInvalid => "input must be a regular file of at most one MiB",
+            Self::ContextSchemaTooDeep => "context schema type nesting exceeds 16",
+            Self::ProviderExportInvalid => {
+                "provider export is not a valid native context description"
+            }
+            Self::ProviderNamespaceMismatch => {
+                "provider export namespace differs from its compiled binding"
+            }
+            Self::ProviderContractMismatch => {
+                "provider export context contract differs from the compiled policy"
+            }
+        })
+    }
+}
+
+impl std::error::Error for ProjectRefusal {}
 pub(super) const STANDALONE_YAML: &str = r#"# yaml-language-server: $schema=.casework/schemas/project.schema.json
 apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
@@ -146,7 +193,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         bail!("unknown template; use caseworkctl init --help to list available templates");
     }
     if project.exists() {
-        bail!("destination already exists; init never overwrites a project");
+        return Err(ProjectRefusal::DestinationExists.into());
     }
     let parent = project
         .parent()
@@ -367,10 +414,7 @@ fn check_impl(project: &Path, production: bool, deny_warnings: bool) -> Result<V
             Err(error) => return Err(error.into()),
         };
         if !metadata.file_type().is_file() || metadata.len() > 4 * 1024 * 1024 {
-            bail!(
-                "{} must be a regular file of at most four MiB",
-                path.display()
-            );
+            return Err(ProjectRefusal::AuxiliaryInputInvalid(path).into());
         }
         let bytes = fs::read(&path)?;
         let shown = path.display().to_string();
@@ -423,10 +467,13 @@ fn check_impl(project: &Path, production: bool, deny_warnings: bool) -> Result<V
                 files_checked.insert(description.clone());
                 let bytes = read_package_input(&project_input_path(project, description)?)?;
                 let export: registry_casework_breg::BregContextExport =
-                    serde_json::from_value(registry_breg_client_value(&bytes)?)?;
-                export.check()?;
+                    serde_json::from_value(registry_breg_client_value(&bytes)?)
+                        .map_err(|_| ProjectRefusal::ProviderExportInvalid)?;
+                export
+                    .check()
+                    .map_err(|_| ProjectRefusal::ProviderExportInvalid)?;
                 if export.source_namespace != provider.source_namespace {
-                    bail!("provider export namespace differs from its compiled binding");
+                    return Err(ProjectRefusal::ProviderNamespaceMismatch.into());
                 }
                 for review in &policy.review_policies {
                     if let ReviewContextPolicy::CurrentSource {
@@ -435,9 +482,7 @@ fn check_impl(project: &Path, production: bool, deny_warnings: bool) -> Result<V
                     } = &review.context
                     {
                         if id == &provider.id && contract != &export.contract {
-                            bail!(
-                                "provider export context contract differs from the compiled policy"
-                            );
+                            return Err(ProjectRefusal::ProviderContractMismatch.into());
                         }
                     }
                 }
@@ -656,7 +701,7 @@ fn holiday_file_diagnostic(
 fn registry_breg_client_value(bytes: &[u8]) -> Result<Value> {
     let document = registry_platform_yaml::Reader::new("context-provider.json")
         .scan(bytes)?
-        .context("context export is empty")?;
+        .ok_or(ProjectRefusal::ProviderExportInvalid)?;
     Ok(document.to_json_value())
 }
 pub(super) fn explain(project: &Path) -> Result<Value> {
@@ -746,7 +791,7 @@ pub(super) fn test(project: &Path, deny_warnings: bool) -> Result<Value> {
             // The shared reader owns the one-MiB boundary and positioned
             // format diagnostics, including empty and oversized fixtures.
             if !fs::symlink_metadata(&path)?.file_type().is_file() {
-                bail!("fixture input must be a regular file");
+                return Err(ProjectRefusal::FixtureInputInvalid.into());
             }
             let mut bytes = Vec::new();
             fs::File::open(&path)?
@@ -781,19 +826,19 @@ pub(crate) fn project_input_path(project: &Path, relative: &str) -> Result<PathB
             .components()
             .any(|c| !matches!(c, std::path::Component::Normal(_)))
     {
-        bail!("input must be a normalized relative project path");
+        return Err(ProjectRefusal::ProjectInputPathInvalid.into());
     }
     let root = fs::canonicalize(project)?;
     let candidate = fs::canonicalize(root.join(path))?;
     if !candidate.starts_with(&root) {
-        bail!("input leaves the project");
+        return Err(ProjectRefusal::ProjectInputOutside.into());
     }
     Ok(candidate)
 }
 pub(crate) fn read_package_input(path: &Path) -> Result<Vec<u8>> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.file_type().is_file() || meta.len() > 1024 * 1024 {
-        bail!("input must be a regular file of at most one MiB");
+        return Err(ProjectRefusal::PackageInputInvalid.into());
     }
     Ok(fs::read(path)?)
 }
@@ -1102,6 +1147,42 @@ pub(super) fn doctor(path: &Path) -> Result<Value> {
 mod display_integrity_tests {
     use super::*;
 
+    fn assert_typed_authoring_refusal(error: anyhow::Error) {
+        let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Authoring, &error);
+        assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "caseworkctl.refused");
+    }
+
+    #[test]
+    fn authored_project_file_guards_are_typed_domain_refusals() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("project");
+        init(&project, "standalone-decision").unwrap();
+
+        assert_typed_authoring_refusal(
+            project_input_path(&project, "../outside")
+                .expect_err("a parent path leaves the project"),
+        );
+        assert_typed_authoring_refusal(
+            read_package_input(&project).expect_err("a package input must be a bounded file"),
+        );
+
+        let fixture = project.join("fixtures/symlink.yaml");
+        std::os::unix::fs::symlink(project.join("casework.yaml"), &fixture).unwrap();
+        assert_typed_authoring_refusal(
+            test(&project, false).expect_err("a fixture symlink is not an authored file"),
+        );
+
+        let project = root.path().join("auxiliary");
+        init(&project, "standalone-decision").unwrap();
+        fs::remove_file(project.join("dev-clients.yaml")).unwrap();
+        fs::create_dir(project.join("dev-clients.yaml")).unwrap();
+        assert_typed_authoring_refusal(
+            check(&project, false, false)
+                .expect_err("an auxiliary authored input must be a bounded file"),
+        );
+    }
+
     #[test]
     fn check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
         let root = crate::canonical_tempdir();
@@ -1358,6 +1439,80 @@ mod display_integrity_tests {
             let rendered = String::from_utf8(stdout).unwrap();
             assert!(!rendered.contains("facility-registry"));
             assert!(!rendered.contains("different-registry"));
+        }
+    }
+
+    #[test]
+    fn check_treats_invalid_authored_provider_exports_as_domain_refusals() {
+        for malformed in ["empty", "wrong-shape", "invalid-export"] {
+            let root = crate::canonical_tempdir();
+            let project = root.path().join("project");
+            init(&project, "canonical-review").unwrap();
+            let project_file = project.join("casework.yaml");
+            let authored = fs::read_to_string(&project_file).unwrap().replacen(
+                "deploymentRef: facility-registry",
+                "deploymentRef: facility-registry\n    description: providers/facility-proposal-context.json",
+                1,
+            );
+            fs::write(&project_file, authored).unwrap();
+            fs::create_dir(project.join("providers")).unwrap();
+
+            let schema_bytes =
+                fs::read_to_string(project.join("schemas/correct-address.schema.json")).unwrap();
+            let schema: Value = serde_json::from_str(&schema_bytes).unwrap();
+            let invalid_export = json!({
+                "apiVersion": "private-api-canary",
+                "kind": registry_casework_breg::DESCRIPTION_KIND,
+                "sourceNamespace": "private-source-canary",
+                "actionId": "correct-address",
+                "contextId": "facility-address-context",
+                "contract": {
+                    "id": schema["$id"],
+                    "revision": schema["x-registry-definition-revision"],
+                    "schemaDigest": registry_platform_config::sha256_uri(schema_bytes.as_bytes()),
+                },
+                "schema": schema,
+                "schemaBytes": schema_bytes,
+            });
+            let bytes = match malformed {
+                "empty" => Vec::new(),
+                "wrong-shape" => b"{}".to_vec(),
+                "invalid-export" => serde_json::to_vec(&invalid_export).unwrap(),
+                _ => unreachable!(),
+            };
+            fs::write(
+                project.join("providers/facility-proposal-context.json"),
+                bytes,
+            )
+            .unwrap();
+
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let exit = crate::main_entry_from(
+                [
+                    "caseworkctl".into(),
+                    "--format=json".into(),
+                    "check".into(),
+                    project.into_os_string(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            );
+            assert_eq!(
+                exit,
+                std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT),
+                "{malformed}: {}",
+                String::from_utf8_lossy(&stdout)
+            );
+            assert!(stderr.is_empty(), "{malformed}");
+            let report: Value = serde_json::from_slice(&stdout).unwrap();
+            assert_eq!(report["status"], "domain-refusal", "{malformed}");
+            assert_eq!(
+                report["diagnostics"][0]["code"], "caseworkctl.refused",
+                "{malformed}"
+            );
+            let rendered = String::from_utf8(stdout).unwrap();
+            assert!(!rendered.contains("private-api-canary"), "{malformed}");
+            assert!(!rendered.contains("private-source-canary"), "{malformed}");
         }
     }
 

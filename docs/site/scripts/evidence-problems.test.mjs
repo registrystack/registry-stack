@@ -68,20 +68,26 @@ function pageKinds() {
 }
 
 // The kind crates/registry-evidence-client/src/problem.rs map_problem() gives a
-// registered problem: the statuses of its Denied arm, its one NotAvailable code,
-// and Protocol for every other registered code.
+// registered problem, preserving the precedence of specialized statuses over
+// the general client-error and server-error ranges.
 function clientKindOf() {
   const source = read('../../../crates/registry-evidence-client/src/problem.rs');
-  const denied = source.match(/\(([\d |]+), Some\(code\)\) => EvidenceClientError::Denied/);
+  const denied = source.match(/\(([\d |]+), code\) => EvidenceClientError::Denied/);
   assert.ok(denied, 'problem.rs map_problem() should carry the Denied arm this test reads');
   const deniedStatuses = new Set(denied[1].split('|').map((status) => Number(status.trim())));
   const notAvailable = source.match(/\((\d{3}), Some\(EVIDENCE_NOT_AVAILABLE\)\) => EvidenceClientError::NotAvailable/);
   assert.ok(notAvailable, 'problem.rs map_problem() should carry the NotAvailable arm this test reads');
   const notAvailableCode = source.match(/const EVIDENCE_NOT_AVAILABLE: &str = "([^"]+)";/)?.[1];
   assert.ok(notAvailableCode, 'problem.rs should declare EVIDENCE_NOT_AVAILABLE');
+  const invalid = source.match(/\((\d{3})\.\.=(\d{3}), code\) => EvidenceClientError::InvalidRequest/);
+  assert.ok(invalid, 'problem.rs should classify the client-error status range');
+  const unavailable = source.match(/\((\d{3})\.\.=(\d{3}), code\) => EvidenceClientError::Unavailable/);
+  assert.ok(unavailable, 'problem.rs should classify the server-error status range');
   return (code, status) => {
     if (deniedStatuses.has(status)) return 'denied';
     if (status === Number(notAvailable[1]) && code === notAvailableCode) return 'not-available';
+    if (status >= Number(invalid[1]) && status <= Number(invalid[2])) return 'invalid-request';
+    if (status >= Number(unavailable[1]) && status <= Number(unavailable[2])) return 'unavailable';
     return 'protocol';
   };
 }

@@ -4,15 +4,14 @@
 //! sibling ctls.
 //!
 //! A report is one JSON object on standard output. It opens with `ok`,
-//! `command`, and `status`, in that order, followed by the command's own
-//! camelCase members, `apiVersion` and `kind` among them. `ok` is true
+//! `command`, `status`, `apiVersion`, and `kind`, in that order, followed by
+//! flat command members, the binary version, and diagnostics. `ok` is true
 //! exactly when the process exits zero; `status` names what happened. A
 //! report that is not ok carries a non-empty `diagnostics` array whose
 //! entries each name a `suggestedAction`.
 
 use std::io;
 
-use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::Value;
 
 /// The command line was incomplete, conflicting, or unsupported.
@@ -20,11 +19,7 @@ pub(crate) const USAGE_EXIT: u8 = 2;
 /// A file, process, or service the command depends on was unavailable.
 pub(crate) const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 
-/// The members every report opens with, in the order they are written.
-const HEAD: [&str; 3] = ["ok", "command", "status"];
-
 /// The status a failure envelope carries for each exit class.
-#[cfg(test)]
 pub(crate) fn failure_status(exit: u8) -> &'static str {
     match exit {
         USAGE_EXIT => "usage-error",
@@ -121,32 +116,11 @@ fn refused_argument(error: &clap::Error) -> Option<String> {
 
 /// Write one report, envelope members first, and its trailing newline.
 pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    serde_json::to_writer_pretty(&mut *stdout, &Ordered(report)).map_err(io::Error::other)?;
+    let report =
+        registry_cli_report::Report::new(report, registry_platform_buildinfo::DISPLAY_VERSION)
+            .map_err(io::Error::other)?;
+    serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
     writeln!(stdout)
-}
-
-/// Serialize the top-level object with the envelope members first, whatever
-/// order the underlying map keeps.
-struct Ordered<'a>(&'a Value);
-
-impl Serialize for Ordered<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let Value::Object(members) = self.0 else {
-            return self.0.serialize(serializer);
-        };
-        let mut map = serializer.serialize_map(Some(members.len()))?;
-        for key in HEAD {
-            if let Some(value) = members.get(key) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        for (key, value) in members {
-            if !HEAD.contains(&key.as_str()) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        map.end()
-    }
 }
 
 #[cfg(test)]
@@ -207,7 +181,7 @@ mod tests {
     fn a_report_opens_with_ok_command_and_status_in_that_order() {
         let mut out = Vec::new();
         write(
-            &json!({"apiVersion": "v", "status": "complete", "command": "check", "ok": true}),
+            &json!({"apiVersion": "v", "kind": "CtlReport", "status": "complete", "command": "check", "ok": true}),
             &mut out,
         )
         .unwrap();
@@ -259,6 +233,7 @@ pub(crate) struct ReportCommon {
     pub api_version: &'static str,
     #[cfg_attr(feature="schema",schemars(extend("const"=REPORT_KIND)))]
     pub kind: &'static str,
+    pub version: &'static str,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -444,7 +419,7 @@ payload!(DevDirectory {
     revision: i64,
     teams: usize
 });
-payload!(DevData {state:DevState,project:PathBuf,state_file:PathBuf,operator_config:PathBuf,
+payload!(DevData {outcome:DevState,project:PathBuf,state_file:PathBuf,operator_config:PathBuf,
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     casework_url:String,token_endpoint:String,
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
@@ -463,21 +438,59 @@ payload!(DevIdentityData {
     subject: String
 });
 payload!(UsageData {});
+payload!(InternalData {});
 
 macro_rules! reports {
     ($($variant:ident => $name:literal : $data:ty),* $(,)?)=>{
         #[derive(DeriveSerialize)]
         #[cfg_attr(feature="schema",derive(schemars::JsonSchema))]
         #[serde(tag="command",deny_unknown_fields)]
-        pub(crate) enum CliReport {$(#[serde(rename=$name)]$variant{#[serde(flatten)]common:ReportCommon,#[serde(skip_serializing_if="Option::is_none")]data:Option<$data>}),*}
+        pub(crate) enum CliReport {$(#[serde(rename=$name)]$variant{#[serde(flatten)]common:ReportCommon,#[serde(flatten,skip_serializing_if="Option::is_none")]data:Option<$data>}),*}
         impl CliReport {
             fn assemble(command:&str,common:ReportCommon,data:Option<Value>)->anyhow::Result<Self>{
                 Ok(match command {$($name=>Self::$variant{common,data:data.map(serde_json::from_value::<$data>).transpose()?},)* _=>anyhow::bail!("the CLI report command is not declared")})
             }
         }
+        #[cfg(feature="schema")]
+        pub(crate) fn payload_members(command:&str)->Option<PayloadMembers>{
+            match command {$($name=>Some(serialized_payload_members::<$data>()),)* _=>None}
+        }
     }
 }
-reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData);
+
+#[cfg(feature = "schema")]
+pub(crate) struct PayloadMembers {
+    pub(crate) required: Vec<String>,
+    pub(crate) present: Vec<String>,
+}
+
+#[cfg(feature = "schema")]
+fn serialized_payload_members<T: schemars::JsonSchema>() -> PayloadMembers {
+    let mut settings = schemars::generate::SchemaSettings::draft2020_12();
+    settings.contract = schemars::generate::Contract::Serialize;
+    let schema = settings.into_generator().into_root_schema_for::<T>();
+    let schema = serde_json::to_value(schema).expect("a generated payload schema serializes");
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|member| {
+            member
+                .as_str()
+                .expect("a generated required member is a string")
+                .to_owned()
+        })
+        .collect();
+    let present = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|properties| properties.keys().cloned())
+        .collect();
+    PayloadMembers { required, present }
+}
+reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData,Internal=>"internal":InternalData);
 
 impl CliReport {
     pub(crate) fn from_value(command: &str, value: Value) -> anyhow::Result<Self> {
@@ -496,13 +509,17 @@ impl CliReport {
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default();
         let mut diagnostics = diagnostics.into_iter().map(diagnostic).collect::<Vec<_>>();
-        if !ok && diagnostics.is_empty() {
+        if !ok {
             if let Some(refusals) = fields
                 .get("activation")
                 .and_then(|v| v.get("refusals"))
                 .and_then(Value::as_array)
             {
-                diagnostics.extend(refusals.iter().cloned().map(diagnostic));
+                for refusal in refusals.iter().cloned().map(diagnostic) {
+                    if !diagnostics.contains(&refusal) {
+                        diagnostics.push(refusal);
+                    }
+                }
             }
             if diagnostics.is_empty() {
                 diagnostics.push(Diagnostic::error(
@@ -542,8 +559,8 @@ impl CliReport {
             }
             "dev" => {
                 fields.insert(
-                    "state".into(),
-                    raw_status.ok_or_else(|| anyhow::anyhow!("dev report has no state"))?,
+                    "outcome".into(),
+                    raw_status.ok_or_else(|| anyhow::anyhow!("dev report has no outcome"))?,
                 );
                 Value::Object(fields)
             }
@@ -558,6 +575,7 @@ impl CliReport {
             },
             api_version: REPORT_API_VERSION,
             kind: REPORT_KIND,
+            version: registry_platform_buildinfo::DISPLAY_VERSION,
             diagnostics,
         };
         Self::assemble(command, common, Some(data))
@@ -575,6 +593,7 @@ impl CliReport {
                 status,
                 api_version: REPORT_API_VERSION,
                 kind: REPORT_KIND,
+                version: registry_platform_buildinfo::DISPLAY_VERSION,
                 diagnostics,
             },
             None,
@@ -694,5 +713,132 @@ mod typed_report_tests {
             serde_json::json!({"ok":true,"output":"types","files":[],"unexpected":true})
         )
         .is_err());
+    }
+
+    #[test]
+    fn dev_command_words_are_flat_outcomes_not_report_statuses() {
+        let report = CliReport::from_value(
+            "dev",
+            serde_json::json!({
+                "ok": true,
+                "status": "ready",
+                "project": "review",
+                "stateFile": "state.json",
+                "operatorConfig": "operator.yaml",
+                "caseworkUrl": "http://127.0.0.1:8092",
+                "tokenEndpoint": "http://127.0.0.1:8093/oauth2/token",
+                "issuer": "http://127.0.0.1:8093",
+                "clientAssertionAudience": "http://127.0.0.1:8093",
+                "resource": "urn:casework:dev:review",
+                "audience": "urn:casework:dev:review",
+                "journal": "casework.ndjson",
+                "contextProviders": [],
+                "clients": [],
+                "directory": {"revision": 1, "teams": 1}
+            }),
+        )
+        .unwrap();
+        let value = serde_json::to_value(report).unwrap();
+        assert_eq!(value["status"], "complete");
+        assert_eq!(value["outcome"], "ready");
+        assert!(value.get("state").is_none());
+        assert!(value.get("data").is_none());
+    }
+
+    #[test]
+    fn provider_add_command_words_are_flat_outcomes_not_report_statuses() {
+        let report = CliReport::from_value(
+            "provider-add",
+            serde_json::json!({
+                "ok": false,
+                "outcome": "changes-needed",
+                "project": "review",
+                "actionId": "correct-address",
+                "pattern": "single-reviewer-approval",
+                "sourceNamespace": "facility-registry",
+                "policyId": "correct-address-review",
+                "authorityId": "correct-address-review-authority",
+                "providerId": "correct-address-context",
+                "contextFields": [],
+                "changes": [],
+                "deployment": [],
+                "bypassPaths": [],
+                "sourceWrites": false,
+                "next": "Apply the intended BReg changes, then retry.",
+                "diagnostics": [{
+                    "severity":"error",
+                    "code":"casework.provider-add.breg-changes-needed",
+                    "path":"--breg-project",
+                    "message":"The BReg Action needs authored changes.",
+                    "suggestedAction":"Review the proposed changes, apply them, then retry."
+                }]
+            }),
+        )
+        .unwrap();
+        let value = serde_json::to_value(report).unwrap();
+        assert_eq!(value["status"], "domain-refusal");
+        assert_eq!(value["outcome"], "changes-needed");
+        assert!(value.get("state").is_none());
+        assert!(value.get("data").is_none());
+    }
+
+    #[test]
+    fn usage_and_internal_failures_are_declared_closed_variants() {
+        for command in ["usage", "internal"] {
+            let report = CliReport::failure(
+                command,
+                ReportStatus::OperationalFailure,
+                vec![Diagnostic::error(
+                    "caseworkctl.internal-error",
+                    "",
+                    "The command stopped because of an internal error.",
+                    "Preserve the input and report the diagnostic code.",
+                )],
+            );
+            assert!(report.is_ok(), "{command} failure is not declared");
+        }
+    }
+
+    #[test]
+    fn failed_doctor_reports_keep_activation_refusals_beside_warnings() {
+        let report = CliReport::from_value(
+            "doctor",
+            serde_json::json!({
+                "ok": false,
+                "runtimeConfig": "runtime.yaml",
+                "packageDigest": format!("sha256:{}", "a".repeat(64)),
+                "activation": {
+                    "active": {"revision": "candidate"},
+                    "refusals": [{
+                        "severity":"error",
+                        "code":"casework.activation.refused",
+                        "path":"/package",
+                        "message":"The candidate package was refused.",
+                        "suggestedAction":"Correct the package, then run doctor again."
+                    }]
+                },
+                "checks": {
+                    "configuration":"ready",
+                    "package":"ready",
+                    "database":"ready",
+                    "audit":"ready"
+                },
+                "diagnostics": [{
+                    "severity":"warning",
+                    "code":"casework.staffing.insufficient-distinct-approvers",
+                    "path":"queues.review",
+                    "message":"The serving team is understaffed.",
+                    "suggestedAction":"Add another eligible reviewer."
+                }]
+            }),
+        )
+        .unwrap();
+        let value = serde_json::to_value(report).unwrap();
+        assert_eq!(value["diagnostics"].as_array().unwrap().len(), 2);
+        assert!(value["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "casework.activation.refused"));
     }
 }

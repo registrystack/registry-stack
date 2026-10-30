@@ -1690,9 +1690,12 @@ fn the_report_names_every_local_credential_without_a_secret() {
     let typed = crate::report::CliReport::from_value("dev", report).unwrap();
     let typed = serde_json::to_value(typed).unwrap();
     assert_eq!(typed["ok"], true);
-    assert_eq!(typed["data"]["issuer"], state.issuer_origin());
+    assert_eq!(typed["status"], "complete");
+    assert_eq!(typed["outcome"], "ready");
+    assert!(typed.get("data").is_none());
+    assert_eq!(typed["issuer"], state.issuer_origin());
     assert_eq!(
-        typed["data"]["clients"][0]["subject"],
+        typed["clients"][0]["subject"],
         config::principal("requester")
     );
 }

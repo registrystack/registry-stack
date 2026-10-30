@@ -853,6 +853,7 @@ async fn execute_response(
                         },
                         issued_at,
                         observed_at,
+                        source_valid_until: None,
                         subjects,
                     },
                 )

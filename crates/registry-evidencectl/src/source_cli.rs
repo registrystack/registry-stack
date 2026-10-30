@@ -318,7 +318,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use std::fs;
 
-    const SOURCE: &str = "type: http-json\nposture: record-transformed\nconnection: remote\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{profile: record-code, fields: [code]}]\n  projection: [/matched]\n  prepareScript: adapters/lookup-prepare.rhai\n  adapterParameters: {}\n  adapterParametersSchema: schemas/lookup-parameters.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/lookup-response.yaml\nfactSchema: schemas/lookup-facts.yaml\nextractScript: adapters/lookup-extract.rhai\n";
+    const SOURCE: &str = "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nposture: record-transformed\nconnection: remote\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{profile: record-code, fields: [code]}]\n  projection: [/matched]\n  prepareScript: adapters/lookup-prepare.rhai\n  adapterParameters: {}\n  adapterParametersSchema: schemas/lookup-parameters.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/lookup-response.yaml\nfactSchema: schemas/lookup-facts.yaml\nextractScript: adapters/lookup-extract.rhai\n";
     const EXTRACT_ONE: &str = "fn extract(response, context) { #{outcome: \"no_match\"} } // one\n";
     const EXTRACT_TWO: &str = "fn extract(response, context) { #{outcome: \"no_match\"} } // two\n";
 
@@ -398,7 +398,7 @@ assertionDefinitions:
                 ("sources/lookup.yaml", SOURCE),
                 (
                     "selectors/record-code.yaml",
-                    "maximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n",
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n",
                 ),
                 (
                     "schemas/lookup-parameters.yaml",

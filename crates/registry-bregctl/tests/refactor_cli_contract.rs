@@ -335,8 +335,8 @@ fn explain_findings_share_checks_source_locations_and_json_pointers() {
         "events",
     ] {
         let report = explain_project(subject, project);
-        assert_eq!(report["findings"], checked["diagnostics"], "{subject}");
-        for finding in report["findings"].as_array().unwrap() {
+        assert_eq!(report["diagnostics"], checked["diagnostics"], "{subject}");
+        for finding in report["diagnostics"].as_array().unwrap() {
             assert!(finding["path"].as_str().unwrap().starts_with('/'));
             assert!(finding["source"]["file"]
                 .as_str()

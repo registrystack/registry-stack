@@ -109,11 +109,20 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
         {"id":"z-result","target":{"recordType":"entry"},"operation":"create","fields":["name"]},
         {"id":"a-result","target":{"recordType":"entry"},"operation":"create","fields":["name"]}
     ]});
+    let mut reused = value["actions"][0].clone();
+    reused["id"] = json!("create-pair-again");
+    value["actions"].as_array_mut().unwrap().push(reused);
+    let mut permission = value["accessProfiles"][0]["permissions"]["actions"][0].clone();
+    permission["action"] = json!("create-pair-again");
+    value["accessProfiles"][0]["permissions"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(permission);
     let records = parse_module_json(&serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"records","version":"1",
         "valueTypes":{"name":{"type":"string","maximumLength":32}},
         "recordTypes":[{"id":"entry","route":"entries","primaryDataset":"records","mutationMode":"mutable","fields":[{"id":"name","typeRef":"name","required":true,"classification":"internal"}]}],
-        "functions":[{"id":"module-plan","runtime":"rhai","source":"plans/plan.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":[]}]
+        "functions":[{"id":"module-plan","runtime":"rhai","source":"plans/plan.rhai","entrypoint":"plan","abi":"registry.action-plan/v1","capabilities":["evidence"]}]
     })).unwrap()).unwrap();
     let extensions = parse_module_json(&serde_json::to_vec(&json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"extensions","version":"1","dependencies":["records"],
@@ -142,15 +151,18 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
     )
     .unwrap();
     assert!(model.entities()["entry"].fields.contains_key("note"));
-    assert_eq!(
-        model.actions().actions[0]
+    assert_eq!(model.actions().actions.len(), 2);
+    assert!(model.actions().actions.iter().all(|action| {
+        action
             .handler
             .as_ref()
-            .unwrap()
-            .source_module
-            .as_deref(),
-        Some("records")
-    );
+            .and_then(|handler| handler.source_module.as_deref())
+            == Some("records")
+    }));
+    assert!(model.actions().actions.iter().all(|action| action
+        .handler
+        .as_ref()
+        .is_some_and(|handler| handler.capabilities.is_empty())));
     assert!(evaluate_action(
         &model.actions().actions[0],
         &json!({"name":"entry"}).as_object().unwrap().clone(),

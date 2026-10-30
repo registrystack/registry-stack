@@ -99,6 +99,7 @@ products of their own.
 | `crates/registry-thunderid-tooling` | Tooling-only support for adopter CLIs and integration tests against a pinned upstream ThunderID issuer; no runtime depends on it |
 | `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
 | `crates/registry-cli-reference` | Deterministic reference data walked from one Clap command tree, shared by `registry-cli-docs` and each binary's `help --format json` |
+| `crates/registry-cli-report` | Shared CLI report serialization, result classes, and value-free internal-error reporting; products retain payload and failure policy |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `tools/payment-simulator` | Synthetic payment simulator (Python, SQLite): a test double for G2P and P2G payment APIs that never moves money and refuses non-loopback serving without `--allow-network`; run from its directory with `uv` |
@@ -124,6 +125,7 @@ Before editing an area, read its owning guide:
   `products/discovery/AGENTS.md`
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
 - `registry-platform-*`: `products/platform/AGENTS.md`
+- `registry-cli-report`: `products/platform/AGENTS.md` and the crate README
 - product clients, their language bindings, `registry-record`, and
   `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
 - `docs/site/`: `docs/site/AGENTS.md`

@@ -378,6 +378,36 @@ fn publish_json_reports_separately_from_the_output_artifacts() {
 }
 
 #[test]
+fn publish_distinguishes_a_refused_destination_from_an_unavailable_filesystem() {
+    let root = temp_dir("publish-exit-class");
+    let manifest = root.join("metadata.yaml");
+    let blocked = root.join("blocked");
+    write_minimal_manifest(&manifest, "datasets: []\n");
+    fs::write(&blocked, "regular file").unwrap();
+    for (destination, exit, status) in [
+        (blocked.clone(), 1, "domain-refusal"),
+        (blocked.join("child"), 3, "operational-failure"),
+    ] {
+        let output = Command::new(bin())
+            .arg("publish")
+            .arg(&manifest)
+            .arg("--output")
+            .arg(&destination)
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(exit));
+        assert!(output.stderr.is_empty());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["status"], status);
+        assert!(!report["diagnostics"].as_array().unwrap().is_empty());
+        assert!(report["version"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty()));
+    }
+}
+
+#[test]
 fn retired_manifest_options_name_their_replacements_before_effects() {
     let root = temp_dir("retired-cli-options");
     let manifest = root.join("metadata.yaml");
@@ -2385,9 +2415,25 @@ fn the_report_example_is_the_validate_output() {
         .output()
         .expect("run cli");
     assert_eq!(output.status.code(), Some(0));
+    let committed = fs::read_to_string(example).expect("the report example");
+    let sample: serde_json::Value = serde_json::from_str(&committed).unwrap();
+    let sample_version = sample["version"]
+        .as_str()
+        .filter(|version| !version.is_empty())
+        .expect("the report example carries a displayed binary version");
+    let output = String::from_utf8(output.stdout).expect("stdout utf8");
+    let actual_version = format!(
+        "  \"version\": {},\n",
+        serde_json::to_string(registry_platform_buildinfo::DISPLAY_VERSION).unwrap()
+    );
+    assert_eq!(output.matches(&actual_version).count(), 1, "{output}");
+    let sample_version = format!(
+        "  \"version\": {},\n",
+        serde_json::to_string(sample_version).unwrap()
+    );
+    let normalized = output.replacen(&actual_version, &sample_version, 1);
     assert_eq!(
-        fs::read_to_string(example).expect("the report example"),
-        String::from_utf8(output.stdout).expect("stdout utf8"),
+        committed, normalized,
         "regenerate it with `registry-manifest validate --format json \
          profiles/example-benefits-sync/fixtures/metadata.yaml` from products/manifest"
     );

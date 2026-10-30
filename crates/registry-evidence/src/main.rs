@@ -3890,6 +3890,7 @@ async fn sign_and_verify_fixture_evidence(
                 },
                 issued_at,
                 observed_at,
+                source_valid_until: None,
                 subjects,
             },
         )

@@ -1451,8 +1451,8 @@ fn proposal_application_status_schema() -> Value {
     "properties":{
         "state":{"enum":["awaiting-review","pending","applying","blocked","applied","cancelled","rejected"]},
         "mode":{"enum":["automatic","manual"]},
-        "reason":{"enum":["contract-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
-        "recovery":{"enum":["retry","correct-input"]},
+        "reason":{"enum":["package-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
+        "recovery":{"enum":["retry","rebase","correct-input"]},
         "automaticRetry":{"type":"object","additionalProperties":false,
             "required":["scheduled","attempts","maximumAttempts"],"properties":{
                 "scheduled":{"type":"boolean"},"attempts":{"type":"integer","minimum":0,"maximum":1000},
@@ -1495,8 +1495,8 @@ fn proposal_attachment_schema() -> Value {
 pub fn availability_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["available","observedRevision"],
         "properties":{"available":{"type":"boolean"},"observedRevision":{"type":"integer","minimum":1},
-            "reason":{"enum":["pending-review","review-rejected","review-changes-requested","review-ended","stale-revision","contract-changed","dependency-outage","invalid-input","already-applied"]},
-            "recovery":{"enum":["refresh","revise","retry","correct-input","receipt-only"]}},
+            "reason":{"enum":["pending-review","review-rejected","review-changes-requested","review-ended","stale-revision","package-changed","dependency-outage","invalid-input","already-applied"]},
+            "recovery":{"enum":["refresh","revise","retry","rebase","correct-input","receipt-only"]}},
         "if":{"properties":{"available":{"const":false}}},"then":{"required":["reason","recovery"]}})
 }
 
@@ -2977,10 +2977,10 @@ pub(crate) fn openapi_batch_items_schema(
         item_schemas.push(json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["operation", "recordId", "ifMatch", "patch"],
+            "required": ["operation", "recordIdentifier", "ifMatch", "patch"],
             "properties": {
                 "operation": {"const": "patch"},
-                "recordId": {"type": "string", "format": "uuid"},
+                "recordIdentifier": {"type": "string", "format": "uuid"},
                 "ifMatch": {"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"},
                 "patch": json_patch_array_schema(),
             }
@@ -3362,11 +3362,10 @@ fn mutation_record_member_schema(schema_ref: &str) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["recordIdentifier", "revisionIdentifier", "domainData", "snapshot"],
+        "required": ["recordIdentifier", "revisionIdentifier", "domainData"],
         "properties": {
             "recordIdentifier": {"type": "string", "format": "uuid"},
             "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
-            "snapshot": snapshot_reference_schema(),
             "domainData": {"$ref": format!("#/components/schemas/{schema_ref}")},
         }
     })
@@ -3380,14 +3379,14 @@ fn response_meta_schema(spec: OpenApiOperationSpec<'_>) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["registryIdentifier", "datasetIdentifier", "entityTypeIdentifier"],
+        "required": ["registryIdentifier", "datasetIdentifier", "recordTypeIdentifier"],
         "properties": {
             "registryIdentifier": {"const": spec.registry_identifier},
             "datasetIdentifier": {
                 "const": spec.response_entity.primary_dataset.as_deref()
                     .expect("served entities have a compiled primary dataset")
             },
-            "entityTypeIdentifier": {"const": spec.response_entity.id}
+            "recordTypeIdentifier": {"const": spec.response_entity.id}
         }
     })
 }
@@ -3671,13 +3670,13 @@ fn batch_response_schema(
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["operation", "id", "revision", "etag", "data"],
+                    "required": ["operation", "recordIdentifier", "revisionIdentifier", "etag", "domainData"],
                     "properties": {
                         "operation": {"enum": operations},
-                        "id": {"type": "string", "format": "uuid"},
-                        "revision": {"type": "integer", "format": "int64", "minimum": 1},
+                        "recordIdentifier": {"type": "string", "format": "uuid"},
+                        "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
                         "etag": {"type": "string", "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"},
-                        "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
+                        "domainData": {"$ref": format!("#/components/schemas/{schema_ref}")},
                     }
                 }
             }
@@ -3947,7 +3946,20 @@ fn problem_responses(
             }],
         );
     }
-    if matches!(operation, Operation::Create | Operation::Batch) && has_row_boundaries {
+    if matches!(
+        operation,
+        Operation::Create | Operation::Patch | Operation::Batch
+    ) && has_row_boundaries
+    {
+        responses.insert(
+            "403",
+            vec![ProblemExample {
+                code: "write.outside-boundary",
+                detail: "The resulting record falls outside the selected access profile's row boundary.",
+            }],
+        );
+    }
+    if operation == Operation::Batch && has_row_boundaries {
         responses.insert(
             "412",
             vec![ProblemExample {
@@ -3976,6 +3988,7 @@ fn problem_responses(
 }
 
 fn problem_schema() -> Value {
+    let write_outside_boundary = crate::problem::ProblemCode::WriteOutsideBoundary;
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -4011,6 +4024,21 @@ fn problem_schema() -> Value {
             }
         },
         "allOf": [
+            {
+                "if": {"properties": {"code": {"const": write_outside_boundary.code()}}},
+                "then": {
+                    "propertyNames": {"enum": [
+                        "type", "title", "status", "detail", "code", "traceId"
+                    ]},
+                    "properties": {
+                        "type": {"const": write_outside_boundary.type_uri()},
+                        "title": {"const": write_outside_boundary.title()},
+                        "status": {"const": write_outside_boundary.status()},
+                        "detail": {"const": write_outside_boundary.description()},
+                        "code": {"const": write_outside_boundary.code()}
+                    }
+                }
+            },
             {
                 "if":{"properties":{"code":{"not":{"const":"action.guard_failed"}}}},
                 "then":{"not":{"required":["guardReason"]}}
@@ -4119,6 +4147,7 @@ fn problem_example(status: &str, code: &str, detail: &str) -> Value {
         "title": match status {
             "400" => "Bad Request",
             "401" => "Unauthorized",
+            "403" => "Forbidden",
             "404" => "Not Found",
             "409" => "Conflict",
             "410" => "Gone",

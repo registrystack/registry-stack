@@ -250,7 +250,7 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
             "{layout}: matching authority must compose: {}",
             json(&created)
         );
-        assert_eq!(json(&created)["data"]["state"], "created");
+        assert_eq!(json(&created)["outcome"], "created");
         let runtime = read_yaml(&project.join("runtime.example.yaml"));
         assert_eq!(runtime["package"]["root"], json!(output));
         assert!(output.join("SHA256SUMS").is_file());
@@ -276,7 +276,7 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
             repeated.status.success(),
             "matching sealed rerun must succeed"
         );
-        assert_eq!(json(&repeated)["data"]["state"], "in-agreement");
+        assert_eq!(json(&repeated)["outcome"], "in-agreement");
         assert_eq!(files(&project), before);
         assert_eq!(files(&output), output_before);
     }

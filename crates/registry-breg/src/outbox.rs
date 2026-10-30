@@ -77,8 +77,7 @@ pub(crate) struct CapturedEvent<'a> {
     pub event_id: Uuid,
     pub event_type: &'a str,
     pub created_at: OffsetDateTime,
-    pub record_reference: &'a str,
-    pub record_revision: i64,
+    pub subject: EventSubject,
     pub data: Value,
 }
 
@@ -103,10 +102,7 @@ pub(crate) fn capture_envelope(
         event_type: event.event_type.to_owned(),
         source: binding.source.to_owned(),
         time: event.created_at,
-        subject: EventSubject {
-            record_reference: event.record_reference.to_owned(),
-            record_revision: event.record_revision,
-        },
+        subject: event.subject,
         dataschema,
         data: event.data,
         causation,
@@ -252,8 +248,7 @@ pub(crate) async fn insert_configured_events(
                 event_id,
                 event_type: &event.id,
                 created_at: OffsetDateTime::from(created_at),
-                record_reference: mutation.record_reference,
-                record_revision: mutation.record_revision,
+                subject: EventSubject::record(mutation.record_reference, mutation.record_revision),
                 data,
             },
         )?;
@@ -619,9 +614,10 @@ mod tests {
             event_type: "permit.granted",
             created_at: OffsetDateTime::from_unix_timestamp_nanos(1_767_225_600_123_000_000)
                 .expect("capture instant"),
-            record_reference:
+            subject: EventSubject::record(
                 "hmac-sha256:8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
-            record_revision: 3,
+                3,
+            ),
             data,
         }
     }
@@ -651,10 +647,10 @@ mod tests {
         assert_eq!(envelope.causation, Causation::root(EVENT_ID));
         assert_eq!(envelope.dataschema, DATA_SCHEMA);
         assert_eq!(
-            envelope.subject.record_reference,
+            envelope.subject.reference(),
             "hmac-sha256:8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7"
         );
-        assert_eq!(envelope.subject.record_revision, 3);
+        assert_eq!(envelope.subject.revision(), 3);
     }
 
     #[test]
@@ -781,10 +777,9 @@ mod tests {
                 event_type: EVENT_ID,
                 created_at: OffsetDateTime::from_unix_timestamp_nanos(1_767_225_600_123_000_000)
                     .expect("capture instant"),
-                record_reference: &record_reference,
                 // The largest i64 canonical JSON accepts, and the widest
                 // decimal spelling any revision can reach: 2^63 - 2^10.
-                record_revision: 9_223_372_036_854_774_784,
+                subject: EventSubject::record(record_reference, 9_223_372_036_854_774_784),
                 data: projection(),
             },
         )

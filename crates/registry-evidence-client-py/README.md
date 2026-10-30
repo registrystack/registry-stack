@@ -143,19 +143,18 @@ the other verification mode's kind is refused.
 A mapped failure surfaces to a caller as an `EvidenceClientError`, exported
 from the package root, with one subclass per stable kind:
 `ConfigurationError`, `NonceError`, `TokenError`, `TransportError`,
-`DeniedError`, `NotAvailableError`, `ProtocolError`, `VerificationError`. Every
+`DeniedError`, `NotAvailableError`, `InvalidRequestError`, `UnavailableError`,
+`ProtocolError`, `VerificationError`. Every
 instance carries `kind`; `status`, `code`, `trace_id`,
 `retry_after_seconds`, `transport_kind` (on a `TransportError`, and on a
 `TokenError` whose `token_kind` is `"transport"`), and `token_kind` (only on a
 `TokenError`) are set as attributes only when the underlying failure carries
 them. `str(error)` is human prose, not JSON: read it, do not parse it.
 
-The `denied`/`protocol` split is a hazard worth calling out explicitly: HTTP
-401, 403, and 429 all map to `denied` regardless of the response body's own
-`code`, while every other non-2xx status (including 400, 500, and anything
-else not specifically recognized) maps to `protocol`. A caller that only
-checks `status` without also checking `kind` can misclassify a 429 rate limit
-as a generic protocol failure, or vice versa. See
+HTTP 401, 403, and 429 map to `denied`; 422 maps to `not-available`; other
+contract-valid 4xx responses map to `invalid-request`; and contract-valid 5xx
+responses map to `unavailable`. A response that breaks the wire contract maps
+to `protocol`. A caller branches on `kind`, not only `status`. See
 `registry-evidence-client`'s `problem.rs` for the authoritative mapping table.
 
 A response that exceeds its size bound maps to `kind: "transport"` with

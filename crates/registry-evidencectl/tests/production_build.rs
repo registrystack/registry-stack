@@ -795,7 +795,8 @@ fn package_accepts_a_stable_package_root_outside_the_output() {
                 assert!(output.stderr.is_empty());
                 let report: serde_json::Value =
                     serde_json::from_slice(&output.stdout).expect("JSON package report");
-                assert_eq!(report["status"], "packaged");
+                assert_eq!(report["status"], "complete");
+                assert_eq!(report["outcome"], "packaged");
                 assert!(report["packageDigest"]
                     .as_str()
                     .unwrap()

@@ -140,7 +140,7 @@ async fn sdk_relationship_continuation_keeps_source_path_authority_and_target_pr
         household.value.data.record_identifier
     );
     assert_eq!(
-        first_continuation.collection.entity_type_identifier,
+        first_continuation.collection.record_type_identifier,
         "person"
     );
     assert_eq!(
@@ -151,7 +151,7 @@ async fn sdk_relationship_continuation_keeps_source_path_authority_and_target_pr
 
     let mut seen = BTreeSet::new();
     loop {
-        assert_eq!(page.value.value.meta.entity_type_identifier, "person");
+        assert_eq!(page.value.value.meta.record_type_identifier, "person");
         assert_eq!(page.value.value.items.len(), 1);
         let record = &page.value.value.items[0];
         assert!(seen.insert(record.record_identifier.clone()));
@@ -234,7 +234,7 @@ async fn read_path_answers_when_the_profile_has_no_entry_for_its_target_entity()
         )
         .await
         .expect("the path grant alone authorizes the target read");
-    assert_eq!(page.value.value.meta.entity_type_identifier, "person");
+    assert_eq!(page.value.value.meta.record_type_identifier, "person");
     assert_eq!(page.value.value.items.len(), 1);
     let record = &page.value.value.items[0];
     assert_eq!(

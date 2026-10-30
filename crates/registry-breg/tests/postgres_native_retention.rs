@@ -175,7 +175,7 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [registry-client]
-    deniedKids: [denied-kid]
+    revokedKeyIds: [denied-kid]
     maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:

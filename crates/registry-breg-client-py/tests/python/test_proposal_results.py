@@ -206,6 +206,29 @@ class ProposalResultTests(unittest.TestCase):
                 observed = self.client.get_proposal(self.binding, ID).document
                 self.assertNotIn('applicationStatus', observed)
 
+    def test_package_change_exposes_only_the_rebase_recovery_vocabulary(self):
+        self.value = status_document('blocked')
+        self.value['blockedReason'] = 'package-changed'
+        self.value['applicationStatus'].update(reason='package-changed', recovery='rebase')
+        self.value['links']['apply'] = {
+            'method': 'POST', 'path': '/v1/proposals/' + ID + '/apply',
+            'accessProfile': 'reader', 'operation': 'apply', 'ifMatch': '"blocked-condition"',
+            'availability': {'available': False, 'observedRevision': 8,
+                             'reason': 'package-changed', 'recovery': 'rebase'},
+        }
+        observed = self.client.get_proposal(self.binding, ID).document
+        self.assertEqual(observed['applicationStatus'], self.value['applicationStatus'])
+        self.assertEqual(observed['links']['apply']['availability'],
+                         self.value['links']['apply']['availability'])
+
+        for reason, recovery in [('contract-changed', 'rebase'),
+                                 ('package-changed', 'correct-input'),
+                                 ('package-changed', 'refresh')]:
+            self.value['applicationStatus'].update(reason=reason, recovery=recovery)
+            self.value['links']['apply']['availability'].update(reason=reason, recovery=recovery)
+            with self.subTest(reason=reason, recovery=recovery), self.assertRaises(BaseRegistryClientError):
+                self.client.get_proposal(self.binding, ID)
+
     def test_malformed_and_widened_receipts_are_refused(self):
         for path, value in [(('submissionVersion',), 1), (('effectDigest',), 'sha256:UPPERCASE'),
                             (('resultLinks', 0, 'revision'), 0), (('resultLinks', 0, 'recordId'), 'not-a-uuid'),

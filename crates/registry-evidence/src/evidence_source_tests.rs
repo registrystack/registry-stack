@@ -17,6 +17,7 @@ struct ComposedRuntime {
     token_server: MockServer,
     serving: tokio::task::JoinHandle<()>,
     requests: Arc<Mutex<Vec<Value>>>,
+    upstream_valid_until: Arc<Mutex<Vec<String>>>,
     fault: Arc<AtomicUsize>,
 }
 
@@ -81,6 +82,7 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
     assert_eq!(contract.definitions.len(), 1);
 
     let requests = Arc::new(Mutex::new(Vec::new()));
+    let upstream_valid_until = Arc::new(Mutex::new(Vec::new()));
     let fault = Arc::new(AtomicUsize::new(0));
     let signer = Arc::new(
         EvidenceSigner::initialize(
@@ -94,9 +96,11 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
     );
     let router = build_app(Arc::clone(&upstream.runtime)).layer(axum::middleware::from_fn({
         let requests = Arc::clone(&requests);
+        let upstream_valid_until = Arc::clone(&upstream_valid_until);
         let fault = Arc::clone(&fault);
         move |request: Request, next: Next| {
             let requests = Arc::clone(&requests);
+            let upstream_valid_until = Arc::clone(&upstream_valid_until);
             let fault = Arc::clone(&fault);
             let signer = Arc::clone(&signer);
             async move {
@@ -221,6 +225,16 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
                             Body::from(serde_json::to_vec(&corrupt).unwrap()),
                         );
                     }
+                    23 => {
+                        let issued_at = payload["issuedAt"]
+                            .as_str()
+                            .unwrap()
+                            .parse::<DateTime<Utc>>()
+                            .unwrap();
+                        let valid_until = (issued_at + chrono::Duration::seconds(60)).to_rfc3339();
+                        payload["validUntil"] = json!(valid_until);
+                        upstream_valid_until.lock().await.push(valid_until);
+                    }
                     _ => unreachable!(),
                 }
                 let modified = signer.sign_json(&payload).await.unwrap();
@@ -270,6 +284,7 @@ async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
         token_server,
         serving,
         requests,
+        upstream_valid_until,
         fault,
     }
 }
@@ -467,6 +482,69 @@ async fn signed_evidence_source_composes_two_authorized_services_with_fresh_valu
         for request in requests.iter() {
             assert!(!audit.contains(request["requestNonce"].as_str().unwrap()));
         }
+    }
+}
+
+#[tokio::test]
+async fn signed_evidence_source_caps_downstream_validity_at_the_upstream_deadline() {
+    let fixture = composed_runtime().await;
+    fixture.fault.store(23, Ordering::SeqCst);
+    mount_residence_source(&fixture.upstream.server).await;
+    let request = residence_request();
+    let response = TestServer::new(build_app(Arc::clone(&fixture.runtime)))
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)
+        .json(&request)
+        .await;
+    response.assert_status_ok();
+    let bytes = response.as_bytes();
+    let evidence = verify_flattened_jws(
+        bytes,
+        fixture.runtime.jwks(),
+        &verification_policy(&fixture.runtime, &request, bytes),
+    )
+    .unwrap();
+    let upstream_valid_until = fixture.upstream_valid_until.lock().await;
+    assert_eq!(upstream_valid_until.len(), 1);
+    assert_eq!(
+        evidence.valid_until.parse::<DateTime<Utc>>().unwrap(),
+        upstream_valid_until[0].parse::<DateTime<Utc>>().unwrap(),
+        "the downstream assertion must use the verified upstream deadline exactly"
+    );
+    assert!(
+        evidence.valid_until.parse::<DateTime<Utc>>().unwrap()
+            > evidence.issued_at.parse::<DateTime<Utc>>().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn signed_evidence_source_caps_each_sequential_request_batch_item() {
+    let fixture = composed_runtime().await;
+    fixture.fault.store(23, Ordering::SeqCst);
+    mount_residence_source_expecting(&fixture.upstream.server, 2).await;
+    let response = TestServer::new(build_app(Arc::clone(&fixture.runtime)))
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&request_batch_from_request(&residence_request(), 2))
+        .await;
+    response.assert_status_ok();
+    let response = response.json::<EvidenceRequestBatchResponse>();
+    assert_eq!(response.items.len(), 2);
+    let upstream_valid_until = fixture.upstream_valid_until.lock().await;
+    assert_eq!(upstream_valid_until.len(), 2);
+    for (item, upstream_valid_until) in response.items.into_iter().zip(upstream_valid_until.iter())
+    {
+        let EvidenceRequestBatchResponseItem::Evidence { evidence } = item else {
+            panic!("each signed-source batch item should produce evidence");
+        };
+        let evidence = decode_evidence(&evidence);
+        assert_eq!(
+            evidence.valid_until.parse::<DateTime<Utc>>().unwrap(),
+            upstream_valid_until.parse::<DateTime<Utc>>().unwrap(),
+            "each item keeps its own verified upstream deadline"
+        );
     }
 }
 

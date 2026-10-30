@@ -379,8 +379,9 @@ impl Session {
         assert_eq!(report["status"], "complete");
         assert_eq!(report["diagnostics"], json!([]));
         assert_eq!(report["ok"], true);
-        report["data"].as_object().expect("typed command data");
-        report["data"].clone()
+        assert!(report.get("data").is_none());
+        assert!(report.get("state").is_none());
+        report
     }
 
     fn success(&self, args: &[&str]) -> Value {
@@ -404,7 +405,7 @@ impl Session {
             "--casework-bin",
             self.casework_bin.to_str().expect("a UTF-8 casework path"),
         ]);
-        assert_eq!(report["state"], "ready", "{report:#}");
+        assert_eq!(report["outcome"], "ready", "{report:#}");
         assert_eq!(
             report["caseworkUrl"],
             format!("http://127.0.0.1:{casework_port}")
@@ -425,7 +426,7 @@ impl Session {
             "--casework-bin",
             self.casework_bin.to_str().expect("a UTF-8 casework path"),
         ]);
-        assert_eq!(report["state"], "ready", "{report:#}");
+        assert_eq!(report["outcome"], "ready", "{report:#}");
         report
     }
 
@@ -781,8 +782,8 @@ fn dev_allocates_ports_for_parallel_fresh_projects_and_retains_them() {
         second_report["tokenEndpoint"]
     );
 
-    assert_eq!(first.stop(&[])["state"], "stopped");
-    assert_eq!(second.stop(&[])["state"], "stopped");
+    assert_eq!(first.stop(&[])["outcome"], "stopped");
+    assert_eq!(second.stop(&[])["outcome"], "stopped");
     let (first_restart, second_restart) = std::thread::scope(|scope| {
         let first_start = scope.spawn(|| first.start_with_allocated_ports());
         let second_start = scope.spawn(|| second.start_with_allocated_ports());
@@ -1096,7 +1097,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     // A stopped session keeps its records: the same item is in the same inbox
     // after a restart, on the same retained ports. Complete it only after that
     // restart so both the pending and terminal forms cross a process boundary.
-    assert_eq!(session.stop(&[])["state"], "stopped");
+    assert_eq!(session.stop(&[])["outcome"], "stopped");
     let second = session.start();
     let completed = native.python(&json!({
         "baseUrl": second["caseworkUrl"],
@@ -1121,7 +1122,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
 
     // Terminal results are retained by the same session too. A newly started
     // runtime serves the producer's exact result and does not resurrect work.
-    assert_eq!(session.stop(&[])["state"], "stopped");
+    assert_eq!(session.stop(&[])["outcome"], "stopped");
     let terminal_restart = session.start();
     assert!(inbox(&session, &terminal_restart).is_empty());
     let retained_result = native.node(&json!({
@@ -1145,7 +1146,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     assert_eq!(receipt["policy"], accepted["policy"]);
 
     // Removal discards them: the same project starts empty and serves again.
-    assert_eq!(session.stop(&["--remove"])["state"], "stopped");
+    assert_eq!(session.stop(&["--remove"])["outcome"], "stopped");
     let third = session.start();
     assert_eq!(third["directory"]["teams"], 1, "{third:#}");
     assert!(inbox(&session, &third).is_empty());

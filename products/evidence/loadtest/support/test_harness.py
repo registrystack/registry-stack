@@ -355,9 +355,34 @@ class EvidenceHarnessTests(unittest.TestCase):
             header.chmod(0o600)
             fake = Path(directory) / "evidencectl"
             fake.write_text(
-                f"#!/bin/sh\nprintf '%s\\n' '{{\"status\":\"ready\",\"headerFile\":\"{header}\"}}'\n", encoding="utf-8"
+                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"ready\",\"headerFile\":\"{header}\"}}'\n",
+                encoding="utf-8",
             )
             fake.chmod(0o700)
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.fresh_header(fake, project, "loadtest-001")
+            fake.write_text(
+                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"complete\",\"headerFile\":\"{header}\"}}'\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.fresh_header(fake, project, "loadtest-001")
+            fake.write_text(
+                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"complete\",\"outcome\":\"starting\",\"headerFile\":\"{header}\"}}'\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.fresh_header(fake, project, "loadtest-001")
+            fake.write_text(
+                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":false,\"status\":\"complete\",\"outcome\":\"ready\",\"headerFile\":\"{header}\"}}'\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.fresh_header(fake, project, "loadtest-001")
+            fake.write_text(
+                f"#!/bin/sh\nprintf '%s\\n' '{{\"ok\":true,\"status\":\"complete\",\"outcome\":\"ready\",\"headerFile\":\"{header}\"}}'\n",
+                encoding="utf-8",
+            )
             self.assertEqual(loadenv.fresh_header(fake, project, "loadtest-001"), header.resolve())
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.fresh_header(fake, project, "loadtest-002")
@@ -378,7 +403,8 @@ class EvidenceHarnessTests(unittest.TestCase):
             "fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n"
             "os.write(fd, ('Authorization: Bearer ' + b(b'{}') + '.' + claims + '.' + b(client.encode()) + '\\n').encode())\n"
             "os.close(fd)\n"
-            "print(json.dumps({'operation': 'dev-token', 'status': 'ready', 'headerFile': path}))\n",
+            "print(json.dumps({'ok': True, 'operation': 'dev-token', 'status': 'complete', "
+            "'outcome': 'ready', 'headerFile': path}))\n",
             encoding="utf-8",
         )
         evidencectl.chmod(0o700)
@@ -500,15 +526,34 @@ class EvidenceHarnessTests(unittest.TestCase):
             (root / "pool").mkdir()
             (root / "pool/pool-facts.json").write_text(json.dumps({"subjects": 200}), encoding="utf-8")
             report = root / "dev-report.json"
-            report.write_text(
-                json.dumps({"status": "ready", "project": str(project), "evidenceOrigin": "http://127.0.0.1:5555"}),
-                encoding="utf-8",
-            )
+            ready = {
+                "ok": True,
+                "status": "complete",
+                "outcome": "ready",
+                "project": str(project),
+                "evidenceOrigin": "http://127.0.0.1:5555",
+            }
             expected = loadenv.mock_command(evidencectl, 4711)
             with (
                 unittest.mock.patch.object(loadenv, "_process_command", return_value=expected),
                 unittest.mock.patch.object(loadenv, "_process_cwd", return_value=str(project.resolve())),
             ):
+                for stale in (
+                    {
+                        **{key: value for key, value in ready.items() if key != "outcome"},
+                        "status": "ready",
+                    },
+                    {key: value for key, value in ready.items() if key != "outcome"},
+                    {**ready, "outcome": "starting"},
+                    {**ready, "ok": False},
+                ):
+                    report.write_text(json.dumps(stale), encoding="utf-8")
+                    with self.assertRaises(loadenv.LoadtestError):
+                        loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
+                report.write_text(
+                    json.dumps(ready),
+                    encoding="utf-8",
+                )
                 loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
             environment = json.loads((root / "env.json").read_text(encoding="utf-8"))
             self.assertEqual(environment["evidence_url"], "http://127.0.0.1:5555")

@@ -2113,11 +2113,10 @@ mod tests {
             source: STORED_SOURCE.to_owned(),
             time: OffsetDateTime::from_unix_timestamp_nanos(1_767_225_600_123_000_000)
                 .expect("capture instant"),
-            subject: crate::EventSubject {
-                record_reference:
-                    "8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7".to_owned(),
-                record_revision: 3,
-            },
+            subject: crate::EventSubject::record(
+                "8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
+                3,
+            ),
             dataschema: STORED_DATA_SCHEMA.to_owned(),
             data: serde_json::json!({ "values": { "status": "granted" } }),
             causation: crate::Causation::root(STORED_EVENT_ID),

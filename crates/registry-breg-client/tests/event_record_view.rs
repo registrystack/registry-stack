@@ -840,7 +840,7 @@ fn a_creation_revision_for_another_record_type_with_the_same_id_is_refused() {
         BRegEventRecordDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
     let mut other_type_revision =
         creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create");
-    other_type_revision["meta"]["entityTypeIdentifier"] = json!("ownership-transfer");
+    other_type_revision["meta"]["recordTypeIdentifier"] = json!("ownership-transfer");
     other_type_revision["data"]["createdAt"] = json!("2026-10-25T07:00:00Z");
     let creation = BRegCreationRevision::from_document(INCORPORATION_ID, &other_type_revision)
         .expect("revision 1 for the other record type");
@@ -1474,7 +1474,7 @@ fn creation_revision_envelope(
             "requestReference": "request-ref-1"
         },
         "meta": {"registryIdentifier": "registry", "datasetIdentifier": "dataset",
-            "entityTypeIdentifier": "incorporation"}
+            "recordTypeIdentifier": "incorporation"}
     })
 }
 
@@ -1500,6 +1500,13 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
         wrong_record,
         Err(BRegEventRecordError::WrongRecordEvidence { .. })
     ));
+    let mut retired_record_type =
+        creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create");
+    retired_record_type["meta"]["entityTypeIdentifier"] = json!("incorporation");
+    assert!(matches!(
+        BRegCreationRevision::from_document(INCORPORATION_ID, &retired_record_type),
+        Err(BRegEventRecordError::WrongRecordEvidence { .. })
+    ));
     for (document, label) in [
         (
             creation_revision_envelope(INCORPORATION_ID, "1", json!(0), "create"),
@@ -1510,7 +1517,7 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
             "mutation kind",
         ),
         (
-            json!({"meta": {"entityTypeIdentifier": "incorporation"}}),
+            json!({"meta": {"recordTypeIdentifier": "incorporation"}}),
             "missing data",
         ),
         (json!([]), "not an object"),

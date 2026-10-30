@@ -236,7 +236,8 @@ fn curated_source_recipes_cover_the_source_import_lifecycle() {
         ]);
         assert_success(&diff);
         let report: Value = serde_json::from_slice(&diff.stdout).expect("source diff JSON report");
-        assert_eq!(report["status"], "conflict");
+        assert_eq!(report["status"], "complete");
+        assert_eq!(report["outcome"], "conflict");
         assert_eq!(report["validation"]["status"], "conflict");
         let conflict_path = format!("functions/{source_id}-extract.rhai");
         assert!(report["conflicts"]

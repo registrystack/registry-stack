@@ -213,7 +213,10 @@ fn model_selection_effective_ids_refuse_separator_collisions_at_authored_sources
         let report = json_report(&output);
         assert_eq!(output.status.code(), Some(1), "{report}");
         let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["code"], "init.selection.entity-id-collision");
+        assert_eq!(
+            diagnostic["code"],
+            "init.selection.record-type-id-collision"
+        );
         assert_eq!(diagnostic["path"], primary.0);
         assert_eq!(diagnostic["source"]["file"], path(&file));
         assert_eq!(diagnostic["source"]["line"], primary.1);
@@ -238,7 +241,7 @@ fn model_selection_effective_ids_refuse_separator_collisions_at_authored_sources
         assert_eq!(output.status.code(), Some(1), "{report}");
         assert_eq!(
             report["diagnostics"][0]["code"],
-            "init.selection.entity-id-collision"
+            "init.selection.record-type-id-collision"
         );
         assert!(
             !destination.exists(),

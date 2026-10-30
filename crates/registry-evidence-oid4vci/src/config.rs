@@ -85,6 +85,7 @@ pub const fn loader() -> RuntimeConfigLoader {
         kind: OID4VCI_RUNTIME_KIND,
     })
     .removed_keys(REMOVED_KEYS)
+    .require_trusted_ownership()
 }
 
 /// A runtime file the service refused, with every diagnostic that decided it.
@@ -1693,6 +1694,65 @@ store:
             .iter()
             .map(|diagnostic| diagnostic.code.as_str())
             .collect()
+    }
+
+    #[cfg(unix)]
+    fn assert_unsafe_runtime(error: ConfigError) {
+        let diagnostic = error
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "platform.runtime-config.unsafe-file")
+            .expect("the ownership refusal is reported");
+        assert!(diagnostic
+            .message
+            .contains("owned by root or the runtime user"));
+        assert!(diagnostic
+            .suggested_action
+            .contains("remove group and other write permission"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_ownership_accepts_an_owner_writable_file_in_a_private_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_root, path) = write(VALID);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        DeliveryConfig::load(&path)
+            .expect("an owner-writable runtime in a private directory loads");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_ownership_refuses_a_group_writable_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_root, path) = write(VALID);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+        let result = DeliveryConfig::load(&path);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_ownership_refuses_a_group_writable_ancestor() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = canonical_tempdir();
+        let writable = root.path().join("writable");
+        fs::create_dir(&writable).unwrap();
+        fs::set_permissions(&writable, fs::Permissions::from_mode(0o770)).unwrap();
+        let path = writable.join("oid4vci.yaml");
+        fs::write(&path, VALID).unwrap();
+        let result = DeliveryConfig::load(&path);
+        fs::set_permissions(&writable, fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_unsafe_runtime(
+            result.expect_err("a runtime below a group-writable directory is refused"),
+        );
     }
 
     #[test]

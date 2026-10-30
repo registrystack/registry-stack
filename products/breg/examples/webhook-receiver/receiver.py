@@ -24,10 +24,10 @@ class ReceiverError(RuntimeError):
 def _verify_webhook_request(
     key: bytes,
     path: str,
-    headers: dict[str, str],
+    header_pairs: list[tuple[str, str]],
     body: bytes,
     contract: dict[str, Any],
-) -> tuple[str, int, int, str]:
+) -> dict[str, str]:
     required = {
         "accept",
         "content-type",
@@ -43,15 +43,21 @@ def _verify_webhook_request(
         "idempotency-key",
         "x-registry-signature",
     }
-    if path != "/events" or not required.issubset(headers):
-        raise ReceiverError("the receiver refused the webhook request shape")
     # The shared Rust verifier authenticates the signed attributes, request
     # target, content type, idempotency key and exact body, and checks that
     # generation and attempt are positive decimals. The checks below apply this
     # receiver's own contract and clock policy to the authenticated values.
     verified = breg.verify_hook_delivery(
-        method="POST", path=path, headers=headers, body=body, key=key
+        method="POST", path=path, headers=header_pairs, body=body, key=key
     )
+    headers: dict[str, str] = {}
+    for name, value in header_pairs:
+        normalized_name = name.lower()
+        if normalized_name in headers:
+            raise ReceiverError("the receiver refused a repeated webhook header")
+        headers[normalized_name] = value
+    if path != "/events" or not required.issubset(headers):
+        raise ReceiverError("the receiver refused the webhook request shape")
     if (
         headers["accept"] != "application/json"
         or headers["content-type"] != "application/json"
@@ -81,8 +87,6 @@ def _verify_webhook_request(
         raise ReceiverError("the receiver refused unzoned event time")
     if abs((datetime.now(timezone.utc) - delivery_time).total_seconds()) > 30:
         raise ReceiverError("the receiver refused stale delivery time")
-    generation = int(verified["generation"])
-    attempt = int(verified["attempt"])
     idempotency_key = verified["idempotency_key"]
     if not idempotency_key.startswith("sha256:") or len(idempotency_key) != 71:
         raise ReceiverError("the receiver refused the idempotency key")
@@ -141,7 +145,7 @@ def _verify_webhook_request(
         or set(document["values"]) != set(contract["event_values"])
     ):
         raise ReceiverError("the receiver refused the event data contract")
-    return event_uuid, generation, attempt, idempotency_key
+    return headers
 
 
 class WebhookInbox:
@@ -243,9 +247,9 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
             if length <= 0 or length > WEBHOOK_RECEIVER_MAX_BODY_BYTES:
                 raise ReceiverError("the receiver refused the webhook length")
             body = self.rfile.read(length)
-            headers = {name.lower(): value for name, value in self.headers.items()}
-            _verify_webhook_request(
-                self.server.webhook_key, self.path, headers, body, self.server.contract
+            header_pairs = list(self.headers.raw_items())
+            headers = _verify_webhook_request(
+                self.server.webhook_key, self.path, header_pairs, body, self.server.contract
             )
         except (
             ReceiverError, breg.BaseRegistryClientError, KeyError, TypeError, ValueError,

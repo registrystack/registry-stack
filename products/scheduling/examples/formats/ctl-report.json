@@ -4,8 +4,8 @@
   "status": "complete",
   "apiVersion": "id.registrystack.org/formats/scheduling/ctl-report/v1alpha1",
   "kind": "SchedulingCtlReport",
+  "version": "0.44.0-dev",
   "databaseAccess": false,
-  "diagnostics": [],
   "effective": {
     "holdPolicy": {
       "maximumPerCaller": 3,
@@ -41,5 +41,6 @@
   },
   "filesChecked": 5,
   "networkAccess": false,
-  "project": "products/scheduling/examples/standalone-exact-time"
+  "project": "products/scheduling/examples/standalone-exact-time",
+  "diagnostics": []
 }

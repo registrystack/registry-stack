@@ -394,7 +394,7 @@ pub fn audience_scoped_request_from_json(
     require_exact_fields(
         object,
         &[
-            "requirement",
+            "handle",
             "responseFormat",
             "selectors",
             "subjects",
@@ -412,7 +412,7 @@ pub fn audience_scoped_request_from_json(
     }
 
     let mut request = AudienceScopedRequest::new(
-        required_string(object, "requirement")?,
+        required_string(object, "handle")?,
         selectors
             .map(|value| selector_values_from_json(value, "`selectors`"))
             .transpose()?
@@ -1031,7 +1031,7 @@ pub fn evidence_to_json(evidence: &Evidence) -> Result<Value, ConversionError> {
 
 /// A shape-level failure reports the same stable envelope every mapped
 /// failure uses, so a caller need not special-case where a failure
-/// originated. There is no dedicated "shape" kind among the eight the runtime
+/// originated. There is no dedicated "shape" kind among the ten the runtime
 /// client defines; a JS caller that supplied an unusable shape is, from the
 /// caller's side, exactly the "the client cannot be used as configured" case.
 pub fn map_conversion_error(error: &ConversionError) -> Value {
@@ -1062,7 +1062,7 @@ pub fn map_config_error(error: &ConfigError) -> Value {
 ///
 /// Never included: response bytes, a credential, a header value, a selector
 /// value, or a subject binding. Every message here is `Display` text over
-/// fixed, non-secret reasons; none of the eight kinds can carry one of those.
+/// fixed, non-secret reasons; none of the ten kinds can carry one of those.
 pub fn map_client_error(error: &EvidenceClientError) -> Value {
     let mut fields = Map::new();
     fields.insert("kind".to_owned(), Value::String(error.kind().to_owned()));
@@ -1093,6 +1093,20 @@ pub fn map_client_error(error: &EvidenceClientError) -> Value {
             insert_retry_after(&mut fields, *retry_after_seconds);
         }
         EvidenceClientError::NotAvailable { trace_id } => {
+            insert_trace_id(&mut fields, trace_id);
+        }
+        EvidenceClientError::InvalidRequest {
+            status,
+            code,
+            trace_id,
+        }
+        | EvidenceClientError::Unavailable {
+            status,
+            code,
+            trace_id,
+        } => {
+            fields.insert("status".to_owned(), Value::from(*status));
+            fields.insert("code".to_owned(), Value::String(code.clone()));
             insert_trace_id(&mut fields, trace_id);
         }
         EvidenceClientError::Protocol {
@@ -1173,14 +1187,20 @@ mod tests {
 
     #[test]
     fn audience_scoped_request_requires_exactly_one_subject_input_shape() {
-        let neither = serde_json::json!({ "requirement": "adult-status" });
+        let retired_name = serde_json::json!({
+            "requirement": "adult-status",
+            "selectors": { "person_id": "person-123" },
+        });
+        assert!(audience_scoped_request_from_json(&retired_name).is_err());
+
+        let neither = serde_json::json!({ "handle": "adult-status" });
         assert!(audience_scoped_request_from_json(&neither)
             .expect_err("a request cannot omit both selector forms")
             .to_string()
             .contains("exactly one"));
 
         let both = serde_json::json!({
-            "requirement": "adult-status",
+            "handle": "adult-status",
             "selectors": { "person_id": "person-123" },
             "subjects": { "subject": { "person_id": "person-123" } },
         });
@@ -1193,7 +1213,7 @@ mod tests {
     #[test]
     fn audience_scoped_request_accepts_explicit_selectors_and_a_serialized_receipt() {
         let request = serde_json::json!({
-            "requirement": "adult-status",
+            "handle": "adult-status",
             "selectors": { "person_id": "person-123" },
             "responseFormat": "signed-jws",
             "bindingReceipt": {
@@ -2206,7 +2226,7 @@ mod tests {
     }
 
     /// The discriminant is what a caller branches on, so every one of the
-    /// eight stable kinds is distinct.
+    /// ten stable kinds is distinct.
     #[test]
     fn every_client_failure_reports_a_distinct_kind() {
         let errors = [
@@ -2223,6 +2243,16 @@ mod tests {
                 retry_after_seconds: None,
             },
             EvidenceClientError::NotAvailable { trace_id: None },
+            EvidenceClientError::InvalidRequest {
+                status: 400,
+                code: "evidence.invalid-request".to_owned(),
+                trace_id: None,
+            },
+            EvidenceClientError::Unavailable {
+                status: 503,
+                code: "service.unavailable".to_owned(),
+                trace_id: None,
+            },
             EvidenceClientError::Protocol {
                 status: 200,
                 code: None,

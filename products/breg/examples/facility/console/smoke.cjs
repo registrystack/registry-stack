@@ -28,10 +28,10 @@ const native = {
   async continueList(current) { assert.equal(current, continuation); calls.push(['next']); return {value: {items: []}}; },
   async registryContract(profile) { return {selectAction: action => ({action, profile}), selectProposals: () => ({profile})}; },
   async invokeAction(binding, input, key) { calls.push(['invoke', binding.action, binding.profile, key]); return {value: {action: binding.action, applicationId: facility, results: {}}}; },
-  async startProposal(binding, input, key) { calls.push(['start', binding.action, binding.profile, key]); assert.equal(JSON.parse(input).facilityId, facility); return handle('draft'); },
-  prepareProposal(proposal, transition, body, key) { assert.equal(transition, 'submit'); assert.equal(body, '{}'); return {proposal, key}; },
+  async startProposal(binding, input, key) { calls.push(['start', binding.action, binding.profile, key]); assert.equal(input.facilityId, facility); return handle('draft'); },
+  prepareProposal(proposal, transition, body, key) { assert.equal(transition, 'submit'); assert.deepEqual(body, {}); return {proposal, key}; },
   async executeProposal(attempt) { assert.equal(attempt.key, 'console-submit-1'); return handle('submitted'); },
-  async listProposals(collection, query) { assert.equal(collection.profile, 'author'); assert.equal(JSON.parse(query).action, 'correct-address'); return {items: [handle('submitted')], nextCursor: null}; },
+  async listProposals(collection, query) { assert.equal(collection.profile, 'author'); assert.equal(query.action, 'correct-address'); return {items: [handle('submitted')], nextCursor: null}; },
   async readProposal(proposal) { calls.push(['resume']); return proposal; },
 };
 (async () => {

@@ -401,13 +401,27 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             caseworkctl = Path(directory) / "caseworkctl"
             caseworkctl.write_text("", encoding="utf-8")
             report = {
-                "status": "ready",
+                "ok": True,
+                "status": "complete",
+                "outcome": "ready",
                 "project": str(project),
                 "stateFile": str(state),
                 "caseworkUrl": "http://127.0.0.1:4321",
                 "clients": [{"id": "loadtest-staff"}, {"id": "loadtest-producer"}],
             }
             report_path = root / "dev-report.json"
+            for stale in (
+                {
+                    **{key: value for key, value in report.items() if key != "outcome"},
+                    "status": "ready",
+                },
+                {key: value for key, value in report.items() if key != "outcome"},
+                {**report, "outcome": "starting"},
+                {**report, "ok": False},
+            ):
+                report_path.write_text(json.dumps(stale), encoding="utf-8")
+                with self.assertRaises(loadenv.LoadtestError):
+                    loadenv.write_environment(root, report_path, caseworkctl, "release", "")
             report_path.write_text(json.dumps({**report, "caseworkUrl": "http://192.0.2.1:4321"}), encoding="utf-8")
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.write_environment(root, report_path, caseworkctl, "release", "")

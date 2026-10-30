@@ -179,7 +179,7 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         "revision-http-registry"
     );
     assert_eq!(detail["meta"]["datasetIdentifier"], "test-dataset");
-    assert_eq!(detail["meta"]["entityTypeIdentifier"], "widget");
+    assert_eq!(detail["meta"]["recordTypeIdentifier"], "widget");
 
     let bounded = send(
         &app,

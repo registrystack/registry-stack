@@ -131,7 +131,7 @@ async fn real_postgres_temporal_correction_batches_validate_only_completed_inter
         "final-overlap",
         json!({"items":[{
             "operation":"patch",
-            "recordId":overlap.a_id,
+            "recordIdentifier":overlap.a_id,
             "ifMatch":overlap.a_etag,
             "patch":[{"op":"replace","path":"/data/validTo","value":"2026-06-15"}]
         }]}),
@@ -182,7 +182,7 @@ async fn real_postgres_temporal_correction_batches_validate_only_completed_inter
             },
             {
                 "operation":"patch",
-                "recordId":stale.b_id,
+                "recordIdentifier":stale.b_id,
                 "ifMatch":"\"breg-stale-etag\"",
                 "patch":[{"op":"replace","path":"/data/validFrom","value":"2026-06-15"}]
             }
@@ -434,7 +434,7 @@ async fn seed_pair(
 fn correction_body(pair: &MembershipPair, a_first: bool) -> Value {
     let a = json!({
         "operation":"patch",
-        "recordId":pair.a_id,
+        "recordIdentifier":pair.a_id,
         "ifMatch":pair.a_etag,
         "patch":[
             {"op":"test","path":"/data/validTo","value":"2026-06-01"},
@@ -443,7 +443,7 @@ fn correction_body(pair: &MembershipPair, a_first: bool) -> Value {
     });
     let b = json!({
         "operation":"patch",
-        "recordId":pair.b_id,
+        "recordIdentifier":pair.b_id,
         "ifMatch":pair.b_etag,
         "patch":[
             {"op":"test","path":"/data/validFrom","value":"2026-06-01"},
@@ -469,16 +469,16 @@ async fn assert_batch_corrected(response: axum::response::Response, pair: &Membe
         .expect("batch response has ordered results");
     assert_eq!(results.len(), 2);
     assert!(results.iter().any(|item| {
-        item["id"] == pair.a_id
-            && item["revision"] == 2
-            && item["data"]["group"] == "A"
-            && item["data"]["validTo"] == "2026-06-15"
+        item["recordIdentifier"] == pair.a_id
+            && item["revisionIdentifier"] == "2"
+            && item["domainData"]["group"] == "A"
+            && item["domainData"]["validTo"] == "2026-06-15"
     }));
     assert!(results.iter().any(|item| {
-        item["id"] == pair.b_id
-            && item["revision"] == 2
-            && item["data"]["group"] == "B"
-            && item["data"]["validFrom"] == "2026-06-15"
+        item["recordIdentifier"] == pair.b_id
+            && item["revisionIdentifier"] == "2"
+            && item["domainData"]["group"] == "B"
+            && item["domainData"]["validFrom"] == "2026-06-15"
     }));
 }
 

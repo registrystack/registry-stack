@@ -431,6 +431,89 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertIn('if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]', historical_gate)
         self.assertIn("registry_prepare_cargo_runtime", historical_gate)
 
+    def test_statistics_workflow_consumes_common_report_envelopes(self) -> None:
+        source = (SCRIPT_DIR / "test-statistics-workflow.sh").read_text(encoding="utf-8")
+
+        def validator(marker: str) -> str:
+            return source.split(marker, 1)[1].split("\nPY\n", 1)[0]
+
+        def validate(marker: str, report: dict[str, object]) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                return subprocess.run(
+                    [sys.executable, "-", str(path)],
+                    input=validator(marker),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+        dev_marker = 'python3 - "$temporary_root/dev.json" <<\'PY\'\n'
+        dev = {
+            "ok": True,
+            "command": "dev",
+            "status": "complete",
+            "outcome": "ready",
+            "bregUrl": "http://127.0.0.1:8091",
+            "tokenEndpoint": "http://127.0.0.1:8090/oauth2/token",
+            "clientAssertionAudience": "http://127.0.0.1:8090",
+            "resource": "urn:breg:dev:fixture",
+        }
+        accepted = validate(dev_marker, dev)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertEqual(f'{dev["bregUrl"]}\n', accepted.stdout)
+        for refused_report in (
+            {**dev, "status": "ready", "recordData": "value-canary"},
+            {**dev, "outcome": "starting", "recordData": "value-canary"},
+        ):
+            refused = validate(dev_marker, refused_report)
+            self.assertNotEqual(0, refused.returncode)
+            self.assertIn("bregctl dev did not reach ready", refused.stderr)
+            self.assertNotIn("value-canary", refused.stderr)
+
+        publish_marker = 'python3 - "$temporary_root/publish.json" <<\'PY\'\n'
+        publish = {
+            "ok": True,
+            "command": "statistics publish",
+            "status": "complete",
+            "outcome": "final",
+            "period": "2025-01",
+            "version": "1.0.0-dev",
+            "releaseVersion": 1,
+        }
+        accepted = validate(publish_marker, publish)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        for refused_report in (
+            {**publish, "outcome": "provisional"},
+            {**publish, "releaseVersion": 2},
+            {key: value for key, value in publish.items() if key != "releaseVersion"},
+        ):
+            refused = validate(publish_marker, refused_report)
+            self.assertNotEqual(0, refused.returncode)
+
+        withdraw_marker = 'python3 - "$temporary_root/withdraw.json" <<\'PY\'\n'
+        withdraw = {
+            "ok": True,
+            "command": "statistics withdraw",
+            "status": "complete",
+            "outcome": "final",
+            "dataset": "monthly-discharge-reports",
+            "period": "2025-01",
+            "version": "1.0.0-dev",
+            "releaseVersion": 1,
+            "withdrawal": {"reason": "source-data-error"},
+        }
+        accepted = validate(withdraw_marker, withdraw)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        for refused_report in (
+            {**withdraw, "outcome": "provisional"},
+            {**withdraw, "releaseVersion": 2},
+            {key: value for key, value in withdraw.items() if key != "releaseVersion"},
+        ):
+            refused = validate(withdraw_marker, refused_report)
+            self.assertNotEqual(0, refused.returncode)
+
     def test_postgres_tls_script_hands_off_public_ca_material_without_retaining_keys(self) -> None:
         tls_gate = (SCRIPT_DIR / "test-postgres-tls.sh").read_text(encoding="utf-8")
         self.assertIn("validate_caller_output_path", tls_gate)

@@ -134,31 +134,32 @@ pub const CTL_REPORT_API_VERSION: &str = "id.registrystack.org/formats/breg/ctl-
 /// The `kind` every `--format json` report opens with.
 pub const CTL_REPORT_KIND: &str = "BRegCtlReport";
 
-/// One `--format json` report as it is written: the two members that name its
-/// format, then the command's own members in the order the command gives them.
-#[derive(Serialize)]
-struct CtlReport<'a, T: Serialize + ?Sized> {
-    #[serde(rename = "apiVersion")]
-    api_version: &'static str,
-    kind: &'static str,
-    #[serde(flatten)]
-    report: &'a T,
-}
-
 /// Write one `--format json` report. Every command writes its report through
 /// here, so no command names the format itself and none can leave it out.
 fn write_ctl_report<T: Serialize + ?Sized>(
     stdout: &mut dyn Write,
     report: &T,
 ) -> serde_json::Result<()> {
-    serde_json::to_writer_pretty(
-        stdout,
-        &CtlReport {
-            api_version: CTL_REPORT_API_VERSION,
-            kind: CTL_REPORT_KIND,
-            report,
-        },
-    )
+    let mut value = serde_json::to_value(report)?;
+    let members = value.as_object_mut().ok_or_else(|| {
+        serde_json::Error::io(io::Error::other("a BReg command report must be an object"))
+    })?;
+    members.insert("apiVersion".to_owned(), json!(CTL_REPORT_API_VERSION));
+    members.insert("kind".to_owned(), json!(CTL_REPORT_KIND));
+    if let Some(diagnostics) = members.remove("findings") {
+        if members
+            .insert("diagnostics".to_owned(), diagnostics)
+            .is_some()
+        {
+            return Err(serde_json::Error::io(io::Error::other(
+                "a BReg command supplied two diagnostic arrays",
+            )));
+        }
+    }
+    let report =
+        registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
+            .map_err(|error| serde_json::Error::io(io::Error::other(error)))?;
+    serde_json::to_writer_pretty(stdout, &report)
 }
 // Keep ctl-authored project and module source capture aligned with the
 // schema-test package rederivation ceiling so source-size refusals occur
@@ -1766,6 +1767,7 @@ impl From<FailureReport> for Refusal {
 struct DocumentFailureReport<D> {
     ok: bool,
     command: &'static str,
+    status: &'static str,
     diagnostics: D,
 }
 
@@ -1837,12 +1839,12 @@ struct ToolRelatedDiagnostic {
     message: String,
 }
 
-/// A successful report already identifies these entries as `findings`, so its
-/// elements do not repeat the constant `finding` severity. Refusal reports keep
-/// the complete diagnostic envelope because they can contain findings or errors.
+/// Command diagnostics retain their source and remedy alongside a severity
+/// understood by every operator report.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolFinding<'a> {
+    severity: &'static str,
     code: &'a str,
     artifact: DiagnosticArtifact,
     path: &'a str,
@@ -1861,6 +1863,10 @@ where
     findings
         .iter()
         .map(|finding| ToolFinding {
+            severity: match finding.severity {
+                DiagnosticSeverity::Finding => "warning",
+                DiagnosticSeverity::Error => "error",
+            },
             code: &finding.code,
             artifact: finding.artifact,
             path: &finding.path,
@@ -2297,7 +2303,59 @@ struct StatisticsMutationSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    release: registry_breg::statistics::ReleaseVersionHeader,
+    release: StatisticsMutationReleaseReport,
+}
+
+/// A statistical release header inside the shared CLI report envelope.
+///
+/// The HTTP header keeps its `version` member. The CLI envelope reserves that
+/// name for the binary identity, so its flat statistical payload names the
+/// domain value explicitly.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatisticsMutationReleaseReport {
+    dataset: String,
+    period: String,
+    #[serde(rename = "releaseVersion")]
+    version: u64,
+    status: registry_breg::statistics::ReleaseStatus,
+    snapshot: Option<String>,
+    computed_at: String,
+    package_digest: String,
+    definition_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    withdrawal: Option<registry_breg::statistics::WithdrawalDocument>,
+}
+
+impl From<registry_breg::statistics::ReleaseVersionHeader> for StatisticsMutationReleaseReport {
+    fn from(header: registry_breg::statistics::ReleaseVersionHeader) -> Self {
+        let registry_breg::statistics::ReleaseVersionHeader {
+            dataset,
+            period,
+            version,
+            status,
+            snapshot,
+            computed_at,
+            package_digest,
+            definition_digest,
+            content_digest,
+            withdrawal,
+        } = header;
+        Self {
+            dataset,
+            period,
+            version,
+            status,
+            snapshot,
+            computed_at,
+            package_digest,
+            definition_digest,
+            content_digest,
+            withdrawal,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -2546,6 +2604,15 @@ pub fn command() -> clap::Command {
 /// honoring `NO_COLOR` and `CLICOLOR_FORCE` on the way. A tutorial that
 /// captures a command therefore records the same plain bytes it prints.
 pub fn main_entry() -> ExitCode {
+    registry_cli_report::install_panic_hook(
+        registry_cli_report::Identity {
+            binary: "bregctl",
+            api_version: CTL_REPORT_API_VERSION,
+            kind: CTL_REPORT_KIND,
+            version: registry_platform_buildinfo::DISPLAY_VERSION,
+        },
+        registry_cli_report::json_requested(std::env::args_os()),
+    );
     // Every PostgreSQL session this process opens names it, so an operator can
     // tell tooling sessions from the runtime's in `pg_stat_activity`. Nothing
     // has connected yet, so the name cannot already be fixed to another one.
@@ -2574,12 +2641,16 @@ where
             registry_platform_buildinfo::DISPLAY_VERSION,
             Some(registry_cli_reference::SYMBOLIC_LINK_REFUSAL),
         );
-        let _ = writeln!(
+        let written = writeln!(
             stdout,
             "{}",
             serde_json::to_string(&catalog).expect("the command catalog serializes")
         );
-        return ExitCode::SUCCESS;
+        return ExitCode::from(if written.is_ok() {
+            0
+        } else {
+            OPERATIONAL_FAILURE_EXIT
+        });
     }
     let cli = match Cli::try_parse_from(&arguments) {
         Ok(cli) => cli,
@@ -2588,13 +2659,19 @@ where
                 error.kind(),
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
             ) {
-                let _ = write!(stdout, "{error}");
-                return ExitCode::SUCCESS;
+                return ExitCode::from(if write!(stdout, "{error}").is_ok() {
+                    0
+                } else {
+                    OPERATIONAL_FAILURE_EXIT
+                });
             }
             let message = usage_message(&error, &arguments);
             if !machine_mode {
-                let _ = writeln!(stderr, "error: {message}");
-                return ExitCode::from(USAGE_EXIT);
+                return ExitCode::from(if writeln!(stderr, "error: {message}").is_ok() {
+                    USAGE_EXIT
+                } else {
+                    OPERATIONAL_FAILURE_EXIT
+                });
             }
             let report = FailureReport {
                 ok: false,
@@ -2605,8 +2682,13 @@ where
                     SuggestedAction::CorrectCommandUsage,
                 )],
             };
-            let _ = write_failure(&report, OutputFormat::Json, stdout, stderr);
-            return ExitCode::from(USAGE_EXIT);
+            return write_failure_with_exit(
+                &report,
+                OutputFormat::Json,
+                stdout,
+                stderr,
+                USAGE_EXIT,
+            );
         }
     };
 
@@ -3917,7 +3999,7 @@ fn write_instance_claim_status(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        let body = json!({"ok": true, "command": "instance-claim status", "status": status});
+        let body = json!({"ok": true, "command": "instance-claim status", "instanceClaim": status});
         write_ctl_report(&mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
@@ -5093,7 +5175,7 @@ fn statistics_publish(
     Ok(StatisticsMutationSuccessReport {
         ok: true,
         command: "statistics publish",
-        release,
+        release: release.into(),
     })
 }
 
@@ -5114,7 +5196,7 @@ fn statistics_withdraw(
     Ok(StatisticsMutationSuccessReport {
         ok: true,
         command: "statistics withdraw",
-        release,
+        release: release.into(),
     })
 }
 
@@ -14126,6 +14208,17 @@ fn write_document_failure(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
+    let exit = if refusal
+        .report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code.ends_with(".unavailable"))
+    {
+        OPERATIONAL_FAILURE_EXIT
+    } else {
+        DOMAIN_REFUSAL_EXIT
+    };
+    let status = registry_cli_report::Status::from_exit(exit).as_str();
     let result = if format == OutputFormat::Json {
         let written = if refusal.command == "explain" {
             write_ctl_report(
@@ -14133,6 +14226,7 @@ fn write_document_failure(
                 &DocumentFailureReport {
                     ok: false,
                     command: refusal.command,
+                    status,
                     diagnostics: check::ranked_diagnostics(refusal.report.diagnostics()),
                 },
             )
@@ -14142,6 +14236,7 @@ fn write_document_failure(
                 &DocumentFailureReport {
                     ok: false,
                     command: refusal.command,
+                    status,
                     diagnostics: refusal.report.diagnostics(),
                 },
             )
@@ -14164,7 +14259,7 @@ fn write_document_failure(
         let _ = writeln!(stderr, "bregctl: output could not be written");
         return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
     }
-    ExitCode::from(DOMAIN_REFUSAL_EXIT)
+    ExitCode::from(exit)
 }
 
 fn write_failure(
@@ -14173,9 +14268,32 @@ fn write_failure(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
+    let exit = if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code.ends_with(".unavailable"))
+    {
+        OPERATIONAL_FAILURE_EXIT
+    } else {
+        DOMAIN_REFUSAL_EXIT
+    };
+    write_failure_with_exit(report, format, stdout, stderr, exit)
+}
+
+fn write_failure_with_exit(
+    report: &FailureReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    exit: u8,
+) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+        serde_json::to_value(report)
             .map_err(io::Error::other)
+            .and_then(|mut value| {
+                value["status"] = json!(registry_cli_report::Status::from_exit(exit).as_str());
+                write_ctl_report(&mut *stdout, &value).map_err(io::Error::other)
+            })
             .and_then(|()| writeln!(stdout))
     } else {
         {
@@ -14192,13 +14310,56 @@ fn write_failure(
         let _ = writeln!(stderr, "bregctl: output could not be written");
         return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
     }
-    ExitCode::from(DOMAIN_REFUSAL_EXIT)
+    ExitCode::from(exit)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use registry_breg::postgres::RoleMode;
+
+    #[test]
+    fn help_and_usage_output_failures_are_operational_in_both_formats() {
+        struct ClosedOutput;
+        impl Write for ClosedOutput {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        for arguments in [
+            vec!["bregctl", "--help"],
+            vec!["bregctl", "--format=json", "help"],
+            vec!["bregctl", "--unknown-option"],
+            vec!["bregctl", "--format=json", "--unknown-option"],
+        ] {
+            let exit = run_from(arguments.clone(), &mut ClosedOutput, &mut ClosedOutput);
+            assert_eq!(
+                exit,
+                ExitCode::from(OPERATIONAL_FAILURE_EXIT),
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreachable_status_database_has_an_operational_report_and_exit() {
+        let report = status_lifecycle_failure(ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::DatabaseUnavailable,
+        ));
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let exit = write_failure(&report, OutputFormat::Json, &mut stdout, &mut stderr);
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        assert!(stderr.is_empty());
+        let value: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(value["status"], "operational-failure");
+        assert_eq!(
+            value["diagnostics"][0]["code"],
+            "status.database.unavailable"
+        );
+    }
 
     #[test]
     fn diagnostic_and_assurance_words_use_the_public_kebab_case_contract() {
@@ -14244,6 +14405,7 @@ mod tests {
         };
 
         let encoded = serde_json::to_value(findings).unwrap();
+        assert_eq!(encoded["findings"][0]["severity"], "warning");
         assert_eq!(
             encoded["findings"][0]["source"],
             json!({"file":"modules/core/module.yaml","line":6,"column":9})
@@ -14281,6 +14443,101 @@ mod tests {
         assert!(rendered.contains("note:"));
         assert!(rendered.contains("recordTypes[id=other].id"));
         assert!(rendered.contains("the first identifier is defined here"));
+    }
+
+    #[test]
+    fn statistics_mutation_reports_keep_binary_and_release_versions_distinct() {
+        use registry_breg::statistics::{
+            ReleaseStatus, ReleaseVersionHeader, WithdrawalDocument, WithdrawalReason,
+        };
+
+        for (command, content_digest, withdrawal, lead) in [
+            (
+                "statistics publish",
+                Some(format!("sha256:{}", "3".repeat(64))),
+                None,
+                "Published the statistical release version.",
+            ),
+            (
+                "statistics withdraw",
+                None,
+                Some(WithdrawalDocument {
+                    withdrawn_at: "2026-10-28T02:00:00Z".to_owned(),
+                    reason: WithdrawalReason::SourceDataError,
+                }),
+                "Withdrew the statistical release version.",
+            ),
+        ] {
+            let report = StatisticsMutationSuccessReport {
+                ok: true,
+                command,
+                release: ReleaseVersionHeader {
+                    dataset: "population".to_owned(),
+                    period: "2026-09".to_owned(),
+                    version: 7,
+                    status: ReleaseStatus::Final,
+                    snapshot: Some("history:7".to_owned()),
+                    computed_at: "2026-10-28T01:00:00Z".to_owned(),
+                    package_digest: format!("sha256:{}", "1".repeat(64)),
+                    definition_digest: format!("sha256:{}", "2".repeat(64)),
+                    content_digest: content_digest.clone(),
+                    withdrawal: withdrawal.clone(),
+                }
+                .into(),
+            };
+
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            assert_eq!(
+                write_statistics_success(&report, OutputFormat::Json, &mut stdout, &mut stderr),
+                ExitCode::SUCCESS
+            );
+            assert!(stderr.is_empty());
+            let value: Value = serde_json::from_slice(&stdout).unwrap();
+            assert_eq!(
+                value["version"],
+                registry_platform_buildinfo::DISPLAY_VERSION
+            );
+            assert_eq!(value["releaseVersion"], 7);
+            assert_eq!(value["status"], "complete");
+            assert_eq!(value["outcome"], "final");
+            assert_eq!(value["dataset"], "population");
+            assert_eq!(value["period"], "2026-09");
+            assert_eq!(value["snapshot"], "history:7");
+            assert_eq!(value["computedAt"], "2026-10-28T01:00:00Z");
+            assert_eq!(value["packageDigest"], format!("sha256:{}", "1".repeat(64)));
+            assert_eq!(
+                value["definitionDigest"],
+                format!("sha256:{}", "2".repeat(64))
+            );
+            assert_eq!(value["diagnostics"], json!([]));
+            match (&content_digest, &withdrawal) {
+                (Some(content_digest), None) => {
+                    assert_eq!(value["contentDigest"], content_digest.as_str());
+                    assert!(value.get("withdrawal").is_none());
+                }
+                (None, Some(withdrawal)) => {
+                    assert!(value.get("contentDigest").is_none());
+                    assert_eq!(
+                        value["withdrawal"],
+                        serde_json::to_value(withdrawal).unwrap()
+                    );
+                }
+                _ => unreachable!(),
+            }
+
+            stdout.clear();
+            assert_eq!(
+                write_statistics_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
+                ExitCode::SUCCESS
+            );
+            assert!(stderr.is_empty());
+            let rendered = plain(&stdout);
+            assert!(rendered.starts_with(lead), "{rendered}");
+            assert!(rendered.lines().any(|line| {
+                let line = line.trim_start();
+                line.starts_with("version") && line.ends_with('7')
+            }));
+        }
     }
 
     #[test]
@@ -15145,12 +15402,33 @@ mod tests {
         anstream::adapter::strip_str(&rendered).to_string()
     }
 
-    /// The report a command built, as `--format json` writes it: with the two
-    /// members that name the report format beside the command's own.
+    /// The product payload beside the common machine-readable envelope.
     fn with_ctl_report_header(report: &Value) -> Value {
         let mut written = report.clone();
         written["apiVersion"] = json!(CTL_REPORT_API_VERSION);
         written["kind"] = json!(CTL_REPORT_KIND);
+        written["version"] = json!(registry_platform_buildinfo::DISPLAY_VERSION);
+        let status = if written["ok"] == true {
+            "complete"
+        } else {
+            "domain-refusal"
+        };
+        if let Some(word) = written.get("status").cloned() {
+            if !matches!(
+                word.as_str(),
+                Some("complete" | "domain-refusal" | "usage-error" | "operational-failure")
+            ) {
+                written["outcome"] = word;
+                written["status"] = json!(status);
+            }
+        } else {
+            written["status"] = json!(status);
+        }
+        let members = written.as_object_mut().unwrap();
+        if let Some(findings) = members.remove("findings") {
+            members.insert("diagnostics".into(), findings);
+        }
+        members.entry("diagnostics").or_insert_with(|| json!([]));
         written
     }
 
@@ -15542,6 +15820,78 @@ mod tests {
         ] {
             assert!(message.contains(hint), "missing {hint:?}: {message}");
         }
+    }
+
+    #[test]
+    fn instance_claim_status_keeps_the_domain_payload_beside_the_shared_envelope() {
+        use registry_breg::instance_claim::{InstanceClaim, InstanceClaimStatus, InstanceIdentity};
+
+        let claimed_at = chrono::DateTime::parse_from_rfc3339("2026-09-25T10:00:00Z")
+            .expect("instant parses")
+            .with_timezone(&chrono::Utc);
+        let status = InstanceClaimStatus {
+            live: InstanceIdentity {
+                system_identifier: Some("7300000000000000001".to_owned()),
+                database_oid: 16_401,
+            },
+            claim: Some(InstanceClaim {
+                identity: InstanceIdentity {
+                    system_identifier: Some("7300000000000000000".to_owned()),
+                    database_oid: 16_400,
+                },
+                epoch: 7,
+                claimed_at,
+            }),
+            matches: false,
+        };
+
+        let mut human_out = Vec::new();
+        let mut human_err = Vec::new();
+        assert_eq!(
+            write_instance_claim_status(
+                &status,
+                OutputFormat::Human,
+                &mut human_out,
+                &mut human_err,
+            ),
+            ExitCode::SUCCESS
+        );
+        assert!(human_err.is_empty());
+        let human = plain(&human_out);
+        for expected in [
+            "The instance claim names another database.",
+            "7300000000000000001",
+            "16401",
+            "7300000000000000000",
+            "16400",
+            "2026-09-25T10:00:00+00:00",
+        ] {
+            assert!(human.contains(expected), "missing {expected:?}: {human}");
+        }
+
+        let mut json_out = Vec::new();
+        let mut json_err = Vec::new();
+        assert_eq!(
+            write_instance_claim_status(&status, OutputFormat::Json, &mut json_out, &mut json_err,),
+            ExitCode::SUCCESS
+        );
+        assert!(json_err.is_empty());
+        let report: Value = serde_json::from_slice(&json_out).expect("report is JSON");
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["command"], "instance-claim status");
+        assert_eq!(report["status"], "complete");
+        assert_eq!(report["apiVersion"], CTL_REPORT_API_VERSION);
+        assert_eq!(report["kind"], CTL_REPORT_KIND);
+        assert_eq!(
+            report["version"],
+            registry_platform_buildinfo::DISPLAY_VERSION
+        );
+        assert_eq!(report["diagnostics"], json!([]));
+        assert_eq!(
+            report["instanceClaim"],
+            serde_json::to_value(&status).expect("instance claim status serializes")
+        );
+        assert!(report.get("outcome").is_none());
     }
 
     #[test]
@@ -15999,7 +16349,7 @@ mod tests {
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"destinations.hooks\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"status\": \"complete\",\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \"version\": \"__BINARY_VERSION__\",\n  \"advisories\": [],\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"destinations.hooks\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"diagnostics\": []\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
@@ -16009,7 +16359,10 @@ mod tests {
                 write_doctor_success(&[], RoleMode::Split, None, &[], format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
-            assert_eq!(plain(&stdout), expected);
+            assert_eq!(
+                plain(&stdout),
+                expected.replace("__BINARY_VERSION__", registry_platform_buildinfo::DISPLAY_VERSION)
+            );
             assert!(stderr.is_empty());
         }
     }

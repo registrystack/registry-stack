@@ -1329,7 +1329,7 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
     let receipt = body_json(committed).await["receipt"].clone();
-    let erased_record = receipt["batch"]["results"][0]["id"]
+    let erased_record = receipt["batch"]["results"][0]["recordIdentifier"]
         .as_str()
         .expect("receipt carries a created record id")
         .to_owned();
@@ -1418,7 +1418,8 @@ async fn an_erasure_committed_during_a_parked_recovery_refuses_the_release() {
         )
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
-    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]["id"]
+    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]
+        ["recordIdentifier"]
         .as_str()
         .expect("receipt carries a created record id")
         .to_owned();
@@ -1527,7 +1528,8 @@ async fn an_erasure_committed_during_a_parked_replay_refuses_the_release() {
         )
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
-    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]["id"]
+    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]
+        ["recordIdentifier"]
         .as_str()
         .expect("receipt carries a created record id")
         .to_owned();
@@ -1840,7 +1842,7 @@ async fn terminal_chunks_must_satisfy_the_announced_operation_totals_and_prefix(
     // parses for the batch route, but diverges from the announced operation.
     let patch_item = json!({
         "operation": "patch",
-        "recordId": Uuid::new_v4().to_string(),
+        "recordIdentifier": Uuid::new_v4().to_string(),
         "ifMatch": "\"breg-ingestion-terminal-proof\"",
         "patch": [{"op": "replace", "path": "/data/quantity", "value": 5}]
     });
@@ -3267,8 +3269,8 @@ async fn a_fresh_receipt_opens_encrypted_members_and_stays_sealed_at_rest() {
     let results = body["receipt"]["batch"]["results"]
         .as_array()
         .expect("receipt results");
-    assert_eq!(results[0]["data"]["serialNumber"], "SN-0000");
-    assert_eq!(results[1]["data"]["serialNumber"], "SN-0001");
+    assert_eq!(results[0]["domainData"]["serialNumber"], "SN-0000");
+    assert_eq!(results[1]["domainData"]["serialNumber"], "SN-0001");
 
     assert_receipt_stays_sealed(&harness, &run_id).await;
 }
@@ -3308,7 +3310,7 @@ async fn replayed_and_recovered_receipts_open_encrypted_members() {
     let body: Value = serde_json::from_slice(&raw).expect("replay answer is JSON");
     assert_eq!(body["receipt"]["replayed"], true);
     assert_eq!(
-        body["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        body["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -3326,7 +3328,7 @@ async fn replayed_and_recovered_receipts_open_encrypted_members() {
     );
     let body: Value = serde_json::from_slice(&raw).expect("recovery answer is JSON");
     assert_eq!(
-        body["batch"]["results"][0]["data"]["serialNumber"],
+        body["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -4153,6 +4155,54 @@ async fn a_pattern_violation_is_a_refused_chunk_not_an_outage() {
     assert_eq!(durable_widget_count(&harness).await, 0);
 }
 
+/// Ingestion consumes the batch mutation outcome behind its run protocol. An
+/// item outside the run's bound row context therefore retains the run's
+/// established generic 412 refusal instead of exposing the direct-route 403.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_outside_boundary_ingestion_item_remains_a_value_free_precondition_refusal() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = vec![json!({"operation":"create", "data": {
+        "jurisdiction": "zone-b",
+        "label": "ingestion-boundary-canary",
+        "quantity": 1
+    }})];
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::PRECONDITION_FAILED);
+    let refused = body_json(refused).await;
+    assert_eq!(refused["code"], "precondition.failed");
+    assert_eq!(refused["detail"], "The mutation precondition failed.");
+    assert_eq!(
+        refused
+            .as_object()
+            .expect("problem is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        ["type", "title", "status", "detail", "code", "traceId"]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+    for concealed in ["zone-b", "ingestion-boundary-canary"] {
+        assert!(!refused.to_string().contains(concealed), "{refused}");
+    }
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["status"], "open");
+    assert_eq!(run["nextChunkIndex"], 0);
+    assert_eq!(run["committedItems"], 0);
+    assert_eq!(run["lastAttempt"]["outcome"], "refused");
+    assert_eq!(durable_widget_count(&harness).await, 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_runs_filters_by_status_and_input_digest() {
     let harness = IngestionHarness::create().await;
@@ -4217,14 +4267,20 @@ async fn listing_runs_filters_by_status_and_input_digest() {
     assert_eq!(runs[0]["runId"], complete_id.as_str());
 
     // Values outside the closed filter vocabularies are invalid queries.
-    for invalid in ["status=pending", "inputDigest=not-a-digest"] {
+    for (invalid, field_path) in [
+        ("status=pending", "status"),
+        ("inputDigest=not-a-digest", "inputDigest"),
+    ] {
         let refused = harness
             .get_json(
                 &format!("/v1/records/widgets/ingestion-runs?{invalid}"),
                 &claims,
             )
             .await;
-        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{invalid}");
+        let problem = body_json(refused).await;
+        assert_eq!(problem["code"], "query.invalid", "{invalid}: {problem}");
+        assert_eq!(problem["fieldPath"], field_path, "{invalid}: {problem}");
     }
 }
 
@@ -4419,6 +4475,64 @@ async fn listing_runs_pages_by_cursor_and_refuses_after_naming_cursor() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ingestion_list_query_refusals_follow_authority() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+
+    for (query, field_path) in [
+        ("limit=0", "limit"),
+        ("cursor=not-a-uuid", "cursor"),
+        ("status=unknown", "status"),
+        ("after=00000000-0000-4000-8000-000000000001", "after"),
+    ] {
+        let response = harness
+            .get_json(
+                &format!("/v1/records/widgets/ingestion-runs?accessProfile=operator&{query}"),
+                &claims,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "query.invalid", "{query}: {problem}");
+        assert_eq!(problem["fieldPath"], field_path, "{query}: {problem}");
+    }
+
+    let mut unknown_problems = Vec::new();
+    for name in ["unknownCanary", "otherSecretName"] {
+        let response = harness
+            .get_json(
+                &format!("/v1/records/widgets/ingestion-runs?accessProfile=operator&{name}=1"),
+                &claims,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let mut problem = body_json(response).await;
+        assert_eq!(problem["code"], "query.invalid", "{problem}");
+        assert_eq!(problem["fieldPath"], "query", "{problem}");
+        assert!(!problem.to_string().contains(name), "{problem}");
+        problem.as_object_mut().unwrap().remove("traceId");
+        unknown_problems.push(problem);
+    }
+    assert_eq!(unknown_problems[0], unknown_problems[1]);
+
+    for query in [
+        "accessProfile=missing&limit=0",
+        "accessProfile=Operator&limit=0",
+        "accessProfile=operator&accessProfile=operator&limit=0",
+    ] {
+        let response = harness
+            .get_json(
+                &format!("/v1/records/widgets/ingestion-runs?{query}"),
+                &claims,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{query}");
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "resource.not_found", "{query}: {problem}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
     let harness = IngestionHarness::create().await;
     let claims = operator_claims(PRINCIPAL, "zone-a");
@@ -4436,13 +4550,16 @@ async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
         .await;
     assert_eq!(created.status(), StatusCode::OK);
     let results = body_json(created).await["receipt"]["batch"]["results"].clone();
-    let record_id = results[0]["id"].as_str().expect("record id").to_owned();
+    let record_id = results[0]["recordIdentifier"]
+        .as_str()
+        .expect("record id")
+        .to_owned();
     let etag = results[0]["etag"].as_str().expect("record etag").to_owned();
-    assert_eq!(results[0]["revision"], 1);
+    assert_eq!(results[0]["revisionIdentifier"], "1");
 
     let patch_item = json!({
         "operation": "patch",
-        "recordId": record_id,
+        "recordIdentifier": record_id,
         "ifMatch": etag,
         "patch": [{"op": "replace", "path": "/data/quantity", "value": 7}]
     });
@@ -4457,8 +4574,8 @@ async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
         .await;
     assert_eq!(patched.status(), StatusCode::OK);
     assert_eq!(
-        body_json(patched).await["receipt"]["batch"]["results"][0]["revision"],
-        2
+        body_json(patched).await["receipt"]["batch"]["results"][0]["revisionIdentifier"],
+        "2"
     );
 
     harness.erase_widget_history(&record_id).await;
@@ -4482,8 +4599,8 @@ async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
         .await;
     assert_eq!(retained.status(), StatusCode::OK);
     assert_eq!(
-        body_json(retained).await["batch"]["results"][0]["revision"],
-        2
+        body_json(retained).await["batch"]["results"][0]["revisionIdentifier"],
+        "2"
     );
 }
 

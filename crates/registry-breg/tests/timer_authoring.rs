@@ -878,7 +878,7 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
     remote["actions"][2]["plan"] = json!({
         "type":"function","function":"timer-plan",
         "inputs":["contact","planned-at","operation-id"],
-        "capabilities":["evidence"],"refusals":[],
+        "refusals":[],
         "writes":[{"id":"activated","target":{"fromInput":"contact"},"operation":"patch","fields":["active"]}]
     });
     let remote_assets = [ModuleAssetSource {
@@ -887,11 +887,14 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
         bytes: br#"fn plan(ctx) { #{effects: [#{id: "activated", set: #{active: true}}]} }"#
             .to_vec(),
     }];
-    assert_refused_with_assets(
-        remote,
-        &remote_assets,
-        "breg.timer.action-capability-forbidden",
-    );
+    let ceiling_only = compile_value_with_assets(remote, &remote_assets)
+        .expect("a Function ceiling alone gives a timer Action no capability");
+    assert!(ceiling_only
+        .actions()
+        .actions
+        .iter()
+        .filter_map(|action| action.handler.as_ref())
+        .all(|handler| handler.capabilities.is_empty()));
 
     let mut evidence = timer_project_value();
     evidence["functions"] = json!([{
@@ -901,7 +904,7 @@ fn timer_refuses_remote_function_and_evidence_capabilities() {
     evidence["actions"][2]["plan"] = json!({
         "type":"function","function":"timer-plan",
         "inputs":["contact","planned-at","operation-id"],
-        "capabilities":["evidence"],"refusals":[],
+        "refusals":[],
         "writes":[{"id":"activated","target":{"fromInput":"contact"},"operation":"patch","fields":["active"]}]
     });
     evidence["evidenceProviders"] = json!([{

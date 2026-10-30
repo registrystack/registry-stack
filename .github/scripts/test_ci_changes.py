@@ -2337,12 +2337,15 @@ class CiChangesTest(unittest.TestCase):
         # an adopter's Evidence documents, and evidencectl is its supported CLI
         # host. A change to the authoring form can therefore break an
         # editor session or dependent build without touching a host, so the
-        # closure has to carry it into their shards.
+        # closure has to carry it into their shards. BReg also validates its
+        # exported Evidence fragments against this form in a test, so the
+        # direct dev-dependency selects the BReg test shard without propagating
+        # through BReg's own dependents.
         outputs = classify(self.workspace, AUTHORING_FORM_CHANGE)
         self.assertTrue(outputs["evidence_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"evidence", "developer-tools"},
+            {"breg", "evidence", "developer-tools"},
         )
         self.assertIn("registry-language-server", outputs["rust_packages"])
 
@@ -3240,6 +3243,22 @@ on:
                 self.assertIn("registry-cli-docs", outputs["rust_packages"])
                 selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
                 self.assertIn("developer-tools", selected)
+
+    def test_shared_reports_select_every_consuming_command_tree(self) -> None:
+        outputs = classify(self.workspace, ("crates/registry-cli-report/src/lib.rs",))
+        for package in (
+            "registry-cli-report",
+            "registry-bregctl",
+            "registry-evidencectl",
+            "registry-caseworkctl",
+            "registry-messagingctl",
+            "registry-schedulingctl",
+            "registry-discoveryctl",
+            "registry-manifest-cli",
+            "registry-cli-docs",
+        ):
+            with self.subTest(package=package):
+                self.assertIn(package, outputs["rust_packages"])
 
     def test_shared_api_changes_select_every_consuming_command_tree(self) -> None:
         outputs = classify(self.workspace, ("crates/registry-cli-api/src/api.rs",))

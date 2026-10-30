@@ -17,7 +17,7 @@
 ## Next commands
 
 ```sh
-evidencectl source suggest source.openapi.yaml --project . --source-id <id> --operation '<METHOD /path>'
+evidencectl source suggest . --source-id <id> --operation '<METHOD /path>'
 evidencectl check . --target local-target.yaml
 ```
 

@@ -39,6 +39,7 @@ schema = [
 ]
 
 [dependencies]
+registry-cli-report.workspace = true
 anstream.workspace = true
 anstyle.workspace = true
 anyhow.workspace = true

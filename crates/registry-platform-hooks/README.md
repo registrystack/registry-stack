@@ -33,8 +33,10 @@ stay with the owning product.
   `idempotency_key`, `signature`) are explicitly not envelope fields; they stay
   on the transport headers. The envelope is what the handler reasons over; the
   attributes are what the worker reasons over. `id`, `causation.root`, and
-  `causation.parent` are UUIDs and `subject.recordRevision` is greater than
-  zero, refused on both encode and decode; `time` is normalized to UTC at whole
+  `causation.parent` are UUIDs and the closed subject is either
+  `{recordReference, recordRevision}` or `{proposalReference,
+  proposalRevision}`, with its revision greater than zero, refused on both
+  encode and decode; `time` is normalized to UTC at whole
   milliseconds on encode, so equal instants produce identical bytes, and decode
   refuses any other spelling of it; decode requires the bytes to equal their own
   canonicalization, so a decoded envelope re-encodes to the bytes it arrived as.

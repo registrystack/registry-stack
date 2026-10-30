@@ -4,24 +4,20 @@
 //! sibling ctls.
 //!
 //! A report is one JSON object on standard output. It opens with `ok`,
-//! `command`, and `status`, in that order, followed by the command's own
-//! camelCase members, `apiVersion` and `kind` among them. `ok` is true
+//! `command`, `status`, `apiVersion`, and `kind`, in that order, followed by
+//! flat command members, the binary version, and diagnostics. `ok` is true
 //! exactly when the process exits zero; `status` names what happened. A
 //! report that is not ok carries a non-empty `diagnostics` array whose
 //! entries each name a `suggestedAction`.
 
 use std::io;
 
-use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::Value;
 
 /// The command line was incomplete, conflicting, or unsupported.
 pub(crate) const USAGE_EXIT: u8 = 2;
 /// A file, process, or service the command depends on was unavailable.
 pub(crate) const OPERATIONAL_FAILURE_EXIT: u8 = 3;
-
-/// The members every report opens with, in the order they are written.
-const HEAD: [&str; 3] = ["ok", "command", "status"];
 
 /// The status a failure envelope carries for each exit class.
 pub(crate) fn failure_status(exit: u8) -> &'static str {
@@ -120,32 +116,10 @@ fn refused_argument(error: &clap::Error) -> Option<String> {
 
 /// Write one report, envelope members first, and its trailing newline.
 pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    serde_json::to_writer_pretty(&mut *stdout, &Ordered(report)).map_err(io::Error::other)?;
+    let report = registry_cli_report::Report::new(report, crate::build_info::DISPLAY_VERSION)
+        .map_err(io::Error::other)?;
+    serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
     writeln!(stdout)
-}
-
-/// Serialize the top-level object with the envelope members first, whatever
-/// order the underlying map keeps.
-struct Ordered<'a>(&'a Value);
-
-impl Serialize for Ordered<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let Value::Object(members) = self.0 else {
-            return self.0.serialize(serializer);
-        };
-        let mut map = serializer.serialize_map(Some(members.len()))?;
-        for key in HEAD {
-            if let Some(value) = members.get(key) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        for (key, value) in members {
-            if !HEAD.contains(&key.as_str()) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        map.end()
-    }
 }
 
 #[cfg(test)]
@@ -206,7 +180,7 @@ mod tests {
     fn a_report_opens_with_ok_command_and_status_in_that_order() {
         let mut out = Vec::new();
         write(
-            &json!({"apiVersion": "v", "status": "complete", "command": "check", "ok": true}),
+            &json!({"apiVersion": "v", "kind": "CtlReport", "status": "complete", "command": "check", "ok": true}),
             &mut out,
         )
         .unwrap();
@@ -215,6 +189,35 @@ mod tests {
             text.starts_with(
                 "{\n  \"ok\": true,\n  \"command\": \"check\",\n  \"status\": \"complete\",\n  \"apiVersion\""
             ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn report_envelope_always_carries_diagnostics_and_binary_version() {
+        let mut out = Vec::new();
+        write(
+            &json!({
+                "ok": true,
+                "command": "check",
+                "status": "complete",
+                "apiVersion": "v",
+                "kind": "DiscoveryCtlReport",
+                "filesChecked": 0
+            }),
+            &mut out,
+        )
+        .unwrap();
+        let report: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(report["diagnostics"], json!([]));
+        assert_eq!(report["version"], crate::build_info::DISPLAY_VERSION);
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.starts_with(concat!(
+                "{\n  \"ok\": true,\n  \"command\": \"check\",\n",
+                "  \"status\": \"complete\",\n  \"apiVersion\": \"v\",\n",
+                "  \"kind\": \"DiscoveryCtlReport\","
+            )),
             "{text}"
         );
     }

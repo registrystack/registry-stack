@@ -1133,8 +1133,12 @@ fn receipt_records(receipt: &[u8]) -> Option<Vec<(Uuid, i64)>> {
     let results = value.get("results")?.as_array()?;
     let mut records = Vec::with_capacity(results.len());
     for result in results {
-        let id = result.get("id")?.as_str()?;
-        let revision = result.get("revision")?.as_i64()?;
+        let id = result.get("recordIdentifier")?.as_str()?;
+        let revision_identifier = result.get("revisionIdentifier")?.as_str()?;
+        let revision = revision_identifier
+            .parse::<i64>()
+            .ok()
+            .filter(|revision| *revision > 0 && revision.to_string() == revision_identifier)?;
         records.push((Uuid::parse_str(id).ok()?, revision));
     }
     Some(records)
@@ -1158,7 +1162,7 @@ pub(crate) fn receipt_field_bindings(
     let results = value.get("results")?.as_array()?;
     let mut bindings = serde_json::Map::new();
     for result in results {
-        let data = result.get("data")?.as_object()?;
+        let data = result.get("domainData")?.as_object()?;
         for member in data.keys() {
             let field = entity
                 .stored_fields
@@ -1638,8 +1642,8 @@ mod tests {
         let registry = bindings_registry();
         let entity = registry.entities().get("entry").expect("fixture entity");
         let receipt = br#"{"results":[
-            {"id":"11111111-1111-4111-8111-111111111111","revision":1,
-             "data":{"serialNumber":"SN-1","tenant":"a"}}]}"#;
+            {"recordIdentifier":"11111111-1111-4111-8111-111111111111",
+             "revisionIdentifier":"1","domainData":{"serialNumber":"SN-1","tenant":"a"}}]}"#;
         let bindings = receipt_field_bindings(entity, receipt).expect("the map derives");
         assert_eq!(
             bindings, r#"{"serialNumber":"serial-code","tenant":"tenant"}"#,
@@ -1661,8 +1665,8 @@ mod tests {
         assert_eq!(
             receipt_field_bindings(
                 entity,
-                br#"{"results":[{"id":"11111111-1111-4111-8111-111111111111",
-                     "revision":1,"data":{"ghost":"x"}}]}"#,
+                br#"{"results":[{"recordIdentifier":"11111111-1111-4111-8111-111111111111",
+                     "revisionIdentifier":"1","domainData":{"ghost":"x"}}]}"#,
             ),
             None,
             "a member no stored field produces cannot be bound"
@@ -1772,7 +1776,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(",");
         let receipt = format!(
-            r#"{{"results":[{{"id":"11111111-1111-4111-8111-111111111111","revision":1,"data":{{{members}}}}}]}}"#
+            r#"{{"results":[{{"recordIdentifier":"11111111-1111-4111-8111-111111111111","revisionIdentifier":"1","domainData":{{{members}}}}}]}}"#
         );
         let bindings = receipt_field_bindings(entity, receipt.as_bytes()).expect("the map derives");
         // Every entry is a quoted 64-byte api name, a colon, a quoted 64-byte

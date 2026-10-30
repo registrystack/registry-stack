@@ -4,5 +4,4 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "jsonschema==4.25.1",
-    "registry-stack-client==0.43.0",
 ]

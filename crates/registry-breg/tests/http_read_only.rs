@@ -2094,6 +2094,42 @@ async fn legacy_query_keys_are_not_accepted() {
     assert_eq!(harness.records.calls(), 0);
 }
 
+#[test]
+fn retired_proposal_history_query_name_is_not_advertised() {
+    assert!(!registry_breg::query::QUERY_PARAMETERS.contains(&"requestHistoryAfterProposalVersion"));
+}
+
+#[tokio::test]
+async fn record_list_limit_refusal_names_limit_and_guides_top() {
+    let harness = Harness::new(true);
+    let response = harness
+        .send(
+            Method::GET,
+            "/v1/records/cases?limit=1",
+            Some(public_claims()),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let problem = body_json(response).await;
+    assert_eq!(problem["code"], "query.invalid", "{problem}");
+    assert_eq!(problem["fieldPath"], "limit", "{problem}");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("`$top`"),
+        "{problem}"
+    );
+    assert_eq!(harness.records.calls(), 0);
+
+    let accepted = harness
+        .send(
+            Method::GET,
+            "/v1/records/cases?$top=1",
+            Some(public_claims()),
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert_eq!(harness.records.last_request().maximum_records, 2);
+}
+
 #[tokio::test]
 async fn count_requires_compiled_permission_and_top_is_bounded() {
     let harness = Harness::new(true);
@@ -3805,7 +3841,7 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
         json!({
             "registryIdentifier": {"const": "asset-site-placement"},
             "datasetIdentifier": {"const": "asset-site-placement"},
-            "entityTypeIdentifier": {"const": "asset-item"}
+            "recordTypeIdentifier": {"const": "asset-item"}
         })
     );
     assert_eq!(

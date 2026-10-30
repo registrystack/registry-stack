@@ -267,11 +267,11 @@ caseworkctl dev start
 ```
 
 ```json test-excerpt
-{"directory": {"revision": 0, "teams": 0}, "state": "stopped"}
+{"status": "complete", "outcome": "stopped", "directory": {"revision": 0, "teams": 0}}
 ```
 
 ```json test-excerpt
-{"directory": {"revision": 1, "teams": 1}, "state": "ready"}
+{"status": "complete", "outcome": "ready", "directory": {"revision": 1, "teams": 1}}
 ```
 
 The session keeps its ports. Its tokens are new, so run `caseworkctl dev token` again before your

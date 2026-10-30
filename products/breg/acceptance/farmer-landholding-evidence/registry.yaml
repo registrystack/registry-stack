@@ -126,9 +126,6 @@
           "parcel-code",
           "include-category"
         ],
-        "capabilities": [
-          "evidence"
-        ],
         "writes": [
           {
             "id": "landholding",
@@ -231,9 +228,6 @@
           "farmer-number",
           "parcel-code",
           "include-category"
-        ],
-        "capabilities": [
-          "evidence"
         ],
         "writes": [
           {

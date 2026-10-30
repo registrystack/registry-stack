@@ -175,13 +175,13 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     };
     let (exit, plan) = invoke("plan", &[]);
     assert_eq!(exit, ExitCode::SUCCESS, "{plan:?}");
-    assert_eq!(plan["data"]["plan"]["planKind"], "initial");
+    assert_eq!(plan["plan"]["planKind"], "initial");
     let (exit, applied) = invoke(
         "apply",
         &["--operator-reference", "CHANGE_REFERENCE_CANARY"],
     );
     assert_eq!(exit, ExitCode::SUCCESS, "{applied:?}");
-    assert!(!applied["data"]["schemaVersionsApplied"]
+    assert!(!applied["schemaVersionsApplied"]
         .as_array()
         .unwrap()
         .is_empty());
@@ -189,8 +189,8 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     assert_eq!(exit, ExitCode::SUCCESS, "{status:?}");
     let (exit, replan) = invoke("plan", &[]);
     assert_eq!(exit, ExitCode::SUCCESS, "{replan:?}");
-    assert_eq!(replan["data"]["plan"]["changesPending"], false);
-    let supported = status["data"]["activation"]["supportedSchemaVersion"]
+    assert_eq!(replan["plan"]["changesPending"], false);
+    let supported = status["activation"]["supportedSchemaVersion"]
         .as_i64()
         .unwrap();
     execute(

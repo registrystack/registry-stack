@@ -142,6 +142,28 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
 }
 
 #[test]
+fn exported_fragments_match_the_evidence_owned_header_contracts() {
+    use registry_evidence_authoring::formats::{
+        decode_authored, SELECTOR_FRAGMENT, SOURCE_FRAGMENT,
+    };
+
+    let export = export_evidence_source(&compiled(&project(), SQL), &options()).unwrap();
+    decode_authored::<Value>(
+        "sources/registry-status.yaml",
+        file(&export, "sources/registry-status.yaml"),
+        &SOURCE_FRAGMENT,
+    )
+    .expect("the exported Source matches the Evidence-owned format");
+
+    for artifact in export.artifacts.iter().filter(|artifact| {
+        artifact.path.starts_with("selectors/") && artifact.path.ends_with(".yaml")
+    }) {
+        decode_authored::<Value>(&artifact.path, &artifact.bytes, &SELECTOR_FRAGMENT)
+            .expect("the exported selector matches the Evidence-owned format");
+    }
+}
+
+#[test]
 fn the_source_is_spelled_as_evidence_reads_it() {
     let registry = compiled(&project(), SQL);
     let export = export_evidence_source(&registry, &options()).unwrap();

@@ -260,15 +260,20 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     assert_eq!(records.len(), 101);
     let mut exported_codes = Vec::new();
     for record in &records {
-        assert_eq!(record["data"].as_object().map(|data| data.len()), Some(1));
+        assert_eq!(
+            record["domainData"].as_object().map(|data| data.len()),
+            Some(1)
+        );
         exported_codes.push(
-            record["data"]["code"]
+            record["domainData"]["code"]
                 .as_str()
                 .expect("projected code is a string")
                 .to_owned(),
         );
-        assert!(record["id"].is_string());
-        assert_eq!(record["revision"], 1);
+        assert!(record["recordIdentifier"].is_string());
+        assert_eq!(record["revisionIdentifier"], "1");
+        assert_eq!(record.as_object().expect("export record").len(), 3);
+        assert!(record.get("etag").is_none());
     }
     exported_codes.sort();
     assert_eq!(
@@ -317,7 +322,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
                    "domainData":{"code":"ROW-000","secret":SECRET_CANARY}}],
         "pageInfo":{"nextCursor":null},
         "meta":{"registryIdentifier":"data-export-registry",
-                "datasetIdentifier":"test-dataset","entityTypeIdentifier":"entry"}
+                "datasetIdentifier":"test-dataset","recordTypeIdentifier":"entry"}
     }))
     .unwrap();
     let widened = execute_export_page(

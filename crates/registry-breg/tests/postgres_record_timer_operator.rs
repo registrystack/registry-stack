@@ -1341,10 +1341,10 @@ async fn built_bregctl_operator_journey(harness: &mut NativeTimerHarness) -> Res
     let audit_baseline = harness.separate_operator_audit_entries(&config)?.len();
 
     let status = run_bregctl_json(harness, &config, "status", &["status"], true).await?;
-    let initial_control_epoch = status["status"]["controlEpoch"]
+    let initial_control_epoch = status["timer"]["controlEpoch"]
         .as_i64()
         .ok_or_else(|| "bregctl timer status omitted controlEpoch".to_owned())?;
-    if status["status"]["controlState"] != "running" {
+    if status["timer"]["controlState"] != "running" {
         return Err(format!("bregctl timer status was not running: {status}"));
     }
 

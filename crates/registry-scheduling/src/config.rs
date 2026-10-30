@@ -711,6 +711,7 @@ impl RuntimeConfig {
         RuntimeConfigLoader::new(SCHEDULING_RUNTIME_ENVELOPE)
             .removed_keys(SCHEDULING_REMOVED_KEYS)
             .retired_api_versions(SCHEDULING_RETIRED_RUNTIME_API_VERSIONS)
+            .require_trusted_ownership()
     }
 
     #[must_use]
@@ -2090,6 +2091,77 @@ holdPolicy:
         let operator = root.join("runtime.yaml");
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         operator
+    }
+
+    #[cfg(unix)]
+    fn write_ownership_test_runtime(directory: &Path) -> PathBuf {
+        let path = directory.join("runtime.yaml");
+        std::fs::write(
+            &path,
+            format!(
+                "apiVersion: {SCHEDULING_RUNTIME_API_VERSION}\nkind: {SCHEDULING_RUNTIME_KIND}\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    fn assert_unsafe_runtime(error: registry_platform_config::RuntimeConfigError) {
+        let diagnostic = error.deciding_diagnostic();
+        assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
+        assert!(diagnostic
+            .message
+            .contains("owned by root or the runtime user"));
+        assert!(diagnostic
+            .suggested_action
+            .contains("remove group and other write permission"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_accepts_an_owner_writable_file_in_a_private_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_ownership_test_runtime(directory.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        RuntimeConfig::loader()
+            .load::<serde_json::Value>(&path)
+            .expect("an owner-writable runtime in a private directory loads");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_refuses_a_group_writable_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_ownership_test_runtime(directory.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
+        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_refuses_a_group_writable_ancestor() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let writable = directory.path().join("writable");
+        std::fs::create_dir(&writable).unwrap();
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let path = write_ownership_test_runtime(&writable);
+        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_unsafe_runtime(
+            result.expect_err("a runtime below a group-writable directory is refused"),
+        );
     }
 
     fn parse_runtime(document: &serde_json::Value) -> Result<RuntimeConfig, RuntimeConfigError> {

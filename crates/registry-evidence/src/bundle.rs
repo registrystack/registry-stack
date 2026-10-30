@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use jsonschema::{Draft, JSONSchema};
 use registry_platform_config::{
-    package::is_envelope_file, sha256_uri, verify_package, PackageError, PackageLimits,
-    VerifiedPackage, SUM_FILE,
+    package::is_envelope_file, require_trusted_runtime_path, sha256_uri, verify_package,
+    PackageError, PackageLimits, VerifiedPackage, SUM_FILE,
 };
 use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
@@ -410,6 +410,9 @@ impl RuntimeDocument {
         if path.file_name().and_then(|name| name.to_str()) != Some(RUNTIME_FILE) {
             return Err(BundleError::InvalidPath);
         }
+        require_trusted_runtime_path(path).map_err(|error| {
+            BundleError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
+        })?;
         let metadata = fs::symlink_metadata(path).map_err(|_| BundleError::Unavailable)?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(BundleError::InvalidPath);
@@ -4856,18 +4859,22 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().expect("temporary runtime root");
-        let secret_root = directory.path().join("secrets");
+        let root = directory
+            .path()
+            .canonicalize()
+            .expect("canonical runtime root");
+        let secret_root = root.join("secrets");
         fs::create_dir(&secret_root).expect("create secret root");
         fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
             .expect("lock secret root");
-        let ca_path = directory.path().join("internal.pem");
+        let ca_path = root.join("internal.pem");
         fs::write(
             &ca_path,
             b"-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICATE-----\n",
         )
         .expect("write CA bundle");
         fs::set_permissions(&ca_path, fs::Permissions::from_mode(0o444)).expect("lock CA bundle");
-        let runtime_path = directory.path().join("runtime.yaml");
+        let runtime_path = root.join("runtime.yaml");
         fs::write(
             &runtime_path,
             format!(
@@ -4892,6 +4899,26 @@ mod tests {
             runtime.bytes(),
             fs::read(&runtime_path).expect("read runtime")
         );
+
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o770))
+            .expect("make runtime ancestor group-writable");
+        let result = RuntimeDocument::load(&runtime_path);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("restore runtime ancestor");
+        let BundleError::Refused(report) = result.expect_err("a writable ancestor is refused")
+        else {
+            panic!("the shared runtime path check supplies the refusal");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one path refusal is reported");
+        };
+        assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
+        assert!(diagnostic
+            .message
+            .contains("owned by root or the runtime user"));
+        assert!(diagnostic
+            .suggested_action
+            .contains("remove group and other write permission"));
 
         // Everything the operator can re-freeze is already frozen here, so the
         // refusal has to name the one input outside the bundle. Re-freezing the

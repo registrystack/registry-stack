@@ -258,7 +258,8 @@ fn dev_check_reports_platform_file_findings_in_both_formats() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
     assert_eq!(report["ok"], false);
     assert_eq!(report["command"], "dev check");
-    assert_eq!(report["status"], "refused");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["outcome"], "refused");
     assert_eq!(report["filesChecked"], 1);
     assert_eq!(report["errors"], 1);
     assert_eq!(

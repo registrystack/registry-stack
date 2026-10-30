@@ -73,7 +73,7 @@ export type ProgressiveResult =
   | ({ readonly responseFormat: 'sd-jwt-vc' } & ProgressiveVerifiedAudienceScopedCredential)
 
 export type AudienceScopedRequest = {
-  requirement: string
+  handle: string
   responseFormat?: EvidenceResponseFormat
   /** One request-origin subject. Node keeps the selector map explicit. */
   selectors?: Readonly<Record<string, string | number | boolean>>
@@ -333,18 +333,18 @@ export interface EvidenceRequestBatchSpec {
 }
 
 /**
- * The stable eight-kind error envelope every mapped Evidence Node failure
+ * The stable ten-kind error envelope every mapped Evidence Node failure
  * carries, as properties on a thrown `Error` (see `src/lib.rs`'s
  * `to_napi_error` and `src/convert.rs`'s `map_client_error` for the Rust side
  * of this contract).
  *
  * `kind` is always present. The rest are present only when the underlying
  * failure carries them:
- * - `status`: `denied`, `protocol`, and any `token` failure whose `tokenKind`
+ * - `status`: `denied`, `invalid-request`, `unavailable`, `protocol`, and any `token` failure whose `tokenKind`
  *   is `protocol`
- * - `code`: `denied`, `protocol` (optional), `verification`, and any `token`
+ * - `code`: `denied`, `invalid-request`, `unavailable`, `protocol` (optional), `verification`, and any `token`
  *   failure whose `tokenKind` is `refused`
- * - `traceId`: `denied`, `not-available`, `protocol` (all optional)
+ * - `traceId`: `denied`, `not-available`, `invalid-request`, `unavailable`, `protocol` (all optional)
  * - `retryAfterSeconds`: `denied`, `protocol` (both optional)
  * - `transportKind`: `transport`, and any `token` failure whose `tokenKind`
  *   is `transport`

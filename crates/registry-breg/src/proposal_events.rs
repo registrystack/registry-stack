@@ -7,7 +7,7 @@ use crate::outbox::{
     activate_delivery, capture_envelope, capture_time, envelope_payload, insert_hook_delivery,
     CapturedEvent, EnvelopeBinding, HookCapture, OutboxError,
 };
-use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
+use registry_platform_hooks::{EnvelopeLimits, EventSubject, HookEnvelope};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -90,8 +90,10 @@ pub(crate) async fn insert_proposal_lifecycle_event(
             event_id,
             event_type: &event_type,
             created_at: created.into(),
-            record_reference: event.reference,
-            record_revision: i64::try_from(event.revision).map_err(|_| OutboxError::Unavailable)?,
+            subject: EventSubject::proposal(
+                event.reference,
+                i64::try_from(event.revision).map_err(|_| OutboxError::Unavailable)?,
+            ),
             data: json!({"actionId":event.action_id,"actionRevision":event.action_revision,
                 "proposalId":event.proposal_id,"submissionVersion":event.version,"revision":event.revision,
                 "fromState":event.from_state,"state":event.state,"transition":event.transition,

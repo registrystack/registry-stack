@@ -54,9 +54,9 @@ fn check_validates_project_holiday_sets_offline() {
     let (exit, report) = run_json_check(&project);
     assert_eq!(exit, std::process::ExitCode::SUCCESS);
     assert_eq!(report["ok"], true);
-    assert_eq!(report["data"]["networkAccess"], false);
-    assert_eq!(report["data"]["databaseAccess"], false);
-    assert!(report["data"]["filesChecked"].as_u64().unwrap() >= 2);
+    assert_eq!(report["networkAccess"], false);
+    assert_eq!(report["databaseAccess"], false);
+    assert!(report["filesChecked"].as_u64().unwrap() >= 2);
 }
 
 #[cfg(unix)]
@@ -73,7 +73,7 @@ fn check_follows_a_reviewed_holiday_set_directory_alias() {
     let (exit, report) = run_json_check(&project);
     assert_eq!(exit, std::process::ExitCode::SUCCESS);
     assert_eq!(report["ok"], true);
-    assert!(report["data"]["filesChecked"].as_u64().unwrap() >= 2);
+    assert!(report["filesChecked"].as_u64().unwrap() >= 2);
 }
 
 #[test]
@@ -224,8 +224,8 @@ fn fixture_test_option_and_init_schema_are_executable() {
     assert!(err.is_empty());
     let report: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(report["ok"], true);
-    assert_eq!(report["data"]["proofBoundary"], "offline-synthetic");
-    assert_eq!(report["data"]["fixtures"].as_array().unwrap().len(), 1);
+    assert_eq!(report["proofBoundary"], "offline-synthetic");
+    assert_eq!(report["fixtures"].as_array().unwrap().len(), 1);
 }
 #[test]
 fn fixture_command_preserves_unknown_field_and_reference_locations() {

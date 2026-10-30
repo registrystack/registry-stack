@@ -51,7 +51,7 @@ import json
 import sys
 
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-policies = report["data"]["reviewPolicies"]
+policies = report["reviewPolicies"]
 if report["ok"] is not True or len(policies) != 1:
     sys.exit("the regional review policy did not compile")
 policy = policies[0]
@@ -71,12 +71,12 @@ packaged, dry_run = [json.load(open(path, encoding="utf-8")) for path in sys.arg
 for report in (packaged, dry_run):
     if report["ok"] is not True or report["command"] != "package":
         sys.exit("package did not return its typed success report")
-if dry_run["data"]["dryRun"] is not True or "output" in dry_run["data"]:
+if dry_run["dryRun"] is not True or "output" in dry_run:
     sys.exit("dry-run must report its mode without an output path")
-if dry_run["data"]["packageDigest"] != packaged["data"]["packageDigest"]:
+if dry_run["packageDigest"] != packaged["packageDigest"]:
     sys.exit("dry-run and written package digests differ")
-actual = sorted(path.relative_to(root).as_posix() for root in [__import__("pathlib").Path(packaged["data"]["output"])] for path in root.rglob("*") if path.is_file() and path.name != "SHA256SUMS")
-if actual != sorted(dry_run["data"]["files"]):
+actual = sorted(path.relative_to(root).as_posix() for root in [__import__("pathlib").Path(packaged["output"])] for path in root.rglob("*") if path.is_file() and path.name != "SHA256SUMS")
+if actual != sorted(dry_run["files"]):
     sys.exit("dry-run file closure differs from the written package")
 PY
 printf '%s\n' 'Casework offline policy, inspection, types, package and schema checkpoint passed.'

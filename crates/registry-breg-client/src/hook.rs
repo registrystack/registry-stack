@@ -1,17 +1,16 @@
-use std::collections::BTreeMap;
-
 use registry_platform_hooks::receiver::{
     verify_delivery, DeliveryFreshness, ReceiverError, SignedDelivery,
 };
 
 /// Exact request material supplied to the BReg Version 1 hook verifier.
 ///
-/// Header names are matched without regard to ASCII case. The key and body are
-/// never rendered by this type or by its refusal errors.
+/// Header pairs retain order and duplicates; names are matched without regard
+/// to ASCII case. The key and body are never rendered by this type or by its
+/// refusal errors.
 pub struct BRegHookDelivery<'a> {
     pub method: &'a str,
     pub path: &'a str,
-    pub headers: &'a BTreeMap<String, String>,
+    pub headers: &'a [(String, String)],
     pub body: &'a [u8],
     pub key: &'a [u8],
 }

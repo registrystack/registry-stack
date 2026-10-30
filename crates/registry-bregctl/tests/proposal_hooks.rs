@@ -78,5 +78,12 @@ fn native_observers_load_owned_assets_generate_schema_and_sample_the_real_transi
     );
     assert_eq!(sample["request"]["body"]["data"]["transition"], "cancelled");
     assert_eq!(sample["request"]["body"]["data"]["state"], "cancelled");
+    assert_eq!(
+        sample["request"]["body"]["subject"],
+        json!({
+            "proposalReference": "/v1/proposals/00000000-0000-4000-8000-000000000002",
+            "proposalRevision": 1,
+        })
+    );
     assert!(sample["request"]["body"]["data"].get("values").is_none());
 }

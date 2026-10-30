@@ -106,7 +106,7 @@ fn record() -> Value {
 }
 
 fn meta() -> Value {
-    json!({"registryIdentifier":"registry","datasetIdentifier":"dataset","entityTypeIdentifier":"company"})
+    json!({"registryIdentifier":"registry","datasetIdentifier":"dataset","recordTypeIdentifier":"company"})
 }
 
 fn response(media: &str, value: Value, link: bool, etag: bool) -> Response<Body> {

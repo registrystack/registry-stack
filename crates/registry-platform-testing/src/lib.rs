@@ -21,6 +21,12 @@ mod migration_pins;
 #[cfg(feature = "migration-pins")]
 pub use migration_pins::{assert_migration_pins, verify_migration_pins, MIGRATION_PIN_RULE};
 
+#[cfg(feature = "postgres-catalog")]
+mod postgres_catalog;
+
+#[cfg(feature = "postgres-catalog")]
+pub use postgres_catalog::verify_postgres_schema_equivalence;
+
 #[cfg(feature = "test-authorization-server")]
 pub use authorization_server::{
     ExchangeProfile, TestActorKind, TestAuthorizationServer, TestAuthorizationServerBuilder,

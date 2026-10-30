@@ -28,7 +28,7 @@ const proposal = {id, actionId: 'correct', actionRevision: revision, submissionV
   submit: {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'author', operation: 'submit', ifMatch: '"draft-condition"'},
 }};
 
-test('proposal handles preserve base path, selected profile and exact prepared evidence', async () => {
+test('proposal object methods preserve exact bodies and refuse JSON strings before I/O', async () => {
   const requests = [];
   const server = http.createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk;
@@ -59,19 +59,20 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     }
     assert.equal(requests.length, getCount);
     const binding = contract.selectAction('correct', 'author');
-    const draft = await client.startProposal(binding, '{}', 'start-once');
+    const draft = await client.startProposal(binding, {}, 'start-once');
     assert.equal(draft.identifier, id);
     assert.equal(JSON.parse(draft.documentJson).submissionVersion, 1);
-    assert.ok(client.prepareProposal(draft, 'edit', '{"input":{}}', 'edit-empty'));
-    await client.startProposal(binding, '{}', 'k'.repeat(256));
+    assert.equal(requests.at(-1).body, '{"input":{}}');
+    assert.ok(client.prepareProposal(draft, 'edit', {input: {}}, 'edit-empty'));
+    await client.startProposal(binding, {}, 'k'.repeat(256));
     assert.equal(requests.at(-1).headers['idempotency-key'], 'k'.repeat(256));
     const startCount = requests.length;
-    for (const invalid of ['{"address":null}', '{"address":42}', '{"address":""}']) {
+    for (const invalid of [{address: null}, {address: 42}, {address: ''}]) {
       await assert.rejects(client.startProposal(binding, invalid, 'invalid-start'), error => error.kind === 'invalid-request');
     }
-    await assert.rejects(client.startProposal(binding, '{}', 'k'.repeat(257)), error => error.kind === 'invalid-request');
+    await assert.rejects(client.startProposal(binding, {}, 'k'.repeat(257)), error => error.kind === 'invalid-request');
     assert.equal(requests.length, startCount, 'invalid supplied Proposal inputs fail before credential acquisition or I/O');
-    const attempt = client.prepareProposal(draft, 'submit', '{}', 'submit-once');
+    const attempt = client.prepareProposal(draft, 'submit', {}, 'submit-once');
     const saved = attempt.toBytes();
     const restored = BRegPreparedProposal.fromBytes(saved);
     const before = requests.length;
@@ -86,10 +87,15 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     assert.equal(sent.body, '{}');
     assert.equal(sent.headers['if-match'], '"draft-condition"');
     assert.equal(sent.headers['idempotency-key'], 'submit-once');
-    const page = await client.listProposals(contract.selectProposals('author'), '{"action":"correct","limit":1}');
+    const page = await client.listProposals(contract.selectProposals('author'), {action: 'correct', limit: 1});
     assert.equal(page.items[0].identifier, id);
     assert.equal(page.nextCursor, undefined);
-    assert.throws(() => client.prepareProposal(draft, 'submit', '{"input":{}}', 'invalid-body'), error => error.kind === 'invalid-request');
+    assert.throws(() => client.prepareProposal(draft, 'submit', {input: {}}, 'invalid-body'), error => error.kind === 'invalid-request');
+    const oldShapeCount = requests.length;
+    await assert.rejects(client.startProposal(binding, '{}', 'old-start'), error => error.kind === 'invalid-request');
+    await assert.rejects(client.listProposals(contract.selectProposals('author'), '{}'), error => error.kind === 'invalid-request');
+    assert.throws(() => client.prepareProposal(draft, 'submit', '{}', 'old-submit'), error => error.kind === 'invalid-request');
+    assert.equal(requests.length, oldShapeCount, 'retired JSON-string forms fail before I/O');
     const foreign = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/other/`});
     await assert.rejects(foreign.getProposal(getBinding, id), error => error.kind === 'invalid-request');
     await assert.rejects(foreign.readProposal(draft), error => error.kind === 'invalid-request');
@@ -144,11 +150,11 @@ test('returned Proposal cursors are usable for explicit bounded continuation', a
     const pendingManual = {...proposal, state: 'submitted', effectDigest: revision,
       applicationStatus: {state: 'pending', mode: 'manual'}};
     value = {items: [pendingManual]};
-    const selected = await client.listProposals(collection, '{"pendingManualApplication":true}');
+    const selected = await client.listProposals(collection, {pendingManualApplication: true});
     assert.equal(selected.items[0].identifier, id);
     assert.equal(new URL(requests.at(-1), 'http://fixture.invalid').searchParams.get('pendingManualApplication'), 'true');
     value = {items: [pendingManual]};
-    await client.listProposals(collection, '{"pendingManualApplication":false}');
+    await client.listProposals(collection, {pendingManualApplication: false});
     assert.equal(new URL(requests.at(-1), 'http://fixture.invalid').searchParams.has('pendingManualApplication'), false);
     for (const applicationStatus of [
       undefined,
@@ -157,26 +163,26 @@ test('returned Proposal cursors are usable for explicit bounded continuation', a
     ]) {
       value = {items: [{...pendingManual, applicationStatus}]};
       await assert.rejects(
-        client.listProposals(collection, '{"pendingManualApplication":true}'),
+        client.listProposals(collection, {pendingManualApplication: true}),
         error => error.kind === 'invalid-request',
       );
     }
     for (const cursor of ['', ' ', 'cursor\nvalue', 'cursor\tvalue', 'é', 'x'.repeat(513)]) {
       value = {items: [proposal], nextCursor: cursor};
       const count = requests.length;
-      await assert.rejects(client.listProposals(collection, '{}'), error => error.kind === 'invalid-request');
+      await assert.rejects(client.listProposals(collection, {}), error => error.kind === 'invalid-request');
       assert.equal(requests.length, count + 1, 'refuse the received page without automatically following it');
     }
     for (const cursor of [id, 'x'.repeat(512)]) {
       value = {items: [], nextCursor: cursor};
-      const emptyPage = await client.listProposals(collection, '{}');
+      const emptyPage = await client.listProposals(collection, {});
       assert.equal(emptyPage.nextCursor, cursor);
       value = {items: [proposal], nextCursor: cursor};
-      await assert.rejects(client.listProposals(collection, JSON.stringify({cursor})), error => error.kind === 'invalid-request');
-      const page = await client.listProposals(collection, '{}');
+      await assert.rejects(client.listProposals(collection, {cursor}), error => error.kind === 'invalid-request');
+      const page = await client.listProposals(collection, {});
       assert.equal(page.nextCursor, cursor);
       value = {items: []};
-      const finalPage = await client.listProposals(collection, JSON.stringify({cursor: page.nextCursor}));
+      const finalPage = await client.listProposals(collection, {cursor: page.nextCursor});
       assert.equal(new URL(requests.at(-1), 'http://fixture.invalid').searchParams.get('cursor'), cursor);
       assert.equal(finalPage.nextCursor, undefined);
     }
@@ -200,8 +206,8 @@ test('Proposal Start accepts exact Draft replay and refuses otherwise valid term
     const contract = await client.registryContract('author');
     const start = contract.selectAction('correct', 'author');
     const get = contract.selectProposalGet('author');
-    const first = await client.startProposal(start, '{}', 'exact-draft-start');
-    const repeated = await client.startProposal(start, '{}', 'exact-draft-start');
+    const first = await client.startProposal(start, {}, 'exact-draft-start');
+    const repeated = await client.startProposal(start, {}, 'exact-draft-start');
     assert.equal(first.documentJson, repeated.documentJson);
     assert.deepEqual(requests.at(-1), requests.at(-2));
     for (const state of ['submitted', 'applied', 'cancelled']) {
@@ -209,7 +215,7 @@ test('Proposal Start accepts exact Draft replay and refuses otherwise valid term
       if (state === 'submitted') value.effectDigest = revision;
       assert.equal(JSON.parse((await client.getProposal(get, id)).documentJson).state, state, 'ordinary reads permit this representation');
       const count = requests.length;
-      await assert.rejects(client.startProposal(start, '{}', `wrong-start-${state}`), error => error.kind === 'protocol' && error.outcomeUnknown);
+      await assert.rejects(client.startProposal(start, {}, `wrong-start-${state}`), error => error.kind === 'protocol' && error.outcomeUnknown);
       assert.equal(requests.length, count + 1, 'validate one actual Start response');
       assert.equal(requests.at(-1).url, '/tenant/v1/actions/correct/proposals?accessProfile=author');
     }

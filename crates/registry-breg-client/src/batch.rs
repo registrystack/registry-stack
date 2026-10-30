@@ -132,7 +132,7 @@ enum BRegChangeKind {
     Correction,
 }
 
-/// Builds one ordered atomic batch against one metadata-selected entity route.
+/// Builds one ordered atomic batch against one metadata-selected record route.
 pub struct BRegBatchBuilder<'a> {
     binding: &'a BRegBatchBinding,
     items: Vec<BRegBatchItem>,
@@ -266,7 +266,7 @@ enum BRegBatchItem {
         data: Map<String, Value>,
     },
     Patch {
-        #[serde(rename = "recordId")]
+        #[serde(rename = "recordIdentifier")]
         #[serde(serialize_with = "serialize_uuid")]
         record_id: Uuid,
         #[serde(rename = "ifMatch")]
@@ -350,10 +350,10 @@ pub enum BRegBatchOperation {
 pub struct BRegBatchResult {
     operation: BRegBatchOperation,
     #[serde(serialize_with = "serialize_uuid")]
-    id: Uuid,
-    revision: u64,
+    record_identifier: Uuid,
+    revision_identifier: String,
     etag: BRegEtag,
-    data: Map<String, Value>,
+    domain_data: Map<String, Value>,
 }
 
 impl BRegBatchResult {
@@ -364,12 +364,12 @@ impl BRegBatchResult {
 
     #[must_use]
     pub const fn record_identifier(&self) -> Uuid {
-        self.id
+        self.record_identifier
     }
 
     #[must_use]
-    pub const fn revision(&self) -> u64 {
-        self.revision
+    pub fn revision_identifier(&self) -> &str {
+        &self.revision_identifier
     }
 
     #[must_use]
@@ -378,8 +378,8 @@ impl BRegBatchResult {
     }
 
     #[must_use]
-    pub fn data(&self) -> &Map<String, Value> {
-        &self.data
+    pub fn domain_data(&self) -> &Map<String, Value> {
+        &self.domain_data
     }
 }
 
@@ -486,9 +486,15 @@ fn decode_result(
 ) -> Result<BRegBatchResult, BRegBatchError> {
     let object = value.as_object().ok_or(BRegBatchError::InvalidResponse)?;
     if object.len() != 5
-        || !["operation", "id", "revision", "etag", "data"]
-            .iter()
-            .all(|key| object.contains_key(*key))
+        || ![
+            "operation",
+            "recordIdentifier",
+            "revisionIdentifier",
+            "etag",
+            "domainData",
+        ]
+        .iter()
+        .all(|key| object.contains_key(*key))
     {
         return Err(BRegBatchError::InvalidResponse);
     }
@@ -500,7 +506,7 @@ fn decode_result(
     if operation != expected {
         return Err(BRegBatchError::InvalidResponse);
     }
-    let id = object["id"]
+    let record_identifier = object["recordIdentifier"]
         .as_str()
         .and_then(|value| {
             Uuid::parse_str(value)
@@ -508,25 +514,29 @@ fn decode_result(
                 .filter(|id| id.to_string() == value)
         })
         .ok_or(BRegBatchError::InvalidResponse)?;
-    let revision = object["revision"]
-        .as_u64()
-        .filter(|value| *value > 0 && *value <= i64::MAX as u64)
+    let revision_identifier = object["revisionIdentifier"]
+        .as_str()
+        .filter(|value| {
+            value.parse::<u64>().is_ok_and(|revision| {
+                revision > 0 && revision <= i64::MAX as u64 && revision.to_string() == *value
+            })
+        })
         .ok_or(BRegBatchError::InvalidResponse)?;
     let etag = object["etag"]
         .as_str()
         .and_then(|value| BRegEtag::parse(value).ok())
         .ok_or(BRegBatchError::InvalidResponse)?;
-    let data = object["data"]
+    let domain_data = object["domainData"]
         .as_object()
         .filter(|data| data.keys().all(|field| readable.contains(field)))
         .cloned()
         .ok_or(BRegBatchError::InvalidResponse)?;
     Ok(BRegBatchResult {
         operation,
-        id,
-        revision,
+        record_identifier,
+        revision_identifier: revision_identifier.to_owned(),
         etag,
-        data,
+        domain_data,
     })
 }
 
@@ -543,6 +553,55 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn batch_patch_and_result_use_the_record_envelope_vocabulary() {
+        let record_identifier = Uuid::parse_str("018f06d6-0248-7c7f-8a7e-df9dfbd83d2c").unwrap();
+        let if_match = BRegEtag::parse("\"breg-record-v1-abcdef012345\"").unwrap();
+        let item = BRegBatchItem::Patch {
+            record_id: record_identifier,
+            if_match,
+            patch: vec![json!({"op":"replace","path":"/data/name","value":"Example"})],
+        };
+        assert_eq!(
+            serde_json::to_value(item).unwrap(),
+            json!({
+                "operation": "patch",
+                "recordIdentifier": record_identifier,
+                "ifMatch": "\"breg-record-v1-abcdef012345\"",
+                "patch": [{"op":"replace","path":"/data/name","value":"Example"}]
+            })
+        );
+
+        let result = decode_result(
+            &json!({
+                "operation": "patch",
+                "recordIdentifier": record_identifier,
+                "revisionIdentifier": "9007199254740993",
+                "etag": "\"breg-record-v1-abcdef012346\"",
+                "domainData": {"name":"Example"}
+            }),
+            BRegBatchOperation::Patch,
+            &BTreeSet::from(["name".to_owned()]),
+        )
+        .expect("the unified batch result envelope decodes");
+        assert_eq!(result.record_identifier(), record_identifier);
+        assert_eq!(result.revision_identifier(), "9007199254740993");
+        assert_eq!(result.domain_data()["name"], "Example");
+
+        assert!(decode_result(
+            &json!({
+                "operation": "patch",
+                "id": record_identifier,
+                "revision": 1,
+                "etag": "\"breg-record-v1-abcdef012346\"",
+                "data": {"name":"Example"}
+            }),
+            BRegBatchOperation::Patch,
+            &BTreeSet::from(["name".to_owned()]),
+        )
+        .is_err());
+    }
 
     #[test]
     fn correction_context_uses_exact_wire_names_and_bounds() {

@@ -78,7 +78,7 @@ pub(crate) struct ProviderAddData {
     pub project: PathBuf,
     pub action_id: String,
     pub pattern: String,
-    pub state: ProviderAddState,
+    pub outcome: ProviderAddState,
     pub source_namespace: String,
     pub policy_id: String,
     pub authority_id: String,
@@ -333,7 +333,10 @@ fn explain(bregctl: &Path, project: &Path, subject: &'static str) -> Result<Valu
         _ => "Run the refused bregctl explain command by hand, correct the named BReg project, and run provider add again.",
     };
     if !output.status.success() {
-        return Err(ProviderAddFailure::BregctlRefused { command }.into());
+        return Err(crate::child_report_failure(
+            output.status,
+            ProviderAddFailure::BregctlRefused { command },
+        ));
     }
     let report: Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| ProviderAddFailure::InvalidReport { command })?;
@@ -386,10 +389,12 @@ fn breg_package_agrees_with_project(bregctl: &Path, project: &Path, package: &Pa
         .output()
         .context("starting bregctl diff")?;
     if !output.status.success() {
-        return Err(ProviderAddFailure::BregctlRefused {
-            command: BREG_DIFF_COMMAND,
-        }
-        .into());
+        return Err(crate::child_report_failure(
+            output.status,
+            ProviderAddFailure::BregctlRefused {
+                command: BREG_DIFF_COMMAND,
+            },
+        ));
     }
     let report = decode_breg_package_diff_report(&output.stdout)?;
     if report.baseline_registry_revision != report.candidate_registry_revision {
@@ -1785,7 +1790,7 @@ pub(super) fn add(
                 project: project.into(),
                 action_id: action.into(),
                 pattern: pattern.into(),
-                state: ProviderAddState::ChangesNeeded,
+                outcome: ProviderAddState::ChangesNeeded,
                 source_namespace: plan.source_namespace,
                 policy_id: plan.policy_id,
                 authority_id: plan.authority_id,
@@ -1866,7 +1871,7 @@ pub(super) fn add(
                 project: project.into(),
                 action_id: action.into(),
                 pattern: pattern.into(),
-                state: ProviderAddState::InAgreement,
+                outcome: ProviderAddState::InAgreement,
                 source_namespace: plan.source_namespace,
                 policy_id: plan.policy_id,
                 authority_id: plan.authority_id,
@@ -1988,7 +1993,7 @@ pub(super) fn add(
             project: project.into(),
             action_id: action.into(),
             pattern: pattern.into(),
-            state: ProviderAddState::Created,
+            outcome: ProviderAddState::Created,
             source_namespace: plan.source_namespace,
             policy_id: plan.policy_id,
             authority_id: plan.authority_id,
@@ -3292,7 +3297,8 @@ exit 1
         )
         .unwrap();
         assert_eq!(created["ok"], true, "initial generation");
-        assert_eq!(created["state"], "created");
+        assert_eq!(created["outcome"], "created");
+        assert!(created.get("state").is_none());
         assert_eq!(created["providerId"], "correct-address-context");
         assert_eq!(created["check"]["project"], json!(project));
         assert_eq!(
@@ -3361,7 +3367,7 @@ exit 1
         )
         .unwrap();
         assert_eq!(rerun["ok"], true, "unchanged project rerun");
-        assert_eq!(rerun["state"], "in-agreement");
+        assert_eq!(rerun["outcome"], "in-agreement");
         assert_eq!(
             fs::read(project.join("casework.yaml")).unwrap(),
             policy_before
@@ -3392,7 +3398,7 @@ exit 1
                 None,
                 &bregctl,
             )
-            .unwrap()["state"],
+            .unwrap()["outcome"],
             "in-agreement",
             "extra operator scopes remain allowed"
         );
@@ -3451,7 +3457,7 @@ exit 1
                 None,
                 &bregctl,
             )
-            .unwrap()["state"],
+            .unwrap()["outcome"],
             "in-agreement",
             "the current required scope may coexist with operator scopes"
         );
@@ -3509,7 +3515,7 @@ exit 1
                 None,
                 &bregctl,
             )
-            .unwrap()["state"],
+            .unwrap()["outcome"],
             "in-agreement",
             "provider agreement does not require an optional runtime example"
         );
@@ -3793,7 +3799,7 @@ exit 1
             &bregctl,
         )
         .unwrap();
-        assert_eq!(rerun["state"], "in-agreement", "explicit policy defaults");
+        assert_eq!(rerun["outcome"], "in-agreement", "explicit policy defaults");
         assert_eq!(
             fs::read(project.join("casework.yaml")).unwrap(),
             explicit_bytes
@@ -3890,6 +3896,8 @@ exit 1
         )
         .unwrap();
         assert_eq!(refused["ok"], false, "missing BReg configuration");
+        assert_eq!(refused["outcome"], "changes-needed");
+        assert!(refused.get("state").is_none());
         assert_eq!(
             refused["diagnostics"][0]["code"],
             "casework.provider-add.breg-changes-needed"
@@ -3922,6 +3930,41 @@ exit 1
             Some(ProviderAddFailure::BregctlRefused { .. })
         ));
         assert!(!failed_project.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn breg_explain_and_diff_preserve_peer_exit_classes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = crate::canonical_tempdir();
+        let bregctl = temporary.path().join("bregctl");
+        for (child_exit, expected_exit) in [
+            (crate::DOMAIN_REFUSAL_EXIT, crate::DOMAIN_REFUSAL_EXIT),
+            (
+                crate::OPERATIONAL_FAILURE_EXIT,
+                crate::OPERATIONAL_FAILURE_EXIT,
+            ),
+            (crate::report::USAGE_EXIT, crate::OPERATIONAL_FAILURE_EXIT),
+            (64, crate::OPERATIONAL_FAILURE_EXIT),
+        ] {
+            fs::write(&bregctl, format!("#!/bin/sh\nexit {child_exit}\n")).unwrap();
+            fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+            for error in [
+                explain(&bregctl, temporary.path(), "actions")
+                    .expect_err("the child explanation was refused"),
+                breg_package_agrees_with_project(
+                    &bregctl,
+                    temporary.path(),
+                    &temporary.path().join("package"),
+                )
+                .expect_err("the child package comparison was refused"),
+            ] {
+                let (exit, diagnostic) =
+                    crate::classify_failure(crate::CommandKind::Authoring, &error);
+                assert_eq!(exit, expected_exit, "child exit {child_exit}: {diagnostic}");
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -4014,7 +4057,7 @@ exit 1
             &bregctl,
         )
         .unwrap();
-        assert_eq!(repeated["state"], "in-agreement", "sealed package rerun");
+        assert_eq!(repeated["outcome"], "in-agreement", "sealed package rerun");
         assert_eq!(repeated["package"]["output"], json!(package_output));
         assert_eq!(
             fs::read(project.join("casework.yaml")).unwrap(),

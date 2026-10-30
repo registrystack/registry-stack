@@ -288,7 +288,11 @@ fn generated_numbers(results: &Value) -> Vec<&str> {
         .as_array()
         .expect("ordered mutation results")
         .iter()
-        .map(|result| result["data"]["number"].as_str().expect("generated number"))
+        .map(|result| {
+            result["domainData"]["number"]
+                .as_str()
+                .expect("generated number")
+        })
         .collect()
 }
 

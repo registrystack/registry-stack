@@ -186,7 +186,7 @@ test('fromProfile returns the public wrapper and preserves consumer subclasses',
     const client = EvidenceClient.fromProfile(profilePath, privateJwk);
     assert.ok(client instanceof EvidenceClient);
     assert.throws(
-      () => client.request({ requirement: 'adult-status' }),
+      () => client.request({ handle: 'adult-status' }),
       (error) => error instanceof EvidenceClientError && error.kind === 'configuration',
     );
 

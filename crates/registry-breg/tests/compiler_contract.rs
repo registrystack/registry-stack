@@ -1834,6 +1834,17 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
             .get("changeContext")
             .is_none());
     }
+    let patch_item_schema = batch_request_schema["properties"]["items"]["items"]["oneOf"]
+        .as_array()
+        .expect("batch request item alternatives are rendered")
+        .iter()
+        .find(|schema| schema["properties"]["operation"]["const"] == json!("patch"))
+        .expect("the Patch batch item schema renders");
+    assert_eq!(
+        patch_item_schema["required"],
+        json!(["operation", "recordIdentifier", "ifMatch", "patch"])
+    );
+    assert!(patch_item_schema["properties"].get("recordId").is_none());
     let batch_response_schema =
         &batch_operation["responses"]["200"]["content"]["application/json"]["schema"];
     assert!(batch_response_schema["required"]
@@ -1851,6 +1862,28 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
             .get("snapshot")
             .is_none()
     );
+    let batch_result = &batch_response_schema["properties"]["results"]["items"];
+    assert_eq!(
+        batch_result["required"],
+        json!([
+            "operation",
+            "recordIdentifier",
+            "revisionIdentifier",
+            "etag",
+            "domainData"
+        ])
+    );
+    assert_eq!(
+        batch_result["properties"]["revisionIdentifier"]["type"],
+        "string"
+    );
+    assert_eq!(
+        batch_result["properties"]["revisionIdentifier"]["pattern"],
+        "^[1-9][0-9]*$"
+    );
+    for retired in ["id", "revision", "data"] {
+        assert!(batch_result["properties"].get(retired).is_none());
+    }
 
     let create_response_schema = &openapi["paths"]["/v1/records/records"]["post"]["responses"]
         ["201"]["content"]["application/json"]["schema"];
@@ -1866,11 +1899,11 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
         tombstone_response_schema,
     ] {
         let record = &schema["properties"]["data"];
-        assert!(record["required"]
-            .as_array()
-            .expect("mutation response record properties render")
-            .contains(&json!("snapshot")));
-        assert!(record["properties"].get("snapshot").is_some());
+        assert_eq!(
+            record["required"],
+            json!(["recordIdentifier", "revisionIdentifier", "domainData"])
+        );
+        assert!(record["properties"].get("snapshot").is_none());
     }
     let get_record = &get_response_schema["properties"]["data"];
     assert!(get_record["required"]
@@ -6024,7 +6057,8 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "statistical_dataset.release_refused",
             "statistical_dataset.version_conflict",
             "statistical_dataset.version_withdrawn",
-            "unsupported.media_type"
+            "unsupported.media_type",
+            "write.outside-boundary"
         ])
     );
     assert_eq!(
@@ -6227,12 +6261,11 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
         json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["recordIdentifier", "revisionIdentifier", "domainData", "snapshot"],
+            "required": ["recordIdentifier", "revisionIdentifier", "domainData"],
             "properties": {
                 "recordIdentifier": {"type": "string", "format": "uuid"},
                 "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
-                "domainData": {"$ref": "#/components/schemas/business-record"},
-                "snapshot": {"type": "string", "maxLength": 4096}
+                "domainData": {"$ref": "#/components/schemas/business-record"}
             }
         })
     );

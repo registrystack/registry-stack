@@ -15,33 +15,33 @@ export declare class BaseRegistryClient {
   statisticsPublish(dataset: string, period: string, status: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   statisticsWithdraw(dataset: string, period: string, version: number, reason: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | undefined | null): Promise<BRegMetadata>
-  entitySchema(recordTypeIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  recordSchema(recordTypeIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
   /** Retrieve one bounded first page of record revisions as inert JSON. */
-  recordRevisions(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  recordRevisions(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
   /** Retrieve one exact retained revision as validated inert record JSON. */
-  getRecordRevision(entityRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null): Promise<RawOutcome>
+  getRecordRevision(recordRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null): Promise<RawOutcome>
   /**
    * Read the first revision of one record as the compact
    * `{recordType, recordId, revision, createdAt}` JSON, or null when the
    * caller may not read it.
    */
-  eventRecordCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<string | null>
-  getRecord(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
-  listRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  eventRecordCreationRevision(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<string | null>
+  getRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
+  listRecords(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueList(value: any): Promise<PageOutcome>
-  getGeoJsonRecord(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
-  listGeoJsonRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  getGeoJsonRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
+  listGeoJsonRecords(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueGeoJsonList(value: any): Promise<PageOutcome>
-  listCurrentRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  listCurrentRecords(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueCurrentList(value: any): Promise<PageOutcome>
-  listRecordsAsOf(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  listRecordsAsOf(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueAsOfList(value: any): Promise<PageOutcome>
-  listSnapshotRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  listSnapshotRecords(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueSnapshotList(value: any): Promise<PageOutcome>
-  listRelationshipRecords(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  listRelationshipRecords(recordRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueRelationshipList(value: any): Promise<PageOutcome>
-  lookupRecord(entityRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
-  startProposal(binding: BRegActionBinding, inputsJson: string, key: string): Promise<BRegProposal>
+  lookupRecord(recordRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
+  startProposal(binding: BRegActionBinding, inputs: any, key: string): Promise<BRegProposal>
   readProposal(proposal: BRegProposal): Promise<BRegProposal>
   readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome>
   getProposal(binding: BRegProposalGetBinding, id: string): Promise<BRegProposal>
@@ -53,8 +53,8 @@ export declare class BaseRegistryClient {
   readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids: Array<string>): Promise<CompleteOutcome>
   uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
   deleteProposalAttachment(proposal: BRegProposal, slot: string, key: string): Promise<BRegProposal>
-  listProposals(collection: BRegProposalCollection, queryJson: string): Promise<ProposalPage>
-  prepareProposal(proposal: BRegProposal, operation: string, bodyJson: string, key: string): BRegPreparedProposal
+  listProposals(collection: BRegProposalCollection, query: any): Promise<ProposalPage>
+  prepareProposal(proposal: BRegProposal, operation: string, body: any, key: string): BRegPreparedProposal
   recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
   executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   /** Fetch opaque target conditions for one metadata-selected action. */
@@ -105,42 +105,42 @@ export declare class BaseRegistryClient {
    * run request names the access profile, which the client selects for the
    * exchange.
    */
-  createIngestionRun(entityRoute: string, request: any): Promise<CompleteOutcome>
-  /** Read one bounded page of ingestion runs for one entity route. */
-  listIngestionRuns(entityRoute: string, query?: any | undefined | null): Promise<CompleteOutcome>
+  createIngestionRun(recordRoute: string, request: any): Promise<CompleteOutcome>
+  /** Read one bounded page of ingestion runs for one record route. */
+  listIngestionRuns(recordRoute: string, query?: any | undefined | null): Promise<CompleteOutcome>
   /** Read the current durable state of one ingestion run. */
-  readIngestionRun(entityRoute: string, runId: string, accessProfile?: string | undefined | null): Promise<CompleteOutcome>
+  readIngestionRun(recordRoute: string, runId: string, accessProfile?: string | undefined | null): Promise<CompleteOutcome>
   /**
    * Submit one bounded chunk of an open ingestion run under the run's
    * access profile. A resubmitted chunk replays its retained receipt
    * instead of executing twice.
    */
-  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk, profileId: string): Promise<CompleteOutcome>
+  submitIngestionChunk(recordRoute: string, runId: string, chunk: BRegIngestionChunk, profileId: string): Promise<CompleteOutcome>
   /** Cancel an open ingestion run. Committed chunks stay committed. */
-  cancelIngestionRun(entityRoute: string, runId: string, accessProfile?: string | undefined | null): Promise<CompleteOutcome>
+  cancelIngestionRun(recordRoute: string, runId: string, accessProfile?: string | undefined | null): Promise<CompleteOutcome>
   /**
    * Read the retained receipt of one committed chunk under the run's
    * access profile. An erased receipt answers with the
    * `ingestion.receipt_erased` problem instead.
    */
-  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: number, profileId: string): Promise<CompleteOutcome>
+  ingestionChunkReceipt(recordRoute: string, runId: string, chunkIndex: number, profileId: string): Promise<CompleteOutcome>
   /** Tombstone one record against its current strong ETag. */
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
-  getRecordJson(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
-  listRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  getRecordJson(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listRecordsJson(recordRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueListJson(value: any): Promise<JsonOutcome>
-  getGeoJsonRecordJson(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
-  listGeoJsonRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  getGeoJsonRecordJson(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listGeoJsonRecordsJson(recordRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueGeoJsonListJson(value: any): Promise<JsonOutcome>
-  listCurrentRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listCurrentRecordsJson(recordRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueCurrentListJson(value: any): Promise<JsonOutcome>
-  listRecordsAsOfJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listRecordsAsOfJson(recordRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueAsOfListJson(value: any): Promise<JsonOutcome>
-  listSnapshotRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listSnapshotRecordsJson(recordRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueSnapshotListJson(value: any): Promise<JsonOutcome>
-  listRelationshipRecordsJson(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listRelationshipRecordsJson(recordRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueRelationshipListJson(value: any): Promise<JsonOutcome>
-  lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
+  lookupRecordJson(recordRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
   /** Fetch opaque target conditions from exact action-input JSON. */
   actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
   /** Read field-guard availability from exact action-input JSON. */

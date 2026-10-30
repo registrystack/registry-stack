@@ -116,6 +116,23 @@
   before the upgrade replays without it. The Rust client, which rejects
   unknown response members, exposes `createdAt()`; update the client together
   with the server. See [Proposals](proposals.md).
+- BREAKING: PublicSchema model-selection diagnostics replace
+  `init.selection.entities`, `init.selection.entity-duplicate`, and
+  `init.selection.entity-id-collision` with `init.selection.record-types`,
+  `init.selection.record-type-duplicate`, and
+  `init.selection.record-type-id-collision`. Statistical-dataset validation
+  replaces `breg.statistical-dataset.publisher-entity-row-boundary` with
+  `breg.statistical-dataset.publisher-record-type-row-boundary`. Update
+  automation that matches these diagnostic codes; the retired codes are not
+  emitted as aliases.
+- BREAKING: a direct Create, direct Batch item, or Patch that moves a visible
+  Record outside the selected access profile's row boundary now answers
+  `403 write.outside-boundary` with a fixed value-free problem, instead of
+  `412 precondition.failed`. Hidden or absent Patch targets and stale
+  conditions remain `412`; ingestion items, immediate Action effects, and
+  Proposal targets and effects retain their established generic `412`
+  refusal. Update code-based error handling and regenerate packages whose
+  OpenAPI contract includes row-bounded direct write operations.
 
 ## 0.44.0 - 2026-10-27
 

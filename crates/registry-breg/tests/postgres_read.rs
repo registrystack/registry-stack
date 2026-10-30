@@ -119,7 +119,7 @@ async fn benchmark_audited_record_read(workload: ReadBenchmark) {
     );
     let app = read_router(pool.clone(), compiled, identity, lock_key, profile, None);
     let expected_record = format!(
-        "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
+        "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"recordTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
     );
     let (name, uri, expected_body) = match workload {
         ReadBenchmark::Get => (
@@ -170,7 +170,7 @@ async fn benchmark_audited_record_read(workload: ReadBenchmark) {
                 "items": items,
                 "meta": {
                     "datasetIdentifier": "test-dataset",
-                    "entityTypeIdentifier": "widget",
+                    "recordTypeIdentifier": "widget",
                     "registryIdentifier": "read-registry",
                 },
                 "pageInfo": {"nextCursor": null},
@@ -279,7 +279,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert_eq!(
         get_bytes,
         format!(
-            "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
+            "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"recordTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
         )
         .as_bytes()
     );
@@ -289,7 +289,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert_eq!(body["data"]["domainData"], json!({"label": "label-001"}));
     assert_eq!(body["meta"]["registryIdentifier"], "read-registry");
     assert_eq!(body["meta"]["datasetIdentifier"], "test-dataset");
-    assert_eq!(body["meta"]["entityTypeIdentifier"], "widget");
+    assert_eq!(body["meta"]["recordTypeIdentifier"], "widget");
     assert!(body.get("@context").is_none());
     assert!(body.get("@id").is_none());
     assert!(body.get("@type").is_none());
@@ -321,7 +321,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert_eq!(json_ld["data"]["domainData"], json!({"label": "label-001"}));
     assert_eq!(json_ld["meta"]["registryIdentifier"], "read-registry");
     assert_eq!(json_ld["meta"]["datasetIdentifier"], "test-dataset");
-    assert_eq!(json_ld["meta"]["entityTypeIdentifier"], "widget");
+    assert_eq!(json_ld["meta"]["recordTypeIdentifier"], "widget");
     assert!(json_ld.get("@id").is_none());
     assert!(json_ld.get("@type").is_none());
 
@@ -385,7 +385,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert_eq!(
         decimal_bytes,
         format!(
-            "{{\"data\":{{\"domainData\":{{\"amount\":\"1.20\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
+            "{{\"data\":{{\"domainData\":{{\"amount\":\"1.20\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"recordTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
         )
         .as_bytes(),
         "fixed-scale decimals are returned as exact strings, not JSON numbers"

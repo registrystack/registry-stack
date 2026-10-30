@@ -79,7 +79,7 @@ class CapabilityInventoryTests(unittest.TestCase):
         inventory, rust, node, python = self.query_binding_inputs()
         without_list = node.replace("listProposals(collection:", "retiredListProposals(collection:")
         errors = CHECK.check_query_option_bindings(inventory, rust, without_list, python)
-        self.assertIn("action: missing node query-option declaration BaseRegistryClient.listProposals.queryJson", errors)
+        self.assertIn("action: missing node query-option declaration BaseRegistryClient.listProposals.query", errors)
         self.assertNotIn("requestHistoryAfterProposalVersion", inventory["queryOptions"])
         self.assertNotIn("proposalVersion", inventory["queryOptions"])
 

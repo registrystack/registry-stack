@@ -686,7 +686,7 @@ mod tests {
                 access_profile: Some("operator".to_owned()),
                 registry_identifier: "registry".to_owned(),
                 dataset_identifier: "dataset".to_owned(),
-                entity_type_identifier: "asset".to_owned(),
+                record_type_identifier: "asset".to_owned(),
             }
         )
         .is_ok());

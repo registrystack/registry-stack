@@ -140,7 +140,7 @@ test('422 with the not-available code maps to its own failure, with no status fi
   });
 });
 
-test('400 with an ordinary contract code maps to a protocol failure', async () => {
+test('400 with an invalid-request code maps to an invalid-request failure', async () => {
   const stub = await startStubServer({
     'POST /v1/evidence': (req, res) => {
       res.writeHead(400, {
@@ -151,11 +151,60 @@ test('400 with an ordinary contract code maps to a protocol failure', async () =
     },
   });
   await assertMappedFailure(stub, (mapped) => {
-    assert.equal(mapped.kind, 'protocol');
+    assert.equal(mapped.kind, 'invalid-request');
     assert.equal(mapped.status, 400);
     assert.equal(mapped.code, 'evidence.invalid-request');
     assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, undefined);
+  });
+});
+
+test('503 with an unavailable code maps to an unavailable failure without Retry-After', async () => {
+  const stub = await startStubServer({
+    'POST /v1/evidence': (req, res) => {
+      res.writeHead(503, {
+        'content-type': 'application/problem+json',
+        traceparent: TRACEPARENT,
+        'retry-after': '30',
+      });
+      const problem = JSON.parse(problemBody(503, 'service.unavailable', TRACE_ID));
+      problem.title = 'Service temporarily offline';
+      problem.detail = 'Try the request again later.';
+      problem.futureMember = true;
+      res.end(JSON.stringify(problem));
+    },
+  });
+  await assertMappedFailure(stub, (mapped) => {
+    assert.equal(mapped.kind, 'unavailable');
+    assert.equal(mapped.status, 503);
+    assert.equal(mapped.code, 'service.unavailable');
+    assert.equal(mapped.traceId, TRACE_ID);
+    assert.equal(mapped.retryAfterSeconds, undefined);
+  });
+});
+
+test('an unknown valid problem code falls back by HTTP status and preserves the code', async () => {
+  const stub = await startStubServer({
+    'POST /v1/evidence': (req, res) => {
+      res.writeHead(409, {
+        'content-type': 'application/problem+json',
+        traceparent: TRACEPARENT,
+      });
+      res.end(JSON.stringify({
+        type: 'https://id.registrystack.org/problems/registry-evidence/request/future-conflict',
+        title: 'Future request conflict',
+        status: 409,
+        detail: 'The request conflicts with future service state.',
+        code: 'request.future-conflict',
+        traceId: TRACE_ID,
+      }));
+    },
+  });
+  await assertMappedFailure(stub, (mapped) => {
+    assert.equal(mapped.kind, 'invalid-request');
+    assert.equal(mapped.status, 409);
+    assert.equal(mapped.code, 'request.future-conflict');
+    assert.equal(mapped.traceId, TRACE_ID);
   });
 });
 

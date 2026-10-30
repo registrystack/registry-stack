@@ -417,8 +417,14 @@ async fn pending_manual_application_filter_precedes_pagination_and_keeps_authori
             .unwrap();
         assert_eq!(
             response.status(),
-            reqwest::StatusCode::NOT_FOUND,
-            "malformed list queries preserve concealment"
+            reqwest::StatusCode::BAD_REQUEST,
+            "authorized malformed list queries are invalid"
+        );
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["code"], "query.invalid", "{query}: {problem}");
+        assert_eq!(
+            problem["fieldPath"], "pendingManualApplication",
+            "{query}: {problem}"
         );
     }
     let mut expected = BTreeSet::new();
@@ -1938,6 +1944,76 @@ async fn proposal_list_pages_by_limit_and_refuses_top_naming_limit() {
         problem["detail"].as_str().unwrap().contains("`limit`"),
         "{problem}"
     );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn proposal_list_query_refusals_follow_authority_and_audit_concealment() {
+    let fixture =
+        client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
+
+    for (query, field_path) in [
+        ("limit=0", "limit"),
+        ("cursor=not-a-uuid", "cursor"),
+        ("owner=another", "owner"),
+        ("top=1", "top"),
+    ] {
+        let response = reqwest::get(format!(
+            "{}/v1/proposals?accessProfile=clerk&{query}",
+            fixture.http.base_url
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "{query}"
+        );
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["code"], "query.invalid", "{query}: {problem}");
+        assert_eq!(problem["fieldPath"], field_path, "{query}: {problem}");
+    }
+
+    let mut unknown_problems = Vec::new();
+    for name in ["unknownCanary", "otherSecretName"] {
+        let response = reqwest::get(format!(
+            "{}/v1/proposals?accessProfile=clerk&{name}=1",
+            fixture.http.base_url
+        ))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let mut problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["code"], "query.invalid", "{problem}");
+        assert_eq!(problem["fieldPath"], "query", "{problem}");
+        assert!(!problem.to_string().contains(name), "{problem}");
+        problem.as_object_mut().unwrap().remove("traceId");
+        unknown_problems.push(problem);
+    }
+    assert_eq!(unknown_problems[0], unknown_problems[1]);
+
+    for query in [
+        "accessProfile=missing&limit=0",
+        "accessProfile=Clerk&limit=0",
+        "accessProfile=clerk&accessProfile=clerk&limit=0",
+    ] {
+        let before = fixture.audit_capture.entries().len();
+        let response = reqwest::get(format!("{}/v1/proposals?{query}", fixture.http.base_url))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND, "{query}");
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["code"], "resource.not_found", "{query}: {problem}");
+        let entries = fixture.audit_capture.entries();
+        let refusals = entries[before..]
+            .iter()
+            .filter(|entry| entry["record"]["phase"] == "refusal")
+            .collect::<Vec<_>>();
+        assert_eq!(refusals.len(), 1, "{query}: {:?}", &entries[before..]);
+        assert_eq!(refusals[0]["record"]["operationId"], "proposals.list");
+        assert!(refusals[0]["record"].get("actionId").is_none());
+    }
+
     fixture.finish().await;
 }
 
@@ -5451,6 +5527,10 @@ async fn reference_only_targets_are_locked_and_readmitted_at_submit_and_apply() 
         refused.problem_code(),
         Some(BRegProblemCode::PreconditionFailed)
     );
+    assert!(refused.field_path().is_none());
+    assert!(refused.constraint().is_none());
+    assert!(refused.refusal_code().is_none());
+    assert!(!refused.to_string().contains("zone-b"));
     fixture
         .database
         .admin
@@ -5487,6 +5567,10 @@ async fn reference_only_targets_are_locked_and_readmitted_at_submit_and_apply() 
         refused.problem_code(),
         Some(BRegProblemCode::PreconditionFailed)
     );
+    assert!(refused.field_path().is_none());
+    assert!(refused.constraint().is_none());
+    assert!(refused.refusal_code().is_none());
+    assert!(!refused.to_string().contains("zone-b"));
     let row = fixture
         .database
         .admin
@@ -6722,7 +6806,11 @@ async fn review_pin_only_verified_activation_blocks_apply_but_preserves_inspecti
     assert!(!apply.available);
     assert_eq!(
         apply.reason,
-        Some(registry_breg_client::BRegAvailabilityReason::ContractChanged)
+        Some(registry_breg_client::BRegAvailabilityReason::PackageChanged)
+    );
+    assert_eq!(
+        apply.recovery,
+        Some(registry_breg_client::BRegRecoveryHint::Rebase)
     );
     let cancel = current
         .client
@@ -7134,11 +7222,11 @@ async fn compatible_legacy_review_closure_survives_status_apply_successors_and_r
     );
     assert_eq!(
         availability.reason,
-        Some(registry_breg_client::BRegAvailabilityReason::ContractChanged)
+        Some(registry_breg_client::BRegAvailabilityReason::PackageChanged)
     );
     assert_eq!(
         availability.recovery,
-        Some(registry_breg_client::BRegRecoveryHint::Refresh)
+        Some(registry_breg_client::BRegRecoveryHint::Rebase)
     );
     assert!(
         current

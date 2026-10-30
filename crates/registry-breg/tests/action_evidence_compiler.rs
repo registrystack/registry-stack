@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::{
     compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_json, ModuleAssetSource},
+    contract::{parse_project_json, read_module_yaml, read_project_yaml, ModuleAssetSource},
     model::CompiledRegistry,
 };
 use serde_json::{json, Value};
@@ -23,7 +23,7 @@ fn project() -> Value {
             {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"plan":{"type":"function","function":"register-plan","inputs":["given-name","family-name","person"],"capabilities":["evidence"],"refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+        ],"plan":{"type":"function","function":"register-plan","inputs":["given-name","family-name","person"],"refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"friend","target":{"recordType":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromInput":"person"},"operation":"patch","fields":["name","friend"]}
@@ -188,9 +188,82 @@ fn the_evidence_declaration_selects_the_capability_under_the_one_handler_abi() {
         "registry.action-plan/v1"
     );
     assert_eq!(action.evidence.len(), 1);
+    assert_eq!(
+        action
+            .handler
+            .as_ref()
+            .expect("the Action uses its named Function")
+            .capabilities,
+        ["evidence".to_owned()].into_iter().collect()
+    );
     assert!(compile(project(), None).unwrap().actions().actions[0]
         .evidence
         .is_empty());
+
+    let mut refused = configured();
+    refused["functions"][0]["capabilities"] = json!([]);
+    let failure = compile(refused, Some(contracts()))
+        .expect_err("the Function capability list is a ceiling on its Evidence Action");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.action.function-contract-invalid")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected the Function ceiling refusal: {:?}",
+                failure.diagnostics()
+            )
+        });
+    assert_eq!(diagnostic.path, "actions[register-person].plan.function");
+}
+
+#[test]
+fn plan_capabilities_are_not_an_authored_grant() {
+    let mut source = project();
+    source["actions"][0]["plan"]["capabilities"] = json!(["evidence"]);
+    let project_report = read_project_yaml("registry.json", &serde_json::to_vec(&source).unwrap())
+        .expect_err("the project Action evidence declaration is the only authored grant");
+    let module_report = read_module_yaml(
+        "module.json",
+        &serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+            "kind":"BRegModule", "id":"actions", "version":"1",
+            "actions":[source["actions"][0].clone()]
+        }))
+        .unwrap(),
+    )
+    .expect_err("the module Action evidence declaration is the only authored grant");
+    for report in [&project_report, &module_report] {
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/actions/0/plan/capabilities")
+            .unwrap_or_else(|| panic!("expected the removed plan member refusal: {report:?}"));
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert!(diagnostic.suggested_action.contains("Action's Evidence"));
+        assert!(diagnostic
+            .suggested_action
+            .contains("Function's `capabilities`"));
+    }
+}
+
+#[test]
+fn function_capabilities_are_a_closed_value_free_vocabulary() {
+    let mut source = project();
+    source["functions"][0]["capabilities"] = json!(["private-capability-canary"]);
+    let report = read_project_yaml("registry.json", &serde_json::to_vec(&source).unwrap())
+        .expect_err("a Function capability outside the closed vocabulary is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/functions/0/capabilities/0")
+        .unwrap_or_else(|| panic!("expected the Function capability refusal: {report:?}"));
+    assert_eq!(diagnostic.code, "config.unknown-variant");
+    assert!(diagnostic.message.contains("evidence"));
+    assert!(!diagnostic.message.contains("private-capability-canary"));
+    assert!(!diagnostic
+        .suggested_action
+        .contains("private-capability-canary"));
 }
 #[test]
 fn the_retired_evidence_abi_is_refused_where_it_is_declared() {
@@ -403,6 +476,18 @@ fn published_authoring_schema_accepts_evidence_action_and_rejects_every_other_ab
     assert!(
         validator.is_valid(&source),
         "canonical Evidence Action validates"
+    );
+    let mut with_plan_capability = source.clone();
+    with_plan_capability["actions"][0]["plan"]["capabilities"] = json!(["evidence"]);
+    assert!(
+        !validator.is_valid(&with_plan_capability),
+        "the schema removes the redundant Action plan capability"
+    );
+    let mut with_unknown_capability = source.clone();
+    with_unknown_capability["functions"][0]["capabilities"] = json!(["private-capability"]);
+    assert!(
+        !validator.is_valid(&with_unknown_capability),
+        "the schema closes Function capabilities to evidence"
     );
     for other in ["registry.action-plan/v2", "registry.action-plan/v3"] {
         source["functions"][0]["abi"] = json!(other);

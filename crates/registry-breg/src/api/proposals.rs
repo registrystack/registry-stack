@@ -508,6 +508,45 @@ pub(super) async fn known_action_refusal(
     }
 }
 
+async fn audited_list_concealment(
+    mutations: &crate::postgres::PostgresRecordMutationService,
+    service: &HttpService,
+    claims: &VerifiedRequestClaims,
+    selected: Option<&str>,
+    correlation: &RequestCorrelation,
+) -> Response {
+    let selected_access_profile = selected.filter(|selected| {
+        service.registry.actions().actions.iter().any(|action| {
+            matches!(
+                &action.execution,
+                CompiledActionExecution::Proposal { proposal }
+                    if proposal.permissions.iter().any(|permission| {
+                        permission.profile_id == *selected
+                            && permission.operations.contains(&ProposalOperation::List)
+                    })
+            )
+        })
+    });
+    match mutations
+        .record_refusal(crate::audit::HttpRefusalAudit {
+            refusal_reason: None,
+            grant: crate::audit::GrantAuditContext::from_claims(claims),
+            method: HttpMethod::Get.into(),
+            operation_id: "proposals.list",
+            target_record: None,
+            action_id: None,
+            principal: claims.principal(),
+            selected_access_profile,
+            purpose_present: claims.purpose().is_some(),
+            correlation,
+        })
+        .await
+    {
+        Ok(()) => concealed(),
+        Err(_) => unavailable(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn start(
     State(service): State<Arc<HttpService>>,
@@ -1570,60 +1609,13 @@ pub(super) async fn list(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let mut selected = None;
-    let mut query = ProposalListQuery {
-        limit: 50,
-        ..Default::default()
+    let selected = match proposal_list_admission_profile(raw_query.as_deref()) {
+        Ok(selected) => selected,
+        Err(()) => {
+            return audited_list_concealment(mutations, &service, &claims, None, &correlation)
+                .await;
+        }
     };
-    let mut seen = BTreeSet::new();
-    let mut renamed_top = false;
-    if let Some(raw) = raw_query {
-        if raw.len() > MAX_RAW_QUERY_BYTES {
-            return concealed();
-        }
-        for pair in raw.split('&') {
-            let Some((key, value)) = pair.split_once('=') else {
-                return concealed();
-            };
-            let (Ok(key), Ok(value)) = (percent_decode(key), percent_decode(value)) else {
-                return concealed();
-            };
-            if !seen.insert(key.clone()) {
-                return concealed();
-            }
-            match key.as_str() {
-                "accessProfile" => selected = Some(value),
-                "action" => query.action = Some(value),
-                "owner" if value == "caller" => query.owner = Some(value),
-                "state"
-                    if ["draft", "submitted", "applied", "cancelled", "rejected"]
-                        .contains(&value.as_str()) =>
-                {
-                    query.state = Some(value)
-                }
-                "turn" if ["party", "official", "nobody"].contains(&value.as_str()) => {
-                    query.turn = Some(value)
-                }
-                "pendingManualApplication" if value == "true" || value == "false" => {
-                    query.pending_manual_application = value == "true";
-                }
-                "target" => match Uuid::parse_str(&value) {
-                    Ok(id) => query.target = Some(id),
-                    Err(_) => return concealed(),
-                },
-                "cursor" => match Uuid::parse_str(&value) {
-                    Ok(id) => query.after = Some(id),
-                    Err(_) => return concealed(),
-                },
-                "limit" => match value.parse::<usize>() {
-                    Ok(limit) if (1..=100).contains(&limit) => query.limit = limit,
-                    _ => return concealed(),
-                },
-                "top" => renamed_top = true,
-                _ => return concealed(),
-            }
-        }
-    }
     let authorities = service
         .registry
         .actions()
@@ -1641,16 +1633,26 @@ pub(super) async fn list(
         })
         .collect::<Vec<_>>();
     if authorities.is_empty() {
-        return concealed();
+        return audited_list_concealment(
+            mutations,
+            &service,
+            &claims,
+            selected.as_deref(),
+            &correlation,
+        )
+        .await;
     }
-    // Refused only after authority, so an unauthorized caller still sees the
-    // same concealment as any other refused query.
-    if renamed_top {
-        return problem_with_detail(
-            ProblemCode::QueryInvalid,
-            "The Proposal list takes `limit` for its page size; `top` is not accepted.",
-        );
-    }
+    let query = match parse_proposal_list_query(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(QueryParseError::InvalidAt("top")) => {
+            return invalid_query_at_with_detail(
+                "top",
+                "The Proposal list takes `limit` for its page size; `top` is not accepted.",
+            );
+        }
+        Err(QueryParseError::Invalid) => return invalid_query_at("query"),
+        Err(error) => return error.problem(),
+    };
     match mutations
         .list_proposals(&authorities, &query, &claims, &correlation)
         .await
@@ -1658,4 +1660,115 @@ pub(super) async fn list(
         Ok(value) => json_response(value, None),
         Err(error) => proposal_problem(error),
     }
+}
+
+fn proposal_list_admission_profile(raw: Option<&str>) -> Result<Option<String>, ()> {
+    let Some(raw) = raw else { return Ok(None) };
+    if raw.len() > MAX_RAW_QUERY_BYTES {
+        return Err(());
+    }
+    let mut selected = None;
+    for pair in raw.split('&') {
+        let Some((name, value)) = pair.split_once('=') else {
+            if percent_decode(pair).ok().as_deref() == Some("accessProfile") {
+                return Err(());
+            }
+            continue;
+        };
+        let Ok(name) = percent_decode(name) else {
+            continue;
+        };
+        if name != "accessProfile" {
+            continue;
+        }
+        let value = percent_decode(value).map_err(|_| ())?;
+        if !strict_query::valid_config_identifier(&value) || selected.replace(value).is_some() {
+            return Err(());
+        }
+    }
+    Ok(selected)
+}
+
+fn proposal_list_parameter(name: &str) -> Option<&'static str> {
+    match name {
+        "accessProfile" => Some("accessProfile"),
+        "action" => Some("action"),
+        "owner" => Some("owner"),
+        "state" => Some("state"),
+        "turn" => Some("turn"),
+        "pendingManualApplication" => Some("pendingManualApplication"),
+        "target" => Some("target"),
+        "cursor" => Some("cursor"),
+        "limit" => Some("limit"),
+        "top" => Some("top"),
+        _ => None,
+    }
+}
+
+fn proposal_list_error(name: &str) -> QueryParseError {
+    proposal_list_parameter(name).map_or(QueryParseError::Invalid, QueryParseError::InvalidAt)
+}
+
+fn parse_proposal_list_query(raw: Option<&str>) -> Result<ProposalListQuery, QueryParseError> {
+    let mut query = ProposalListQuery {
+        limit: 50,
+        ..Default::default()
+    };
+    let Some(raw) = raw else { return Ok(query) };
+    if raw.is_empty() || raw.len() > MAX_RAW_QUERY_BYTES {
+        return Err(QueryParseError::Invalid);
+    }
+    let mut seen = BTreeSet::new();
+    for pair in raw.split('&') {
+        let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
+        let name = percent_decode(name).map_err(|_| QueryParseError::Invalid)?;
+        let value = percent_decode(value).map_err(|_| proposal_list_error(&name))?;
+        if !seen.insert(name.clone()) {
+            return Err(proposal_list_error(&name));
+        }
+        match name.as_str() {
+            "accessProfile" => {
+                if !strict_query::valid_config_identifier(&value) {
+                    return Err(QueryParseError::InvalidAt("accessProfile"));
+                }
+            }
+            "action" => query.action = Some(value),
+            "owner" if value == "caller" => query.owner = Some(value),
+            "state"
+                if ["draft", "submitted", "applied", "cancelled", "rejected"]
+                    .contains(&value.as_str()) =>
+            {
+                query.state = Some(value)
+            }
+            "turn" if ["party", "official", "nobody"].contains(&value.as_str()) => {
+                query.turn = Some(value)
+            }
+            "pendingManualApplication" if value == "true" || value == "false" => {
+                query.pending_manual_application = value == "true";
+            }
+            "target" => {
+                query.target = Some(
+                    Uuid::parse_str(&value).map_err(|_| QueryParseError::InvalidAt("target"))?,
+                );
+            }
+            "cursor" => {
+                query.after = Some(
+                    Uuid::parse_str(&value).map_err(|_| QueryParseError::InvalidAt("cursor"))?,
+                );
+            }
+            "limit" => {
+                query.limit = value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|limit| (1..=100).contains(limit))
+                    .ok_or(QueryParseError::InvalidAt("limit"))?;
+            }
+            "top" => return Err(QueryParseError::InvalidAt("top")),
+            _ if proposal_list_parameter(&name).is_some() => {
+                return Err(proposal_list_error(&name));
+            }
+            _ => return Err(QueryParseError::Invalid),
+        }
+    }
+    Ok(query)
 }

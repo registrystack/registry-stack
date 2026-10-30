@@ -480,8 +480,8 @@ fn schema_type(schema: &Value, python: bool) -> String {
 }
 
 const TYPESCRIPT_CONTRACT: &str = r#"
-export type EngineReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'contract-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied';
-export type RecoveryHint = 'refresh' | 'revise' | 'retry' | 'correct-input' | 'terminal' | 'receipt-only';
+export type EngineReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied';
+export type RecoveryHint = 'refresh' | 'revise' | 'retry' | 'rebase' | 'correct-input' | 'receipt-only';
 export type Availability<R extends string = EngineReason> =
   | { readonly available: true; readonly observedRevision: number }
   | { readonly available: false; readonly observedRevision: number; readonly reason: R; readonly recovery: RecoveryHint };
@@ -545,11 +545,11 @@ export class ProjectClient {
   async invoke<K extends keyof ProjectActions>(action: K, input: ProjectActions[K]['input'], key: string): Promise<ProjectActions[K]['result']> {
     const metadata = await this.native.registryContract(this.profile);
     const binding = metadata.selectAction(action, this.profile);
+    const values = input as unknown as breg.JsonObject;
     if (definitions.actions[action].mode === 'proposal') {
-      const native = await this.native.startProposal(binding, JSON.stringify(input), key);
+      const native = await this.native.startProposal(binding, values, key);
       return {native, document: JSON.parse(native.documentJson)} as ProjectActions[K]['result'];
     }
-    const values = input as unknown as breg.JsonObject;
     const required = definitions.actions[action].conditionInputs;
     const conditions = required.length ? await this.native.actionTargetConditions(binding,
       Object.fromEntries(required.map(name => [name, values[name]])) as breg.JsonObject) : undefined;
@@ -559,7 +559,8 @@ export class ProjectClient {
   async listProposals<K extends keyof ProjectActions>(action: K, cursor?: string): Promise<Page<Proposal<ProjectActions[K]['input']>>> {
     const metadata = await this.native.registryContract(this.profile);
     const collection = metadata.selectProposals(this.profile);
-    const result = await this.native.listProposals(collection, JSON.stringify({action, cursor}));
+    const query: breg.JsonObject = cursor === undefined ? {action: String(action)} : {action: String(action), cursor};
+    const result = await this.native.listProposals(collection, query);
     return {items: result.items.map(native => ({native, document: JSON.parse(native.documentJson)})),
       next: result.nextCursor ? () => this.listProposals(action, result.nextCursor!) : undefined};
   }
@@ -568,7 +569,7 @@ export class ProjectClient {
     return {native, document: JSON.parse(native.documentJson)};
   }
   prepare<I, R extends string>(proposal: Proposal<I, R>, transition: breg.BRegProposalTransition, body: breg.JsonObject, key: string): breg.BRegPreparedProposal {
-    return this.native.prepareProposal(proposal.native, transition, JSON.stringify(body), key);
+    return this.native.prepareProposal(proposal.native, transition, body, key);
   }
   async execute<I, R extends string>(attempt: breg.BRegPreparedProposal): Promise<Proposal<I, R>> {
     const native = await this.native.executeProposal(attempt);
@@ -577,8 +578,8 @@ export class ProjectClient {
 }
 "#;
 const PYTHON_CONTRACT: &str = r#"
-EngineReason = Literal['pending-review', 'review-rejected', 'review-changes-requested', 'review-ended', 'stale-revision', 'contract-changed', 'dependency-outage', 'invalid-input', 'already-applied']
-RecoveryHint = Literal['refresh', 'revise', 'retry', 'correct-input', 'terminal', 'receipt-only']
+EngineReason = Literal['pending-review', 'review-rejected', 'review-changes-requested', 'review-ended', 'stale-revision', 'package-changed', 'dependency-outage', 'invalid-input', 'already-applied']
+RecoveryHint = Literal['refresh', 'revise', 'retry', 'rebase', 'correct-input', 'receipt-only']
 class Availability(TypedDict):
     available: bool
     observedRevision: int
@@ -695,3 +696,37 @@ class ProjectClient:
         return Proposal(native, native.document)
 
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::{PYTHON_CONTRACT, TYPESCRIPT_CLIENT, TYPESCRIPT_CONTRACT};
+
+    #[test]
+    fn typescript_project_client_passes_proposal_objects_to_the_native_client() {
+        for call in [
+            "startProposal(binding, values, key)",
+            "cursor === undefined ? {action: String(action)} : {action: String(action), cursor}",
+            "listProposals(collection, query)",
+            "prepareProposal(proposal.native, transition, body, key)",
+        ] {
+            assert!(TYPESCRIPT_CLIENT.contains(call), "missing {call}");
+        }
+        for retired in [
+            "JSON.stringify(input)",
+            "JSON.stringify({action, cursor})",
+            "JSON.stringify(body)",
+        ] {
+            assert!(!TYPESCRIPT_CLIENT.contains(retired), "retained {retired}");
+        }
+    }
+
+    #[test]
+    fn recovery_vocabulary_names_rebase_and_omits_terminal() {
+        for contract in [TYPESCRIPT_CONTRACT, PYTHON_CONTRACT] {
+            assert!(contract.contains("'package-changed'"), "{contract}");
+            assert!(!contract.contains("'contract-changed'"), "{contract}");
+            assert!(contract.contains("'rebase'"), "{contract}");
+            assert!(!contract.contains("'terminal'"), "{contract}");
+        }
+    }
+}

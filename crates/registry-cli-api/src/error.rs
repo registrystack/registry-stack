@@ -34,14 +34,10 @@ impl ApiError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => 2,
+            Self::Configuration(_) | Self::Credential => 1,
+            Self::HttpStatus(status) if (500..=599).contains(status) => 3,
             Self::HttpStatus(_) => 1,
-            Self::Configuration(_)
-            | Self::Credential
-            | Self::Connect
-            | Self::Timeout
-            | Self::Exchange
-            | Self::ResponseTooLarge
-            | Self::Io => 3,
+            Self::Connect | Self::Timeout | Self::Exchange | Self::ResponseTooLarge | Self::Io => 3,
         }
     }
 }

@@ -18,6 +18,14 @@ async fn reviewed_fixture(
     authority: &Authority,
     automatic: bool,
 ) -> (client_http::ClientFixture, Value) {
+    reviewed_fixture_with_recovery(authority, automatic, false).await
+}
+
+async fn reviewed_fixture_with_recovery(
+    authority: &Authority,
+    automatic: bool,
+    recovery_contract: bool,
+) -> (client_http::ClientFixture, Value) {
     let mut source = registry_source(json!(policy()));
     source["actions"][0]["execution"]["proposal"]["application"] =
         json!({"mode":if automatic { "automatic" } else { "manual" }});
@@ -25,6 +33,26 @@ async fn reviewed_fixture(
         json!(["get", "list", "submit", "cancel", "rebase"]);
     source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
+    if recovery_contract {
+        source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+            "id":"review-name",
+            "fields":{"proposedName":{"type":"input","input":"value"}}
+        });
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] = json!([
+            "get",
+            "list",
+            "edit",
+            "submit",
+            "revise",
+            "cancel",
+            "rebase",
+            "retry",
+            "get-review-status",
+            "get-review-context"
+        ]);
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+            json!(["proposedName"]);
+    }
     if !automatic {
         source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
             .as_array_mut()
@@ -147,6 +175,262 @@ async fn application_jobs(fixture: &client_http::ClientFixture, id: Uuid) -> Vec
         "SELECT state FROM registry_internal.registry_proposal_application_jobs WHERE proposal_id=$1 ORDER BY submission_version",
         &[&id],
     ).await.unwrap().into_iter().map(|row| row.get(0)).collect()
+}
+
+async fn draft(fixture: &client_http::ClientFixture, key_name: &str) -> Uuid {
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create")
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(
+                json!({"name":"Before","jurisdiction":"zone-a"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap(),
+            &BRegIdempotencyKey::parse(format!("{key_name}-record")).unwrap(),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    let input = BRegActionInvocationRequest::new(
+        &action,
+        json!({"target":record.value.data.record_identifier,"value":"After"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        None,
+    )
+    .unwrap();
+    let proposal = client
+        .start_proposal(
+            &action,
+            &input,
+            &BRegIdempotencyKey::parse(format!("{key_name}-start")).unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    Uuid::parse_str(proposal.id()).unwrap()
+}
+
+#[tokio::test]
+async fn go_live_blocked_proposals_name_rebase_and_hide_stale_review_context() {
+    for automatic in [false, true] {
+        assert_go_live_blocked_proposals(automatic).await;
+    }
+}
+
+async fn assert_go_live_blocked_proposals(automatic: bool) {
+    use registry_breg_client::BRegProposalState;
+
+    let mode = if automatic { "automatic" } else { "manual" };
+    let authority = Authority::start(false, true).await;
+    let (fixture, source) = reviewed_fixture_with_recovery(&authority, automatic, true).await;
+    let approved = submitted(&fixture, &format!("{mode}-approved")).await;
+    approve(&fixture, &authority).await;
+    let awaiting_review = submitted(&fixture, &format!("{mode}-awaiting-review")).await;
+    let draft = draft(&fixture, &format!("{mode}-draft")).await;
+
+    let (package, active) = activate(&fixture, &source, &authority).await;
+    let (http, mutations) =
+        active_package_client(&fixture, package.registry(), &active, &authority, claims()).await;
+    let metadata = http.client.registry_contract(Some("clerk")).await.unwrap();
+    let get = metadata.value.select_proposal_get("clerk").unwrap();
+    let mut fresh_application = None;
+
+    for (label, id, state, blocked_operations) in [
+        (
+            "draft",
+            draft,
+            BRegProposalState::Draft,
+            &["edit", "submit"][..],
+        ),
+        (
+            "awaiting-review",
+            awaiting_review,
+            BRegProposalState::Submitted,
+            if automatic {
+                &["revise"][..]
+            } else {
+                &["revise", "retry", "apply"][..]
+            },
+        ),
+        (
+            "approved",
+            approved,
+            BRegProposalState::Submitted,
+            if automatic {
+                &["revise"][..]
+            } else {
+                &["revise", "retry", "apply"][..]
+            },
+        ),
+    ] {
+        let proposal = http
+            .client
+            .get_proposal(&get, &id.to_string())
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(proposal.state(), state, "{mode}/{label}");
+        assert_eq!(
+            proposal.blocked_reason(),
+            Some("package-changed"),
+            "{mode}/{label}"
+        );
+        for operation in blocked_operations {
+            let availability = serde_json::to_value(
+                proposal
+                    .link(operation)
+                    .unwrap_or_else(|| panic!("{mode}/{label}/{operation}"))
+                    .availability()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                availability["available"], false,
+                "{mode}/{label}/{operation}"
+            );
+            assert_eq!(
+                availability["reason"], "package-changed",
+                "{mode}/{label}/{operation}"
+            );
+            assert_eq!(
+                availability["recovery"], "rebase",
+                "{mode}/{label}/{operation}"
+            );
+        }
+        for operation in ["rebase", "cancel"] {
+            assert!(
+                proposal
+                    .link(operation)
+                    .unwrap_or_else(|| panic!("{mode}/{label}/{operation}"))
+                    .availability()
+                    .unwrap()
+                    .available,
+                "{mode}/{label}/{operation}"
+            );
+        }
+
+        if state == BRegProposalState::Submitted {
+            if automatic {
+                assert!(proposal.link("retry").is_none(), "{mode}/{label}");
+                assert!(proposal.link("apply").is_none(), "{mode}/{label}");
+            }
+            let status = serde_json::to_value(proposal.application_status().unwrap()).unwrap();
+            assert_eq!(status["state"], "blocked", "{mode}/{label}");
+            assert_eq!(status["reason"], "package-changed", "{mode}/{label}");
+            assert_eq!(status["recovery"], "rebase", "{mode}/{label}");
+            assert!(proposal.link("reviewContext").is_none(), "{mode}/{label}");
+            assert!(
+                proposal
+                    .link("reviewStatus")
+                    .unwrap()
+                    .availability()
+                    .unwrap()
+                    .available,
+                "{mode}/{label}"
+            );
+            let review = http
+                .client
+                .read_proposal_review_status(&proposal)
+                .await
+                .unwrap()
+                .value;
+            assert!(!review.reviewable, "{mode}/{label}");
+        } else {
+            assert!(proposal.application_status().is_none(), "{mode}/{label}");
+        }
+
+        let rebase = http
+            .client
+            .prepare_proposal(
+                &proposal,
+                "rebase",
+                json!({"input":proposal.input().unwrap()}),
+                &BRegIdempotencyKey::parse(format!("{mode}-{label}-rebase")).unwrap(),
+            )
+            .unwrap();
+        let rebased = http.client.execute_proposal(&rebase).await.unwrap().value;
+        assert_eq!(rebased.state(), BRegProposalState::Draft, "{mode}/{label}");
+        assert_eq!(rebased.blocked_reason(), None, "{mode}/{label}");
+        assert!(
+            rebased
+                .link("submit")
+                .unwrap()
+                .availability()
+                .unwrap()
+                .available,
+            "{mode}/{label}"
+        );
+        if id == approved {
+            fresh_application = Some(rebased);
+        }
+    }
+
+    let fresh_application = fresh_application.unwrap();
+    let submit = http
+        .client
+        .prepare_proposal(
+            &fresh_application,
+            "submit",
+            json!({}),
+            &BRegIdempotencyKey::parse(format!("{mode}-fresh-submit")).unwrap(),
+        )
+        .unwrap();
+    let submitted = http.client.execute_proposal(&submit).await.unwrap().value;
+    assert_eq!(submitted.state(), BRegProposalState::Submitted);
+    assert_eq!(submitted.blocked_reason(), None);
+    let review = http
+        .client
+        .read_proposal_review_status(&submitted)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        review.result.as_ref().map(|result| result.state.as_str()),
+        Some("pending"),
+        "{mode}: verified compatibility permits a fresh review submission"
+    );
+    if automatic {
+        assert!(submitted.link("apply").is_none(), "{mode}");
+        assert_eq!(
+            serde_json::to_value(submitted.application_status().unwrap()).unwrap()["state"],
+            "awaiting-review",
+            "{mode}: automatic application waits for fresh review"
+        );
+    } else {
+        let apply = submitted.link("apply").unwrap().availability().unwrap();
+        assert!(!apply.available, "{mode}");
+        assert_eq!(
+            serde_json::to_value(apply).unwrap(),
+            json!({
+                "available":false,
+                "observedRevision":submitted.revision(),
+                "reason":"pending-review",
+                "recovery":"refresh"
+            }),
+            "{mode}: Apply waits for the fresh review"
+        );
+    }
+
+    drop(mutations);
+    drop(http);
+    fixture.finish().await;
 }
 
 #[tokio::test]
@@ -569,8 +853,8 @@ async fn assert_withdrawn_proposal_readable(
         if automatic {
             let status = serde_json::to_value(proposal.application_status().unwrap()).unwrap();
             assert_eq!(status["state"], "blocked");
-            assert_eq!(status["reason"], "contract-changed");
-            assert_eq!(status["recovery"], "correct-input");
+            assert_eq!(status["reason"], "package-changed");
+            assert_eq!(status["recovery"], "rebase");
             assert_eq!(status["automaticRetry"]["scheduled"], false);
         } else {
             let apply =
@@ -1107,8 +1391,8 @@ async fn activated_automatic_proposal_preserves_requester_recovery(rollback: boo
     );
     let status = serde_json::to_value(proposal.application_status().unwrap()).unwrap();
     assert_eq!(status["state"], "blocked");
-    assert_eq!(status["reason"], "contract-changed");
-    assert_eq!(status["recovery"], "correct-input");
+    assert_eq!(status["reason"], "package-changed");
+    assert_eq!(status["recovery"], "rebase");
     assert_eq!(status["automaticRetry"]["scheduled"], false);
     assert!(
         proposal

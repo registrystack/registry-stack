@@ -858,7 +858,7 @@ fn validate_publisher_independence(
             .is_some_and(|requirements| !requirements.row_boundaries.is_empty())
         {
             errors.push(error(
-                "breg.statistical-dataset.publisher-entity-row-boundary",
+                "breg.statistical-dataset.publisher-record-type-row-boundary",
                 root,
                 &source.id,
                 &format!(

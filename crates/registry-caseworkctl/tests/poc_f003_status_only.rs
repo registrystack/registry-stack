@@ -142,14 +142,14 @@ exit 1
         });
         if let Some(operation) = operation {
             assert_eq!(
-                report["data"]["state"], "changes-needed",
+                report["outcome"], "changes-needed",
                 "a service with {operation} statistical authority must not be accepted as status-only: {report}"
             );
             assert!(
                 !project.exists(),
                 "an overprivileged status service must not produce a project"
             );
-            let changes = report["data"]["changes"].as_array().unwrap();
+            let changes = report["changes"].as_array().unwrap();
             assert!(
                 changes.iter().any(|change| {
                     change["path"] == "accessProfiles[id=correct-address-review-status]"
@@ -164,7 +164,7 @@ exit 1
                 output.status.success(),
                 "a genuine status-only service must remain usable: {report}"
             );
-            assert_eq!(report["data"]["state"], "created", "{report}");
+            assert_eq!(report["outcome"], "created", "{report}");
         }
     }
 }

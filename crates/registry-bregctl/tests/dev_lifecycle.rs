@@ -364,8 +364,10 @@ fn installed_dev_allocates_ports_for_parallel_fresh_projects_and_retains_them() 
             second_start.join().expect("the second start completes"),
         )
     });
-    assert_eq!(first_report["status"], "ready");
-    assert_eq!(second_report["status"], "ready");
+    assert_eq!(first_report["status"], "complete");
+    assert_eq!(first_report["outcome"], "ready");
+    assert_eq!(second_report["status"], "complete");
+    assert_eq!(second_report["outcome"], "ready");
     let first_ports = first.retained_ports();
     let second_ports = second.retained_ports();
     assert_eq!(
@@ -395,8 +397,10 @@ fn installed_dev_allocates_ports_for_parallel_fresh_projects_and_retains_them() 
             second_start.join().expect("the second restart completes"),
         )
     });
-    assert_eq!(first_restart["status"], "ready");
-    assert_eq!(second_restart["status"], "ready");
+    assert_eq!(first_restart["status"], "complete");
+    assert_eq!(first_restart["outcome"], "ready");
+    assert_eq!(second_restart["status"], "complete");
+    assert_eq!(second_restart["outcome"], "ready");
     assert_eq!(first.retained_ports(), first_ports);
     assert_eq!(second.retained_ports(), second_ports);
     assert_eq!(first_restart["bregUrl"], first_report["bregUrl"]);
@@ -494,7 +498,8 @@ seed:
         "--issuer-port",
         &issuer_port.to_string(),
     ]));
-    assert_eq!(first["status"], "ready");
+    assert_eq!(first["status"], "complete");
+    assert_eq!(first["outcome"], "ready");
     let dev = project.join(".breg/dev");
     let state_file = dev.join("state.json");
     let state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
@@ -908,7 +913,8 @@ seed:
         "--issuer-port",
         &issuer_port.to_string(),
     ]));
-    assert_eq!(first["status"], "ready");
+    assert_eq!(first["status"], "complete");
+    assert_eq!(first["outcome"], "ready");
     let dev = project.join(".breg/dev");
     let credentials: Value =
         serde_norway::from_slice(&fs::read(dev.join("schema-test-credentials.yaml")).unwrap())
@@ -1020,7 +1026,8 @@ seed:
     interrupted["seedImportAuthorities"] = json!({"reference-seed": authority_id});
     write(&state_file, &serde_json::to_vec(&interrupted).unwrap());
     let restarted = session.start();
-    assert_eq!(restarted["status"], "ready");
+    assert_eq!(restarted["status"], "complete");
+    assert_eq!(restarted["outcome"], "ready");
     assert_eq!(restarted["packageDigest"], first["packageDigest"]);
     assert_eq!(read_seed(), seeded_record);
     let recovered: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
@@ -1154,7 +1161,8 @@ seed:
     let key_before =
         fs::read(project.join(".breg/dev/credentials/operator/assertion-key.jwk")).unwrap();
     let first = session.start();
-    assert_eq!(first["status"], "ready");
+    assert_eq!(first["status"], "complete");
+    assert_eq!(first["outcome"], "ready");
     assert_eq!(first["bregUrl"], origin);
     // Public source handoff copies only the selected private pair and reports
     // the exact OAuth request parameters a separate Evidence process needs.
@@ -1450,6 +1458,7 @@ seed:
     session.stop();
     let stopped: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
     assert_eq!(stopped["status"], "stopped");
+    assert!(stopped.get("outcome").is_none());
     // Simulate a crash after the HTTP seed committed but before its local
     // checkpoint was flushed. The permanent BReg idempotency reservation
     // replays its result without replacing the subsequently edited record.
@@ -1573,7 +1582,8 @@ seed:
     // exercised: `dev stop --remove` must reclaim the remaining volume instead
     // of refusing on the now-absent container.
     let recreated = session.start();
-    assert_eq!(recreated["status"], "ready");
+    assert_eq!(recreated["status"], "complete");
+    assert_eq!(recreated["outcome"], "ready");
     session.stop();
     assert!(Command::new("docker")
         .args(["rm", "--force", &owned])
@@ -1663,7 +1673,8 @@ seed:
         "--issuer-port",
         &issuer_port.to_string(),
     ]));
-    assert_eq!(first["status"], "ready");
+    assert_eq!(first["status"], "complete");
+    assert_eq!(first["outcome"], "ready");
     assert_eq!(first["packageSequence"], 1);
     session.stop();
 
@@ -1686,14 +1697,17 @@ seed:
         "by-code-source-reader",
     ];
     let preview = session.success(&source_args);
-    assert_eq!(preview["status"], "preview");
+    assert_eq!(preview["status"], "complete");
+    assert_eq!(preview["outcome"], "preview");
     assert_eq!(preview["packageSequence"], 2);
     let mut apply = source_args.to_vec();
     apply.push("--apply");
     let prepared = session.success(&apply);
-    assert_eq!(prepared["status"], "prepared");
+    assert_eq!(prepared["status"], "complete");
+    assert_eq!(prepared["outcome"], "prepared");
     let restarted = session.start();
-    assert_eq!(restarted["status"], "ready");
+    assert_eq!(restarted["status"], "complete");
+    assert_eq!(restarted["outcome"], "ready");
     assert_eq!(restarted["packageSequence"], 2);
     assert_ne!(restarted["packageDigest"], first["packageDigest"]);
 

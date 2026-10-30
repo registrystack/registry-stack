@@ -62,12 +62,13 @@ function tombstoneOperation() {
 function batchOperation() {
   const value = operation('batch');
   return {...value, id:'records.item.batch', method:'POST', path:'/v1/records/items:batch', operation:'batch',
-    createWritableFields:fields.map(f=>f.id), patchWritableFields:[],
+    createWritableFields:fields.map(f=>f.id), patchWritableFields:fields.map(f=>f.id),
     request:{fieldNames:'api',queryParameters:[],body:'batch',contentType:'application/json',
       idempotencyKeyRequired:true,mutationSemantics:'direct',maximumItems:4,maximumBodyBytes:16384,
-      allowCreate:true,allowPatch:false,schema:{type:'object',additionalProperties:false,required:['items'],
+      allowCreate:true,allowPatch:true,schema:{type:'object',additionalProperties:false,required:['items'],
         properties:{items:{type:'array',minItems:1,maxItems:4,items:{oneOf:[
           {type:'object',properties:{operation:{const:'create'},data:{type:'object'}}},
+          {type:'object',properties:{operation:{const:'patch'},recordIdentifier:{type:'string'},ifMatch:{type:'string'},patch:{type:'array'}}},
         ]}}}}}};
 }
 function otherCreateOperation() {
@@ -82,8 +83,8 @@ const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(6
       operations:[{operation:'create',accessProfile:profile}],readableFields:fields.map(f=>f.id)}],
   operations:[...['create','patch','list'].map(operation), lookupOperation(), tombstoneOperation(), batchOperation(), otherCreateOperation()],
 };
-const meta = {registryIdentifier:'test-registry',datasetIdentifier:'items',entityTypeIdentifier:'item'};
-const record = `{"recordIdentifier":"${id}","revisionIdentifier":"1","snapshot":"breg1_${id}","domainData":{"wide":9007199254740992,"decimal":"12.3400","date":"2026-09-08","nullable":null,"reference":"${id}"}}`;
+const meta = {registryIdentifier:'test-registry',datasetIdentifier:'items',recordTypeIdentifier:'item'};
+const record = `{"recordIdentifier":"${id}","revisionIdentifier":"1","domainData":{"wide":9007199254740992,"decimal":"12.3400","date":"2026-09-08","nullable":null,"reference":"${id}"}}`;
 const lookupValues = '{"wide":9007199254740992,"decimal":"12.3400"}';
 const lookupRecord = `{"recordIdentifier":"${id}","revisionIdentifier":"1","domainData":{"wide":9007199254740992,"decimal":"12.3400"}}`;
 test('native JSON methods preserve values, metadata, cursors and mutation preconditions', async () => {
@@ -105,7 +106,8 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     }
     if (path.endsWith(':batch')) {
       const revision = request.headers['idempotency-key'] === 'exact-batch' ? '9007199254740992' : '2';
-      return response.end(`{"snapshot":"breg1_${applicationId}","results":[{"operation":"create","id":"${id}","revision":${revision},"etag":"\\"breg-record-000000000002\\"","data":{"wide":9007199254740992}}]}`);
+      const operation = JSON.parse(body).items[0].operation;
+      return response.end(`{"snapshot":"breg1_${applicationId}","results":[{"operation":"${operation}","recordIdentifier":"${id}","revisionIdentifier":"${revision}","etag":"\\"breg-record-000000000002\\"","domainData":{"wide":9007199254740992}}]}`);
     }
     response.setHeader('link','<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile", </v1/schemas/item>; rel="describedby"');
     response.setHeader('etag','"breg-record-000000000001"');
@@ -200,14 +202,24 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const batch = contract.selectBatch('item',profile);
     const batchDescriptor = contract.operations.find(op=>op.kind === 'batch');
     assert.equal(batchDescriptor.request.allowCreate,true);
-    assert.equal(batchDescriptor.request.allowPatch,false);
+    assert.equal(batchDescriptor.request.allowPatch,true);
     assert.equal(contract.operations.find(op=>op.kind === 'tombstone').request.allowCreate,null);
     const batchResult = await client.batchRecords(batch,{items:[{operation:'create',data:{wide:1}}],
       changeContext:{kind:'correction',reasonCode:'verified-source',reasonText:'Correct source',sourceReferences:['case:1']}},'batch-one');
-    assert.equal(batchResult.value.results[0].revision,2);
+    assert.equal(batchResult.value.results[0].recordIdentifier,id);
+    assert.equal(batchResult.value.results[0].revisionIdentifier,'2');
+    assert.equal(batchResult.value.results[0].domainData.wide,9007199254740992);
     assert.match(requests.at(-1).body,/"reasonCode":"verified-source"/);
+    const batchPatch = await client.batchRecords(batch,{items:[{operation:'patch',recordIdentifier:id,
+      ifMatch:'"breg-record-000000000001"',patch:[{op:'replace',field:'wide',value:2}]}]},'batch-patch');
+    assert.equal(batchPatch.value.results[0].operation,'patch');
+    assert.deepEqual(JSON.parse(requests.at(-1).body),{items:[{operation:'patch',recordIdentifier:id,
+      ifMatch:'"breg-record-000000000001"',patch:[{op:'replace',path:'/data/wide',value:2}]}]});
+    await assert.rejects(client.batchRecords(batch,{items:[{operation:'patch',recordIdentifier:id,
+      etag:'"breg-record-000000000001"',operations:[{op:'replace',field:'wide',value:2}]}]},'retired-batch-patch'),
+      error=>error.kind === 'invalid-request');
     const exactBatch = await client.batchRecordsJson(batch,'{"items":[{"operation":"create","data":{"wide":9007199254740992}}]}','exact-batch');
-    assert.match(exactBatch.valueJson,/"revision":9007199254740992/);
+    assert.match(exactBatch.valueJson,/"revisionIdentifier":"9007199254740992"/);
     assert.match(requests.at(-1).body,/"wide":9007199254740992/);
     const tombstone = contract.selectTombstone('item',profile);
     const removed = await client.tombstoneRecord(tombstone,id,'"breg-record-000000000001"','remove-one');
@@ -247,7 +259,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });
 
-test('native Proposal JSON preserves exact values and protected edit recovery', async () => {
+test('native Proposal objects refuse unsafe values and preserve protected edit recovery', async () => {
   const requests = [];
   const revision = `sha256:${'a'.repeat(64)}`;
   const proposal = {
@@ -285,16 +297,16 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
     assert.ok(!Object.hasOwn(JSON.parse(current.inputJson), 'undisclosed'));
     assert.doesNotMatch(util.inspect(current), /9007199254740993|12\.3400/);
     const before = requests.length;
-    // Exact reads retain wide integers; persisted edits must also satisfy JCS.
-    for (const invalid of ['{"input":{"wide":0.10000000000000001}}', '{"input":{"wide":1,"wide":2}}', '{"input":{"wide":9007199254740993}}']) {
+    // Exact reads retain wide integers; object writes refuse values that JavaScript cannot represent safely.
+    for (const invalid of [{input: {wide: Number.NaN}}, {input: {wide: 9007199254740992}}, '{"input":{"wide":1}}']) {
       assert.throws(() => client.prepareProposal(current, 'edit', invalid, 'refused'), error => error.kind === 'invalid-request' && error.outcomeUnknown === false, invalid);
     }
     assert.equal(requests.length, before);
-    const body = '{"input":{"wide":9007199254740994,"decimal":"12.3400","nullable":null}}';
+    const body = {input: {wide: 9007199254740990, decimal: '12.3400', nullable: null}};
     const prepared = client.prepareProposal(current, 'edit', body, 'exact-edit');
     const bytes = prepared.toBytes();
     assert.match(util.inspect(prepared), /^BRegPreparedProposal\(<redacted>\)$/);
-    assert.doesNotMatch(util.inspect(prepared), /exact-edit|9007199254740994|12\.3400/);
+    assert.doesNotMatch(util.inspect(prepared), /exact-edit|9007199254740990|12\.3400/);
     const restored = BRegPreparedProposal.fromBytes(bytes);
     await assert.rejects(client.executeProposal(restored), error => error.kind === 'invalid-request');
     const recovered = client.recoverProposal(await client.readProposal(current), restored);
@@ -303,10 +315,10 @@ test('native Proposal JSON preserves exact values and protected edit recovery', 
     assert.equal(edited.revision, proposal.revision + 1);
     assert.equal(edited.submissionVersion, proposal.submissionVersion);
     assert.equal(edited.state, 'draft');
-    assert.equal(edited.input.wide, 9007199254740994);
+    assert.equal(edited.input.wide, 9007199254740990);
     assert.equal(requests.at(-1).url, `/tenant/v1/proposals/${id}/edit?accessProfile=${profile}`);
-    assert.equal(requests.at(-1).body, '{"input":{"decimal":"12.3400","nullable":null,"wide":9007199254740994}}');
-    assert.match(requests.at(-1).body, /"wide":9007199254740994/);
+    assert.equal(requests.at(-1).body, '{"input":{"decimal":"12.3400","nullable":null,"wide":9007199254740990.0}}');
+    assert.match(requests.at(-1).body, /"wide":9007199254740990/);
     assert.equal(requests.at(-1).headers['if-match'], '"edit-condition"');
     assert.equal(requests.at(-1).headers['idempotency-key'], 'exact-edit');
   } finally { await new Promise(resolve => server.close(resolve)); }

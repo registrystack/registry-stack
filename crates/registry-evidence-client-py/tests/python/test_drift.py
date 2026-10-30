@@ -9,12 +9,10 @@ either side fails this test rather than silently drifting.
 
 Two different techniques are needed, for two different shapes of drift:
 
-- The eight plain classes (`EvidenceClient`, both prepared request classes,
-  both raw response classes, `SdJwtVcBatchResponse`, and both verified result
-  classes) expose their methods and
+- The plain client and result classes expose their methods and
   attributes as ordinary class-level descriptors, visible to `vars(cls)`
   without ever constructing an instance.
-- The nine exception classes set their stable attributes (`kind`, `status`,
+- The eleven exception classes set their stable attributes (`kind`, `status`,
   ...) per instance, at raise time (`to_py_err`'s `set_attr!` calls in
   `src/lib.rs`), which `vars(cls)` on the class itself cannot see at all.
   Those are checked against a hardcoded reference list instead, drawn
@@ -60,6 +58,8 @@ EXCEPTION_SUBCLASS_NAMES = {
     "TransportError",
     "DeniedError",
     "NotAvailableError",
+    "InvalidRequestError",
+    "UnavailableError",
     "ProtocolError",
     "VerificationError",
 }

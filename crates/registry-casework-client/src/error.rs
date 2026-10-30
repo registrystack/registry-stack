@@ -525,8 +525,8 @@ impl CaseworkClientError {
             ReviewClientError::Problem { status, problem } => {
                 let registry_review_client::ReviewProblem {
                     code,
-                    title,
-                    detail,
+                    title: _,
+                    detail: _,
                     trace_id,
                     validation,
                 } = *problem;
@@ -535,8 +535,6 @@ impl CaseworkClientError {
                 if code
                     .expected_status()
                     .is_some_and(|expected| expected != status)
-                    || expected_text
-                        .is_some_and(|expected| expected != (title.as_str(), detail.as_str()))
                 {
                     return Self::Protocol {
                         status,

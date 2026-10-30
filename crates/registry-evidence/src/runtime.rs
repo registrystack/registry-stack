@@ -1524,8 +1524,16 @@ impl EvidenceRuntime {
             let evaluated = if let Some(lookups) = optimized_lookups.as_mut() {
                 match lookups.next() {
                     Some(LookupResult::Match(facts)) => {
-                        self.complete_request_batch_item(item, &facts, observed_at, issued_at)
-                            .await
+                        self.complete_request_batch_item(
+                            item,
+                            &AcquiredFacts {
+                                values: facts,
+                                valid_until: None,
+                            },
+                            observed_at,
+                            issued_at,
+                        )
+                        .await
                     }
                     Some(LookupResult::NoMatch | LookupResult::Ambiguous) => {
                         Ok(RequestBatchItemEvaluation::EvidenceNotAvailable)
@@ -2004,7 +2012,7 @@ impl EvidenceRuntime {
         // one and two stage forms leave it unset, because their scalars already
         // name every source they reached.
         let mut executed_stages: Option<(Vec<String>, Vec<String>)> = None;
-        let (facts, source_id, adapter_id) = match acquisition {
+        let (facts, source_id, adapter_id, source_valid_until) = match acquisition {
             AcquisitionConfig::Single { source } => {
                 let stage = self
                     .execute_source_stage(
@@ -2021,7 +2029,7 @@ impl EvidenceRuntime {
                     .await?;
                 match stage.lookup {
                     SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
-                        (facts, stage.source_id, stage.adapter_id)
+                        (facts, stage.source_id, stage.adapter_id, stage.valid_until)
                     }
                     SourceStageLookup::DeclaredUnresolved => {
                         self.append_failure(
@@ -2124,6 +2132,7 @@ impl EvidenceRuntime {
                         return Err(evidence_unavailable_failure());
                     }
                 };
+                let search_valid_until = search_stage.valid_until;
                 let fetch_stage = self
                     .execute_source_stage(
                         &material,
@@ -2138,9 +2147,12 @@ impl EvidenceRuntime {
                     )
                     .await?;
                 match fetch_stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
-                        (facts, fetch_stage.source_id, fetch_stage.adapter_id)
-                    }
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => (
+                        facts,
+                        fetch_stage.source_id,
+                        fetch_stage.adapter_id,
+                        earliest_deadline(search_valid_until, fetch_stage.valid_until),
+                    ),
                     SourceStageLookup::DeclaredUnresolved
                     | SourceStageLookup::Lookup(LookupResult::NoMatch)
                         if on_fetch_no_match == crate::config::FetchNoMatchPolicy::Unavailable =>
@@ -2193,6 +2205,7 @@ impl EvidenceRuntime {
                 let mut source_ids: Vec<String> = Vec::new();
                 let mut adapter_ids: Vec<String> = Vec::new();
                 let mut last_stage: Option<(String, String)> = None;
+                let mut source_valid_until = None;
                 for stage in &plan.stages {
                     if let Some((source_id, adapter_id)) = last_stage.as_ref() {
                         if acquisition_budget_exhausted(deadline, Instant::now()) {
@@ -2226,6 +2239,7 @@ impl EvidenceRuntime {
                         lookup,
                         source_id,
                         adapter_id,
+                        valid_until,
                     } = self
                         .execute_source_stage(
                             &material,
@@ -2242,6 +2256,7 @@ impl EvidenceRuntime {
                     source_ids.push(source_id.clone());
                     adapter_ids.push(adapter_id.clone());
                     last_stage = Some((source_id.clone(), adapter_id.clone()));
+                    source_valid_until = earliest_deadline(source_valid_until, valid_until);
                     match (stage.role, lookup) {
                         (
                             StageRole::Search,
@@ -2358,7 +2373,7 @@ impl EvidenceRuntime {
                     ));
                 }
                 executed_stages = Some((source_ids, adapter_ids));
-                (merged, source_id, adapter_id)
+                (merged, source_id, adapter_id, source_valid_until)
             }
         };
         let derivation_selectors =
@@ -2446,6 +2461,7 @@ impl EvidenceRuntime {
                     scope: evidence_scope(member_scope, &request.request_nonce),
                     issued_at,
                     observed_at,
+                    source_valid_until,
                     subjects,
                 },
             ) {
@@ -2840,7 +2856,7 @@ impl EvidenceRuntime {
     async fn complete_request_batch_item(
         &self,
         item: &AuthorizedRequestBatchItem,
-        facts: &BTreeMap<String, Value>,
+        facts: &AcquiredFacts,
         observed_at: chrono::DateTime<Utc>,
         issued_at: chrono::DateTime<Utc>,
     ) -> Result<RequestBatchItemEvaluation, RuntimeFailure> {
@@ -2852,7 +2868,7 @@ impl EvidenceRuntime {
             selector_input_value(&item.resolved, &requirement.derivation.selector_inputs)?;
         let values = match self.kernel.derive_and_validate_with_selectors(
             &item.request.requirement,
-            facts,
+            &facts.values,
             &derivation_selectors,
             observed_at,
             ValueProjection {
@@ -2888,6 +2904,7 @@ impl EvidenceRuntime {
                     ),
                     issued_at,
                     observed_at,
+                    source_valid_until: facts.valid_until,
                     subjects,
                 },
             )
@@ -2981,7 +2998,16 @@ impl EvidenceRuntime {
                 )
             })?;
         let response = match response {
-            SourceResponse::Data(response) => response,
+            SourceResponse::Data(response) if response.valid_until.is_none() => response.value,
+            // Signed Evidence sources cannot declare the optimized source-batch
+            // block. Refuse rather than discard a deadline if startup
+            // validation and execution ever disagree.
+            SourceResponse::Data(_) => {
+                return Err(failure(
+                    ProblemCode::DependencyUnavailable,
+                    "source-protocol",
+                ));
+            }
             // Bundle validation rejects this combination. Keep the optimized
             // physical batch fail-closed because it cannot attribute one
             // transport outcome to a logical item.
@@ -3020,7 +3046,7 @@ impl EvidenceRuntime {
         operation: &str,
         started: Instant,
         observed_at: chrono::DateTime<Utc>,
-    ) -> Result<Option<BTreeMap<String, Value>>, RuntimeFailure> {
+    ) -> Result<Option<AcquiredFacts>, RuntimeFailure> {
         let requirement = self
             .kernel
             .requirement(&resolved.requirement)
@@ -3050,7 +3076,12 @@ impl EvidenceRuntime {
                     Err(error) => return Err(error),
                 };
                 match stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => Ok(Some(facts)),
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
+                        Ok(Some(AcquiredFacts {
+                            values: facts,
+                            valid_until: stage.valid_until,
+                        }))
+                    }
                     SourceStageLookup::DeclaredUnresolved
                     | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
                         Ok(None)
@@ -3090,6 +3121,7 @@ impl EvidenceRuntime {
                         return Ok(None);
                     }
                 };
+                let search_valid_until = search_stage.valid_until;
                 let fetch_stage = self
                     .execute_request_batch_source_stage(
                         audit_material,
@@ -3112,7 +3144,15 @@ impl EvidenceRuntime {
                     Err(error) => return Err(error),
                 };
                 match fetch_stage.lookup {
-                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => Ok(Some(facts)),
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
+                        Ok(Some(AcquiredFacts {
+                            values: facts,
+                            valid_until: earliest_deadline(
+                                search_valid_until,
+                                fetch_stage.valid_until,
+                            ),
+                        }))
+                    }
                     SourceStageLookup::DeclaredUnresolved
                     | SourceStageLookup::Lookup(LookupResult::NoMatch)
                         if on_fetch_no_match == crate::config::FetchNoMatchPolicy::Unavailable =>
@@ -3132,6 +3172,7 @@ impl EvidenceRuntime {
                     .map(|budget| Instant::now() + Duration::from_millis(budget));
                 let mut search_facts = BTreeMap::new();
                 let mut merged: BTreeMap<String, Value> = BTreeMap::new();
+                let mut source_valid_until = None;
                 for stage in &plan.stages {
                     if acquisition_budget_exhausted(deadline, Instant::now()) {
                         return Err(failure(
@@ -3161,6 +3202,7 @@ impl EvidenceRuntime {
                         }
                         Err(error) => return Err(error),
                     };
+                    source_valid_until = earliest_deadline(source_valid_until, outcome.valid_until);
                     match (stage.role, outcome.lookup) {
                         (
                             StageRole::Search,
@@ -3205,7 +3247,10 @@ impl EvidenceRuntime {
                         "acquisition-fact-size",
                     ));
                 }
-                Ok(Some(merged))
+                Ok(Some(AcquiredFacts {
+                    values: merged,
+                    valid_until: source_valid_until,
+                }))
             }
         }
     }
@@ -3295,28 +3340,32 @@ impl EvidenceRuntime {
                 source_failure_category(&error),
             )
         })?;
-        let lookup = match source_response {
-            SourceResponse::Data(source_response) => SourceStageLookup::Lookup(
-                self.kernel
-                    .extract_source_for_request_batch_with_selectors(
-                        &source_id,
-                        &source_response,
-                        &preparation_selector_value,
-                        prior_facts,
-                    )
-                    .map_err(|error| {
-                        failure(
-                            kernel_failure_problem(&error),
-                            kernel_failure_category(&error),
+        let (lookup, valid_until) = match source_response {
+            SourceResponse::Data(source_response) => (
+                SourceStageLookup::Lookup(
+                    self.kernel
+                        .extract_source_for_request_batch_with_selectors(
+                            &source_id,
+                            &source_response.value,
+                            &preparation_selector_value,
+                            prior_facts,
                         )
-                    })?,
+                        .map_err(|error| {
+                            failure(
+                                kernel_failure_problem(&error),
+                                kernel_failure_category(&error),
+                            )
+                        })?,
+                ),
+                source_response.valid_until,
             ),
-            SourceResponse::DeclaredUnresolved => SourceStageLookup::DeclaredUnresolved,
+            SourceResponse::DeclaredUnresolved => (SourceStageLookup::DeclaredUnresolved, None),
         };
         Ok(SourceStageOutcome {
             lookup,
             source_id,
             adapter_id,
+            valid_until,
         })
     }
 
@@ -3470,16 +3519,19 @@ impl EvidenceRuntime {
                 return Err(failure(source_failure_problem(&error), category));
             }
         };
-        let lookup = match source_response {
-            SourceResponse::DeclaredUnresolved => SourceStageLookup::DeclaredUnresolved,
+        let (lookup, valid_until) = match source_response {
+            SourceResponse::DeclaredUnresolved => (SourceStageLookup::DeclaredUnresolved, None),
             SourceResponse::Data(source_response) => {
                 match self.kernel.extract_source_with_selectors(
                     &source_id,
-                    &source_response,
+                    &source_response.value,
                     &preparation_selector_value,
                     prior_facts,
                 ) {
-                    Ok(lookup) => SourceStageLookup::Lookup(lookup),
+                    Ok(lookup) => (
+                        SourceStageLookup::Lookup(lookup),
+                        source_response.valid_until,
+                    ),
                     Err(error) => {
                         let category = kernel_failure_category(&error);
                         let problem = kernel_failure_problem(&error);
@@ -3510,6 +3562,7 @@ impl EvidenceRuntime {
             lookup,
             source_id,
             adapter_id,
+            valid_until,
         })
     }
 
@@ -3842,6 +3895,23 @@ struct SourceStageOutcome {
     lookup: SourceStageLookup,
     source_id: String,
     adapter_id: String,
+    valid_until: Option<chrono::DateTime<Utc>>,
+}
+
+struct AcquiredFacts {
+    values: BTreeMap<String, Value>,
+    valid_until: Option<chrono::DateTime<Utc>>,
+}
+
+fn earliest_deadline(
+    left: Option<chrono::DateTime<Utc>>,
+    right: Option<chrono::DateTime<Utc>>,
+) -> Option<chrono::DateTime<Utc>> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
 }
 
 enum SourceStageLookup {

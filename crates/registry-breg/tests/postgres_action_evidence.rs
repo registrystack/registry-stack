@@ -291,11 +291,6 @@ async fn missing_evidence_refuses_guarded_action_while_unrelated_action_commits(
             .find(|action| action.id == "check-procedure")
             .unwrap();
         check.evidence.clear();
-        if let registry_breg::contract::ActionPlanSource::Function { capabilities, .. } =
-            &mut check.plan
-        {
-            capabilities.clear();
-        }
     })
     .await;
     let secrets = registry_platform_config::SecretResolver::new(
@@ -341,9 +336,6 @@ async fn commit_evidence_is_guard_only_and_replay_never_reacquires() {
     let (database, registry, identity) = setup_customized(Some(pure), 60, None, |project| {
         let action = project.actions.iter_mut().find(|action| action.id == "register-landholding").unwrap();
         action.evidence.clear();
-        if let registry_breg::contract::ActionPlanSource::Function { capabilities, .. } = &mut action.plan {
-            capabilities.clear();
-        }
         action.commit_guards.evidence.push(serde_json::from_value(json!({
             "id":"farmer-status","provider":"farmer-registry","requirement":"urn:example:farmer:status-v1",
             "subjects":{"farmer":{"profile":"farmer-number-v1","selectors":{"farmer-number":{"type":"input","input":"farmer-number"}}}},

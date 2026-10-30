@@ -3106,9 +3106,35 @@ jobs:
         with:
           version: "0.11.16"
 
-      - name: Test direct Python composition
+      - name: Test direct Python composition with the exact checkout client
         working-directory: products/platform/examples/python-composition
-        run: uv run --locked python -m unittest discover -s tests -v
+        shell: bash
+        run: |
+          set -euo pipefail
+          maturin_venv="${RUNNER_TEMP}/python-composition-maturin"
+          uv venv "${maturin_venv}"
+          uv pip install \
+            --python "${maturin_venv}/bin/python" \
+            --require-hashes \
+            --only-binary=:all: \
+            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
+          out_dir="${RUNNER_TEMP}/python-composition-client"
+          python3 "${GITHUB_WORKSPACE}/release/scripts/assemble-registry-client-packages.py" \
+            --artifacts python \
+            --python-profile ci \
+            --output-dir "${out_dir}" \
+            --work-dir "${RUNNER_TEMP}/python-composition-client-assembly" \
+            --maturin "${maturin_venv}/bin/maturin" \
+            --zig-python "${maturin_venv}/bin/python"
+          mapfile -t wheels < <(find "${out_dir}" -maxdepth 1 -type f \
+            -name 'registry_stack_client-*.whl')
+          if [[ "${#wheels[@]}" -ne 1 ]]; then
+            printf 'expected exactly one assembled client wheel in %s\n' "${out_dir}" >&2
+            printf '%s\n' "${wheels[@]}" >&2
+            exit 1
+          fi
+          uv run --locked --with "${wheels[0]}" \
+            python -m unittest discover -s tests -v
 
       - name: Test released-client Coordinator example
         working-directory: products/coordinator/examples/reviewed-notice

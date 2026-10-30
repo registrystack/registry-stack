@@ -82,10 +82,10 @@ def receipt_wire() -> dict:
             "results": [
                 {
                     "operation": "create",
-                    "id": RUN_ID,
-                    "revision": 1,
+                    "recordIdentifier": RUN_ID,
+                    "revisionIdentifier": "1",
                     "etag": '"breg-record-v1-abcdef012345"',
-                    "data": {"label": "Example Ltd"},
+                    "domainData": {"label": "Example Ltd"},
                 }
             ],
         },

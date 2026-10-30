@@ -68,9 +68,9 @@ const MAX_RSA_MODULUS_BITS: usize = 8192;
 const MAX_RSA_EXPONENT_BYTES: usize = 8;
 const DEFAULT_HOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
 const MAX_HOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
-const DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS: u64 = 30_000;
-const DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS: u64 = 30_000;
-const DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS: u64 = 30_000;
+const DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS: u64 = 1_000;
+const DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS: u64 = 2_000;
+const DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS: u64 = 2_000;
 const MAX_OIDC_LEEWAY_MILLISECONDS: u64 = 300_000;
 const DEFAULT_JWKS_CACHE_TTL_SECONDS: u64 = 600;
 const DEFAULT_JWKS_NEGATIVE_CACHE_TTL_SECONDS: u64 = 60;
@@ -176,6 +176,10 @@ const REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "authentication.oidc.maxTokenLifetimeSeconds",
         replacement: "rename authentication.oidc.maxTokenLifetimeSeconds to authentication.oidc.maximumTokenLifetimeSeconds; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.deniedKids",
+        replacement: "rename `authentication.oidc.deniedKids` to `authentication.oidc.revokedKeyIds`; the values stay as they are",
     },
     RemovedKey {
         path: "authentication.oidc.jwksCache.maxDocumentBytes",
@@ -390,6 +394,8 @@ pub enum RuntimeConfigError {
     InvalidFieldEncryption,
     #[error("runtime configuration contains invalid operational bounds")]
     InvalidBounds,
+    #[error("pool acquisition must finish before the HTTP request deadline")]
+    PoolBudgetExceeded,
     #[error("runtime configuration contains invalid WASM execution budgets")]
     InvalidWasmExecution,
     #[error("runtime configuration secret resolution failed")]
@@ -432,6 +438,7 @@ impl RuntimeConfigError {
             }
             Self::InvalidFieldEncryption => "breg.runtime.invalid-field-encryption",
             Self::InvalidBounds => "breg.runtime.invalid-bounds",
+            Self::PoolBudgetExceeded => "breg.runtime.pool-budget-exceeded",
             Self::InvalidWasmExecution => "breg.runtime.invalid-wasm-execution",
             Self::Secret => "breg.runtime.secret",
         }
@@ -471,6 +478,7 @@ impl RuntimeConfigError {
             }
             Self::InvalidFieldEncryption => "/fieldEncryption",
             Self::InvalidBounds => "/operationalTimeouts",
+            Self::PoolBudgetExceeded => "/database/pool",
             Self::InvalidWasmExecution => "/wasmExecution",
         }
     }
@@ -555,6 +563,9 @@ impl RuntimeConfigError {
             }
             Self::InvalidBounds => {
                 "Keep every timeout, retention, and pool member within the bounds the runtime schema states."
+            }
+            Self::PoolBudgetExceeded => {
+                "Lower database.pool.waitTimeoutMilliseconds, createTimeoutMilliseconds, or recycleTimeoutMilliseconds so the wait plus the longer connection operation is less than operationalTimeouts.httpRequestMilliseconds."
             }
             Self::InvalidWasmExecution => {
                 "Set wasmExecution.backend to a supported backend and keep its module and guest memory ceilings within the bounds the runtime schema states."
@@ -894,6 +905,7 @@ const fn runtime_config_loader() -> RuntimeConfigLoader {
     })
     .removed_keys(REMOVED_KEYS)
     .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
+    .require_trusted_ownership()
 }
 
 #[derive(Clone)]
@@ -944,6 +956,18 @@ fn validate_attachment_attempt_budget(
     Ok(())
 }
 
+fn validate_pool_acquisition_budget(
+    database: &DatabaseConfig,
+    operational_timeouts: &OperationalTimeouts,
+) -> Result<()> {
+    let pool = database.pool_bounds();
+    let connection_operation = pool.create_timeout.max(pool.recycle_timeout);
+    if pool.wait_timeout + connection_operation >= operational_timeouts.http_request {
+        return Err(RuntimeConfigError::PoolBudgetExceeded);
+    }
+    Ok(())
+}
+
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
         validate_runtime_definition_ids(&raw)?;
@@ -983,6 +1007,7 @@ impl RuntimeConfig {
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
+        validate_pool_acquisition_budget(&database, &operational_timeouts)?;
         let wasm_execution = WasmExecutionConfig::from_raw(raw.wasm_execution)?;
         let metrics_listener = raw
             .metrics_listener
@@ -1983,9 +2008,9 @@ impl OidcVerifierConfig {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         validate_bounded_list(&raw.allowed_clients)?;
-        validate_bounded_list(&raw.denied_kids)?;
-        let denied_unique = raw.denied_kids.iter().collect::<HashSet<_>>();
-        if denied_unique.len() != raw.denied_kids.len() {
+        validate_bounded_list(&raw.revoked_key_ids)?;
+        let denied_unique = raw.revoked_key_ids.iter().collect::<HashSet<_>>();
+        if denied_unique.len() != raw.revoked_key_ids.len() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         let allowed_unique = raw.allowed_clients.iter().collect::<HashSet<_>>();
@@ -2016,7 +2041,7 @@ impl OidcVerifierConfig {
             scope_claim: raw.scope_claim,
             scope_separator: raw.scope_separator,
             allowed_clients: raw.allowed_clients,
-            denied_kids: raw.denied_kids,
+            denied_kids: raw.revoked_key_ids,
             assertion_issuers,
             max_token_lifetime,
             leeway,
@@ -3120,10 +3145,11 @@ struct RawOidcVerifierConfig {
         schemars(with = "crate::contract::sentinel::AllowedClients")
     )]
     allowed_clients: Vec<String>,
-    /// The signing key identifiers this registry refuses a token from.
-    /// Omitted, no key is denied; written, it names at least one key.
-    #[serde(default, deserialize_with = "non_empty_denied_kids")]
-    denied_kids: Vec<String>,
+    /// The signing key identifiers this registry refuses locally even while
+    /// the issuer publishes them. Omitted, no key is refused; written, it
+    /// names at least one key and does not revoke it at the issuer.
+    #[serde(default, deserialize_with = "non_empty_revoked_key_ids")]
+    revoked_key_ids: Vec<String>,
     /// The assertion authorities each client may exchange a subject token
     /// from, keyed by client identifier. Omitted, no assertion-issuer rule
     /// applies; written, it lists at least one client, each with at least one
@@ -3154,16 +3180,16 @@ struct RawOidcVerifierConfig {
     jwks_cache: RawJwksCacheConfig,
 }
 
-/// An empty list is not how the file says "deny no key" (CFG-EMPTY-2):
+/// An empty list is not how the file says "refuse no key" (CFG-EMPTY-2):
 /// omitting the member says it.
-fn non_empty_denied_kids<'de, D: serde::Deserializer<'de>>(
+fn non_empty_revoked_key_ids<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Vec<String>, D::Error> {
     let kids = Vec::<String>::deserialize(deserializer)?;
     if kids.is_empty() {
         return Err(registry_platform_yaml::Invalid::expected(
             "at least one key identifier",
-            "List at least one key identifier to deny, or delete deniedKids to deny no key.",
+            "List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key.",
         )
         .into_error());
     }
@@ -3645,7 +3671,7 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         "/$defs/RawDestinationsConfig/properties/hooks",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",
         "/$defs/RawEventDestinationConfig/properties/tls",
-        "/$defs/RawOidcVerifierConfig/properties/deniedKids",
+        "/$defs/RawOidcVerifierConfig/properties/revokedKeyIds",
         "/$defs/RawOidcVerifierConfig/properties/jwksSource",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers",
     ] {
@@ -3793,7 +3819,7 @@ fn install_schema_constraints(schema: &mut Value) {
         // The list arm of `allowedClients`; the other arm is the keyword
         // `unrestricted`.
         "/$defs/AllowedClients/anyOf/1",
-        "/$defs/RawOidcVerifierConfig/properties/deniedKids",
+        "/$defs/RawOidcVerifierConfig/properties/revokedKeyIds",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/additionalProperties",
     ] {
         install_schema_array_constraints(schema, pointer, MAX_LIST_ITEMS, true);
@@ -3811,10 +3837,10 @@ fn install_schema_constraints(schema: &mut Value) {
             );
         }
     }
-    // `non_empty_denied_kids` refuses a list that names no key, and
+    // `non_empty_revoked_key_ids` refuses a list that names no key, and
     // `ListedIssuers` a client listed with no assertion issuer.
     for pointer in [
-        "/$defs/RawOidcVerifierConfig/properties/deniedKids",
+        "/$defs/RawOidcVerifierConfig/properties/revokedKeyIds",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/additionalProperties",
     ] {
         if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {

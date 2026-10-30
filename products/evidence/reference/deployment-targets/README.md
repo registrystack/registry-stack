@@ -61,8 +61,10 @@ per service.
 
 ACLs grant read metadata and sign access to one named key. Their required and
 allowed parameter constraints admit only the exact signing request shape and
-the version pinned by Evidence. During planned rotation, add the next
-numeric version to `allowed_parameters.key_version`, deploy the overlap, then
+the version pinned by Evidence. Evidence sends `key_version` as a string, which
+OpenBao accepts and matches against the policy, so pin quoted version strings.
+During planned rotation, add the next quoted version string to
+`allowed_parameters.key_version`, deploy the overlap, then
 remove the old version after the token or assertion validity window and
 consumer skew have elapsed. Raising the Transit key's
 `min_encryption_version` is a second retirement control. Emergency retirement

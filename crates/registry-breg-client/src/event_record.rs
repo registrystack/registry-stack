@@ -521,10 +521,15 @@ impl BRegCreationRevision {
     /// Read a Registry Record revision envelope (`{"data": {...}, "meta": {...}}`)
     /// and keep only the creation evidence for `record_id`.
     pub fn from_document(record_id: &str, document: &Value) -> Result<Self, BRegEventRecordError> {
-        let record_type = document
+        let meta = document
             .get("meta")
             .and_then(Value::as_object)
-            .and_then(|meta| meta.get("entityTypeIdentifier"))
+            .ok_or_else(|| wrong_evidence("the revision has no record type"))?;
+        if meta.contains_key("entityTypeIdentifier") {
+            return Err(wrong_evidence("the revision record type is invalid"));
+        }
+        let record_type = meta
+            .get("recordTypeIdentifier")
             .and_then(Value::as_str)
             .ok_or_else(|| wrong_evidence("the revision has no record type"))?;
         let data = document

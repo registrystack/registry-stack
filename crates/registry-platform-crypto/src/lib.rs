@@ -872,7 +872,7 @@ impl SigningProvider for TransitSigner {
         let digest = Sha256::digest(payload);
         let body = serde_json::json!({
             "input": STANDARD.encode(digest),
-            "key_version": self.key_version,
+            "key_version": self.key_version.to_string(),
             "marshaling_algorithm": "jws",
             "prehashed": true,
         });
@@ -2156,7 +2156,7 @@ mod tests {
         let digest = Sha256::digest(payload);
         json!({
             "input": STANDARD.encode(digest),
-            "key_version": version,
+            "key_version": version.to_string(),
             "marshaling_algorithm": "jws",
             "prehashed": true,
         })
@@ -2365,6 +2365,7 @@ mod tests {
             "24/tVBWa/kCs5bSdcCJZ/YjJxACTBxgYJEh7qrXGveo="
         );
         assert_ne!(transit_request(payload, 7)["input"], "+/8=");
+        assert_eq!(transit_request(payload, 7)["key_version"], "7");
         let replies = vec![
             transit_reply(
                 "GET",

@@ -55,6 +55,7 @@ pub enum ProblemCode {
     StatisticalDatasetVersionConflict,
     StatisticalDatasetVersionWithdrawn,
     UnsupportedMediaType,
+    WriteOutsideBoundary,
 }
 
 impl ProblemCode {
@@ -93,6 +94,7 @@ impl ProblemCode {
         Self::StatisticalDatasetVersionConflict,
         Self::StatisticalDatasetVersionWithdrawn,
         Self::UnsupportedMediaType,
+        Self::WriteOutsideBoundary,
     ];
 
     /// The codes a documented HTTP operation can answer with. The readiness
@@ -131,6 +133,7 @@ impl ProblemCode {
         Self::StatisticalDatasetVersionConflict,
         Self::StatisticalDatasetVersionWithdrawn,
         Self::UnsupportedMediaType,
+        Self::WriteOutsideBoundary,
     ];
 
     #[must_use]
@@ -169,6 +172,7 @@ impl ProblemCode {
             Self::StatisticalDatasetVersionConflict => "statistical_dataset.version_conflict",
             Self::StatisticalDatasetVersionWithdrawn => "statistical_dataset.version_withdrawn",
             Self::UnsupportedMediaType => "unsupported.media_type",
+            Self::WriteOutsideBoundary => "write.outside-boundary",
         }
     }
 
@@ -178,7 +182,7 @@ impl ProblemCode {
         match self {
             Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
-            Self::IngestionProfileMismatch => 403,
+            Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
@@ -286,6 +290,9 @@ impl ProblemCode {
                 "The statistical dataset version was withdrawn."
             }
             Self::UnsupportedMediaType => "The request media type is not supported.",
+            Self::WriteOutsideBoundary => {
+                "The resulting record falls outside the selected access profile's row boundary."
+            }
         }
     }
 

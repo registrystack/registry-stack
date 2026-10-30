@@ -1,3 +1,4 @@
+import http.client
 import importlib.util
 import json
 import sqlite3
@@ -108,6 +109,20 @@ class WebhookAcceptanceTests(unittest.TestCase):
         with response:
             return response.status
 
+    def post_pairs(self, headers, body):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        try:
+            connection.putrequest("POST", "/events")
+            connection.putheader("Content-Length", str(len(body)))
+            for name, value in headers:
+                connection.putheader(name, value)
+            connection.endheaders(body)
+            response = connection.getresponse()
+            response.read()
+            return response.status
+        finally:
+            connection.close()
+
     def counts(self):
         with sqlite3.connect(self.inbox_path) as connection:
             return tuple(connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
@@ -161,6 +176,19 @@ class WebhookAcceptanceTests(unittest.TestCase):
                 self.assertEqual(self.post(headers, body), 400)
         self.assertEqual(self.counts(), (0, 0))
 
+    def test_exact_and_cased_duplicate_headers_reach_the_shared_verifier(self):
+        for name, value in (
+            ("ce-type", "withheld-exact-duplicate"),
+            ("CE-TYPE", "withheld-cased-duplicate"),
+        ):
+            with self.subTest(name=name):
+                headers, body = self.event()
+                self.assertEqual(
+                    self.post_pairs([*headers.items(), (name, value)], body),
+                    400,
+                )
+        self.assertEqual(self.counts(), (0, 0))
+
     def test_storage_failure_refuses_acknowledgement_then_recovers(self):
         headers, body = self.event()
         with patch.object(self.server.webhook_inbox, "accept", side_effect=sqlite3.OperationalError):
@@ -197,12 +225,30 @@ class SignatureContractTests(unittest.TestCase):
         }
         signature = SIGNER.webhook_signature(key, headers, body, "/hooks/registry")
         self.assertEqual(signature, "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM")
+        header_pairs = [
+            *headers.items(),
+            ("content-type", "application/json"),
+            ("x-registry-signature", signature),
+        ]
         verified = RECEIVER.breg.verify_hook_delivery(
             method="POST", path="/hooks/registry", body=body, key=key,
-            headers={**headers, "content-type": "application/json",
-                     "x-registry-signature": signature},
+            headers=header_pairs,
         )
         self.assertEqual(verified["body"], body)
+
+        for name, value in (
+            ("ce-type", "withheld-exact-duplicate"),
+            ("CE-TYPE", "withheld-cased-duplicate"),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(RECEIVER.breg.BaseRegistryClientError) as raised:
+                    RECEIVER.breg.verify_hook_delivery(
+                        method="POST", path="/hooks/registry", body=body, key=key,
+                        headers=[*header_pairs, (name, value)],
+                    )
+                self.assertEqual(raised.exception.kind, "hook-verification")
+                self.assertEqual(raised.exception.code, "duplicate-header")
+                self.assertNotIn(value, str(raised.exception))
 
 
 if __name__ == "__main__":

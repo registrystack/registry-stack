@@ -1076,9 +1076,14 @@ fn assert_payload_is_the_envelope(capture: &CapturedDelivery, record_id: &str) {
         "the envelope carries the declared event type"
     );
     assert_eq!(
-        envelope.subject.record_revision, 1,
+        envelope.subject.revision(),
+        1,
         "the envelope subject carries the committed revision"
     );
+    assert!(matches!(
+        envelope.subject,
+        registry_platform_hooks::EventSubject::Record { .. }
+    ));
     assert_eq!(
         envelope.causation,
         Causation::root(&envelope.id),
@@ -1353,7 +1358,7 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [registry-client]
-    deniedKids: [denied-kid]
+    revokedKeyIds: [denied-kid]
     maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:

@@ -171,10 +171,11 @@ pub enum BRegProblemCode {
     StatisticalDatasetVersionConflict,
     StatisticalDatasetVersionWithdrawn,
     UnsupportedMediaType,
+    WriteOutsideBoundary,
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
@@ -208,6 +209,7 @@ impl BRegProblemCode {
         Self::StatisticalDatasetVersionConflict,
         Self::StatisticalDatasetVersionWithdrawn,
         Self::UnsupportedMediaType,
+        Self::WriteOutsideBoundary,
     ];
 
     #[must_use]
@@ -246,6 +248,7 @@ impl BRegProblemCode {
             Self::StatisticalDatasetVersionConflict => "statistical_dataset.version_conflict",
             Self::StatisticalDatasetVersionWithdrawn => "statistical_dataset.version_withdrawn",
             Self::UnsupportedMediaType => "unsupported.media_type",
+            Self::WriteOutsideBoundary => "write.outside-boundary",
         }
     }
 
@@ -257,7 +260,7 @@ impl BRegProblemCode {
             Self::ActionHandlerFailed => 500,
             Self::AuthenticationRefused => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
-            Self::IngestionProfileMismatch => 403,
+            Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
@@ -295,6 +298,7 @@ impl BRegProblemCode {
         )
     }
 
+    #[cfg(test)]
     pub(crate) const fn title(self) -> &'static str {
         match self.status() {
             400 => "Bad Request",
@@ -314,9 +318,8 @@ impl BRegProblemCode {
         }
     }
 
-    /// The sentence the service answers this code under. It is the catalogue's
-    /// own published sentence, so a caller can state what a matching problem
-    /// said without keeping a second copy of the catalogue.
+    /// The catalogue's stable description of this code. Response prose stays
+    /// untrusted and is never retained or used to classify the problem.
     #[must_use]
     pub const fn detail(self) -> &'static str {
         match self {
@@ -324,7 +327,7 @@ impl BRegProblemCode {
             Self::ActionGuardFailed => "The action guard was not satisfied.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             // The published sentence for the code. A refusal carries its
-            // package-declared label on the wire, which `accepts_detail` reads.
+            // package-declared label on the wire instead.
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
@@ -373,18 +376,10 @@ impl BRegProblemCode {
                 "The statistical dataset version was withdrawn."
             }
             Self::UnsupportedMediaType => "The request media type is not supported.",
+            Self::WriteOutsideBoundary => {
+                "The resulting record falls outside the selected access profile's row boundary."
+            }
         }
-    }
-
-    /// Closed alternate text for the field-pattern form of mutation conflict.
-    /// It remains the same typed conflict for existing client consumers.
-    /// An immediate-action refusal is the one code whose detail is declared by
-    /// the package, so it is accepted against the schema bound instead.
-    pub(crate) fn accepts_detail(self, detail: &str) -> bool {
-        detail == self.detail()
-            || (self == Self::MutationConflict
-                && detail == "The field does not conform to its declared storage pattern.")
-            || (self == Self::ActionRefused && bounded_refusal_label(detail))
     }
 
     /// The type URI the service names for this code, resolved the same way the
@@ -407,7 +402,7 @@ impl std::fmt::Display for BRegProblemCode {
 /// The published Problem schema bounds a refusal label at 256 characters. The
 /// label is declared by the package, so the client holds it to that bound and
 /// to the control-character exclusion every public member shares.
-fn bounded_refusal_label(detail: &str) -> bool {
+pub(crate) fn bounded_refusal_label(detail: &str) -> bool {
     !detail.is_empty() && detail.chars().count() <= 256 && !detail.chars().any(char::is_control)
 }
 
@@ -711,8 +706,22 @@ impl BaseRegistryClientError {
 
 #[cfg(test)]
 mod tests {
-    use super::{BRegProblemCode, BRegProtocolFailure, TokenError, TransportKind};
-    use super::{BaseRegistryClientError, TraceId};
+    use super::{
+        bounded_refusal_label, BRegProblemCode, BRegProtocolFailure, BaseRegistryClientError,
+        TokenError, TraceId, TransportKind,
+    };
+
+    #[test]
+    fn direct_write_boundary_refusal_has_a_fixed_value_free_contract() {
+        let code = BRegProblemCode::WriteOutsideBoundary;
+        assert_eq!(code.code(), "write.outside-boundary");
+        assert_eq!(code.status(), 403);
+        assert_eq!(code.title(), "Forbidden");
+        assert_eq!(
+            code.detail(),
+            "The resulting record falls outside the selected access profile's row boundary."
+        );
+    }
 
     /// The client resolves a problem type the same way the service builds it,
     /// on the shared Registry Stack identifier host, with each dot in the code
@@ -744,18 +753,12 @@ mod tests {
     }
 
     #[test]
-    fn field_pattern_detail_is_a_closed_mutation_conflict_variant() {
-        let detail = "The field does not conform to its declared storage pattern.";
-        // An immediate-action refusal carries a package-declared label, so it
-        // accepts any bounded detail and is told apart by its code instead.
-        let matches = BRegProblemCode::ALL
-            .into_iter()
-            .filter(|code| *code != BRegProblemCode::ActionRefused && code.accepts_detail(detail))
-            .collect::<Vec<_>>();
-        assert_eq!(matches, vec![BRegProblemCode::MutationConflict]);
-        assert!(BRegProblemCode::MutationConflict
-            .accepts_detail(BRegProblemCode::MutationConflict.detail()));
-        assert!(!BRegProblemCode::MutationConflict.accepts_detail("response-authored-canary"));
+    fn action_refusal_detail_keeps_its_declared_label_bounds() {
+        assert!(bounded_refusal_label("A declared refusal label."));
+        assert!(bounded_refusal_label(&"é".repeat(256)));
+        assert!(!bounded_refusal_label(""));
+        assert!(!bounded_refusal_label(&"é".repeat(257)));
+        assert!(!bounded_refusal_label("label\ncanary"));
     }
 
     #[test]

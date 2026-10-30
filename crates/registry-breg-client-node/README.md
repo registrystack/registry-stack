@@ -83,8 +83,8 @@ number boundary. `getRecordJson`, `listRecordsJson`, `continueListJson`,
 `lookupRecordJson`, `createRecordJson`, `patchRecordJson`, and
 `invokeActionJson` return `valueJson` with the same trace, ETag,
 location, and opaque continuation semantics as their object counterparts.
-Proposal methods use JSON text for inputs and transition bodies and expose the
-validated representation as `BRegProposal.documentJson`.
+Proposal methods accept bounded plain objects for inputs, queries and transition
+bodies and expose the validated representation as `BRegProposal.documentJson`.
 
 ```js
 const { breg } = require('@registrystack/client');
@@ -210,15 +210,15 @@ private application state.
 ## Standalone Proposals
 
 Select a Proposal-mode Action with `selectAction`, then call `startProposal`
-with its input object encoded as JSON text and a caller-chosen idempotency key.
+with its input object and a caller-chosen idempotency key.
 `prepareProposal` binds an available transition's promoted condition, exact
 body, and key; `executeProposal` is the explicit send.
 
 ```js
 const contract = await client.registryContract(profile);
 const action = contract.selectAction('correct-address', profile);
-const draft = await client.startProposal(action, inputsJson, 'correction-start-1');
-const submit = client.prepareProposal(draft, 'submit', '{}', 'correction-submit-1');
+const draft = await client.startProposal(action, inputs, 'correction-start-1');
+const submit = client.prepareProposal(draft, 'submit', {}, 'correction-submit-1');
 // Persist submit.toBytes() in owner-protected storage before dispatch.
 const submitted = await client.executeProposal(submit);
 ```

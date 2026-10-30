@@ -4,6 +4,7 @@
   "status": "complete",
   "apiVersion": "id.registrystack.org/formats/messaging/ctl-report/v1alpha1",
   "kind": "MessagingCtlReport",
+  "version": "0.44.0-dev",
   "accessProfiles": [
     {
       "id": "case-notices",
@@ -14,7 +15,6 @@
       "role": "operator"
     }
   ],
-  "diagnostics": [],
   "filesChecked": 18,
   "project": "products/messaging/examples/starter",
   "projectDigest": "sha256:b819f6d18f1b32ede522cb7c4ad436056a1cc85e10523c891dcfe892623ecb5b",
@@ -57,5 +57,6 @@
       ],
       "version": "1"
     }
-  ]
+  ],
+  "diagnostics": []
 }

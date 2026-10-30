@@ -2061,8 +2061,12 @@ async fn appointment_hooks_capture_matching_lifecycle_rows_with_bounded_projecti
         assert_eq!(trigger, expected_trigger);
         assert_eq!(envelope.event_type, expected_type);
         assert_eq!(reference, &format!("/v1/appointments/{appointment_id}"));
-        assert_eq!(envelope.subject.record_reference, *reference);
-        assert_eq!(envelope.subject.record_revision, *revision);
+        assert_eq!(envelope.subject.reference(), *reference);
+        assert_eq!(envelope.subject.revision(), *revision);
+        assert!(matches!(
+            envelope.subject,
+            registry_platform_hooks::EventSubject::Record { .. }
+        ));
         assert_eq!(json!(*revision), response["revision"]);
         assert_eq!(envelope.data, expected_data);
         assert_eq!(

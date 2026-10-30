@@ -188,7 +188,8 @@ class EvidenceClientError(Exception):
     """Base exception for every mapped failure this client reports.
 
     `kind` is always present, one of "configuration", "nonce", "token",
-    "transport", "denied", "not-available", "protocol", or "verification".
+    "transport", "denied", "not-available", "invalid-request",
+    "unavailable", "protocol", or "verification".
     Branch on `kind`, never on the rendered message, which this crate does
     not freeze. `status`, `code`, `trace_id`, `retry_after_seconds`,
     `transport_kind`, and `token_kind` are present only when the underlying
@@ -244,6 +245,19 @@ class DeniedError(EvidenceClientError):
 class NotAvailableError(EvidenceClientError):
     """The deployment answered that no evidence is available for this
     request."""
+
+    ...
+
+class InvalidRequestError(EvidenceClientError):
+    """The deployment rejected the request shape or named resource. See the
+    `status` and `code` attributes."""
+
+    ...
+
+class UnavailableError(EvidenceClientError):
+    """The Evidence service or one of its authoritative sources is
+    unavailable. See the `status` and `code` attributes. A retry requires a
+    fresh request."""
 
     ...
 
@@ -413,7 +427,7 @@ class EvidenceClient:
     def refresh_metadata(self) -> None: ...
     def request(
         self,
-        requirement: str,
+        handle: str,
         response_format: EvidenceResponseFormat = ...,
         binding_receipt: Optional[SubjectBindingReceipt] = ...,
         subjects: Optional[Mapping[str, Mapping[str, Union[str, int, bool]]]] = ...,

@@ -806,13 +806,12 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
   "/v1/records/memberships?accessProfile=registry-operator" initial-a application/json \
   "$temporary_root/create-a.json" "$temporary_root/create-a-response.json"
 assert_status "$temporary_root/create-a-response.json" 201
-assert_snapshot_reference "$temporary_root/create-a-response.json" data.snapshot
 a_id=$(json_field "$temporary_root/create-a-response.json" data.recordIdentifier)
 a_etag=$(response_header_literal "$temporary_root/create-a-response.json" ETag)
 
 cat >"$temporary_root/move-june.json" <<EOF
 {"items":[
-  {"operation":"patch","recordId":"$a_id","ifMatch":$a_etag,"patch":[
+  {"operation":"patch","recordIdentifier":"$a_id","ifMatch":$a_etag,"patch":[
     {"op":"replace","path":"/data/validTo","value":"2026-06-01"},
     {"op":"replace","path":"/data/sourceReference","value":"reported-move"}
   ]},
@@ -825,7 +824,7 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
 assert_status "$temporary_root/move-june-response.json" 200
 assert_snapshot_reference "$temporary_root/move-june-response.json" snapshot
 first_snapshot=$(json_field "$temporary_root/move-june-response.json" snapshot)
-b_id=$(json_field "$temporary_root/move-june-response.json" results.1.id)
+b_id=$(json_field "$temporary_root/move-june-response.json" results.1.recordIdentifier)
 b_etag=$(json_field_literal "$temporary_root/move-june-response.json" results.1.etag)
 a_move_etag=$(json_field_literal "$temporary_root/move-june-response.json" results.0.etag)
 
@@ -851,11 +850,11 @@ fi
 
 cat >"$temporary_root/correction-july.json" <<EOF
 {"changeContext":{"kind":"correction","reasonCode":"effective-date-corrected","sourceReferences":["case-document:history-correction-001"]},"items":[
-  {"operation":"patch","recordId":"$a_id","ifMatch":$a_move_etag,"patch":[
+  {"operation":"patch","recordIdentifier":"$a_id","ifMatch":$a_move_etag,"patch":[
     {"op":"replace","path":"/data/validTo","value":"2026-06-15"},
     {"op":"replace","path":"/data/sourceReference","value":"corrected-effective-date"}
   ]},
-  {"operation":"patch","recordId":"$b_id","ifMatch":$b_etag,"patch":[
+  {"operation":"patch","recordIdentifier":"$b_id","ifMatch":$b_etag,"patch":[
     {"op":"replace","path":"/data/validFrom","value":"2026-06-15"},
     {"op":"replace","path":"/data/sourceReference","value":"corrected-effective-date"}
   ]}
@@ -894,7 +893,7 @@ second_a_id=$(json_field "$temporary_root/create-second-a-response.json" data.re
 second_a_etag=$(response_header_literal "$temporary_root/create-second-a-response.json" ETag)
 cat >"$temporary_root/second-move-june.json" <<EOF
 {"items":[
-  {"operation":"patch","recordId":"$second_a_id","ifMatch":$second_a_etag,"patch":[{"op":"replace","path":"/data/validTo","value":"2026-06-01"}]},
+  {"operation":"patch","recordIdentifier":"$second_a_id","ifMatch":$second_a_etag,"patch":[{"op":"replace","path":"/data/validTo","value":"2026-06-01"}]},
   {"operation":"create","data":{"subject":"household-002","group":"B","validFrom":"2026-06-01","sourceReference":"reported-move"}}
 ]}
 EOF
@@ -902,13 +901,13 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
   "/v1/records/memberships:batch?accessProfile=registry-operator" second-june-move application/json \
   "$temporary_root/second-move-june.json" "$temporary_root/second-move-june-response.json"
 assert_status "$temporary_root/second-move-june-response.json" 200
-second_b_id=$(json_field "$temporary_root/second-move-june-response.json" results.1.id)
+second_b_id=$(json_field "$temporary_root/second-move-june-response.json" results.1.recordIdentifier)
 second_b_etag=$(json_field_literal "$temporary_root/second-move-june-response.json" results.1.etag)
 second_a_move_etag=$(json_field_literal "$temporary_root/second-move-june-response.json" results.0.etag)
 cat >"$temporary_root/second-correction-july.json" <<EOF
 {"changeContext":{"kind":"correction","reasonCode":"effective-date-corrected","sourceReferences":["case-document:history-correction-002"]},"items":[
-  {"operation":"patch","recordId":"$second_b_id","ifMatch":$second_b_etag,"patch":[{"op":"replace","path":"/data/validFrom","value":"2026-06-15"}]},
-  {"operation":"patch","recordId":"$second_a_id","ifMatch":$second_a_move_etag,"patch":[{"op":"replace","path":"/data/validTo","value":"2026-06-15"}]}
+  {"operation":"patch","recordIdentifier":"$second_b_id","ifMatch":$second_b_etag,"patch":[{"op":"replace","path":"/data/validFrom","value":"2026-06-15"}]},
+  {"operation":"patch","recordIdentifier":"$second_a_id","ifMatch":$second_a_move_etag,"patch":[{"op":"replace","path":"/data/validTo","value":"2026-06-15"}]}
 ]}
 EOF
 http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
@@ -974,12 +973,17 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
   "/v1/records/memberships?accessProfile=registry-operator" post-upgrade-create application/json \
   "$temporary_root/create-after-upgrade.json" "$temporary_root/create-after-upgrade-response.json"
 assert_status "$temporary_root/create-after-upgrade-response.json" 201
-assert_snapshot_reference "$temporary_root/create-after-upgrade-response.json" data.snapshot
-post_upgrade_snapshot=$(json_field "$temporary_root/create-after-upgrade-response.json" data.snapshot)
+http_json GET "$server_url" "$temporary_root/secrets/consumer-token" \
+  "/v1/records/memberships:snapshot?accessProfile=eligibility-consumer&validAt=2026-07-20" "" "" "" \
+  "$temporary_root/consumer-post-upgrade-latest.json"
+assert_status "$temporary_root/consumer-post-upgrade-latest.json" 200
+assert_snapshot_reference "$temporary_root/consumer-post-upgrade-latest.json" snapshot
+post_upgrade_snapshot=$(json_field "$temporary_root/consumer-post-upgrade-latest.json" snapshot)
 http_json GET "$server_url" "$temporary_root/secrets/consumer-token" \
   "/v1/records/memberships:snapshot?accessProfile=eligibility-consumer&snapshot=$post_upgrade_snapshot&validAt=2026-07-20" "" "" "" \
   "$temporary_root/consumer-post-upgrade-snapshot.json"
 assert_status "$temporary_root/consumer-post-upgrade-snapshot.json" 200
+assert_snapshot_reference "$temporary_root/consumer-post-upgrade-snapshot.json" snapshot
 assert_snapshot_answer "$temporary_root/consumer-post-upgrade-snapshot.json" household-003 A 2026-07-20 null 2026-07-20
 checkpoint "v2 post-upgrade write produced a queryable new snapshot"
 

@@ -147,6 +147,15 @@ const USAGE_ACTION: &str =
 
 #[must_use]
 pub fn main_entry() -> ExitCode {
+    registry_cli_report::install_panic_hook(
+        registry_cli_report::Identity {
+            binary: "discoveryctl",
+            api_version: CTL_REPORT_API_VERSION,
+            kind: CTL_REPORT_KIND,
+            version: build_info::DISPLAY_VERSION,
+        },
+        registry_cli_report::json_requested(std::env::args_os()),
+    );
     main_entry_from(
         std::env::args_os(),
         &mut io::stdout().lock(),
@@ -589,9 +598,24 @@ mod tests {
         );
         let (exit, stdout, _) = run_cli(&["check", "--project", FIXTURE, "--format", "json"]);
         assert_eq!(exit, ExitCode::SUCCESS, "{stdout}");
+        let committed = fs::read_to_string(example).expect("the report example");
+        let sample: Value = serde_json::from_str(&committed).expect("the report example parses");
+        let sample_version = sample["version"]
+            .as_str()
+            .filter(|version| !version.is_empty())
+            .expect("the report example carries a displayed binary version");
+        let actual_version = format!(
+            "  \"version\": {},\n",
+            serde_json::to_string(build_info::DISPLAY_VERSION).unwrap()
+        );
+        assert_eq!(stdout.matches(&actual_version).count(), 1, "{stdout}");
+        let sample_version = format!(
+            "  \"version\": {},\n",
+            serde_json::to_string(sample_version).unwrap()
+        );
+        let normalized = stdout.replacen(&actual_version, &sample_version, 1);
         assert_eq!(
-            fs::read_to_string(example).expect("the report example"),
-            stdout,
+            committed, normalized,
             "regenerate it with `discoveryctl check --project \
              products/discovery/fixtures/project --format json`"
         );

@@ -270,12 +270,15 @@ async fn native_observers_capture_filter_fanout_replay_and_private_values_atomic
             &registry_platform_hooks::EnvelopeLimits::default(),
         )
         .unwrap();
-        assert_eq!(envelope.subject.record_revision, row.get::<_, i64>(2));
-        // A Proposal is addressed by its public resource path; only record
-        // hooks carry a hashed record reference.
+        assert_eq!(envelope.subject.revision(), row.get::<_, i64>(2));
+        // A Proposal has its own closed subject family. Only record hooks use
+        // the record field names and hashed reference.
         assert_eq!(
-            envelope.subject.record_reference,
-            format!("/v1/proposals/{}", draft.id())
+            envelope.subject,
+            registry_platform_hooks::EventSubject::proposal(
+                format!("/v1/proposals/{}", draft.id()),
+                row.get::<_, i64>(2),
+            )
         );
         assert_eq!(envelope.data.as_object().unwrap().len(), 12);
     }

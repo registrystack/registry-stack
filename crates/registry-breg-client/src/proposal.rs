@@ -22,6 +22,7 @@ pub enum BRegRecoveryHint {
     Refresh,
     Revise,
     Retry,
+    Rebase,
     CorrectInput,
     ReceiptOnly,
 }
@@ -34,7 +35,7 @@ pub enum BRegAvailabilityReason {
     ReviewChangesRequested,
     ReviewEnded,
     StaleRevision,
-    ContractChanged,
+    PackageChanged,
     DependencyOutage,
     InvalidInput,
     AlreadyApplied,
@@ -154,7 +155,7 @@ pub enum BRegProposalApplicationMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegProposalApplicationReason {
-    ContractChanged,
+    PackageChanged,
     DependencyOutage,
     LeaseExpired,
     ApplicationRefused,
@@ -167,6 +168,7 @@ pub enum BRegProposalApplicationReason {
 #[serde(rename_all = "kebab-case")]
 pub enum BRegApplicationRecoveryHint {
     Retry,
+    Rebase,
     CorrectInput,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2051,18 +2053,16 @@ fn valid_application_shape(
     recovery: Option<BRegApplicationRecoveryHint>,
     automatic_retry: Option<&BRegProposalAutomaticRetry>,
 ) -> bool {
-    use BRegProposalApplicationReason::{DependencyOutage, LeaseExpired};
+    use BRegProposalApplicationReason::{DependencyOutage, LeaseExpired, PackageChanged};
     use BRegProposalApplicationState::{
         Applied, Applying, AwaitingReview, Blocked, Cancelled, Pending, Rejected,
     };
     let open = matches!(state, AwaitingReview | Pending | Applying | Blocked);
     let paired = recovery
-        == reason.map(|reason| {
-            if matches!(reason, DependencyOutage | LeaseExpired) {
-                BRegApplicationRecoveryHint::Retry
-            } else {
-                BRegApplicationRecoveryHint::CorrectInput
-            }
+        == reason.map(|reason| match reason {
+            DependencyOutage | LeaseExpired => BRegApplicationRecoveryHint::Retry,
+            PackageChanged => BRegApplicationRecoveryHint::Rebase,
+            _ => BRegApplicationRecoveryHint::CorrectInput,
         });
     let reason = reason.is_some();
     paired
@@ -2173,9 +2173,9 @@ fn canonical_proposal_id(value: &str) -> bool {
 /// An available link carries no reason, and an unavailable one carries a
 /// recovery BReg pairs with its reason: a rejected review is revised while
 /// the Proposal is still submitted and read from its receipt once it is
-/// rejected, and a changed contract is refreshed for Revise and corrected
-/// while the draft is blocked. A closed Proposal names its state on every
-/// unavailable link, and an open one never gives either closed reason.
+/// rejected, and a changed package is rebased. A closed Proposal names its
+/// state on every unavailable link, and an open one never gives either closed
+/// reason.
 fn valid_availability(
     availability: &BRegAvailability,
     revision: u64,
@@ -2206,10 +2206,7 @@ fn valid_availability(
                         Reason::StaleRevision | Reason::AlreadyApplied,
                         Recovery::ReceiptOnly
                     )
-                    | (
-                        Reason::ContractChanged,
-                        Recovery::Refresh | Recovery::CorrectInput
-                    )
+                    | (Reason::PackageChanged, Recovery::Rebase)
                     | (Reason::DependencyOutage, Recovery::Retry)
                     | (Reason::InvalidInput, Recovery::CorrectInput)
             ),
@@ -2364,11 +2361,8 @@ fn unavailable(availability: &BRegAvailability) -> BaseRegistryClientError {
         (Some(Reason::AlreadyApplied), Some(Recovery::ReceiptOnly)) => {
             named!("already-applied", "receipt-only")
         }
-        (Some(Reason::ContractChanged), Some(Recovery::Refresh)) => {
-            named!("contract-changed", "refresh")
-        }
-        (Some(Reason::ContractChanged), Some(Recovery::CorrectInput)) => {
-            named!("contract-changed", "correct-input")
+        (Some(Reason::PackageChanged), Some(Recovery::Rebase)) => {
+            named!("package-changed", "rebase")
         }
         (Some(Reason::DependencyOutage), Some(Recovery::Retry)) => {
             named!("dependency-outage", "retry")
@@ -3592,6 +3586,42 @@ mod tests {
             }
             let decoded = BRegProposal::from_slice(&serde_json::to_vec(&erased).unwrap()).unwrap();
             assert!(decoded.application_status().is_none(), "{state}");
+        }
+    }
+
+    #[test]
+    fn package_change_requires_rebase_in_closed_recovery_vocabularies() {
+        let mut value = application_status_document("blocked", "manual");
+        value["blockedReason"] = json!("package-changed");
+        value["applicationStatus"]["reason"] = json!("package-changed");
+        value["applicationStatus"]["recovery"] = json!("rebase");
+        value["links"]["apply"]["availability"] = json!({
+            "available":false,
+            "observedRevision":2,
+            "reason":"package-changed",
+            "recovery":"rebase"
+        });
+        let decoded = BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap())
+            .expect("the canonical package block is a typed rebase recovery");
+        assert_eq!(
+            serde_json::to_value(decoded.application_status().unwrap()).unwrap(),
+            value["applicationStatus"]
+        );
+
+        for (reason, recovery) in [
+            ("contract-changed", "rebase"),
+            ("package-changed", "correct-input"),
+            ("package-changed", "refresh"),
+        ] {
+            let mut stale = value.clone();
+            stale["applicationStatus"]["reason"] = json!(reason);
+            stale["applicationStatus"]["recovery"] = json!(recovery);
+            stale["links"]["apply"]["availability"]["reason"] = json!(reason);
+            stale["links"]["apply"]["availability"]["recovery"] = json!(recovery);
+            assert!(
+                BRegProposal::from_slice(&serde_json::to_vec(&stale).unwrap()).is_err(),
+                "{reason}/{recovery}"
+            );
         }
     }
 

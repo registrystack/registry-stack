@@ -56,7 +56,7 @@ enum Mode {
     TraceMissing,
     TraceUppercase,
     TraceDuplicate,
-    BadProblem,
+    ChangedProblemProse,
     UnknownProblem(u16, Option<ProblemChange>),
     Redirect,
     ConcealedNotFound,
@@ -101,7 +101,7 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
 
     match state.mode {
         Mode::Redirect => redirect_response(),
-        Mode::BadProblem => malformed_problem(),
+        Mode::ChangedProblemProse => changed_problem_prose(),
         Mode::UnknownProblem(status, change) => unknown_problem(status, change),
         Mode::ConcealedNotFound => registered_problem(BRegProblemCode::ResourceNotFound),
         Mode::TraceMissing => response(
@@ -291,7 +291,7 @@ fn meta() -> Value {
     json!({
         "registryIdentifier": "business-registry",
         "datasetIdentifier": "legal-entities",
-        "entityTypeIdentifier": "company",
+        "recordTypeIdentifier": "company",
     })
 }
 
@@ -326,11 +326,11 @@ fn registered_problem(code: BRegProblemCode) -> Response<Body> {
     response
 }
 
-fn malformed_problem() -> Response<Body> {
+fn changed_problem_prose() -> Response<Body> {
     let mut response = response(
         StatusCode::NOT_FOUND,
         "application/problem+json",
-        br#"{"type":"https://id.registrystack.org/problems/registry-breg/resource/not_found","title":"Wrong known title","status":404,"detail":"The requested resource was not found.","code":"resource.not_found","traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}"#,
+        br#"{"type":"https://id.registrystack.org/problems/registry-breg/resource/not_found","title":"Changed bounded title canary","status":404,"detail":"Changed bounded detail canary.","code":"resource.not_found","traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}"#,
         Some(TRACEPARENT),
     );
     response
@@ -531,7 +531,7 @@ async fn breg_paths_queries_credentials_and_record_representations_are_product_e
         .await
         .expect("metadata");
     client
-        .entity_schema("company", Some("public"))
+        .record_schema("company", Some("public"))
         .await
         .expect("schema");
 
@@ -792,7 +792,7 @@ enum Call {
 }
 
 #[tokio::test]
-async fn trace_and_problem_contracts_are_exact_and_concealment_has_no_fallback() {
+async fn trace_contract_is_exact_and_registered_problem_prose_is_not_identity() {
     for mode in [
         Mode::TraceMissing,
         Mode::TraceUppercase,
@@ -809,18 +809,17 @@ async fn trace_and_problem_contracts_are_exact_and_concealment_has_no_fallback()
         ));
     }
 
-    let (client, _) = test_client(Mode::BadProblem, None, 1024).await;
+    let (client, _) = test_client(Mode::ChangedProblemProse, None, 1024).await;
     let error = client
         .health()
         .await
-        .expect_err("malformed problem refused");
-    assert!(matches!(
-        error,
-        BaseRegistryClientError::Protocol {
-            failure: BRegProtocolFailure::Problem,
-            ..
-        }
-    ));
+        .expect_err("registered problem remains an error");
+    assert_eq!(
+        error.problem_code(),
+        Some(BRegProblemCode::ResourceNotFound)
+    );
+    let rendered = format!("{error:?}: {error}");
+    assert!(!rendered.contains("canary"));
 
     let (client, captured) = test_client(Mode::ConcealedNotFound, None, 1024).await;
     let error = client
@@ -912,7 +911,6 @@ async fn unknown_problem_fallback_preserves_envelope_and_known_code_validation()
         ProblemChange::Trace,
         ProblemChange::Type,
         ProblemChange::CodeType,
-        ProblemChange::KnownCode,
         ProblemChange::DuplicateCode,
         ProblemChange::DuplicateExtension,
         ProblemChange::LongTitle,
@@ -931,6 +929,20 @@ async fn unknown_problem_fallback_preserves_envelope_and_known_code_validation()
             }
         ));
     }
+    let (client, _) = test_client(
+        Mode::UnknownProblem(422, Some(ProblemChange::KnownCode)),
+        None,
+        8192,
+    )
+    .await;
+    let error = client
+        .health()
+        .await
+        .expect_err("registered Action refusal remains an error");
+    assert_eq!(error.problem_code(), Some(BRegProblemCode::ActionRefused));
+    let rendered = format!("{error:?}: {error}");
+    assert!(!rendered.contains("Future refusal"));
+    assert!(!rendered.contains("canary future detail"));
     let (client, _) = test_client(
         Mode::UnknownProblem(422, Some(ProblemChange::HugeBody)),
         None,

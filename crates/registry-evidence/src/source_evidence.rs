@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use registry_evidence_client::{
     EvidenceDefinitionsDocument, EvidenceRequestSpec, EvidenceResponseFormat,
     PreparedEvidenceRequest, RetainedEvidenceVerification, SelectorValue, SelectorValueOrigin,
@@ -220,10 +221,13 @@ impl EvidenceSourceConfig {
         &self,
         verification: &RetainedEvidenceVerification,
         response: &[u8],
-    ) -> Result<Value, SourceError> {
+    ) -> Result<(Value, DateTime<Utc>), SourceError> {
         let verified = verification
             .verify(response)
             .map_err(|_| SourceError::Verification)?;
+        let valid_until = DateTime::parse_from_rfc3339(&verified.evidence().valid_until)
+            .map_err(|_| SourceError::Verification)?
+            .with_timezone(&Utc);
         let [definition] = self.contract.definitions.as_slice() else {
             return Err(SourceError::InvalidPlan);
         };
@@ -242,7 +246,7 @@ impl EvidenceSourceConfig {
                 );
             }
         }
-        Ok(json!({"values": values}))
+        Ok((json!({"values": values}), valid_until))
     }
 }
 

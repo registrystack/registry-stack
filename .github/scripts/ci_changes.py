@@ -113,6 +113,7 @@ SHARDS = {
         "registry-rstack",
         "registry-cli-docs",
         "registry-cli-reference",
+        "registry-cli-report",
         "registry-language-server",
     ),
     "render": ("registry-render", "registry-render-client", "registry-render-client-node", "registry-render-client-py"),

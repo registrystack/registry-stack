@@ -156,8 +156,8 @@ impl BaseRegistryClient {
         })
     }
 
-    /// Retrieve one caller-filtered entity schema as inert bounded bytes.
-    pub async fn entity_schema(
+    /// Retrieve one caller-filtered record schema as inert bounded bytes.
+    pub async fn record_schema(
         &self,
         record_type_identifier: &str,
         access_profile: Option<&str>,
@@ -173,11 +173,11 @@ impl BaseRegistryClient {
     /// Read one canonical UUID record as a Registry Record v1 single envelope.
     pub async fn get_record(
         &self,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         options: &BRegRecordOptions,
     ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         validate_record_uuid(record_identifier)?;
         let mut pairs = Vec::new();
         options.append_get_query(&mut pairs);
@@ -186,7 +186,7 @@ impl BaseRegistryClient {
         let format = options.format_value();
         let wire = self
             .get(
-                &["v1", "records", entity_route, record_identifier],
+                &["v1", "records", record_route, record_identifier],
                 &pairs,
                 format.media_type(),
                 Credential::Optional,
@@ -199,16 +199,16 @@ impl BaseRegistryClient {
     /// Retrieve the first page of one Base Registry Engine record collection.
     pub async fn list_records(
         &self,
-        entity_route: &str,
+        record_route: &str,
         request: &BRegListRequest,
     ) -> Result<BRegComplete<BRegPage<RegistryRecordCollectionResponse>>, BaseRegistryClientError>
     {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let pairs = request
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
         self.collection_page(
-            entity_route,
+            record_route,
             &pairs,
             request.record_options().format_value(),
             request.record_options().access_profile_value(),
@@ -239,18 +239,18 @@ impl BaseRegistryClient {
     /// Read one direct record as a native GeoJSON Feature.
     pub async fn get_geojson_record(
         &self,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         options: &BRegGeoJsonOptions,
     ) -> Result<BRegComplete<BRegGeoJsonFeature>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         validate_record_uuid(record_identifier)?;
         let pairs = options
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
         let wire = self
             .get(
-                &["v1", "records", entity_route, record_identifier],
+                &["v1", "records", record_route, record_identifier],
                 &pairs,
                 GEOJSON_MEDIA_TYPE,
                 Credential::Optional,
@@ -263,14 +263,14 @@ impl BaseRegistryClient {
     /// Retrieve the first page of one direct native GeoJSON collection.
     pub async fn list_geojson_records(
         &self,
-        entity_route: &str,
+        record_route: &str,
         request: &BRegGeoJsonListRequest,
     ) -> Result<BRegComplete<BRegGeoJsonPage>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let pairs = request
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
-        self.geojson_page(entity_route, &pairs, request.access_profile(), None)
+        self.geojson_page(record_route, &pairs, request.access_profile(), None)
             .await
     }
 
@@ -294,14 +294,14 @@ impl BaseRegistryClient {
     /// Retrieve the first page of the effective-time `:current` collection.
     pub async fn list_current_records(
         &self,
-        entity_route: &str,
+        record_route: &str,
         request: &BRegCurrentListRequest,
     ) -> Result<BRegComplete<BRegCurrentPage>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let pairs = request
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
-        let route = format!("{entity_route}:current");
+        let route = format!("{record_route}:current");
         let complete = self
             .record_collection(&route, &pairs, request.format())
             .await?;
@@ -312,7 +312,7 @@ impl BaseRegistryClient {
             .as_deref()
             .map(|cursor| {
                 BRegCurrentContinuation::try_from_parts(
-                    entity_route,
+                    record_route,
                     cursor,
                     request.format(),
                     request.access_profile().map(str::to_owned),
@@ -373,14 +373,14 @@ impl BaseRegistryClient {
     /// Retrieve the first page of one effective-time `:as-of` collection.
     pub async fn list_records_as_of(
         &self,
-        entity_route: &str,
+        record_route: &str,
         request: &BRegAsOfListRequest,
     ) -> Result<BRegComplete<BRegAsOfPage>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let pairs = request
             .as_of_query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
-        let route = format!("{entity_route}:as-of");
+        let route = format!("{record_route}:as-of");
         let complete = self
             .record_collection(&route, &pairs, request.format())
             .await?;
@@ -391,7 +391,7 @@ impl BaseRegistryClient {
             .as_deref()
             .map(|cursor| {
                 BRegAsOfContinuation::try_from_parts(
-                    entity_route,
+                    record_route,
                     cursor,
                     request.format(),
                     request.access_profile().map(str::to_owned),
@@ -454,14 +454,14 @@ impl BaseRegistryClient {
     /// Retrieve the first page of one retained `:snapshot` collection.
     pub async fn list_snapshot_records(
         &self,
-        entity_route: &str,
+        record_route: &str,
         request: &BRegSnapshotListRequest,
     ) -> Result<BRegComplete<BRegSnapshotPage>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let pairs = request
             .snapshot_query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
-        let route = format!("{entity_route}:snapshot");
+        let route = format!("{record_route}:snapshot");
         let complete = self
             .record_collection(&route, &pairs, request.format())
             .await?;
@@ -480,7 +480,7 @@ impl BaseRegistryClient {
             .as_deref()
             .map(|cursor| {
                 BRegSnapshotContinuation::try_from_parts(
-                    entity_route,
+                    record_route,
                     cursor,
                     request.format(),
                     request.access_profile().map(str::to_owned),
@@ -553,20 +553,20 @@ impl BaseRegistryClient {
     /// Retrieve the first page of one configured relationship collection.
     pub async fn list_relationship_records(
         &self,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         path_route: &str,
         request: &BRegRelationshipListRequest,
     ) -> Result<BRegComplete<BRegRelationshipPage>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         validate_record_uuid(record_identifier)?;
-        validate_entity_route(path_route)?;
+        validate_record_route(path_route)?;
         let pairs = request
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
         let complete = self
             .record_collection_segments(
-                &["v1", "records", entity_route, record_identifier, path_route],
+                &["v1", "records", record_route, record_identifier, path_route],
                 &pairs,
                 request.format(),
             )
@@ -578,7 +578,7 @@ impl BaseRegistryClient {
             .as_deref()
             .map(|cursor| {
                 BRegRelationshipContinuation::try_from_parts(
-                    entity_route,
+                    record_route,
                     record_identifier,
                     path_route,
                     cursor,
@@ -652,14 +652,14 @@ impl BaseRegistryClient {
     /// Resolve one compiled selector to exactly one Registry Record.
     pub async fn lookup_record(
         &self,
-        entity_route: &str,
+        record_route: &str,
         request: &BRegLookupRequest,
     ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let pairs = request
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
-        let route = format!("{entity_route}:lookup");
+        let route = format!("{record_route}:lookup");
         let url = self.url_with_query(&["v1", "records", &route], &pairs)?;
         let format = request.record_options().format_value();
         let mut builder = self
@@ -690,17 +690,17 @@ impl BaseRegistryClient {
     /// caller explicitly selects the history profile and owns presentation.
     pub async fn record_revisions(
         &self,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         access_profile: Option<&str>,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         validate_record_uuid(record_identifier)?;
         self.raw_document(
             &[
                 "v1",
                 "records",
-                entity_route,
+                record_route,
                 record_identifier,
                 "revisions",
             ],
@@ -712,12 +712,12 @@ impl BaseRegistryClient {
     /// Retrieve one exact positive revision as a Registry Record single envelope.
     pub async fn get_record_revision(
         &self,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         revision: u64,
         options: &BRegRecordOptions,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         validate_record_uuid(record_identifier)?;
         if revision == 0 || revision > i64::MAX as u64 {
             return Err(BaseRegistryClientError::invalid_request(
@@ -735,7 +735,7 @@ impl BaseRegistryClient {
                 &[
                     "v1",
                     "records",
-                    entity_route,
+                    record_route,
                     record_identifier,
                     "revisions",
                     &revision,
@@ -771,7 +771,7 @@ impl BaseRegistryClient {
     /// revision and creation time.
     pub async fn event_record_creation_revision(
         &self,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         access_profile: Option<&str>,
     ) -> Result<Option<BRegCreationRevision>, BaseRegistryClientError> {
@@ -782,7 +782,7 @@ impl BaseRegistryClient {
                 .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
         }
         let document = match self
-            .get_record_revision(entity_route, record_identifier, 1, &options)
+            .get_record_revision(record_route, record_identifier, 1, &options)
             .await
         {
             Ok(document) => document,
@@ -1115,17 +1115,17 @@ impl BaseRegistryClient {
 
     async fn collection_page(
         &self,
-        entity_route: &str,
+        record_route: &str,
         pairs: &[(String, String)],
         format: BRegRecordFormat,
         access_profile: Option<&str>,
         expected: Option<&BRegContinuation>,
     ) -> Result<BRegComplete<BRegPage<RegistryRecordCollectionResponse>>, BaseRegistryClientError>
     {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let wire = self
             .get(
-                &["v1", "records", entity_route],
+                &["v1", "records", record_route],
                 pairs,
                 format.media_type(),
                 Credential::Optional,
@@ -1146,7 +1146,7 @@ impl BaseRegistryClient {
             .as_ref()
             .map(|cursor| {
                 BRegContinuation::try_from_parts(
-                    entity_route,
+                    record_route,
                     cursor,
                     format,
                     access_profile.map(str::to_owned),
@@ -1200,15 +1200,15 @@ impl BaseRegistryClient {
 
     async fn geojson_page(
         &self,
-        entity_route: &str,
+        record_route: &str,
         pairs: &[(String, String)],
         access_profile: Option<&str>,
         _expected: Option<&BRegGeoJsonContinuation>,
     ) -> Result<BRegComplete<BRegGeoJsonPage>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let wire = self
             .get(
-                &["v1", "records", entity_route],
+                &["v1", "records", record_route],
                 pairs,
                 GEOJSON_MEDIA_TYPE,
                 Credential::Optional,
@@ -1224,7 +1224,7 @@ impl BaseRegistryClient {
             .as_deref()
             .map(|cursor| {
                 BRegGeoJsonContinuation::try_from_parts(
-                    entity_route,
+                    record_route,
                     cursor,
                     access_profile.map(str::to_owned),
                 )
@@ -2211,13 +2211,13 @@ fn decode_breg_single(
     };
     validate_breg_records(
         std::slice::from_ref(&value.data),
-        &value.meta.entity_type_identifier,
+        &value.meta.record_type_identifier,
         status,
         &trace_id,
     )?;
     validate_profile_link(
         link.as_deref(),
-        &value.meta.entity_type_identifier,
+        &value.meta.record_type_identifier,
         deployment_prefix,
         status,
         &trace_id,
@@ -2242,13 +2242,13 @@ fn decode_breg_collection(
     };
     validate_breg_records(
         &value.items,
-        &value.meta.entity_type_identifier,
+        &value.meta.record_type_identifier,
         status,
         &trace_id,
     )?;
     validate_profile_link(
         link.as_deref(),
-        &value.meta.entity_type_identifier,
+        &value.meta.record_type_identifier,
         deployment_prefix,
         status,
         &trace_id,
@@ -2279,7 +2279,7 @@ fn decode_registry_record(
 
 fn validate_breg_records(
     records: &[RegistryRecord],
-    _entity_type_identifier: &str,
+    _record_type_identifier: &str,
     status: u16,
     trace_id: &TraceId,
 ) -> Result<(), BaseRegistryClientError> {
@@ -2329,8 +2329,8 @@ pub(crate) fn access_profile_query(
     Ok(pairs)
 }
 
-pub(crate) fn validate_entity_route(value: &str) -> Result<(), BaseRegistryClientError> {
-    validate_breg_identifier(value, "the Base Registry Engine entity route is invalid")
+pub(crate) fn validate_record_route(value: &str) -> Result<(), BaseRegistryClientError> {
+    validate_breg_identifier(value, "the Base Registry Engine record route is invalid")
 }
 
 pub(crate) fn validate_breg_identifier(
@@ -2556,18 +2556,12 @@ fn validate_mutation_record(
 ) -> Result<(), BaseRegistryClientError> {
     let value = &complete.value;
     let record = &value.data;
-    let exact_snapshot = record.extensions.len() == 1
-        && record
-            .extensions
-            .get("snapshot")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(valid_snapshot_reference);
     if value.meta.registry_identifier != expected_registry
         || value.meta.dataset_identifier != expected_dataset
-        || value.meta.entity_type_identifier != expected_entity
+        || value.meta.record_type_identifier != expected_entity
         || !value.extensions.is_empty()
         || !value.meta.extensions.is_empty()
-        || !exact_snapshot
+        || !record.extensions.is_empty()
     {
         return Err(body_failure(
             status.as_u16(),
@@ -2714,11 +2708,12 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
     {
         return problem_failure(status, trace_id);
     }
+    if !valid_problem_text(&document.title, 128) || !valid_problem_text(&document.detail, 256) {
+        return problem_failure(status, trace_id);
+    }
     let code = BRegProblemCode::ALL.into_iter().find(|candidate| {
         document.code == candidate.code()
             && document.status == candidate.status()
-            && document.title == candidate.title()
-            && candidate.accepts_detail(&document.detail)
             && document.type_uri == candidate.type_uri()
     });
     let Some(code) = code else {
@@ -2750,6 +2745,8 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         || extensions.reason_code.is_some()
             != (code == BRegProblemCode::StatisticalDatasetVersionWithdrawn)
         || extensions.guard_reason.is_some() && code != BRegProblemCode::ActionGuardFailed
+        || code == BRegProblemCode::ActionRefused
+            && !crate::error::bounded_refusal_label(&document.detail)
         || (code == BRegProblemCode::StatisticalDatasetReleaseRefused
             && !extensions
                 .refusal_code
@@ -2776,15 +2773,16 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
     }
 }
 
+fn valid_problem_text(value: &str, maximum_chars: usize) -> bool {
+    value.chars().count() <= maximum_chars && !value.chars().any(char::is_control)
+}
+
 fn valid_unrecognized_problem(document: &ProblemDocument) -> bool {
-    let bounded_text = |text: &str, maximum| {
-        text.chars().count() <= maximum && !text.chars().any(char::is_control)
-    };
     !document.code.is_empty()
-        && bounded_text(&document.code, 128)
-        && bounded_text(&document.title, 128)
-        && bounded_text(&document.detail, 256)
-        && bounded_text(&document.type_uri, 256)
+        && valid_problem_text(&document.code, 128)
+        && valid_problem_text(&document.title, 128)
+        && valid_problem_text(&document.detail, 256)
+        && valid_problem_text(&document.type_uri, 256)
         && document.type_uri
             == format!(
                 "https://id.registrystack.org/problems/registry-breg/{}",
@@ -3032,7 +3030,7 @@ fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
 }
 
 /// The fixed query parameters a `query.invalid` refusal may name.
-const BREG_QUERY_PARAMETERS: [&str; 15] = [
+const BREG_QUERY_PARAMETERS: [&str; 26] = [
     "$select",
     "$filter",
     "$orderby",
@@ -3044,10 +3042,21 @@ const BREG_QUERY_PARAMETERS: [&str; 15] = [
     "asOf",
     "snapshot",
     "validAt",
-    "requestHistoryAfterProposalVersion",
     "from",
     "to",
     "status",
+    "limit",
+    "action",
+    "owner",
+    "state",
+    "turn",
+    "pendingManualApplication",
+    "target",
+    "cursor",
+    "top",
+    "inputDigest",
+    "after",
+    "query",
 ];
 
 fn valid_statistical_dimension_problem_path(path: &str) -> bool {
@@ -3079,7 +3088,7 @@ fn valid_record_request_problem_path(path: &str) -> bool {
     let segments = remainder.split('/').collect::<Vec<_>>();
     match segments.as_slice() {
         ["items", index, rest @ ..] if valid_problem_index(index) => match rest {
-            [] | ["operation" | "recordId" | "ifMatch" | "patch"] => true,
+            [] | ["operation" | "recordIdentifier" | "ifMatch" | "patch"] => true,
             ["patch", operation, member @ ..] => valid_patch_problem_path(operation, member),
             data => valid_data_problem_path(data),
         },

@@ -61,7 +61,7 @@ Confirm every consumer trusts the successor before you switch the signer.
 
 In `target.yaml`, set `signer.keyVersion` to the successor key version and `signer.publicJwkFile`
 to the successor's file. Allow both versions in the proxy policy, for example
-`"key_version" = [12, 13]`, and keep `min_encryption_version` at or below the predecessor while
+`"key_version" = ["12", "13"]`, and keep `min_encryption_version` at or below the predecessor while
 replicas still sign with it. Then package; `package` runs the fixtures:
 
 ```sh

@@ -724,12 +724,13 @@ pub(crate) enum BatchOpenError {
 /// Open the sealed members of one batch answer's results at a serve edge.
 ///
 /// Fresh batch bodies, retained ingestion receipts, and their replays all
-/// name each record by `id` beside a `data` member map keyed by API name;
+/// name each record by `recordIdentifier` beside a `domainData` member map
+/// keyed by API name;
 /// this is the one per-record opening for every such results array. Entities
-/// without encrypted fields and results without a `data` map never touch key
-/// state, which resolves lazily on the first map that needs opening. Returns
-/// whether any map was opened, so a caller can serve unopened bytes through
-/// exactly as stored.
+/// without encrypted fields and results without a `domainData` map never touch
+/// key state, which resolves lazily on the first map that needs opening.
+/// Returns whether any map was opened, so a caller can serve unopened bytes
+/// through exactly as stored.
 ///
 /// `retirement_possible` marks a release whose stored answer was produced
 /// under a package the database no longer holds active, the one situation a
@@ -751,12 +752,12 @@ pub(crate) fn open_batch_result_members(
     for item in results {
         if entity_opens_members {
             let record_id = item
-                .get("id")
+                .get("recordIdentifier")
                 .and_then(Value::as_str)
                 .filter(|identifier| !identifier.is_empty())
                 .ok_or(BatchOpenError::OpenFailed)?
                 .to_owned();
-            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+            if let Some(data) = item.get_mut("domainData").and_then(Value::as_object_mut) {
                 let service = service.ok_or(BatchOpenError::KeyStateUnavailable)?;
                 open_member_map(entity, &record_id, data, service, true)
                     .map_err(|_| BatchOpenError::OpenFailed)?;
@@ -764,7 +765,7 @@ pub(crate) fn open_batch_result_members(
             }
         }
         if retirement_possible {
-            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+            if let Some(data) = item.get_mut("domainData").and_then(Value::as_object_mut) {
                 // A member the entity opens itself now holds its opened
                 // plaintext, so only the members the pass would leave
                 // untouched can decide between caller data and ciphertext a

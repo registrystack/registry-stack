@@ -452,7 +452,7 @@ fn assert_registry_record(
     assert!(response.json_ld_context.is_none());
     assert_eq!(response.meta.registry_identifier, "asset-site-placement");
     assert_eq!(response.meta.dataset_identifier, "asset-site-placement");
-    assert_eq!(response.meta.entity_type_identifier, entity_identifier);
+    assert_eq!(response.meta.record_type_identifier, entity_identifier);
     assert_eq!(response.data.revision_identifier, revision_identifier);
     assert_eq!(
         serde_json::to_value(&response.data.domain_data)
@@ -703,7 +703,7 @@ fn assert_profile_link(headers: &axum::http::HeaderMap) {
 }
 
 fn assert_shared_single(document: &Value, gold: &Value, dataset: &Value, json_ld: bool) {
-    let (dataset_identifier, entity_type_identifier) = server_resource_identifiers(dataset);
+    let (dataset_identifier, record_type_identifier) = server_resource_identifiers(dataset);
     assert_eq!(gold["profileIdentifier"], PROFILE_IDENTIFIER);
     assert_eq!(
         document["meta"]["registryIdentifier"],
@@ -711,8 +711,8 @@ fn assert_shared_single(document: &Value, gold: &Value, dataset: &Value, json_ld
     );
     assert_eq!(document["meta"]["datasetIdentifier"], dataset_identifier);
     assert_eq!(
-        document["meta"]["entityTypeIdentifier"],
-        entity_type_identifier
+        document["meta"]["recordTypeIdentifier"],
+        record_type_identifier
     );
     assert_eq!(
         document["data"]["revisionIdentifier"],
@@ -733,7 +733,7 @@ fn assert_shared_single(document: &Value, gold: &Value, dataset: &Value, json_ld
 }
 
 fn assert_shared_collection(document: &Value, gold: &Value, dataset: &Value, json_ld: bool) {
-    let (dataset_identifier, entity_type_identifier) = server_resource_identifiers(dataset);
+    let (dataset_identifier, record_type_identifier) = server_resource_identifiers(dataset);
     assert_eq!(gold["profileIdentifier"], PROFILE_IDENTIFIER);
     assert_eq!(
         document["meta"]["registryIdentifier"],
@@ -741,8 +741,8 @@ fn assert_shared_collection(document: &Value, gold: &Value, dataset: &Value, jso
     );
     assert_eq!(document["meta"]["datasetIdentifier"], dataset_identifier);
     assert_eq!(
-        document["meta"]["entityTypeIdentifier"],
-        entity_type_identifier
+        document["meta"]["recordTypeIdentifier"],
+        record_type_identifier
     );
     let items = document["items"].as_array().expect("collection items");
     assert_eq!(items.len(), 1);
@@ -858,7 +858,7 @@ fn assert_meta_constant_mutations_are_rejected(validator: &JSONSchema, document:
     for member in [
         "registryIdentifier",
         "datasetIdentifier",
-        "entityTypeIdentifier",
+        "recordTypeIdentifier",
     ] {
         let mut mutated = document.clone();
         mutated["meta"][member] = json!(format!("wrong-{member}"));

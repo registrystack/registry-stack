@@ -153,9 +153,7 @@ mod tests {
             )
             .unwrap();
             let explained = serde_json::to_value(explained).unwrap();
-            let stages = explained["data"]["reviewPolicies"][0]["stages"]
-                .as_array()
-                .unwrap();
+            let stages = explained["reviewPolicies"][0]["stages"].as_array().unwrap();
             assert_eq!(
                 stages[0]["negativeDecisions"],
                 if pattern == "technical-check-then-authorization" {

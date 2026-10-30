@@ -10,7 +10,6 @@
 
 use std::io::Write as _;
 
-use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::{Map, Value};
 
 /// The operation completed. A report may still carry warnings or an
@@ -113,7 +112,10 @@ pub(crate) fn failure(command: &str, exit: u8, diagnostics: Vec<Value>) -> Value
 
 /// Render one report on a single line, envelope members first.
 pub(crate) fn render(report: &Value) -> String {
-    serde_json::to_string(&Ordered(report)).expect("a JSON value always serializes")
+    let report =
+        registry_cli_report::Report::new(report, registry_platform_buildinfo::DISPLAY_VERSION)
+            .expect("an Evidence command supplies a valid report envelope");
+    serde_json::to_string(&report).expect("a JSON value always serializes")
 }
 
 /// Write one report and its trailing newline to standard output.
@@ -121,30 +123,6 @@ pub(crate) fn print(report: &Value) -> std::io::Result<()> {
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "{}", render(report))?;
     stdout.flush()
-}
-
-/// Serialize the top-level object with the envelope members first, whatever
-/// order the underlying map keeps.
-struct Ordered<'a>(&'a Value);
-
-impl Serialize for Ordered<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let Value::Object(members) = self.0 else {
-            return self.0.serialize(serializer);
-        };
-        let mut map = serializer.serialize_map(Some(members.len()))?;
-        for key in HEAD {
-            if let Some(value) = members.get(key) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        for (key, value) in members {
-            if !HEAD.contains(&key.as_str()) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        map.end()
-    }
 }
 
 #[cfg(test)]
@@ -163,7 +141,7 @@ mod tests {
             rendered.starts_with(concat!(
                 r#"{"ok":true,"command":"keygen signing","status":"complete","#,
                 r#""apiVersion":"id.registrystack.org/formats/evidence/ctl-report/v1alpha1","#,
-                r#""kind":"EvidenceCtlReport","alpha":1"#
+                r#""kind":"EvidenceCtlReport","#
             )),
             "{rendered}"
         );
@@ -172,10 +150,15 @@ mod tests {
     #[test]
     fn the_registered_example_is_the_envelope_a_report_writes() {
         let committed = include_str!("../../../products/evidence/examples/formats/ctl-report.json");
-        let committed: Value = serde_json::from_str(committed).expect("example parses");
+        let mut committed: Value = serde_json::from_str(committed).expect("example parses");
+        assert!(committed["version"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        committed["version"] = json!(registry_platform_buildinfo::DISPLAY_VERSION);
+        let rendered = render(&success("check", "complete", json!({"diagnostics": []})));
         assert_eq!(
             committed,
-            success("check", "complete", json!({"diagnostics": []}))
+            serde_json::from_str::<Value>(&rendered).expect("rendered report parses")
         );
     }
 

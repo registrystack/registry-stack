@@ -6,6 +6,8 @@ use registry_coordinator::{
 };
 use serde_json::{json, Value};
 use std::fs;
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 
 const RUNTIME: &str =
     include_str!("../../../products/coordinator/examples/delayed-follow-up/runtime.yaml");
@@ -49,6 +51,78 @@ fn refused(text: &str) -> registry_coordinator::CoordinatorError {
         Ok(_) => panic!("configuration must refuse"),
         Err(error) => error,
     }
+}
+
+#[cfg(unix)]
+fn write_ownership_test_runtime(directory: &Path) -> PathBuf {
+    let path = directory.join("runtime.yaml");
+    fs::write(&path, RUNTIME).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn assert_unsafe_runtime(error: registry_coordinator::CoordinatorError) {
+    let diagnostic = error
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "platform.runtime-config.unsafe-file")
+        .expect("the ownership refusal is reported");
+    assert!(diagnostic
+        .message
+        .contains("owned by root or the runtime user"));
+    assert!(diagnostic
+        .suggested_action
+        .contains("remove group and other write permission"));
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_loader_ownership_accepts_an_owner_writable_file_in_a_private_directory() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_ownership_test_runtime(directory.path());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    RuntimeConfig::load(&path).expect("an owner-writable runtime in a private directory loads");
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_loader_ownership_refuses_a_group_writable_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_ownership_test_runtime(directory.path());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+    let result = RuntimeConfig::load(&path);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let error = match result {
+        Ok(_) => panic!("a group-writable runtime is refused"),
+        Err(error) => error,
+    };
+    assert_unsafe_runtime(error);
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_loader_ownership_refuses_a_group_writable_ancestor() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let writable = directory.path().join("writable");
+    fs::create_dir(&writable).unwrap();
+    fs::set_permissions(&writable, fs::Permissions::from_mode(0o770)).unwrap();
+    let path = write_ownership_test_runtime(&writable);
+    let result = RuntimeConfig::load(&path);
+    fs::set_permissions(&writable, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let error = match result {
+        Ok(_) => panic!("a runtime below a group-writable directory is refused"),
+        Err(error) => error,
+    };
+    assert_unsafe_runtime(error);
 }
 
 fn state_key_versions(active: u32, versions: &[&str]) -> Value {

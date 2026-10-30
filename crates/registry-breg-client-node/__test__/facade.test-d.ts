@@ -122,6 +122,9 @@ verifyHookDelivery({ method: 'POST', path: '/', headers: { 'ce-id': 1 }, body: B
 
 const options: ListOptions = { top: 25, filter: 'status eq active', count: true, bbox: ['100.1', '13.1', '100.2', '13.2'] }
 client.listRecords('people', options)
+client.recordSchema('person')
+// @ts-expect-error The entity-named schema method is retired.
+client.entitySchema('person')
 client.createRecord(create, { name: 'Ada' }, 'create-person-1')
 client.patchRecord(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', [
   { op: 'replace', field: 'name', value: 'Grace' },
@@ -195,11 +198,17 @@ BRegPreparedCreate.fromBytes(preparedCreate.toBytes())
 client.recoverCreate(create, preparedCreate)
 client.executeRecoveredCreate(create, recoveredCreate)
 client.executeRecoveredCreateJson(create, recoveredCreate)
-client.startProposal(immediateAction, '{}', 'proposal-start')
+client.startProposal(immediateAction, {}, 'proposal-start')
 client.executeRecoveredProposalStart(immediateAction, recoveredAction)
 client.readProposal(proposal)
+client.listProposals(metadata.selectProposals('author'), {})
+client.prepareProposal(proposal, 'submit', {}, 'proposal-submit').toBytes()
+// @ts-expect-error Proposal methods accept objects, not JSON text.
+client.startProposal(immediateAction, '{}', 'proposal-start')
+// @ts-expect-error Proposal methods accept objects, not JSON text.
 client.listProposals(metadata.selectProposals('author'), '{}')
-client.prepareProposal(proposal, 'submit', '{}', 'proposal-submit').toBytes()
+// @ts-expect-error Proposal methods accept objects, not JSON text.
+client.prepareProposal(proposal, 'submit', '{}', 'proposal-submit')
 BRegPreparedProposal.fromBytes(preparedProposal.toBytes())
 client.recoverProposal(proposal, preparedProposal)
 client.executeProposal(preparedProposal)
@@ -208,10 +217,10 @@ record.data.recordIdentifier.toUpperCase()
 record.data.revisionIdentifier.toUpperCase()
 record.meta.registryIdentifier.toUpperCase()
 record.meta.datasetIdentifier.toUpperCase()
-record.meta.entityTypeIdentifier.toUpperCase()
+record.meta.recordTypeIdentifier.toUpperCase()
 continuation.registryIdentifier.toUpperCase()
 continuation.datasetIdentifier.toUpperCase()
-continuation.entityTypeIdentifier.toUpperCase()
+continuation.recordTypeIdentifier.toUpperCase()
 if (metadata.etag !== null) metadata.etag.toUpperCase()
 
 // @ts-expect-error Direct writes require metadata-selected opaque authority.
@@ -228,7 +237,7 @@ client.continueList({
   skiptoken: 'opaque',
   format: 'json',
   datasetIdentifier: 'people',
-  entityTypeIdentifier: 'person',
+  recordTypeIdentifier: 'person',
 })
 // @ts-expect-error Relay-only record members are not promised by BReg.
 record.data.lifecycleState.toUpperCase()

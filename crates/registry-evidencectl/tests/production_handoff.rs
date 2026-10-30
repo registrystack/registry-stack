@@ -431,7 +431,8 @@ fn explain_refuses_unknown_source_members_without_disclosing_values() {
         .windows(CANARY.len())
         .any(|part| part == CANARY.as_bytes()));
     let report: Value = serde_json::from_slice(&output.stdout).expect("refusal JSON report");
-    assert_eq!(report["status"], "refused");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["outcome"], "refused");
     assert!(report["diagnostics"]
         .as_array()
         .expect("diagnostics array")

@@ -92,7 +92,7 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
     assert_eq!(old["count"], 1);
     assert_eq!(old["meta"]["registryIdentifier"], "history-demo");
     assert_eq!(old["meta"]["datasetIdentifier"], "test-dataset");
-    assert_eq!(old["meta"]["entityTypeIdentifier"], "membership");
+    assert_eq!(old["meta"]["recordTypeIdentifier"], "membership");
     assert!(old.get("@context").is_none());
     assert_eq!(old["items"][0]["recordIdentifier"], MEMBERSHIP);
     assert_eq!(old["items"][0]["revisionIdentifier"], "1");

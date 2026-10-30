@@ -219,6 +219,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "contextProviders": [],
                 "calendars": [],
                 "clocks": [],
+                "futureMember": {"safeToIgnore": True},
             })
 
     def do_POST(self) -> None:  # noqa: N802
@@ -371,6 +372,10 @@ class NativeRequestTests(unittest.TestCase):
         self.server.shutdown()
         self.thread.join()
         self.server.server_close()
+
+    def test_description_ignores_additive_response_members(self) -> None:
+        description = self.client.description("staff-token", "staff")
+        self.assertEqual(description["value"]["projectId"], "fixture")
 
     def test_review_result_feed_preserves_distinct_ids_and_refuses_nil_correlations(self) -> None:
         entry = {

@@ -445,7 +445,11 @@ async fn shape_journey(change: Change) {
             assert!(!apply.available);
             assert_eq!(
                 apply.reason,
-                Some(registry_breg_client::BRegAvailabilityReason::ContractChanged)
+                Some(registry_breg_client::BRegAvailabilityReason::PackageChanged)
+            );
+            assert_eq!(
+                apply.recovery,
+                Some(registry_breg_client::BRegRecoveryHint::Rebase)
             );
             let rebase = current
                 .client

@@ -781,14 +781,6 @@
         {
           "additionalProperties": false,
           "properties": {
-            "capabilities": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
             "function": {
               "type": "string"
             },
@@ -2838,6 +2830,12 @@
         }
       ]
     },
+    "FunctionCapabilitySource": {
+      "enum": [
+        "evidence"
+      ],
+      "type": "string"
+    },
     "FunctionLimitsSource": {
       "additionalProperties": false,
       "properties": {
@@ -2868,7 +2866,7 @@
         "capabilities": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/FunctionCapabilitySource"
           },
           "type": "array",
           "uniqueItems": true

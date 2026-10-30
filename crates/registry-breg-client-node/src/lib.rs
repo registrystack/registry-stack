@@ -23,8 +23,8 @@ use registry_breg_client::{
     BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
     BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
     BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
-    BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
-    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
+    BRegPreparedCreate as CorePreparedCreate, BRegProtocolFailure, BRegRawDocument,
+    BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
     BRegReleaseStatus, BRegSnapshotContinuation, BRegSnapshotContinuationProjection,
     BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding, BRegWithdrawalReason,
@@ -89,10 +89,11 @@ pub struct VerifiedHookDelivery {
 /// Verify a BReg Version 1 hook signature without applying receiver policy.
 #[napi]
 pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDelivery> {
+    let headers = input.headers.into_iter().collect::<Vec<_>>();
     let verified = verify_core_hook_delivery(CoreHookDelivery {
         method: &input.method,
         path: &input.path,
-        headers: &input.headers,
+        headers: &headers,
         body: input.body.as_ref(),
         key: input.key.as_ref(),
     })
@@ -379,6 +380,15 @@ fn token_error_value(error: TokenError) -> Value {
 
 fn client_error(error: BaseRegistryClientError) -> NapiError {
     let outcome_unknown = error.is_outcome_unknown();
+    let kind = error.kind();
+    let status = error.status();
+    let code = error.problem_code().map(|value| value.code().to_owned());
+    let refusal_code = error.refusal_code().map(|value| value.as_str().to_owned());
+    let reason_code = error.reason_code().map(str::to_owned);
+    let guard_reason = error.guard_reason().map(str::to_owned);
+    let field_path = error.field_path().map(|value| value.as_str().to_owned());
+    let constraint = error.constraint().cloned();
+    let trace_id = error.trace_id().map(|value| value.as_str().to_owned());
     let mut value = match error {
         BaseRegistryClientError::Configuration { reason } => {
             json!({"kind": "configuration", "message": reason})
@@ -392,50 +402,24 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             "transportKind": kind.kind(),
             "message": "Base Registry Engine exchange did not complete",
         }),
-        BaseRegistryClientError::Problem {
-            status,
-            code,
-            trace_id,
-            field_path,
-            constraint,
-            refusal_code,
-        } => json!({
-            // app-developer-22: a missing resource is its own kind, not-found,
-            // rather than the generic problem kind every other refusal shares.
-            "kind": match code {
-                BRegProblemCode::ResourceNotFound => "not-found",
-                _ => "problem",
-            },
+        BaseRegistryClientError::Problem { .. } => json!({
+            "kind": kind,
             "status": status,
-            "code": code.code(),
+            "code": code,
             // Problem detail codes travel as bounded strings after their
             // operation-specific vocabulary has been checked by the Rust client.
-            "refusalCode": match code {
-                BRegProblemCode::ActionRefused
-                | BRegProblemCode::StatisticalDatasetReleaseRefused => {
-                    refusal_code.as_ref().map(|value| value.as_str())
-                }
-                _ => None,
-            },
-            "reasonCode": match code {
-                BRegProblemCode::StatisticalDatasetVersionWithdrawn => {
-                    refusal_code.as_ref().map(|value| value.as_str())
-                }
-                _ => None,
-            },
-            "guardReason": match code {
-                BRegProblemCode::ActionGuardFailed => refusal_code.as_ref().map(|value| value.as_str()),
-                _ => None,
-            },
-            "fieldPath": field_path.as_ref().map(|value| value.as_str()),
+            "refusalCode": refusal_code,
+            "reasonCode": reason_code,
+            "guardReason": guard_reason,
+            "fieldPath": field_path,
             "constraint": constraint,
-            "traceId": trace_id.as_str(),
+            "traceId": trace_id,
             "message": "Base Registry Engine refused the request",
         }),
-        BaseRegistryClientError::UnrecognizedProblem { status, trace_id } => json!({
-            "kind": "problem",
+        BaseRegistryClientError::UnrecognizedProblem { .. } => json!({
+            "kind": kind,
             "status": status,
-            "traceId": trace_id.as_str(),
+            "traceId": trace_id,
             "message": "Base Registry Engine refused or failed the request with an unrecognized problem code",
         }),
         BaseRegistryClientError::Protocol {
@@ -1939,7 +1923,7 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
             "patch" => {
                 only_fields(
                     item,
-                    &["operation", "recordIdentifier", "etag", "operations"],
+                    &["operation", "recordIdentifier", "ifMatch", "patch"],
                     "invalid-request",
                     "Patch batch item contains an unsupported field",
                 )?;
@@ -1957,13 +1941,13 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
                 })?;
                 let etag = BRegEtag::parse(&required_string(
                     item,
-                    "etag",
+                    "ifMatch",
                     "invalid-request",
-                    "Patch batch etag must be a string",
+                    "Patch batch ifMatch must be a string",
                 )?)
                 .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-                let request = patch_request(item.get("operations").cloned().ok_or_else(|| {
-                    binding_error("invalid-request", "Patch batch operations are required")
+                let request = patch_request(item.get("patch").cloned().ok_or_else(|| {
+                    binding_error("invalid-request", "Patch batch patch is required")
                 })?)?;
                 builder
                     .patch(record_identifier, &etag, &request)
@@ -2871,13 +2855,13 @@ impl BaseRegistryClient {
     }
 
     #[napi]
-    pub async fn entity_schema(
+    pub async fn record_schema(
         &self,
         record_type_identifier: String,
         access_profile: Option<String>,
     ) -> Result<RawOutcome> {
         self.inner
-            .entity_schema(&record_type_identifier, access_profile.as_deref())
+            .record_schema(&record_type_identifier, access_profile.as_deref())
             .await
             .map(raw_value)
             .map_err(client_error)
@@ -2887,12 +2871,12 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn record_revisions(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         access_profile: Option<String>,
     ) -> Result<RawOutcome> {
         self.inner
-            .record_revisions(&entity_route, &record_identifier, access_profile.as_deref())
+            .record_revisions(&record_route, &record_identifier, access_profile.as_deref())
             .await
             .map(raw_value)
             .map_err(client_error)
@@ -2902,7 +2886,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn get_record_revision(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         revision: i64,
         options: Option<Value>,
@@ -2916,7 +2900,7 @@ impl BaseRegistryClient {
         let options = options_object(options, "record options must be an object")?;
         self.inner
             .get_record_revision(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 revision as u64,
                 &record_options(options.as_ref())?,
@@ -2932,13 +2916,13 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn event_record_creation_revision(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         access_profile: Option<String>,
     ) -> Result<Option<String>> {
         self.inner
             .event_record_creation_revision(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 access_profile.as_deref(),
             )
@@ -2955,7 +2939,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn get_record(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         options: Option<Value>,
     ) -> Result<CompleteOutcome> {
@@ -2963,7 +2947,7 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .get_record(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 &record_options(options.as_ref())?,
             )
@@ -2975,11 +2959,11 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_records(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<PageOutcome> {
         self.inner
-            .list_records(&entity_route, &list_request(options)?)
+            .list_records(&record_route, &list_request(options)?)
             .await
             .map_err(client_error)
             .and_then(page_value)
@@ -3001,7 +2985,7 @@ impl BaseRegistryClient {
     #[napi(js_name = "getGeoJsonRecord")]
     pub async fn get_geo_json_record(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         options: Option<Value>,
     ) -> Result<CompleteOutcome> {
@@ -3016,7 +3000,7 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .get_geojson_record(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 &geojson_options(&options)?,
             )
@@ -3028,12 +3012,12 @@ impl BaseRegistryClient {
     #[napi(js_name = "listGeoJsonRecords")]
     pub async fn list_geo_json_records(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<PageOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_geojson_records(&entity_route, &geojson_list_request(options)?)
+            .list_geojson_records(&record_route, &geojson_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_value(value.value, value.continuation, metadata, None, None)
@@ -3056,12 +3040,12 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_current_records(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<PageOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_current_records(&entity_route, &current_list_request(options)?)
+            .list_current_records(&record_route, &current_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_value(value.value, value.continuation, metadata, None, None)
@@ -3084,12 +3068,12 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_records_as_of(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<PageOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_records_as_of(&entity_route, &as_of_list_request(options)?)
+            .list_records_as_of(&record_route, &as_of_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_value(value.value, value.continuation, metadata, None, None)
@@ -3112,12 +3096,12 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_snapshot_records(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<PageOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_snapshot_records(&entity_route, &snapshot_list_request(options)?)
+            .list_snapshot_records(&record_route, &snapshot_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_value(
@@ -3152,7 +3136,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_relationship_records(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         path_route: String,
         options: Option<Value>,
@@ -3160,7 +3144,7 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .list_relationship_records(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 &path_route,
                 &relationship_list_request(options)?,
@@ -3189,7 +3173,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn lookup_record(
         &self,
-        entity_route: String,
+        record_route: String,
         selector: String,
         values: Option<Value>,
         options: Option<Value>,
@@ -3197,7 +3181,7 @@ impl BaseRegistryClient {
         let request = lookup_request(selector, values, options)?;
         let BRegComplete { value, metadata } = self
             .inner
-            .lookup_record(&entity_route, &request)
+            .lookup_record(&record_route, &request)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -3207,13 +3191,10 @@ impl BaseRegistryClient {
     pub async fn start_proposal(
         &self,
         binding: &ActionBinding,
-        inputs_json: String,
+        inputs: Value,
         key: String,
     ) -> Result<Proposal> {
-        let inputs = input_object(
-            exact_input(&inputs_json)?,
-            "action inputs must be an object",
-        )?;
+        let inputs = input_object(inputs, "action inputs must be an object")?;
         let request = action_invocation(binding, inputs, None)?;
         let key = idempotency_key(key)?;
         self.inner
@@ -3379,9 +3360,9 @@ impl BaseRegistryClient {
     pub async fn list_proposals(
         &self,
         collection: &ProposalCollection,
-        query_json: String,
+        query: Value,
     ) -> Result<ProposalPage> {
-        let query = serde_json::from_value(exact_input(&query_json)?)
+        let query = serde_json::from_value(query)
             .map_err(|_| binding_error("invalid-request", "Proposal query does not conform"))?;
         self.inner
             .list_proposals(&collection.inner, &query)
@@ -3403,16 +3384,11 @@ impl BaseRegistryClient {
         &self,
         proposal: &Proposal,
         operation: String,
-        body_json: String,
+        body: Value,
         key: String,
     ) -> Result<PreparedProposal> {
         self.inner
-            .prepare_proposal(
-                &proposal.inner,
-                &operation,
-                exact_input(&body_json)?,
-                &idempotency_key(key)?,
-            )
+            .prepare_proposal(&proposal.inner, &operation, body, &idempotency_key(key)?)
             .map(|inner| PreparedProposal { inner })
             .map_err(client_error)
     }
@@ -3734,29 +3710,29 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn create_ingestion_run(
         &self,
-        entity_route: String,
+        record_route: String,
         request: Value,
     ) -> Result<CompleteOutcome> {
         let request = ingestion_run_request(request)?;
         let BRegComplete { value, metadata } = self
             .inner
-            .create_ingestion_run(&entity_route, &request)
+            .create_ingestion_run(&record_route, &request)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
     }
 
-    /// Read one bounded page of ingestion runs for one entity route.
+    /// Read one bounded page of ingestion runs for one record route.
     #[napi]
     pub async fn list_ingestion_runs(
         &self,
-        entity_route: String,
+        record_route: String,
         query: Option<Value>,
     ) -> Result<CompleteOutcome> {
         let query = ingestion_run_list_query(query.as_ref())?;
         let BRegComplete { value, metadata } = self
             .inner
-            .list_ingestion_runs(&entity_route, &query)
+            .list_ingestion_runs(&record_route, &query)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -3766,14 +3742,14 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn read_ingestion_run(
         &self,
-        entity_route: String,
+        record_route: String,
         run_id: String,
         access_profile: Option<String>,
     ) -> Result<CompleteOutcome> {
         let run_id = ingestion_run_identifier(run_id)?;
         let BRegComplete { value, metadata } = self
             .inner
-            .read_ingestion_run(&entity_route, run_id, access_profile.as_deref())
+            .read_ingestion_run(&record_route, run_id, access_profile.as_deref())
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -3785,7 +3761,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn submit_ingestion_chunk(
         &self,
-        entity_route: String,
+        record_route: String,
         run_id: String,
         chunk: &IngestionChunk,
         profile_id: String,
@@ -3794,7 +3770,7 @@ impl BaseRegistryClient {
         let chunk = Arc::clone(&chunk.inner);
         let BRegComplete { value, metadata } = self
             .inner
-            .submit_ingestion_chunk(&entity_route, run_id, chunk.as_ref(), &profile_id)
+            .submit_ingestion_chunk(&record_route, run_id, chunk.as_ref(), &profile_id)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -3804,14 +3780,14 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn cancel_ingestion_run(
         &self,
-        entity_route: String,
+        record_route: String,
         run_id: String,
         access_profile: Option<String>,
     ) -> Result<CompleteOutcome> {
         let run_id = ingestion_run_identifier(run_id)?;
         let BRegComplete { value, metadata } = self
             .inner
-            .cancel_ingestion_run(&entity_route, run_id, access_profile.as_deref())
+            .cancel_ingestion_run(&record_route, run_id, access_profile.as_deref())
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -3823,7 +3799,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn ingestion_chunk_receipt(
         &self,
-        entity_route: String,
+        record_route: String,
         run_id: String,
         chunk_index: i64,
         profile_id: String,
@@ -3835,7 +3811,7 @@ impl BaseRegistryClient {
         )?;
         let BRegComplete { value, metadata } = self
             .inner
-            .ingestion_chunk_receipt(&entity_route, run_id, chunk_index, &profile_id)
+            .ingestion_chunk_receipt(&record_route, run_id, chunk_index, &profile_id)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -3878,7 +3854,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn get_record_json(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         options: Option<Value>,
     ) -> Result<JsonOutcome> {
@@ -3886,7 +3862,7 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .get_record(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 &record_options(options.as_ref())?,
             )
@@ -3898,11 +3874,11 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_records_json(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<JsonOutcome> {
         self.inner
-            .list_records(&entity_route, &list_request(options)?)
+            .list_records(&record_route, &list_request(options)?)
             .await
             .map_err(client_error)
             .and_then(page_json_value)
@@ -3924,7 +3900,7 @@ impl BaseRegistryClient {
     #[napi(js_name = "getGeoJsonRecordJson")]
     pub async fn get_geo_json_record_json(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         options: Option<Value>,
     ) -> Result<JsonOutcome> {
@@ -3939,7 +3915,7 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .get_geojson_record(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 &geojson_options(&options)?,
             )
@@ -3951,12 +3927,12 @@ impl BaseRegistryClient {
     #[napi(js_name = "listGeoJsonRecordsJson")]
     pub async fn list_geo_json_records_json(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<JsonOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_geojson_records(&entity_route, &geojson_list_request(options)?)
+            .list_geojson_records(&record_route, &geojson_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_json(value.value, value.continuation, metadata, None, None)
@@ -3979,12 +3955,12 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_current_records_json(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<JsonOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_current_records(&entity_route, &current_list_request(options)?)
+            .list_current_records(&record_route, &current_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_json(value.value, value.continuation, metadata, None, None)
@@ -4007,12 +3983,12 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_records_as_of_json(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<JsonOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_records_as_of(&entity_route, &as_of_list_request(options)?)
+            .list_records_as_of(&record_route, &as_of_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_json(value.value, value.continuation, metadata, None, None)
@@ -4035,12 +4011,12 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_snapshot_records_json(
         &self,
-        entity_route: String,
+        record_route: String,
         options: Option<Value>,
     ) -> Result<JsonOutcome> {
         let BRegComplete { value, metadata } = self
             .inner
-            .list_snapshot_records(&entity_route, &snapshot_list_request(options)?)
+            .list_snapshot_records(&record_route, &snapshot_list_request(options)?)
             .await
             .map_err(client_error)?;
         specialized_page_json(
@@ -4075,7 +4051,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn list_relationship_records_json(
         &self,
-        entity_route: String,
+        record_route: String,
         record_identifier: String,
         path_route: String,
         options: Option<Value>,
@@ -4083,7 +4059,7 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .list_relationship_records(
-                &entity_route,
+                &record_route,
                 &record_identifier,
                 &path_route,
                 &relationship_list_request(options)?,
@@ -4112,7 +4088,7 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn lookup_record_json(
         &self,
-        entity_route: String,
+        record_route: String,
         selector: String,
         values_json: Option<String>,
         options: Option<Value>,
@@ -4121,7 +4097,7 @@ impl BaseRegistryClient {
         let request = lookup_request(selector, values, options)?;
         let BRegComplete { value, metadata } = self
             .inner
-            .lookup_record(&entity_route, &request)
+            .lookup_record(&record_route, &request)
             .await
             .map_err(client_error)?;
         complete_json_value(value, metadata)

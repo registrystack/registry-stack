@@ -48,10 +48,11 @@ use convert::{
 };
 use registry_platform_crypto::PrivateJwk;
 
-// Every instance also carries a `kind` attribute, one of the eight stable
+// Every instance also carries a `kind` attribute, one of the ten stable
 // strings `EvidenceClientError::kind` reports: "configuration", "nonce",
-// "token", "transport", "denied", "not-available", "protocol", or
-// "verification". Branch on `kind`, never on the rendered message, which
+// "token", "transport", "denied", "not-available", "invalid-request",
+// "unavailable", "protocol", or "verification". Branch on `kind`, never on
+// the rendered message, which
 // this crate does not freeze.
 //
 // Where the failure has them, an instance also carries `status`, `code`,
@@ -130,6 +131,22 @@ pyo3::create_exception!(
 
 pyo3::create_exception!(
     registry_evidence_client,
+    InvalidRequestError,
+    EvidenceClientError,
+    "The deployment rejected the request shape or named resource. See the \
+     `status` and `code` attributes."
+);
+
+pyo3::create_exception!(
+    registry_evidence_client,
+    UnavailableError,
+    EvidenceClientError,
+    "The Evidence service or one of its authoritative sources is unavailable. \
+     See the `status` and `code` attributes. A retry requires a fresh request."
+);
+
+pyo3::create_exception!(
+    registry_evidence_client,
     ProtocolError,
     EvidenceClientError,
     "The deployment answered outside its contract: an uncoded refusal, or a \
@@ -144,9 +161,9 @@ pyo3::create_exception!(
      policy. See the `code` attribute for the verifier's own kind."
 );
 
-/// Build the Python exception matching one of the eight stable kinds. Every
+/// Build the Python exception matching one of the ten stable kinds. Every
 /// kind [`evidence_client_sdk::EvidenceClientError::kind`] can report is
-/// listed; a [`MappedError`] can only carry a ninth if the wrapped crate's
+/// listed; a [`MappedError`] can only carry an eleventh if the wrapped crate's
 /// error enum (`#[non_exhaustive]`) grows one this crate does not yet know
 /// about, in which case the base class still reports it faithfully.
 fn exception_for_kind(kind: &str, message: String) -> PyErr {
@@ -157,6 +174,8 @@ fn exception_for_kind(kind: &str, message: String) -> PyErr {
         "transport" => TransportError::new_err(message),
         "denied" => DeniedError::new_err(message),
         "not-available" => NotAvailableError::new_err(message),
+        "invalid-request" => InvalidRequestError::new_err(message),
+        "unavailable" => UnavailableError::new_err(message),
         "protocol" => ProtocolError::new_err(message),
         "verification" => VerificationError::new_err(message),
         _ => EvidenceClientError::new_err(message),
@@ -189,7 +208,7 @@ fn to_py_err(py: Python<'_>, mapped: &MappedError) -> PyErr {
 
 /// A serialization failure on a value this crate itself constructed (a
 /// policy document, a definitions document, a key set, a verified payload) is
-/// not a caller mistake: it has no `kind` among the eight stable ones, so it
+/// not a caller mistake: it has no `kind` among the ten stable ones, so it
 /// is reported as a plain `ValueError` rather than forced into that envelope.
 fn serialization_error(what: &str, error: serde_json::Error) -> PyErr {
     PyValueError::new_err(format!("{what} could not be described: {error}"))
@@ -1075,7 +1094,7 @@ impl EvidenceClient {
     /// merge subjects. The receipt remains application-owned and is never
     /// remembered by this client.
     #[pyo3(signature = (
-        requirement,
+        handle,
         response_format="signed-jws",
         binding_receipt=None,
         subjects=None,
@@ -1084,7 +1103,7 @@ impl EvidenceClient {
     fn request(
         &self,
         py: Python<'_>,
-        requirement: &str,
+        handle: &str,
         response_format: &str,
         binding_receipt: Option<PyRef<'_, SubjectBindingReceipt>>,
         subjects: Option<&Bound<'_, PyAny>>,
@@ -1123,7 +1142,7 @@ impl EvidenceClient {
                 )),
             )
         })?;
-        let mut request = RealAudienceScopedRequest::new(requirement.to_owned(), selector_values)
+        let mut request = RealAudienceScopedRequest::new(handle.to_owned(), selector_values)
             .with_response_format(response_format);
         if let Some(subjects) = subject_values {
             request = request.with_subjects(subjects);
@@ -1416,6 +1435,8 @@ pub fn registry_evidence_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("TransportError", py.get_type::<TransportError>())?;
     module.add("DeniedError", py.get_type::<DeniedError>())?;
     module.add("NotAvailableError", py.get_type::<NotAvailableError>())?;
+    module.add("InvalidRequestError", py.get_type::<InvalidRequestError>())?;
+    module.add("UnavailableError", py.get_type::<UnavailableError>())?;
     module.add("ProtocolError", py.get_type::<ProtocolError>())?;
     module.add("VerificationError", py.get_type::<VerificationError>())?;
 
@@ -1499,7 +1520,7 @@ except BaseException as error:
     /// enum grows a kind this crate does not yet know about. The same
     /// catch-all also means that renaming one of the known kind strings in an
     /// existing match arm degrades that kind to the base class silently
-    /// instead of failing to compile, so this pins every one of the eight
+    /// instead of failing to compile, so this pins every one of the ten
     /// known kind strings to its own specific exception class directly.
     #[test]
     fn exception_for_kind_maps_every_known_kind_to_its_specific_class() {
@@ -1520,6 +1541,10 @@ except BaseException as error:
                 .is_instance_of::<NotAvailableError>(py));
             assert!(!exception_for_kind("not_available", "message".to_owned())
                 .is_instance_of::<NotAvailableError>(py));
+            assert!(exception_for_kind("invalid-request", "message".to_owned())
+                .is_instance_of::<InvalidRequestError>(py));
+            assert!(exception_for_kind("unavailable", "message".to_owned())
+                .is_instance_of::<UnavailableError>(py));
             assert!(exception_for_kind("protocol", "message".to_owned())
                 .is_instance_of::<ProtocolError>(py));
             assert!(exception_for_kind("verification", "message".to_owned())

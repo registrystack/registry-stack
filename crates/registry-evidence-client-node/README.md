@@ -49,7 +49,7 @@ const verifiedAt = client.verifyAsOf(prepared, response, asOfMillis);
 // and its pre-response verification context for application-owned retention.
 const { verifyRetained, verifyRetainedAsOf } = require('@registrystack/client').evidence;
 const profileClient = EvidenceClient.fromProfile('client.json');
-const result = await profileClient.request({ requirement: 'status-check', selectors: {} });
+const result = await profileClient.request({ handle: 'status-check', selectors: {} });
 const replayed = verifyRetainedAsOf(result.retainedVerification, result.assertion, decisionMillis);
 const current = verifyRetained(result.retainedVerification, result.assertion);
 
@@ -134,7 +134,8 @@ from the package root. Its `kind` is always present; `status`, `code`,
 `traceId`, `retryAfterSeconds`, `transportKind`, and `tokenKind` are present
 when the underlying failure carries them. `message` is human prose, not JSON:
 read it, do not parse it. `kind` is one of: `configuration`, `nonce`, `token`,
-`transport`, `denied`, `not-available`, `protocol`, `verification`.
+`transport`, `denied`, `not-available`, `invalid-request`, `unavailable`,
+`protocol`, `verification`.
 
 Underneath, the native layer throws every mapped failure as a plain
 `napi::Error` whose `message` is a JSON-stringified envelope; `client.js`
@@ -144,14 +145,12 @@ caller-facing contract: do not `JSON.parse(error.message)`.
 
 A failure that is not a recognized envelope (a serialization defect, a caught
 panic, napi's own argument-type checking) is left exactly as thrown, so it
-cannot be mistaken for one of the eight kinds above.
+cannot be mistaken for one of the ten kinds above.
 
-The `denied`/`protocol` split is a hazard worth calling out explicitly: HTTP
-401, 403, and 429 all map to `denied` regardless of the response body's own
-`code`, while every other non-2xx status (including 400, 500, and anything
-else not specifically recognized) maps to `protocol`. A caller that only
-checks `status` without also checking `kind` can misclassify a 429 rate limit
-as a generic protocol failure, or vice versa. See
+HTTP 401, 403, and 429 map to `denied`; 422 maps to `not-available`; other
+contract-valid 4xx responses map to `invalid-request`; and contract-valid 5xx
+responses map to `unavailable`. A response that breaks the wire contract maps
+to `protocol`. A caller branches on `kind`, not only `status`. See
 `registry-evidence-client`'s `problem.rs` for the authoritative mapping table.
 
 A response that exceeds its size bound maps to `kind: "transport"` with

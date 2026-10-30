@@ -3,19 +3,18 @@
   "command": "check",
   "status": "complete",
   "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
-  "data": {
-    "databaseAccess": false,
-    "filesChecked": 2,
-    "networkAccess": false,
-    "policyBindings": [
-      {
-        "digest": "sha256:3807f44c707c4dd6a963dd5f7e56f32aec648379fcb97fe27ba17ad04c438e0c",
-        "id": "decision",
-        "version": "1"
-      }
-    ],
-    "project": "products/casework/examples/standalone-decision"
-  },
-  "diagnostics": [],
-  "kind": "CaseworkReport"
+  "kind": "CaseworkReport",
+  "version": "0.45.0-dev",
+  "databaseAccess": false,
+  "filesChecked": 2,
+  "networkAccess": false,
+  "policyBindings": [
+    {
+      "digest": "sha256:3807f44c707c4dd6a963dd5f7e56f32aec648379fcb97fe27ba17ad04c438e0c",
+      "id": "decision",
+      "version": "1"
+    }
+  ],
+  "project": "products/casework/examples/standalone-decision",
+  "diagnostics": []
 }

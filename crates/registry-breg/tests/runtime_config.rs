@@ -184,7 +184,7 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [registry-client]
-    deniedKids: [denied-kid]
+    revokedKeyIds: [denied-kid]
     maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
@@ -1123,15 +1123,15 @@ fn operational_defaults_materialize_without_defaulting_authority() {
     assert_eq!(config.database().pool_bounds().max_size, 4);
     assert_eq!(
         config.database().pool_bounds().wait_timeout,
-        Duration::from_secs(30)
+        Duration::from_secs(1)
     );
     assert_eq!(
         config.database().pool_bounds().create_timeout,
-        Duration::from_secs(30)
+        Duration::from_secs(2)
     );
     assert_eq!(
         config.database().pool_bounds().recycle_timeout,
-        Duration::from_secs(30)
+        Duration::from_secs(2)
     );
     let jwks = config.authentication().oidc().jwks_fetcher_config();
     assert_eq!(jwks.cache_ttl, Duration::from_secs(600));
@@ -1230,6 +1230,52 @@ fn operational_defaults_materialize_without_defaulting_authority() {
             ),
             expected,
             "removing {line:?}"
+        );
+    }
+}
+
+#[test]
+fn pool_acquisition_budget_must_finish_before_the_http_deadline() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let with_pool_budget =
+        |create_milliseconds: u64, recycle_milliseconds: u64, http_milliseconds: u64| {
+            base.replace(
+                "    createTimeoutMilliseconds: 1000\n",
+                &format!("    createTimeoutMilliseconds: {create_milliseconds}\n"),
+            )
+            .replace(
+                "    recycleTimeoutMilliseconds: 1000\n",
+                &format!("    recycleTimeoutMilliseconds: {recycle_milliseconds}\n"),
+            )
+            .replace(
+                "  httpRequestMilliseconds: 10000\n",
+                &format!("  httpRequestMilliseconds: {http_milliseconds}\n"),
+            )
+        };
+
+    parse_runtime_config_with_env(&with_pool_budget(2000, 1500, 3001), env_lookup)
+        .expect("pool wait plus connection work finishes strictly before HTTP timeout");
+
+    for (raw, milliseconds, relation) in [
+        (with_pool_budget(2000, 1500, 3000), 3000, "equal to"),
+        (with_pool_budget(1500, 2000, 2999), 2999, "longer than"),
+    ] {
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("an HTTP deadline that cannot contain pool acquisition is refused");
+        assert_eq!(code_of(&error), "breg.runtime.pool-budget-exceeded");
+        assert_eq!(path_of(&error), "/database/pool");
+        let diagnostics = error.diagnostics(None);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].suggested_action,
+            "Lower database.pool.waitTimeoutMilliseconds, createTimeoutMilliseconds, or recycleTimeoutMilliseconds so the wait plus the longer connection operation is less than operationalTimeouts.httpRequestMilliseconds."
+        );
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(!rendered.contains(&milliseconds.to_string()));
+        assert!(
+            rendered.contains("pool acquisition must finish before the HTTP request deadline"),
+            "the {relation} budget gives an actionable value-free refusal: {rendered}"
         );
     }
 }
@@ -2203,9 +2249,9 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
     };
     let with_issuers = |key: &str| {
         base.replace(
-            "deniedKids: [denied-kid]",
+            "revokedKeyIds: [denied-kid]",
             &format!(
-                "deniedKids: [denied-kid]\n    assertionIssuers:\n      {key}:\n        - https://issuer-a.example"
+                "revokedKeyIds: [denied-kid]\n    assertionIssuers:\n      {key}:\n        - https://issuer-a.example"
             ),
         )
     };
@@ -2689,9 +2735,9 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
 fn assertion_issuers_reach_the_verifier_and_stay_out_of_redacted_debug_output() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "deniedKids: [denied-kid]",
+        "revokedKeyIds: [denied-kid]",
         concat!(
-            "deniedKids: [denied-kid]\n",
+            "revokedKeyIds: [denied-kid]\n",
             "    assertionIssuers:\n",
             "      registry-client:\n",
             "        - https://assertion-issuer.example\n",
@@ -2721,8 +2767,8 @@ fn invalid_assertion_issuer_shapes_are_refused() {
     let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let insert = |block: &str| {
         baseline.replace(
-            "deniedKids: [denied-kid]",
-            &format!("deniedKids: [denied-kid]\n{block}"),
+            "revokedKeyIds: [denied-kid]",
+            &format!("revokedKeyIds: [denied-kid]\n{block}"),
         )
     };
     let too_many_clients = {
@@ -2863,32 +2909,54 @@ fn invalid_assertion_issuer_shapes_are_refused() {
 }
 
 #[test]
-fn an_empty_denied_key_list_is_refused_and_omitting_it_denies_no_key() {
+fn revoked_key_ids_are_canonical_and_an_empty_list_is_refused() {
     let fixture = RuntimeFixture::new();
     let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
 
-    // CFG-EMPTY-2: deniedKids withdraws signing keys, so a list that names
+    // CFG-EMPTY-2: revokedKeyIds withdraws signing keys, so a list that names
     // none is refused; deleting the member is how a file denies no key.
     let error = parse_runtime_config_with_env(
-        &baseline.replace("deniedKids: [denied-kid]", "deniedKids: []"),
+        &baseline.replace("revokedKeyIds: [denied-kid]", "revokedKeyIds: []"),
         env_lookup,
     )
     .expect_err("an empty denied key list is refused");
     assert_eq!(
         reader_refusal(&error),
-        ("config.invalid-value", "/authentication/oidc/deniedKids")
+        ("config.invalid-value", "/authentication/oidc/revokedKeyIds")
     );
     assert!(
-        error.render_human(None).contains("delete deniedKids"),
+        error.render_human(None).contains("delete revokedKeyIds"),
         "the refusal names its fix"
     );
 
-    let omitted = baseline.replace("    deniedKids: [denied-kid]\n", "");
-    assert!(!omitted.contains("deniedKids"));
+    let omitted = baseline.replace("    revokedKeyIds: [denied-kid]\n", "");
+    assert!(!omitted.contains("revokedKeyIds"));
     let config = parse_runtime_config_with_env(&omitted, env_lookup)
-        .expect("a runtime file with no deniedKids member is accepted");
+        .expect("a runtime file with no revokedKeyIds member is accepted");
     let verifier = config.authentication().oidc().token_verifier_config();
     assert!(verifier.denied_kids.is_empty());
+}
+
+#[test]
+fn denied_kids_is_a_value_free_removed_key_with_the_canonical_replacement() {
+    let fixture = RuntimeFixture::new();
+    let retired = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        "revokedKeyIds: [denied-kid]",
+        "deniedKids: [retired-key-canary]",
+    );
+    let error = parse_runtime_config_with_env(&retired, env_lookup)
+        .expect_err("the retired OIDC key-list spelling is refused");
+    let RuntimeConfigError::Reader(refusal) = &error else {
+        panic!("the shared reader decides a removed key: {error:?}");
+    };
+    let diagnostic = refusal.deciding_diagnostic();
+    assert_eq!(diagnostic.code, "config.removed-key");
+    assert_eq!(diagnostic.path, "/authentication/oidc/deniedKids");
+    assert_eq!(
+        diagnostic.suggested_action,
+        "Rename `authentication.oidc.deniedKids` to `authentication.oidc.revokedKeyIds`; the values stay as they are."
+    );
+    assert!(!error.render_human(None).contains("retired-key-canary"));
 }
 
 #[test]
@@ -3516,6 +3584,56 @@ fn runtime_config_path_components_must_not_be_symlinks() {
 
     let error = load_runtime_config_with_env(&linked_config, env_lookup)
         .expect_err("symlinked runtime ancestor refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("platform.runtime-config.unsafe-file", "")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_config_file_and_ancestors_require_trusted_ownership_and_modes() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = RuntimeFixture::new();
+    let runtime = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("    revokedKeyIds: [denied-kid]\n", "");
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(&config_path, &runtime).expect("runtime config writes");
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+        .expect("owner-only mode sets");
+    load_runtime_config_with_env(&config_path, env_lookup)
+        .expect("an owner-controlled development runtime file loads");
+
+    for mode in [0o620, 0o602] {
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(mode))
+            .expect("unsafe runtime mode sets");
+        let error = load_runtime_config_with_env(&config_path, env_lookup)
+            .expect_err("a runtime file writable outside its owner is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("platform.runtime-config.unsafe-file", "")
+        );
+        let rendered = error.render_human(None);
+        assert!(rendered.contains("runtime user"), "{rendered}");
+        assert!(
+            rendered.contains("remove group and other write permission"),
+            "{rendered}"
+        );
+    }
+
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+        .expect("safe runtime mode restores");
+    let unsafe_directory = fixture.path("group-writable-config");
+    fs::create_dir(&unsafe_directory).expect("runtime directory creates");
+    fs::set_permissions(&unsafe_directory, fs::Permissions::from_mode(0o770))
+        .expect("unsafe directory mode sets");
+    let nested_config = unsafe_directory.join("runtime.yaml");
+    fs::write(&nested_config, runtime).expect("nested runtime config writes");
+    fs::set_permissions(&nested_config, fs::Permissions::from_mode(0o600))
+        .expect("nested runtime file mode sets");
+    let error = load_runtime_config_with_env(&nested_config, env_lookup)
+        .expect_err("a runtime file below a group-writable directory is refused");
     assert_eq!(
         reader_refusal(&error),
         ("platform.runtime-config.unsafe-file", "")

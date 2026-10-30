@@ -301,7 +301,7 @@ fn an_invalid_explicit_ca_bundle_is_refused_before_connecting() {
 
     let error = run_api("breg", args, |_, _| unreachable!("explicit URL"))
         .expect_err("invalid trust material must be refused locally");
-    assert_eq!(error.exit_code(), 3);
+    assert_eq!(error.exit_code(), 1);
     assert!(!error.to_string().contains("not a PEM certificate"));
 }
 

@@ -25,6 +25,7 @@ BaseRegistryClientError = breg_client.BaseRegistryClientError
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 MISSING_RECORD_ID = "00000000-0000-4000-8000-000000000001"
+OUTSIDE_WRITE_BOUNDARY_ID = "00000000-0000-4000-8000-000000000403"
 EXTENDED_UNKNOWN_PROBLEM_ID = "00000000-0000-4000-8000-000000000003"
 UNKNOWN_PROBLEM_STATUSES = {
     "00000000-0000-4000-8000-000000000422": 422,
@@ -46,6 +47,16 @@ class _ProblemHandler(BaseHTTPRequestHandler):
                 "status": 404,
                 "detail": "The requested resource was not found.",
                 "code": "resource.not_found",
+                "traceId": TRACE_ID,
+            }
+        elif record_id == OUTSIDE_WRITE_BOUNDARY_ID:
+            status = 403
+            document = {
+                "type": "https://id.registrystack.org/problems/registry-breg/write/outside-boundary",
+                "title": "Forbidden",
+                "status": 403,
+                "detail": "The resulting record falls outside the selected access profile's row boundary.",
+                "code": "write.outside-boundary",
                 "traceId": TRACE_ID,
             }
         else:
@@ -99,6 +110,20 @@ class ProblemKindTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "not-found")
         self.assertEqual(raised.exception.status, 404)
         self.assertEqual(raised.exception.code, "resource.not_found")
+
+    def test_a_write_boundary_refusal_uses_the_core_problem_projection(self) -> None:
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.get_record("companies", OUTSIDE_WRITE_BOUNDARY_ID)
+        error = raised.exception
+        self.assertEqual(error.kind, "problem")
+        self.assertEqual(error.status, 403)
+        self.assertEqual(error.code, "write.outside-boundary")
+        self.assertEqual(error.trace_id, TRACE_ID)
+        self.assertIsNone(error.refusal_code)
+        self.assertIsNone(error.reason_code)
+        self.assertIsNone(error.guard_reason)
+        self.assertIs(error.outcome_unknown, False)
+        self.assertNotIn("row boundary", str(error))
 
     def test_unknown_problem_codes_fall_back_to_http_status_semantics(self) -> None:
         for record_id, status in UNKNOWN_PROBLEM_STATUSES.items():

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
@@ -29,6 +30,15 @@ const USAGE_ACTION: &str =
      arguments.";
 
 fn main() -> ExitCode {
+    registry_cli_report::install_panic_hook(
+        registry_cli_report::Identity {
+            binary: "registry-manifest",
+            api_version: CTL_REPORT_API_VERSION,
+            kind: CTL_REPORT_KIND,
+            version: registry_platform_buildinfo::DISPLAY_VERSION,
+        },
+        registry_cli_report::json_requested(std::env::args_os()),
+    );
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     ExitCode::from(run(&args))
 }
@@ -40,6 +50,10 @@ enum Failure {
     Usage(&'static str),
     /// A refusal from rendering or publication.
     Refused(String),
+    /// A required filesystem operation could not complete.
+    Unavailable,
+    /// A generated value or report could not be serialized.
+    Internal,
     /// Findings from reading the manifest.
     Diagnostics {
         report: Report,
@@ -51,6 +65,22 @@ enum Failure {
 impl From<String> for Failure {
     fn from(message: String) -> Self {
         Self::Refused(message)
+    }
+}
+
+impl From<std::io::Error> for Failure {
+    fn from(_: std::io::Error) -> Self {
+        Self::Unavailable
+    }
+}
+
+impl From<serde_json::Error> for Failure {
+    fn from(error: serde_json::Error) -> Self {
+        if error.is_io() {
+            Self::Unavailable
+        } else {
+            Self::Internal
+        }
     }
 }
 
@@ -124,7 +154,9 @@ fn finish(args: &[String], result: Result<u8, Failure>) -> u8 {
             if machine_readable(args) {
                 let mut report = Report::new(vec![diagnostic]);
                 report.set_files_checked(0);
-                write_report(&CtlReport::new("usage", USAGE_EXIT, &report));
+                if write_report(&CtlReport::new("usage", USAGE_EXIT, &report)).is_err() {
+                    return UNAVAILABLE_EXIT;
+                }
             } else {
                 eprint!("{}", diagnostic.render_human());
                 eprintln!("{}", usage());
@@ -140,11 +172,44 @@ fn finish(args: &[String], result: Result<u8, Failure>) -> u8 {
                     "Correct the manifest or command inputs and retry.",
                 )]);
                 report.set_files_checked(1);
-                write_report(&CtlReport::new(command_name(args), 1, &report));
+                if write_report(&CtlReport::new(command_name(args), 1, &report)).is_err() {
+                    return UNAVAILABLE_EXIT;
+                }
             } else {
                 eprintln!("{message}");
             }
             1
+        }
+        Err(failure @ (Failure::Unavailable | Failure::Internal)) => {
+            let (code, message, action) = match failure {
+                Failure::Unavailable => (
+                    "manifest.io-failure",
+                    "A required filesystem operation could not complete.",
+                    "Check the destination, available storage, and permissions, then retry.",
+                ),
+                _ => (
+                    "registry-manifest.internal-error",
+                    "The command stopped because of an internal error.",
+                    "Preserve the input, check for a corrected release, and report the diagnostic code.",
+                ),
+            };
+            let diagnostic = Diagnostic::error(code, "", message, action);
+            if machine_readable(args) {
+                let mut report = Report::new(vec![diagnostic]);
+                report.set_files_checked(0);
+                if write_report(&CtlReport::new(
+                    command_name(args),
+                    UNAVAILABLE_EXIT,
+                    &report,
+                ))
+                .is_err()
+                {
+                    return UNAVAILABLE_EXIT;
+                }
+            } else {
+                eprint!("{}", diagnostic.render_human());
+            }
+            UNAVAILABLE_EXIT
         }
         Err(Failure::Diagnostics {
             report,
@@ -152,7 +217,9 @@ fn finish(args: &[String], result: Result<u8, Failure>) -> u8 {
             sentence,
         }) => {
             if machine_readable(args) {
-                write_report(&CtlReport::new(command_name(args), exit, &report));
+                if write_report(&CtlReport::new(command_name(args), exit, &report)).is_err() {
+                    return UNAVAILABLE_EXIT;
+                }
             } else {
                 eprintln!("{sentence}");
                 eprint!("{}", report.render_human());
@@ -253,11 +320,16 @@ impl<'a> CtlReport<'a> {
     }
 }
 
-fn write_report(report: &CtlReport<'_>) {
-    match serde_json::to_string_pretty(report) {
-        Ok(json) => println!("{json}"),
-        Err(_) => eprintln!("registry-manifest could not write its JSON report."),
-    }
+fn write_report(report: &CtlReport<'_>) -> Result<(), Failure> {
+    let value = serde_json::to_value(report)?;
+    let report =
+        registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
+            .map_err(|_| Failure::Internal)?;
+    let mut output = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut output, &report)?;
+    writeln!(output)?;
+    output.flush()?;
+    Ok(())
 }
 
 /// `validate`: check one metadata manifest offline (CFG-CHECK-1).
@@ -283,7 +355,7 @@ fn validate_command(matches: &ArgMatches) -> Result<u8, Failure> {
     if options.json {
         let mut written = CtlReport::new("validate", exit, &report);
         written.source_manifest_digest = digest.as_deref();
-        write_report(&written);
+        write_report(&written)?;
     } else if exit == 0 {
         println!("metadata manifest valid: {path}");
         if let Some(digest) = &digest {
@@ -315,7 +387,7 @@ fn validate_profiles_command(matches: &ArgMatches) -> Result<u8, Failure> {
     if options.json {
         let mut written = CtlReport::new("validate-profiles", exit, &check.report);
         written.profiles = Some(check.profiles);
-        write_report(&written);
+        write_report(&written)?;
     } else if exit == 0 {
         println!(
             "validated {} profile descriptors and fixtures",
@@ -455,7 +527,7 @@ fn render_command(matches: &ArgMatches) -> Result<(), Failure> {
         "ogc-records" => render_ogc_records_items(&compiled),
         other => return Err(format!("unsupported render format: {other}").into()),
     };
-    Ok(print_json(&value)?)
+    print_json(&value)
 }
 
 fn publish_command(matches: &ArgMatches) -> Result<(), Failure> {
@@ -678,7 +750,7 @@ fn publish_command(matches: &ArgMatches) -> Result<(), Failure> {
         let mut written = CtlReport::new("publish", 0, &report);
         written.source_manifest_digest = Some(&source_digest);
         written.output = Some(out_root.root.display().to_string());
-        write_report(&written);
+        write_report(&written)?;
     } else {
         println!(
             "published metadata artifacts to {}",
@@ -691,13 +763,13 @@ fn publish_command(matches: &ArgMatches) -> Result<(), Failure> {
 fn write_well_known_discovery(
     public_root: &PublishRoot,
     index: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     create_contained_dir_all(public_root, ".well-known")?;
     write_api_catalog(public_root, index)?;
     write_legacy_registry_manifest_discovery(public_root, index)
 }
 
-fn write_api_catalog(public_root: &PublishRoot, index: &serde_json::Value) -> Result<(), String> {
+fn write_api_catalog(public_root: &PublishRoot, index: &serde_json::Value) -> Result<(), Failure> {
     let mut items = Vec::new();
     push_api_catalog_item(
         &mut items,
@@ -821,7 +893,7 @@ fn value_array<'a>(value: &'a serde_json::Value, key: &str) -> &'a [serde_json::
         .unwrap_or(&[])
 }
 
-fn collect_artifact_digests(root: &PublishRoot) -> Result<Vec<serde_json::Value>, String> {
+fn collect_artifact_digests(root: &PublishRoot) -> Result<Vec<serde_json::Value>, Failure> {
     let mut files = Vec::new();
     collect_artifact_paths(&root.root, Path::new(""), &mut files)?;
     files.sort();
@@ -831,7 +903,7 @@ fn collect_artifact_digests(root: &PublishRoot) -> Result<Vec<serde_json::Value>
             continue;
         }
         let full_path = root.root.join(&relative);
-        let bytes = fs::read(&full_path).map_err(|error| error.to_string())?;
+        let bytes = fs::read(&full_path)?;
         let path = relative_path_string(&relative)?;
         artifacts.push(serde_json::json!({
             "path": path,
@@ -846,13 +918,13 @@ fn collect_artifact_paths(
     root: &Path,
     relative: &Path,
     files: &mut Vec<PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     let dir = root.join(relative);
-    for entry in fs::read_dir(&dir).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
         let name = entry.file_name();
         let child_relative = relative.join(name);
-        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+        let metadata = entry.metadata()?;
         if metadata.is_dir() {
             collect_artifact_paths(root, &child_relative, files)?;
         } else if metadata.is_file() {
@@ -862,7 +934,7 @@ fn collect_artifact_paths(
     Ok(())
 }
 
-fn relative_path_string(path: &Path) -> Result<String, String> {
+fn relative_path_string(path: &Path) -> Result<String, Failure> {
     let mut parts = Vec::new();
     for component in path.components() {
         match component {
@@ -872,7 +944,8 @@ fn relative_path_string(path: &Path) -> Result<String, String> {
                 return Err(format!(
                     "metadata.publish.path_escape: invalid generated path {}",
                     path.display()
-                ));
+                )
+                .into());
             }
         }
     }
@@ -897,20 +970,20 @@ fn media_type_for_artifact(path: &Path) -> &'static str {
 fn publication_package_digest(
     source_manifest_digest: &str,
     artifacts: &[serde_json::Value],
-) -> Result<String, String> {
+) -> Result<String, Failure> {
     let package = serde_json::json!({
         "schema_version": "registry-manifest-package/v1",
         "source_manifest_digest": source_manifest_digest,
         "artifacts": artifacts,
     });
-    let canonical = canonicalize_json(&package).map_err(|error| error.to_string())?;
+    let canonical = canonicalize_json(&package).map_err(|_| Failure::Internal)?;
     Ok(sha256_uri(&canonical))
 }
 
 fn write_legacy_registry_manifest_discovery(
     public_root: &PublishRoot,
     index: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     let discovery = serde_json::json!({
         "schema_version": "registry-manifest-discovery/v1",
         "metadata_index": "/metadata/index.json",
@@ -939,7 +1012,7 @@ fn match_value<'a>(matches: &'a ArgMatches, name: &str) -> Result<&'a str, Failu
 fn ensure_dcat_profile_available(
     compiled: &registry_manifest_core::CompiledMetadata,
     profile: &str,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     if matches!(profile, "dcat" | "dcat-ap") {
         return Ok(());
     }
@@ -951,9 +1024,7 @@ fn ensure_dcat_profile_available(
     {
         Ok(())
     } else {
-        Err(format!(
-            "metadata.manifest.unsupported_application_profile: {profile}"
-        ))
+        Err(format!("metadata.manifest.unsupported_application_profile: {profile}").into())
     }
 }
 
@@ -962,25 +1033,26 @@ struct PublishRoot {
     canonical: PathBuf,
 }
 
-fn prepare_publish_root(path: &Path, not_directory_code: &str) -> Result<PublishRoot, String> {
+fn prepare_publish_root(path: &Path, not_directory_code: &str) -> Result<PublishRoot, Failure> {
     if path.exists() && !path.is_dir() {
-        return Err(format!("{not_directory_code}: {}", path.display()));
+        return Err(format!("{not_directory_code}: {}", path.display()).into());
     }
-    fs::create_dir_all(path).map_err(|error| error.to_string())?;
-    let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+    fs::create_dir_all(path)?;
+    let canonical = path.canonicalize()?;
     Ok(PublishRoot {
         root: path.to_path_buf(),
         canonical,
     })
 }
 
-fn contained_path(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<PathBuf, String> {
+fn contained_path(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<PathBuf, Failure> {
     let relative = relative.as_ref();
     if relative.is_absolute() {
         return Err(format!(
             "metadata.publish.path_escape: absolute generated path {}",
             relative.display()
-        ));
+        )
+        .into());
     }
 
     let mut target = root.canonical.clone();
@@ -992,13 +1064,15 @@ fn contained_path(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<Path
                 return Err(format!(
                     "metadata.publish.path_escape: parent traversal in generated path {}",
                     relative.display()
-                ));
+                )
+                .into());
             }
             Component::RootDir | Component::Prefix(_) => {
                 return Err(format!(
                     "metadata.publish.path_escape: absolute generated path {}",
                     relative.display()
-                ));
+                )
+                .into());
             }
         }
     }
@@ -1009,32 +1083,33 @@ fn contained_path(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<Path
         Err(format!(
             "metadata.publish.path_escape: generated path escaped root {}",
             relative.display()
-        ))
+        )
+        .into())
     }
 }
 
-fn create_contained_dir_all(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<(), String> {
+fn create_contained_dir_all(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<(), Failure> {
     let relative = relative.as_ref();
     let target = contained_path(root, relative)?;
     reject_existing_symlink_components(root, relative)?;
-    fs::create_dir_all(target).map_err(|error| error.to_string())
+    fs::create_dir_all(target).map_err(Into::into)
 }
 
 fn write_contained_bytes(
     root: &PublishRoot,
     relative: impl AsRef<Path>,
     bytes: &[u8],
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     let relative = relative.as_ref();
     let target = contained_path(root, relative)?;
     reject_existing_symlink_components(root, relative)?;
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        fs::create_dir_all(parent)?;
     }
-    fs::write(target, bytes).map_err(|error| error.to_string())
+    fs::write(target, bytes).map_err(Into::into)
 }
 
-fn reject_existing_symlink_components(root: &PublishRoot, relative: &Path) -> Result<(), String> {
+fn reject_existing_symlink_components(root: &PublishRoot, relative: &Path) -> Result<(), Failure> {
     let mut current = root.canonical.clone();
     for component in relative.components() {
         match component {
@@ -1044,7 +1119,8 @@ fn reject_existing_symlink_components(root: &PublishRoot, relative: &Path) -> Re
                 return Err(format!(
                     "metadata.publish.path_escape: invalid generated path {}",
                     relative.display()
-                ));
+                )
+                .into());
             }
         }
         match fs::symlink_metadata(&current) {
@@ -1052,11 +1128,12 @@ fn reject_existing_symlink_components(root: &PublishRoot, relative: &Path) -> Re
                 return Err(format!(
                     "metadata.publish.path_escape: symlink in generated path {}",
                     relative.display()
-                ));
+                )
+                .into());
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(error.into()),
         }
     }
     Ok(())
@@ -1066,8 +1143,8 @@ fn copy_contained(
     root: &PublishRoot,
     relative: impl AsRef<Path>,
     source: impl AsRef<Path>,
-) -> Result<(), String> {
-    let bytes = fs::read(source).map_err(|error| error.to_string())?;
+) -> Result<(), Failure> {
+    let bytes = fs::read(source)?;
     write_contained_bytes(root, relative, &bytes)
 }
 
@@ -1075,16 +1152,13 @@ fn write_json(
     root: &PublishRoot,
     relative: impl AsRef<Path>,
     value: &serde_json::Value,
-) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+) -> Result<(), Failure> {
+    let bytes = serde_json::to_vec_pretty(value)?;
     write_contained_bytes(root, relative, &bytes)
 }
 
-fn print_json(value: &serde_json::Value) -> Result<(), String> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(value).map_err(|error| error.to_string())?
-    );
+fn print_json(value: &serde_json::Value) -> Result<(), Failure> {
+    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
 

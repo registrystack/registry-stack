@@ -432,7 +432,7 @@ queue an application or advance the withdrawn round. Rebase and Submit create a
 fresh version and Review. Rolling back to the frozen Action revision can clear
 `blockedReason`; it never revives a cancelled round or a closed job, including
 when no application job existed before withdrawal. A closed automatic application
-remains observable as `blocked` with `contract-changed`, `correct-input`, and
+remains observable as `blocked` with `package-changed`, `rebase`, and
 `automaticRetry.scheduled: false`, including after rollback clears the package
 block. The Proposal stays submitted and its authorized requester can still
 Rebase or Cancel; observing it never requeues the old application. This includes

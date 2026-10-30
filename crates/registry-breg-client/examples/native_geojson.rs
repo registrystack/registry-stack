@@ -14,7 +14,7 @@ use url::Url;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base_url = std::env::var("BREG_BASE_URL")?;
-    let route = std::env::var("BREG_ENTITY_ROUTE")?;
+    let route = std::env::var("BREG_RECORD_ROUTE")?;
     let profile = std::env::var("BREG_ACCESS_PROFILE")?;
     let bbox = std::env::var("BREG_BBOX")?;
     let coordinates: Vec<_> = bbox.split(',').collect();

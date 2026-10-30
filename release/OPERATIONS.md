@@ -16,13 +16,18 @@ candidate-promotion path. Follow [`release/NIGHTLY.md`](NIGHTLY.md) to publish,
 verify, install, or recover a nightly build. A numbered release rebuilds from
 its source because the nightly version marker makes the bytes distinct.
 
-## Independent Discovery pilot
+## Independent Discovery tooling, deferred until after 1.0
 
-Use the same candidate and publication transaction with `--unit discovery` to
-publish a finished Discovery change before the next Stack release. Discovery
-and discoveryctl share an explicit Cargo package version; internal crates and
-the unified SDK retain their existing lifecycle. `release/units.yaml` owns the
-unit and artifact map. Other units remain on the Stack train during the pilot.
+Registry Stack 1.0 is one Stack cut: the five promised products graduate
+together under the Stack version and `vMAJOR.MINOR.PATCH` tag. Keep Discovery
+on that release train through 1.0. The independent-unit machinery below is
+retained for a later pilot; it is not the 1.0 publication path.
+
+When that pilot is activated, the same candidate and publication transaction
+with `--unit discovery` can publish Discovery separately. Discovery and
+discoveryctl share an explicit Cargo package version; internal crates and the
+unified SDK retain their existing lifecycle. `release/units.yaml` owns the
+unit and artifact map.
 
 Prepare both Discovery package versions, their workspace dependency/lock entries,
 and `release/notes/discovery/vX.Y.Z.md`, which must start with

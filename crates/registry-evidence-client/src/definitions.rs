@@ -22,7 +22,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDate;
 use registry_platform_yaml::tagged_union;
 use serde::{
-    de::Error as _, ser::SerializeMap as _, Deserialize, Deserializer, Serialize, Serializer,
+    de::{Error as _, IgnoredAny},
+    ser::SerializeMap as _,
+    Deserialize, Deserializer, Serialize, Serializer,
 };
 use url::Url;
 
@@ -55,8 +57,8 @@ where
     Ok(value)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EvidenceDefinitionsDocument {
     pub schema: String,
     pub assurance_profile: AssuranceProfile,
@@ -77,12 +79,60 @@ pub struct EvidenceDefinitionsDocument {
     pub definitions: Vec<EvidenceDefinition>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvidenceDefinitionsDocumentWire {
+    schema: String,
+    assurance_profile: AssuranceProfile,
+    audience: String,
+    issued_by: String,
+    provided_by: String,
+    #[serde(
+        default = "default_maximum_holder_bound_batch_size",
+        deserialize_with = "deserialize_maximum_holder_bound_batch_size"
+    )]
+    maximum_holder_bound_batch_size: u16,
+    definitions: Vec<EvidenceDefinition>,
+    #[serde(flatten)]
+    additive: BTreeMap<String, IgnoredAny>,
+}
+
+impl<'de> Deserialize<'de> for EvidenceDefinitionsDocument {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = EvidenceDefinitionsDocumentWire::deserialize(deserializer)?;
+        if wire.additive.contains_key("holderBoundBatchMaxSize") {
+            return Err(D::Error::unknown_field(
+                "holderBoundBatchMaxSize",
+                &[
+                    "schema",
+                    "assuranceProfile",
+                    "audience",
+                    "issuedBy",
+                    "providedBy",
+                    "maximumHolderBoundBatchSize",
+                    "definitions",
+                ],
+            ));
+        }
+        Ok(Self {
+            schema: wire.schema,
+            assurance_profile: wire.assurance_profile,
+            audience: wire.audience,
+            issued_by: wire.issued_by,
+            provided_by: wire.provided_by,
+            maximum_holder_bound_batch_size: wire.maximum_holder_bound_batch_size,
+            definitions: wire.definitions,
+        })
+    }
+}
+
 impl EvidenceDefinitionsDocument {
     /// Validate the complete client-safe catalog before any definition is used
     /// to prepare a request.
     ///
-    /// Strict deserialization closes the document vocabulary. This method
-    /// closes the relationships JSON types cannot express: handle and role
+    /// Deserialization preserves every known member's type while ignoring
+    /// additive response members. This method closes the relationships JSON
+    /// types cannot express: handle and role
     /// uniqueness, ordered bounds, effective format compatibility, and the
     /// list uniqueness invariant. Progressive selection and protocol adapters
     /// use this same check before turning catalog entries into requests.
@@ -139,7 +189,7 @@ impl EvidenceDefinitionsDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct EvidenceDefinition {
     pub handle: String,
     pub requirement: String,
@@ -197,7 +247,6 @@ impl DefinitionResponseFormat {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct DefinitionSubject {
     pub role: String,
     pub cardinality: DefinitionCardinality,
@@ -211,7 +260,7 @@ pub enum DefinitionCardinality {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct DefinitionSelector {
     pub profile: String,
     pub value_origin: SelectorValueOrigin,
@@ -230,7 +279,7 @@ pub enum SelectorValueOrigin {
 
 /// Public validation metadata for one selector field.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SelectorField {
     String {
         name: String,
@@ -508,7 +557,7 @@ fn valid_concepts(concepts: &[DefinitionConcept]) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct DefinitionConcept {
     pub handle: String,
     pub concept: String,
@@ -586,60 +635,119 @@ impl Serialize for DefinitionConceptForm {
 
 impl<'de> Deserialize<'de> for DefinitionConceptForm {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        <TaggedConceptForm as Deserialize>::deserialize(deserializer).map(Self::from)
+        match <TaggedConceptForm as Deserialize>::deserialize(deserializer)?.into_definition() {
+            Ok(form) => Ok(form),
+            Err(refusal) => Err(D::Error::unknown_field(refusal.member, refusal.expected)),
+        }
     }
 }
 
-/// The form as it is written: one variant per `type` value, each refusing a
-/// member it does not declare.
+/// The form as it is written: one variant per `type` value. Additive response
+/// members are ignored, while known members that would change another
+/// variant's semantics remain visible for explicit refusal.
 #[derive(Deserialize)]
 #[serde(
     remote = "Self",
     rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
+    rename_all_fields = "camelCase"
 )]
 enum TaggedConceptForm {
-    Boolean {},
-    Integer {},
-    String {},
-    DateBucket {},
-    TimeBucket {},
-    EntityReference {},
-    Structured {},
+    Boolean {
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
+    },
+    Integer {
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
+    },
+    String {
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
+    },
+    DateBucket {
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
+    },
+    TimeBucket {
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
+    },
+    EntityReference {
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
+    },
+    Structured {
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
+    },
     List {
         items: DefinitionListItemForm,
         minimum_items: usize,
         maximum_items: usize,
         unique: bool,
+        #[serde(flatten)]
+        additive: BTreeMap<String, IgnoredAny>,
     },
 }
 
 tagged_union!(TaggedConceptForm);
 
-impl From<TaggedConceptForm> for DefinitionConceptForm {
-    fn from(form: TaggedConceptForm) -> Self {
-        match form {
-            TaggedConceptForm::Boolean {} => Self::Scalar(ConceptForm::Boolean),
-            TaggedConceptForm::Integer {} => Self::Scalar(ConceptForm::Integer),
-            TaggedConceptForm::String {} => Self::Scalar(ConceptForm::String),
-            TaggedConceptForm::DateBucket {} => Self::Scalar(ConceptForm::DateBucket),
-            TaggedConceptForm::TimeBucket {} => Self::Scalar(ConceptForm::TimeBucket),
-            TaggedConceptForm::EntityReference {} => Self::Scalar(ConceptForm::EntityReference),
-            TaggedConceptForm::Structured {} => Self::Scalar(ConceptForm::Structured),
-            TaggedConceptForm::List {
+struct RefusedConceptFormMember {
+    member: &'static str,
+    expected: &'static [&'static str],
+}
+
+impl TaggedConceptForm {
+    fn into_definition(self) -> Result<DefinitionConceptForm, RefusedConceptFormMember> {
+        const SCALAR_MEMBERS: &[&str] = &["type"];
+        const LIST_MEMBERS: &[&str] = &["type", "items", "minimumItems", "maximumItems", "unique"];
+        const LIST_ONLY_MEMBERS: &[&str] =
+            &["items", "minimumItems", "maximumItems", "unique", "ordered"];
+
+        let scalar = |additive: &BTreeMap<String, IgnoredAny>, form| {
+            if let Some(member) = LIST_ONLY_MEMBERS
+                .iter()
+                .copied()
+                .find(|member| additive.contains_key(*member))
+            {
+                return Err(RefusedConceptFormMember {
+                    member,
+                    expected: SCALAR_MEMBERS,
+                });
+            }
+            Ok(DefinitionConceptForm::Scalar(form))
+        };
+
+        match self {
+            Self::Boolean { additive } => scalar(&additive, ConceptForm::Boolean),
+            Self::Integer { additive } => scalar(&additive, ConceptForm::Integer),
+            Self::String { additive } => scalar(&additive, ConceptForm::String),
+            Self::DateBucket { additive } => scalar(&additive, ConceptForm::DateBucket),
+            Self::TimeBucket { additive } => scalar(&additive, ConceptForm::TimeBucket),
+            Self::EntityReference { additive } => scalar(&additive, ConceptForm::EntityReference),
+            Self::Structured { additive } => scalar(&additive, ConceptForm::Structured),
+            Self::List {
                 items,
                 minimum_items,
                 maximum_items,
                 unique,
-            } => Self::List(DefinitionListForm {
-                list: DefinitionList {
-                    items,
-                    minimum_items,
-                    maximum_items,
-                    unique,
-                },
-            }),
+                additive,
+            } => {
+                if additive.contains_key("ordered") {
+                    return Err(RefusedConceptFormMember {
+                        member: "ordered",
+                        expected: LIST_MEMBERS,
+                    });
+                }
+                Ok(DefinitionConceptForm::List(DefinitionListForm {
+                    list: DefinitionList {
+                        items,
+                        minimum_items,
+                        maximum_items,
+                        unique,
+                    },
+                }))
+            }
         }
     }
 }
@@ -993,16 +1101,14 @@ mod tests {
     }
 
     #[test]
-    fn a_document_level_configuration_revision_is_refused() {
-        // The revision moved from the document to each definition. A deployment
-        // still publishing it at the document level would have a relying party
-        // pin a value no assertion carries, so the closed type refuses it
-        // rather than ignoring it.
+    fn an_additive_document_member_is_ignored() {
         let document_level = DOCUMENT.replace(
             r#""assuranceProfile": "local","#,
             r#""assuranceProfile": "local", "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000","#,
         );
-        assert!(serde_json::from_str::<EvidenceDefinitionsDocument>(&document_level).is_err());
+        let parsed: EvidenceDefinitionsDocument =
+            serde_json::from_str(&document_level).expect("additive members are ignored");
+        assert_eq!(parsed, document());
     }
 
     #[test]
@@ -1044,12 +1150,35 @@ mod tests {
     }
 
     #[test]
-    fn an_undeclared_member_is_refused() {
-        let extended = DOCUMENT.replace(
-            r#""schema": "registry.evidence-definitions/v1","#,
-            r#""schema": "registry.evidence-definitions/v1", "sourcePlan": "leaked","#,
-        );
-        assert!(serde_json::from_str::<EvidenceDefinitionsDocument>(&extended).is_err());
+    fn additive_members_are_ignored_at_each_response_object_boundary() {
+        let extended = DOCUMENT
+            .replace(
+                r#""schema": "registry.evidence-definitions/v1","#,
+                r#""schema": "registry.evidence-definitions/v1", "sourcePlan": "leaked","#,
+            )
+            .replace(
+                r#""handle": "status-holds","#,
+                r#""handle": "status-holds", "futureDefinitionMember": true,"#,
+            )
+            .replace(
+                r#""role": "subject","#,
+                r#""role": "subject", "futureSubjectMember": true,"#,
+            )
+            .replace(
+                r#""profile": "record-lookup-v1","#,
+                r#""profile": "record-lookup-v1", "futureSelectorMember": true,"#,
+            )
+            .replace(
+                r#""type": "string", "name": "record_reference","#,
+                r#""type": "string", "futureFieldMember": true, "name": "record_reference","#,
+            )
+            .replace(
+                r#""form": {"type": "boolean"}"#,
+                r#""form": {"type": "boolean", "futureFormMember": true}"#,
+            );
+        let parsed: EvidenceDefinitionsDocument =
+            serde_json::from_str(&extended).expect("additive members are ignored");
+        assert_eq!(parsed, document());
     }
 
     #[test]
@@ -1348,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    fn a_concept_form_refuses_what_its_variant_does_not_declare() {
+    fn a_concept_form_refuses_known_members_that_do_not_belong_to_its_variant() {
         for written in [
             serde_json::json!({"type": "boolean", "unique": true}),
             serde_json::json!({"type": "structured", "items": "string"}),
@@ -1376,6 +1505,35 @@ mod tests {
             "list",
         ] {
             assert!(refusal.contains(&format!("`{form}`")), "{form}: {refusal}");
+        }
+    }
+
+    #[test]
+    fn a_known_wrong_variant_member_is_reported_as_the_unknown_member() {
+        for (written, member) in [
+            (
+                serde_json::json!({"type": "boolean", "unique": true}),
+                "unique",
+            ),
+            (
+                serde_json::json!({
+                    "type": "list",
+                    "items": "string",
+                    "minimumItems": 1,
+                    "maximumItems": 4,
+                    "unique": true,
+                    "ordered": true
+                }),
+                "ordered",
+            ),
+        ] {
+            let refusal = serde_json::from_value::<DefinitionConceptForm>(written.clone())
+                .expect_err("the known wrong-variant member is refused")
+                .to_string();
+            assert!(
+                refusal.starts_with(&format!("unknown field `{member}`")),
+                "{written} reported the wrong refusal: {refusal}"
+            );
         }
     }
 }

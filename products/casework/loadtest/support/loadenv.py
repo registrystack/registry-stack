@@ -181,7 +181,12 @@ def write_environment(
     root = _require_root(root)
     report = _read_json_object(dev_report)
     project = (root / "project").resolve()
-    if Path(str(report.get("project", ""))).resolve() != project or report.get("status") != "ready":
+    if (
+        Path(str(report.get("project", ""))).resolve() != project
+        or report.get("ok") is not True
+        or report.get("status") != "complete"
+        or report.get("outcome") != "ready"
+    ):
         raise LoadtestError("caseworkctl dev did not report the expected ready project")
     expected_state = project / ".casework/dev/state.json"
     if Path(str(report.get("stateFile", ""))).resolve() != expected_state.resolve():

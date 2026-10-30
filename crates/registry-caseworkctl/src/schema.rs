@@ -40,12 +40,21 @@ pub fn report_documents() -> Result<BTreeMap<&'static str, String>, serde_json::
     );
     value["title"] = Value::String("Casework command report".into());
     value["properties"] = serde_json::json!({"apiVersion":{"const":crate::report::REPORT_API_VERSION},"kind":{"const":crate::report::REPORT_KIND}});
-    value["required"] = serde_json::json!(["apiVersion", "kind"]);
+    value["required"] = serde_json::json!([
+        "ok",
+        "command",
+        "status",
+        "apiVersion",
+        "kind",
+        "version",
+        "diagnostics"
+    ]);
     value["allOf"] = serde_json::json!([{"oneOf":[
-        {"properties":{"ok":{"const":true},"status":{"const":"complete"}},"required":["data"]},
+        {"properties":{"ok":{"const":true},"status":{"const":"complete"}}},
         {"properties":{"ok":{"const":false},"status":{"enum":["domain-refusal","usage-error","operational-failure"]},"diagnostics":{"minItems":1}}}
     ]}]);
     value["unevaluatedProperties"] = Value::Bool(false);
+    require_success_payloads(&mut value);
     registry_casework_core::schema::type_identifier_keyed_maps(&mut value)?;
     type_casework_activation_digests(&mut value)?;
     close_direct_output_structs(&mut value);
@@ -56,6 +65,46 @@ pub fn report_documents() -> Result<BTreeMap<&'static str, String>, serde_json::
         serde_json::to_string_pretty(&value)? + "\n",
     )]
     .into())
+}
+
+/// Schemars correctly flattens each optional command payload, but its members
+/// must remain optional so the same command variant can describe a failure.
+/// Require the payload's non-optional members only for successful reports.
+fn require_success_payloads(schema: &mut Value) {
+    let variants = schema["oneOf"]
+        .as_array_mut()
+        .expect("the report schema is a command union");
+    for variant in variants {
+        let command = variant["properties"]["command"]["const"]
+            .as_str()
+            .expect("a report variant has one command");
+        let payload = crate::report::payload_members(command)
+            .unwrap_or_else(|| panic!("{command} has no payload schema"));
+        let mut payload_or_success = vec![serde_json::json!({
+            "properties":{"ok":{"const":true}},"required":["ok"]
+        })];
+        payload_or_success.extend(
+            payload
+                .present
+                .iter()
+                .map(|member| serde_json::json!({"required":[member]})),
+        );
+        let mut constraints = vec![serde_json::json!({
+            "if":{"anyOf":payload_or_success},
+            "then":{"required":payload.required}
+        })];
+        if let Some(status) = match command {
+            "usage" => Some("usage-error"),
+            "internal" => Some("operational-failure"),
+            _ => None,
+        } {
+            constraints.push(serde_json::json!({
+                "properties":{"ok":{"const":false},"status":{"const":status}},
+                "required":["ok","status"]
+            }));
+        }
+        variant["allOf"] = Value::Array(constraints);
+    }
 }
 
 /// Casework's activation ledger constrains both digest columns to canonical
@@ -277,6 +326,16 @@ mod tests {
         let document: Value =
             serde_json::from_str(&report_documents().unwrap()["report.schema.json"]).unwrap();
         assert_eq!(document["unevaluatedProperties"], false);
+        assert!(document["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|variant| { variant["properties"].get("data").is_none() }));
+        assert!(document["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|variant| { variant["properties"]["command"]["const"] == "internal" }));
         for (name, member) in [("RoutingCondition", "fields"), ("TaskTemplate", "subjects")] {
             assert_eq!(
                 document["$defs"][name]["properties"][member]["propertyNames"]["$ref"],
@@ -328,6 +387,14 @@ mod tests {
             .any(|member| member == "atRisk"));
 
         let definitions = &document["$defs"];
+        let variant = |command: &str| {
+            document["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|variant| variant["properties"]["command"]["const"] == command)
+                .unwrap_or_else(|| panic!("missing {command} report variant"))
+        };
         assert_eq!(
             definitions["Activation"]["properties"]["applyOrder"]["minimum"],
             i64::MIN
@@ -337,15 +404,15 @@ mod tests {
             i64::MAX
         );
         assert_eq!(
-            definitions["DevGrantData"]["properties"]["grantExpiresAt"]["minimum"],
+            variant("dev-grant")["properties"]["grantExpiresAt"]["minimum"],
             0
         );
         assert_eq!(
-            definitions["DevGrantData"]["properties"]["grantExpiresAt"]["maximum"],
+            variant("dev-grant")["properties"]["grantExpiresAt"]["maximum"],
             u64::MAX
         );
         assert_eq!(
-            definitions["CheckData"]["properties"]["filesChecked"]["maximum"],
+            variant("check")["properties"]["filesChecked"]["maximum"],
             usize::MAX as u64
         );
         assert_eq!(
@@ -362,5 +429,196 @@ mod tests {
         );
         assert_eq!(definitions["Digest"]["pattern"], "^sha256:[0-9a-f]{64}$");
         assert_native_integer_bounds(&document, "");
+    }
+
+    #[test]
+    fn actual_flat_success_and_failure_reports_validate() {
+        let document: Value =
+            serde_json::from_str(&report_documents().unwrap()["report.schema.json"]).unwrap();
+        let validator = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(&document)
+            .expect("the report schema compiles as Draft 2020-12");
+
+        let success = crate::report::CliReport::from_value(
+            "dev",
+            serde_json::json!({
+                "ok": true,
+                "status": "ready",
+                "project": "review",
+                "stateFile": "state.json",
+                "operatorConfig": "operator.yaml",
+                "caseworkUrl": "http://127.0.0.1:8092",
+                "tokenEndpoint": "http://127.0.0.1:8093/oauth2/token",
+                "issuer": "http://127.0.0.1:8093",
+                "clientAssertionAudience": "http://127.0.0.1:8093",
+                "resource": "urn:casework:dev:review",
+                "audience": "urn:casework:dev:review",
+                "journal": "casework.ndjson",
+                "contextProviders": [],
+                "clients": [],
+                "directory": {"revision": 1, "teams": 1}
+            }),
+        )
+        .unwrap();
+        let success = serde_json::to_value(success).unwrap();
+        assert!(success.get("data").is_none());
+        if let Err(errors) = validator.validate(&success) {
+            panic!(
+                "flat dev success violates the report schema: {}",
+                errors
+                    .map(|error| format!("{error} at {}", error.instance_path))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+
+        let mut warning_success = success.clone();
+        warning_success["diagnostics"] = serde_json::json!([{
+            "severity":"warning",
+            "code":"casework.project.example-warning",
+            "path":"/reviewPolicies/decision",
+            "message":"The example keeps an accepted warning.",
+            "suggestedAction":"Review the accepted warning before deployment.",
+            "source":{"file":"casework.yaml","line":1,"column":1}
+        }]);
+        if let Err(errors) = validator.validate(&warning_success) {
+            panic!(
+                "flat success with a warning violates the report schema: {}",
+                errors
+                    .map(|error| format!("{error} at {}", error.instance_path))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+
+        let mut incomplete_success = success;
+        incomplete_success
+            .as_object_mut()
+            .unwrap()
+            .remove("outcome");
+        assert!(!validator.is_valid(&incomplete_success));
+
+        let payload_failure = crate::report::CliReport::from_value(
+            "provider-add",
+            serde_json::json!({
+                "ok": false,
+                "outcome": "changes-needed",
+                "project": "review",
+                "actionId": "correct-address",
+                "pattern": "single-reviewer-approval",
+                "sourceNamespace": "facility-registry",
+                "policyId": "correct-address-review",
+                "authorityId": "correct-address-review-authority",
+                "providerId": "correct-address-context",
+                "contextFields": [],
+                "changes": [],
+                "deployment": [],
+                "bypassPaths": [],
+                "sourceWrites": false,
+                "next": "Apply the intended BReg changes, then retry.",
+                "diagnostics": [{
+                    "severity":"error",
+                    "code":"casework.provider-add.breg-changes-needed",
+                    "path":"--breg-project",
+                    "message":"The BReg Action needs authored changes.",
+                    "suggestedAction":"Review the proposed changes, apply them, then retry."
+                }]
+            }),
+        )
+        .unwrap();
+        let payload_failure = serde_json::to_value(payload_failure).unwrap();
+        if let Err(errors) = validator.validate(&payload_failure) {
+            panic!(
+                "complete provider-add failure payload violates the report schema: {}",
+                errors
+                    .map(|error| format!("{error} at {}", error.instance_path))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+
+        let bare_provider_failure = crate::report::CliReport::failure(
+            "provider-add",
+            crate::report::ReportStatus::DomainRefusal,
+            vec![registry_platform_yaml::Diagnostic::error(
+                "casework.provider-add.invalid-breg-report",
+                "--breg-project",
+                "The BReg report was refused.",
+                "Inspect the BReg project, then retry.",
+            )],
+        )
+        .unwrap();
+        let bare_provider_failure = serde_json::to_value(bare_provider_failure).unwrap();
+        if let Err(errors) = validator.validate(&bare_provider_failure) {
+            panic!(
+                "bare provider-add failure violates the report schema: {}: {bare_provider_failure}",
+                errors
+                    .map(|error| format!("{error} at {}", error.instance_path))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+        let mut partial_failure = bare_provider_failure;
+        partial_failure["outcome"] = Value::String("changes-needed".into());
+        assert!(validator.validate(&partial_failure).is_err());
+
+        let failure = crate::report::CliReport::failure(
+            "internal",
+            crate::report::ReportStatus::OperationalFailure,
+            vec![registry_platform_yaml::Diagnostic::error(
+                "caseworkctl.internal-error",
+                "",
+                "The command stopped because of an internal error.",
+                "Preserve the input and report the diagnostic code.",
+            )],
+        )
+        .unwrap();
+        let failure = serde_json::to_value(failure).unwrap();
+        if let Err(errors) = validator.validate(&failure) {
+            panic!(
+                "internal failure violates the report schema: {}",
+                errors
+                    .map(|error| format!("{error} at {}", error.instance_path))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+
+        let mut impossible_internal_success = failure.clone();
+        impossible_internal_success["ok"] = Value::Bool(true);
+        impossible_internal_success["status"] = Value::String("complete".into());
+        impossible_internal_success["diagnostics"] = serde_json::json!([]);
+        assert!(!validator.is_valid(&impossible_internal_success));
+
+        let mut empty_failure = failure;
+        empty_failure["diagnostics"] = serde_json::json!([]);
+        assert!(!validator.is_valid(&empty_failure));
+
+        for (command, status) in [
+            ("usage", "operational-failure"),
+            ("internal", "domain-refusal"),
+        ] {
+            let impossible = crate::report::CliReport::failure(
+                command,
+                match status {
+                    "domain-refusal" => crate::report::ReportStatus::DomainRefusal,
+                    "operational-failure" => crate::report::ReportStatus::OperationalFailure,
+                    _ => unreachable!(),
+                },
+                vec![registry_platform_yaml::Diagnostic::error(
+                    "caseworkctl.synthetic-failure",
+                    "",
+                    "The synthetic report carries the wrong status.",
+                    "Use the status assigned to this failure command.",
+                )],
+            )
+            .unwrap();
+            let impossible = serde_json::to_value(impossible).unwrap();
+            assert!(
+                validator.validate(&impossible).is_err(),
+                "{command} accepted {status}"
+            );
+        }
     }
 }

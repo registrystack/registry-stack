@@ -3,7 +3,7 @@
 //! Base Registry Engine's closed adoption of the shared Registry Record profile.
 //!
 //! The selected compiled record operation is the governed publication
-//! decision for the structural Registry, dataset, and entity-type identifiers.
+//! decision for the structural Registry, dataset, and record-type identifiers.
 //! They are not caller-selectable domain fields and are never inferred from a
 //! route, host header, storage relation, or deployment origin.
 
@@ -25,6 +25,7 @@ const RESERVED_DOMAIN_MEMBERS: &[&str] = &[
     "meta",
     "registryIdentifier",
     "datasetIdentifier",
+    "recordTypeIdentifier",
     "entityTypeIdentifier",
     "recordIdentifier",
     "revisionIdentifier",
@@ -203,7 +204,7 @@ fn response_meta(
             Value::String(dataset_identifier.to_owned()),
         ),
         (
-            "entityTypeIdentifier".to_owned(),
+            "recordTypeIdentifier".to_owned(),
             Value::String(entity.id.clone()),
         ),
     ])))

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, fs, path::Path};
 fn name(id: &str) -> String {
@@ -17,7 +17,7 @@ fn name(id: &str) -> String {
 }
 fn ts(schema: &Value, depth: usize) -> Result<String> {
     if depth > 16 {
-        bail!("context schema type nesting exceeds 16");
+        return Err(crate::project::ProjectRefusal::ContextSchemaTooDeep.into());
     }
     if let Some(values) = schema["enum"].as_array() {
         return Ok(values
@@ -78,7 +78,7 @@ fn ts(schema: &Value, depth: usize) -> Result<String> {
 }
 fn py(schema: &Value, depth: usize) -> Result<String> {
     if depth > 16 {
-        bail!("context schema type nesting exceeds 16");
+        return Err(crate::project::ProjectRefusal::ContextSchemaTooDeep.into());
     }
     if let Some(values) = schema["enum"].as_array() {
         return Ok(format!(
@@ -183,4 +183,30 @@ pub(super) fn generate(project: &Path, output: &Path) -> Result<Value> {
     Ok(
         json!({"ok":true,"command":"types","output":output,"files":["casework.ts","casework.py","contexts.schema.json"]}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn too_deep() -> Value {
+        let mut schema = json!({"type":"string"});
+        for _ in 0..18 {
+            schema = json!({"type":"array","items":schema});
+        }
+        schema
+    }
+
+    #[test]
+    fn bounded_type_generation_is_a_typed_authoring_refusal() {
+        for error in [
+            ts(&too_deep(), 0).unwrap_err(),
+            py(&too_deep(), 0).unwrap_err(),
+        ] {
+            let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Authoring, &error);
+            assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
+            assert_eq!(diagnostic["code"], "caseworkctl.refused");
+            assert!(!diagnostic.to_string().contains("nesting"));
+        }
+    }
 }

@@ -1,6 +1,26 @@
 {
   "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
   "command": "explain",
+  "diagnostics": [
+    {
+      "artifact": "BRegProject",
+      "code": "breg.access.profile-related-disclosure",
+      "message": "profile `facility-reader` can read `operator` records linked to `facility` through `facility-assignment` on read path `operators`; it sees fields jurisdiction, operator-code, status under its own `facility` row boundaries, and access profiles declared for `operator` do not apply",
+      "path": "/accessProfiles/1/permissions/records/1/readPaths/0",
+      "rank": "widens-access",
+      "scope": {
+        "file": "registry.yaml",
+        "path": "/accessProfiles/@id=facility-reader/permissions/records/@recordType=facility/readPaths/0"
+      },
+      "severity": "warning",
+      "source": {
+        "column": 15,
+        "file": "products/breg/examples/facility/registry.yaml",
+        "line": 237
+      },
+      "suggestedAction": "Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply."
+    }
+  ],
   "explanation": {
     "accessProfiles": [
       {
@@ -1644,31 +1664,13 @@
         "protocol": "id.registrystack.org/protocols/review/v1"
       }
     ],
-    "revision": "sha256:aa0ee5c665573a784008c752e732dff2c153d7479a3f07a3f78b475b3867dfa1",
+    "revision": "sha256:5110e45ba7000dc5b756355d9f93a744b2f904b03885bc66b60917de66d5f5e7",
     "statisticalDatasets": []
   },
-  "findings": [
-    {
-      "artifact": "BRegProject",
-      "code": "breg.access.profile-related-disclosure",
-      "message": "profile `facility-reader` can read `operator` records linked to `facility` through `facility-assignment` on read path `operators`; it sees fields jurisdiction, operator-code, status under its own `facility` row boundaries, and access profiles declared for `operator` do not apply",
-      "path": "/accessProfiles/1/permissions/records/1/readPaths/0",
-      "rank": "widens-access",
-      "scope": {
-        "file": "registry.yaml",
-        "path": "/accessProfiles/@id=facility-reader/permissions/records/@recordType=facility/readPaths/0"
-      },
-      "severity": "warning",
-      "source": {
-        "column": 15,
-        "file": "products/breg/examples/facility/registry.yaml",
-        "line": 237
-      },
-      "suggestedAction": "Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply."
-    }
-  ],
   "kind": "BRegCtlReport",
   "ok": true,
   "profile": "authoring",
-  "revision": "sha256:aa0ee5c665573a784008c752e732dff2c153d7479a3f07a3f78b475b3867dfa1"
+  "revision": "sha256:5110e45ba7000dc5b756355d9f93a744b2f904b03885bc66b60917de66d5f5e7",
+  "status": "complete",
+  "version": "0.45.0-dev"
 }

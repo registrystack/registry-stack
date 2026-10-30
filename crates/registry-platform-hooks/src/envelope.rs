@@ -80,18 +80,74 @@ impl Default for EnvelopeLimits {
     }
 }
 
-/// The product record the triggering change landed on.
+/// The product resource the triggering change landed on.
+///
+/// Record and Proposal subjects are separate closed wire shapes. The enum is
+/// untagged because the field names identify the shape without adding a
+/// shared product-semantic discriminator to the envelope.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct EventSubject {
-    /// The record reference, as the product addresses it.
-    pub record_reference: String,
-    /// The revision the triggering change produced. Revisions start at one, so
-    /// a revision of zero or below is refused on both encode and decode, the
-    /// same bound the delivery store enforces on a stored envelope.
-    #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
-    pub record_revision: i64,
+#[serde(untagged, deny_unknown_fields, rename_all_fields = "camelCase")]
+pub enum EventSubject {
+    /// An ordinary product record and the revision the change produced.
+    Record {
+        record_reference: String,
+        #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
+        record_revision: i64,
+    },
+    /// A Proposal resource and its lifecycle revision after the transition.
+    Proposal {
+        proposal_reference: String,
+        #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
+        proposal_revision: i64,
+    },
+}
+
+impl EventSubject {
+    /// Build an ordinary record subject.
+    #[must_use]
+    pub fn record(reference: impl Into<String>, revision: i64) -> Self {
+        Self::Record {
+            record_reference: reference.into(),
+            record_revision: revision,
+        }
+    }
+
+    /// Build a Proposal resource subject.
+    #[must_use]
+    pub fn proposal(reference: impl Into<String>, revision: i64) -> Self {
+        Self::Proposal {
+            proposal_reference: reference.into(),
+            proposal_revision: revision,
+        }
+    }
+
+    /// The resource reference, independent of the owning product's family.
+    #[must_use]
+    pub fn reference(&self) -> &str {
+        match self {
+            Self::Record {
+                record_reference, ..
+            } => record_reference,
+            Self::Proposal {
+                proposal_reference, ..
+            } => proposal_reference,
+        }
+    }
+
+    /// The positive resource revision, independent of the owning product's
+    /// family.
+    #[must_use]
+    pub const fn revision(&self) -> i64 {
+        match self {
+            Self::Record {
+                record_revision, ..
+            } => *record_revision,
+            Self::Proposal {
+                proposal_revision, ..
+            } => *proposal_revision,
+        }
+    }
 }
 
 /// Why this event exists: the chain it belongs to and the event that caused it.
@@ -179,7 +235,7 @@ pub struct HookEnvelope {
     #[serde(with = "utc_millisecond_rfc3339")]
     #[cfg_attr(feature = "schema", schemars(with = "String", extend("format" = "date-time")))]
     pub time: OffsetDateTime,
-    /// The product record reference and revision.
+    /// The product resource reference and revision.
     pub subject: EventSubject,
     /// The product data contract id for `data`.
     pub dataschema: String,
@@ -328,9 +384,9 @@ impl HookEnvelope {
 /// Refuse an envelope the delivery store could never hold or the chain rules
 /// forbid, on the encode and the decode path alike.
 fn validate_envelope(envelope: &HookEnvelope) -> Result<(), HookEnvelopeError> {
-    if envelope.subject.record_revision <= 0 {
+    if envelope.subject.revision() <= 0 {
         return Err(HookEnvelopeError::InvalidRevision {
-            revision: envelope.subject.record_revision,
+            revision: envelope.subject.revision(),
         });
     }
     validate_causation(envelope)?;
@@ -569,10 +625,7 @@ mod tests {
             event_type: "birth-registered-followup".to_owned(),
             source: "/products/breg/deployments/prod".to_owned(),
             time: datetime!(2026-09-18 12:00:00 UTC),
-            subject: EventSubject {
-                record_reference: "breg/person/42".to_owned(),
-                record_revision: 7,
-            },
+            subject: EventSubject::record("breg/person/42", 7),
             dataschema: "https://breg.example.gov/schemas/person/v3".to_owned(),
             data: json!({"entity": "person", "values": {"familyName": "Kalanni"}}),
             causation: Causation::root(EVENT_A),
@@ -612,6 +665,69 @@ mod tests {
         assert_eq!(decoded, source);
         let again = decoded.to_canonical_bytes(&limits).expect("re-encodes");
         assert_eq!(again, bytes);
+    }
+
+    #[test]
+    fn decodes_a_closed_proposal_subject_shape() {
+        let raw = concat!(
+            r#"{"causation":{"hop":0,"root":"019934b2-1f2e-7c3a-9d4b-6f1e2a3b4c5d"},"#,
+            r#""data":{"proposalId":"019934b2-1f2e-7c3a-9d4b-6f1e2a3b4c5f","revision":7,"transition":"submitted"},"#,
+            r#""dataschema":"https://id.registrystack.org/contracts/breg/proposal-event/v1","#,
+            r#""id":"019934b2-1f2e-7c3a-9d4b-6f1e2a3b4c5d","source":"urn:registrystack:registry:permits:instance:prod","#,
+            r#""subject":{"proposalReference":"/v1/proposals/019934b2-1f2e-7c3a-9d4b-6f1e2a3b4c5f","proposalRevision":7},"#,
+            r#""time":"2026-09-18T12:00:00Z","type":"proposal.submitted"}"#,
+        );
+
+        let decoded =
+            HookEnvelope::from_canonical_bytes(raw.as_bytes(), &EnvelopeLimits::default())
+                .expect("the shared envelope admits the closed Proposal subject");
+        assert_eq!(
+            serde_json::to_value(decoded.subject).expect("subject serializes"),
+            json!({
+                "proposalReference": "/v1/proposals/019934b2-1f2e-7c3a-9d4b-6f1e2a3b4c5f",
+                "proposalRevision": 7,
+            })
+        );
+    }
+
+    #[test]
+    fn subject_accessors_preserve_each_closed_family() {
+        let record = EventSubject::record("hmac-sha256:record", 3);
+        assert_eq!(record.reference(), "hmac-sha256:record");
+        assert_eq!(record.revision(), 3);
+        assert!(matches!(record, EventSubject::Record { .. }));
+
+        let proposal = EventSubject::proposal("/v1/proposals/42", 5);
+        assert_eq!(proposal.reference(), "/v1/proposals/42");
+        assert_eq!(proposal.revision(), 5);
+        assert!(matches!(proposal, EventSubject::Proposal { .. }));
+    }
+
+    #[test]
+    fn decode_refuses_mixed_or_open_subject_shapes() {
+        for subject in [
+            json!({
+                "recordReference": "hmac-sha256:record",
+                "proposalRevision": 1,
+            }),
+            json!({
+                "proposalReference": "/v1/proposals/42",
+                "proposalRevision": 1,
+                "recordReference": "hmac-sha256:record",
+            }),
+            json!({
+                "recordReference": "hmac-sha256:record",
+                "recordRevision": 1,
+                "extra": true,
+            }),
+        ] {
+            let mut value = serde_json::to_value(envelope()).expect("serializes");
+            value["subject"] = subject;
+            let raw = canonicalize_json(&value).expect("canonical subject fixture");
+            let error = HookEnvelope::from_canonical_bytes(&raw, &EnvelopeLimits::default())
+                .expect_err("subject families are exact and closed");
+            assert_eq!(error.code(), "hook.envelope.bad_shape");
+        }
     }
 
     #[test]
@@ -1077,7 +1193,7 @@ mod tests {
     fn a_uuid_identity_and_a_positive_revision_are_accepted() {
         let limits = EnvelopeLimits::default();
         let mut source = envelope();
-        source.subject.record_revision = 1;
+        source.subject = EventSubject::record(source.subject.reference(), 1);
         let bytes = source.to_canonical_bytes(&limits).expect("encodes");
         let decoded = HookEnvelope::from_canonical_bytes(&bytes, &limits).expect("decodes");
         assert_eq!(decoded, source);
@@ -1086,9 +1202,14 @@ mod tests {
     #[test]
     fn a_revision_at_or_below_zero_is_refused_on_both_paths() {
         let limits = EnvelopeLimits::default();
-        for revision in [0, -1] {
+        for subject in [
+            EventSubject::record("breg/person/42", 0),
+            EventSubject::record("breg/person/42", -1),
+            EventSubject::proposal("/v1/proposals/42", 0),
+            EventSubject::proposal("/v1/proposals/42", -1),
+        ] {
             let mut source = envelope();
-            source.subject.record_revision = revision;
+            source.subject = subject;
             let error = source
                 .to_canonical_bytes(&limits)
                 .expect_err("encode refuses a revision the store could not hold");
@@ -1108,7 +1229,7 @@ mod tests {
         // A revision whose magnitude no longer survives binary64 is refused by
         // canonical JSON before the revision check, so only encode names it.
         let mut source = envelope();
-        source.subject.record_revision = i64::MIN;
+        source.subject = EventSubject::proposal("/v1/proposals/42", i64::MIN);
         let error = source.to_canonical_bytes(&limits).expect_err("refused");
         assert_eq!(error.code(), "hook.envelope.invalid_revision");
     }
