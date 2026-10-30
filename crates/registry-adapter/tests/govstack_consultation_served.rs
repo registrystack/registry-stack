@@ -434,6 +434,54 @@ async fn a_lookup_identifier_that_cannot_be_one_path_segment_is_not_found_before
 }
 
 #[tokio::test]
+async fn a_lookup_identifier_too_long_for_the_destination_url_is_not_found_before_any_send() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![found()]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    // 2,100 ASCII bytes, and 700 bytes of non-ASCII that triple when encoded.
+    for long in ["a".repeat(2_100), "\u{e9}".repeat(350)] {
+        let (status, _, body) = served.post(
+            LOOKUP_PATH,
+            Some(&token),
+            &json!({"selector": "byRecordId", "values": {"recordId": long}}),
+        );
+        assert_eq!(status, 404, "{body}");
+        contract::assert_problem(&body, 404, "record-not-available");
+    }
+    assert_eq!(upstream.request_count(), 0);
+    let kinds = served.journal_kinds().await;
+    assert!(
+        kinds.iter().all(|kind| kind != "exchangeSending"),
+        "nothing was sent: {kinds:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_retrieve_identifier_too_long_for_the_destination_url_is_not_found_before_any_send() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![found()]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    for long in ["a".repeat(2_100), "%C3%A9".repeat(350)] {
+        let (status, _, body) = served.get(
+            &format!("/v1/collections/persons/records/{long}"),
+            Some(&token),
+        );
+        assert_eq!(status, 404, "{body}");
+        contract::assert_problem(&body, 404, "record-not-available");
+    }
+    assert_eq!(upstream.request_count(), 0);
+    let kinds = served.journal_kinds().await;
+    assert!(
+        kinds.iter().all(|kind| kind != "exchangeSending"),
+        "nothing was sent: {kinds:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_retrieve_identifier_that_cannot_be_one_path_segment_is_not_found_before_any_upstream_call(
 ) {
     let upstream = UpstreamDouble::start();

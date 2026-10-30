@@ -33,7 +33,7 @@ use crate::auth::{
     ProtectedText, TokenBudget, TokenRequest, TokenSend, TokenWire, TransportFailure,
     UpstreamStatusAction,
 };
-use crate::component::http::uri::{encode_path_segment, percent_encode};
+use crate::component::http::uri::{encode_path_segment, percent_encode, LinkRefusal};
 use crate::egress::{EgressError, EndpointEgress, OutboundSend, SendShape};
 use crate::exchange::{
     Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
@@ -464,6 +464,12 @@ impl Run<'_, '_> {
         let path = self.render_path(parameters)?;
         let query = self.render_query(parameters)?;
         let link = format!("{}{path}{query}", endpoint.base);
+        // A link the destination's URL bound cannot hold names nothing the
+        // source can serve: it is answered as no such record, before any
+        // credential is acquired and with no send.
+        if endpoint.egress.origin().pin(&link) == Err(LinkRefusal::TooLong) {
+            return Err(RouteFailure::of(ErrorClass::OutcomeNotFound));
+        }
         let ok_range = parse_ok_range(parameters).unwrap_or(DEFAULT_OK_RANGE);
 
         let mut budget = TokenBudget::new_exchange();
@@ -638,8 +644,9 @@ impl Run<'_, '_> {
 
 /// Fill a path template's `{{name}}` slots from `value`. A slot is one path
 /// segment value: it must be a string or a number whose percent-encoded form
-/// is one canonical path segment (see `encode_path_segment`), so the outbound
-/// origin pin never refuses a path the interpreter built.
+/// is one canonical path segment (see `encode_path_segment`). The rendered
+/// link's length is bounded separately, in `send`, because the URL bound
+/// covers the whole link, not one slot.
 fn fill_path(
     template: &str,
     mut value: impl FnMut(&str) -> Result<Value, RouteFailure>,

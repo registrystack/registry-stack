@@ -756,8 +756,9 @@ fn disclosed_slots(
 
 /// Whether a caller-supplied identifier can stand as one path segment of the
 /// source call: its percent-encoded form must pass the canonical-path rule
-/// the outbound origin pin applies, so the source is never asked for a path
-/// the pin would refuse. An empty identifier is not one.
+/// the outbound origin pin applies. An empty identifier is not one. The
+/// length of the whole rendered link is bounded where the route renders it,
+/// since the URL bound covers the link, not the identifier alone.
 fn is_path_segment_value(record_id: &str) -> bool {
     encode_path_segment(record_id).is_some()
 }
