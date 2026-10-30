@@ -108,8 +108,12 @@ available as `{name}` to the check command), `set` ({pointer: template} on
 the example), `write` ({path: text} in the project copy), `values`
 ({name: template}), `prepare` (commands run in order in the work directory
 before the check, each program taken from the binary directory, such as one
-that generates disposable key material), `digests` (a SHA256SUMS file in the
-project copy to refresh), `removedKeys`, `retiredApiVersions`, and `init`
+that generates disposable key material), `afterWrite` (commands run in
+order in the work directory after each mutation write and before the check,
+each program taken from the binary directory, such as a lock that re-pins
+the project from the artifact a mutation just rewrote), `digests` (a
+SHA256SUMS file in the project copy to refresh), `removedKeys`,
+`retiredApiVersions`, and `init`
 ({command, file}: the command that starts a project in `{directory}`, and the
 file of this format it writes there, relative to that directory). A format
 with an `init` command gets its `run: init` cells even when its check is not
@@ -233,12 +237,13 @@ UNMASKABLE = re.compile(
 # that failed, a report that is not the JSON the runner reads.
 NOT_BUILT = "is not in the binary directory"
 PREPARING = "preparing with `"
+AFTERWRITE = "after write, `"
 NO_REPORT = "the command printed no JSON report"
 NOT_ONE_DOCUMENT = "the output is not one JSON document"
 NOT_AN_OBJECT = "the report is not a JSON object"
 NO_DIAGNOSTICS = "the report has no `diagnostics` list"
 HARNESS = re.compile(
-    rf"\S+ {re.escape(NOT_BUILT)}|{re.escape(PREPARING)}.*"
+    rf"\S+ {re.escape(NOT_BUILT)}|{re.escape(PREPARING)}.*|{re.escape(AFTERWRITE)}.*"
     rf"|{'|'.join(re.escape(text) for text in (NO_REPORT, NOT_ONE_DOCUMENT, NOT_AN_OBJECT, NO_DIAGNOSTICS))}",
     re.DOTALL,
 )
@@ -1653,7 +1658,7 @@ def load_registry(path: Path) -> list[Format]:
 
 
 HARNESS_KEYS = {
-    "project", "copies", "set", "write", "values", "prepare", "digests", "removedKeys", "retiredApiVersions", "init"
+    "project", "copies", "set", "write", "values", "prepare", "afterWrite", "digests", "removedKeys", "retiredApiVersions", "init"
 }
 
 
@@ -1670,6 +1675,9 @@ def load_harness(path: Path) -> dict[str, dict[str, Any]]:
         prepare = harness.get("prepare", [])
         if not isinstance(prepare, list) or not all(isinstance(command, str) for command in prepare):
             raise HarnessError(f"{path.name}: {format_id}: `prepare` is not a list of commands")
+        after_write = harness.get("afterWrite", [])
+        if not isinstance(after_write, list) or not all(isinstance(command, str) for command in after_write):
+            raise HarnessError(f"{path.name}: {format_id}: `afterWrite` is not a list of commands")
         init = harness.get("init")
         if init is not None and not (
             isinstance(init, dict)
@@ -1997,6 +2005,15 @@ def run_cell(root: Path, fmt: Format, case: Case, bin_dir: Path) -> list[str]:
             staged.target.write_bytes(encode(written, case.encoding))
             if fmt.harness.get("digests"):
                 refresh_digests(staged, fmt.harness["digests"])
+            for command in fmt.harness.get("afterWrite") or []:
+                prefix = f"{AFTERWRITE}{command}`: "
+                post_argv, post_missing = command_argv(command, fmt, staged.values, bin_dir)
+                if post_argv is None:
+                    return [prefix + str(post_missing)]
+                post_code, _, post_stderr = run_command(post_argv, staged.work, env)
+                post_problems = exit_problem(post_code, 0, post_stderr, prefix)
+                if post_problems:
+                    return [sanitize(problem, str(staged.work)) for problem in post_problems]
             expected = resolve_expected(
                 case.expect, case.operation, variant, str(staged.target), fmt.id, str(staged.project)
             )

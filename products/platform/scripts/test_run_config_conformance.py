@@ -1196,12 +1196,28 @@ if args[0] == "prepare":
     with open(os.path.join(project, "prepared"), "w", encoding="utf-8") as handle:
         handle.write("prepared\n")
     raise SystemExit(0)
+if args[0] == "pin":
+    with open(os.path.join(project, "pinned"), "w", encoding="utf-8") as handle:
+        handle.write("pinned\n")
+    raise SystemExit(0)
+if args[0] == "pin-fails":
+    print("error: cannot pin", file=sys.stderr)
+    raise SystemExit(3)
 if os.path.exists(os.path.join(project, "needs-prepare")) and not os.path.exists(os.path.join(project, "prepared")):
     print("error: the project was not prepared", file=sys.stderr)
     if "--format" in args:
         print(json.dumps({"ok": False, "diagnostics": []}))
     raise SystemExit(3)
-target = os.path.join(project, "project.yaml")
+pinned_example = os.path.join(project, "pinned.yaml")
+if os.path.exists(pinned_example) and "needs-pin:" in open(pinned_example, encoding="utf-8").read():
+    if not os.path.exists(os.path.join(project, "pinned")):
+        print("error: the project was not pinned", file=sys.stderr)
+        if "--format" in args:
+            print(json.dumps({"ok": False, "diagnostics": []}))
+        raise SystemExit(3)
+target = os.path.join(project, "pinned.yaml")
+if not os.path.exists(target):
+    target = os.path.join(project, "project.yaml")
 seen = {}
 diagnostics = []
 current = None
@@ -1347,6 +1363,38 @@ CASES = {
 }
 
 HARNESS_TEXT = "formats: {}\n"
+
+# A second format whose example lives in its own staged project directory,
+# so the fake check reads `pinned.yaml` as its target. Its harness carries
+# `afterWrite`, and its case appends the member the check refuses until a
+# `pin` command has run in the work directory after the write.
+PINNED_FORMAT = """\
+  - id: demo/pinned
+    syntax: yaml
+    audience: authored
+    target: {apiVersion: id.registrystack.org/formats/demo/project/v1alpha1, kind: DemoProject}
+    schema: {id: https://example.test/demo.schema.json}
+    check: fakectl check {project}
+    example: products/demo/pinned/pinned.yaml
+    conformance: {requiredText: /project/id, optionalText: none, integer: none, boolean: none}
+"""
+PINNED_EXAMPLE = """\
+# A demo project whose artifacts are pinned.
+apiVersion: id.registrystack.org/formats/demo/project/v1alpha1
+kind: DemoProject
+project:
+  id: demo
+  version: "1"
+"""
+NEEDS_PIN_CASE = """\
+    id: needs-pin
+    rules: [CFG-CHECK-2]
+    summary: A pin refreshed after the write keeps the check green.
+    appliesTo: {formats: [demo/pinned]}
+    mutation:
+      append: "needs-pin: true\\n"
+    expect: {exit: 0, diagnostics: []}
+"""
 
 
 class LoadRegistryTest(unittest.TestCase):
@@ -1653,6 +1701,50 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("demo/project\tbaseline\tfail", stdout)
         self.assertIn("preparing with `fakectl prepare {project}`: exit status 3, expected 0: error: cannot prepare", stdout)
+
+    def stage_pinned(self, harness: dict) -> None:
+        """Stage the demo/pinned format: its own example directory, a registry
+        entry, a case whose mutation the fake check refuses until a pin has
+        run after the write, and the harness under test."""
+        pinned = self.root / "products/demo/pinned"
+        pinned.mkdir()
+        (pinned / "pinned.yaml").write_text(PINNED_EXAMPLE, encoding="utf-8")
+        (self.root / "products/platform/config-formats.yaml").write_text(
+            REGISTRY_TEXT + PINNED_FORMAT, encoding="utf-8"
+        )
+        self.write_case("needs-pin", NEEDS_PIN_CASE)
+        self.write_harness(harness)
+
+    def test_after_write_commands_run_after_the_mutation_and_before_the_check(self) -> None:
+        self.stage_pinned({"demo/pinned": {"afterWrite": ["fakectl pin {project}"]}})
+        code, stdout, _ = self.run_runner("--matrix")
+        self.assertIn("demo/pinned\tneeds-pin\tpass", stdout)
+        self.assertNotIn("demo/pinned\tneeds-pin\tfail", stdout)
+        self.assertNotIn("the project was not pinned", stdout)
+
+    def test_without_after_write_the_pin_never_happens_and_the_cell_fails(self) -> None:
+        self.stage_pinned({})
+        code, stdout, _ = self.run_runner("--matrix")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("demo/pinned\tneeds-pin\tfail", stdout)
+        self.assertIn("exit status 3, expected 0: error: the project was not pinned", stdout)
+
+    def test_a_failing_after_write_command_fails_the_cell_as_a_harness_failure(self) -> None:
+        self.stage_pinned({"demo/pinned": {"afterWrite": ["fakectl pin-fails {project}"]}})
+        code, stdout, _ = self.run_runner("--write-expected-failures")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("FAIL demo/pinned baseline", stdout)
+        self.assertIn(
+            "after write, `fakectl pin-fails {project}`: exit status 3, expected 0: error: cannot pin",
+            stdout,
+        )
+        self.assertIn(
+            "not recorded: a leak, a crash, a timeout, or a failure of the harness is never an expected failure",
+            stdout,
+        )
+        self.assertNotIn(
+            ("demo/pinned", "baseline"), runner.load_expected_failures(self.expected_path).failures
+        )
 
     def test_missing_binary_fails(self) -> None:
         (self.bin / "fakectl").unlink()
