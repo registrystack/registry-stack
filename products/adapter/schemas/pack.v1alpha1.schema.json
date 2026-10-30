@@ -789,6 +789,10 @@
           "$ref": "#/$defs/RhaiExpression",
           "description": "The `rhai` language member."
         },
+        "statusPropertyName": {
+          "description": "The exchange property that records the boolean outcome, absent by\ndefault: Camel 4's `statusPropertyName`. Camel 4 sets no fixed\nfilter property, and neither does the port\n(`products/adapter/CONCEPT.md` section 8.6).",
+          "type": "string"
+        },
         "steps": {
           "description": "The steps that run only on match.",
           "items": {

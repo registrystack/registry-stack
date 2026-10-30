@@ -55,6 +55,11 @@ fn scripts(source: &str) -> ScriptSet {
     set
 }
 
+/// Rhai writes a returned property map as an object map literal.
+fn property_script(map: &str) -> ScriptSet {
+    scripts(&format!("fn apply(exchange) {{ #{{ {map} }} }}"))
+}
+
 fn body_of(outcome: &registry_adapter::route::RouteOutcome) -> &Value {
     &outcome
         .result
@@ -81,8 +86,9 @@ async fn transform_replaces_the_body_from_its_expression() {
 }
 
 /// A `jsonpath` expression yields its one value when singular and the
-/// matched nodes as a list otherwise, empty-list-to-null aside, exactly as
-/// section 8.11.8 fixes the two result shapes.
+/// matched nodes as a list otherwise; an absent singular result raises
+/// `validation` where a value is required, while a present null node is
+/// a value, exactly as section 8.11.8 fixes the shapes.
 #[tokio::test]
 async fn jsonpath_yields_its_singular_value_or_its_node_list() {
     let singular = run(
@@ -102,7 +108,22 @@ async fn jsonpath_yields_its_singular_value_or_its_node_list() {
         &ScriptSet::default(),
     )
     .await;
-    assert_eq!(body_of(&absent), &json!(null));
+    assert_eq!(
+        absent
+            .result
+            .expect_err("an absent result raises validation where a value is required")
+            .class,
+        ErrorClass::Validation
+    );
+    let present_null = run(
+        steps(json!([
+            {"setBody": {"constant": {"seen": null}}},
+            {"transform": {"jsonpath": "$.seen"}}
+        ])),
+        &ScriptSet::default(),
+    )
+    .await;
+    assert_eq!(body_of(&present_null), &json!(null));
     check_servable(&steps(json!([
         {"transform": {"jsonpath": format!("$.{}", "a".repeat(4096))}}
     ])))
@@ -134,15 +155,26 @@ async fn set_header_sets_one_header_from_its_expression() {
 /// (sections 8.11.1 and 8.11.4).
 #[test]
 fn header_writes_refuse_the_read_only_targets_at_load() {
-    for refused in ["recordId", "recordType", "pageSize", "Idempotency-Key", "Authorization", "Proxy-Authorization", "CamelHttpResponseCode", "AdapterAnything"] {
+    for refused in [
+        "recordId",
+        "recordType",
+        "pageSize",
+        "Idempotency-Key",
+        "Authorization",
+        "Proxy-Authorization",
+        "CamelHttpResponseCode",
+        "AdapterAnything",
+    ] {
         let set = steps(json!([{"setHeader": {"name": refused, "value": {"constant": 1}}}]));
         let refusal = check_servable(&set).expect_err("the set is refused");
         assert!(refusal.contains(refused), "{refused}: {refusal}");
         let remove = steps(json!([{"removeHeader": refused}]));
         assert!(check_servable(&remove).is_err(), "{refused}");
     }
-    check_servable(&steps(json!([{"setHeader": {"name": "X-Own", "value": {"constant": 1}}}])))
-        .expect("a route's own name is writable");
+    check_servable(&steps(
+        json!([{"setHeader": {"name": "X-Own", "value": {"constant": 1}}}]),
+    ))
+    .expect("a route's own name is writable");
 }
 
 /// `removeHeader` removes a header an earlier step set
@@ -200,7 +232,7 @@ async fn remove_property_removes_a_route_property_and_refuses_facade_names() {
 /// values (manual/script-eip.html, section 8.11.3's slot table).
 #[tokio::test]
 async fn script_sets_properties_from_a_returned_map_and_leaves_the_body() {
-    let set = scripts(r#"fn apply(exchange) { {"seen": true, "first": exchange.body.items[0].id} }"#);
+    let set = property_script(r#""seen": true, "first": exchange.body.items[0].id"#);
     let outcome = run(
         steps(json!([{"script": {"rhai": {"file": "props.rhai", "entrypoint": "apply"}}}])),
         &set,
@@ -209,7 +241,10 @@ async fn script_sets_properties_from_a_returned_map_and_leaves_the_body() {
     let exchange = outcome.result.expect("the route succeeds");
     assert_eq!(exchange.property("seen"), Some(&json!(true)));
     assert_eq!(exchange.property("first"), Some(&json!("a")));
-    assert_eq!(exchange.message.body["items"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        exchange.message.body["items"].as_array().map(Vec::len),
+        Some(2)
+    );
 }
 
 /// A script may set the one reserved property a search route hands back,
@@ -217,17 +252,20 @@ async fn script_sets_properties_from_a_returned_map_and_leaves_the_body() {
 /// engine (section 8.11.2's set rule, one step down).
 #[tokio::test]
 async fn script_writes_the_next_continuation_and_no_other_reserved_property() {
-    let set = scripts(r#"fn apply(exchange) { {"AdapterNextContinuation": 2} }"#);
+    let set = property_script(r#""AdapterNextContinuation": 2"#);
     let outcome = run(
         steps(json!([{"script": {"rhai": {"file": "props.rhai", "entrypoint": "apply"}}}])),
         &set,
     )
     .await;
     assert_eq!(
-        outcome.result.expect("the route succeeds").property("AdapterNextContinuation"),
+        outcome
+            .result
+            .expect("the route succeeds")
+            .property("AdapterNextContinuation"),
         Some(&json!(2))
     );
-    let refused = scripts(r#"fn apply(exchange) { {"AdapterFilters": {}} }"#);
+    let refused = property_script(r#""AdapterFilters": {}"#);
     let outcome = run(
         steps(json!([{"script": {"rhai": {"file": "props.rhai", "entrypoint": "apply"}}}])),
         &refused,
@@ -262,9 +300,10 @@ async fn script_returning_no_map_fails_the_exchange() {
 async fn choice_runs_the_first_matching_when_and_otherwise_when_none_matches() {
     let outcome = run(
         steps(json!([
+            {"setHeader": {"name": "x-typed", "value": {"constant": true}}},
             {"choice": {
                 "when": [
-                    {"header": "recordType", "steps": [{"setBody": {"constant": "typed"}}]},
+                    {"header": "x-typed", "steps": [{"setBody": {"constant": "typed"}}]},
                     {"constant": true, "steps": [{"setBody": {"constant": "second"}}]}
                 ],
                 "otherwise": {"steps": [{"setBody": {"constant": "fallback"}}]}
@@ -304,7 +343,10 @@ async fn a_non_boolean_predicate_fails_and_a_non_singular_one_never_loads() {
     )
     .await;
     assert_eq!(
-        outcome.result.expect_err("a non-boolean predicate fails").class,
+        outcome
+            .result
+            .expect_err("a non-boolean predicate fails")
+            .class,
         ErrorClass::Script
     );
     check_servable(&steps(json!([
@@ -323,8 +365,9 @@ async fn a_non_boolean_predicate_fails_and_a_non_singular_one_never_loads() {
 async fn filter_runs_its_steps_only_on_match_and_records_the_outcome() {
     let matched = run(
         steps(json!([
+            {"setBody": {"constant": {"hit": true}}},
             {"filter": {
-                "jsonpath": "$.items[0].id",
+                "jsonpath": "$.hit",
                 "steps": [{"setHeader": {"name": "x-hit", "value": {"constant": 1}}}],
                 "statusPropertyName": "personMatched"
             }},
@@ -371,17 +414,21 @@ async fn filter_runs_its_steps_only_on_match_and_records_the_outcome() {
 #[tokio::test]
 async fn validate_raises_validation_on_a_failing_predicate() {
     let failed = run(
-        steps(json!([{"validate": {"constant": false}}])),
+        steps(json!([{"validate": {"expression": {"constant": false}}}])),
         &ScriptSet::default(),
     )
     .await;
     assert_eq!(
-        failed.result.expect_err("the failed predicate raises").class,
+        failed
+            .result
+            .expect_err("the failed predicate raises")
+            .class,
         ErrorClass::Validation
     );
     let held = run(
         steps(json!([
-            {"validate": {"jsonpath": "$.items[0].id"}},
+            {"setBody": {"constant": {"ok": true}}},
+            {"validate": {"expression": {"jsonpath": "$.ok"}}},
             {"setBody": {"constant": "passed"}}
         ])),
         &ScriptSet::default(),

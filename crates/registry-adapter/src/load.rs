@@ -669,11 +669,22 @@ fn substitute(node: &mut Value, values: &BTreeMap<&str, &Value>) {
 }
 
 /// The expressions one step carries directly (the walker visits nested
-/// steps itself).
-fn step_expressions(step: &Step) -> Vec<&Expression> {
+/// steps itself). Owned, because the inline predicates of `choice` and
+/// `filter` decode to a value rather than sitting in a field.
+fn step_expressions(step: &Step) -> Vec<Expression> {
     match step {
-        Step::SetBody(expression) => vec![expression],
-        Step::SetProperty(property) => vec![&property.value],
+        Step::SetBody(expression) | Step::Transform(expression) | Step::Script(expression) => {
+            vec![expression.clone()]
+        }
+        Step::SetHeader(header) => vec![header.value.clone()],
+        Step::SetProperty(property) => vec![property.value.clone()],
+        Step::Validate(validate) => vec![validate.expression.clone()],
+        Step::Choice(choice) => choice
+            .when
+            .iter()
+            .filter_map(|clause| clause.predicate())
+            .collect(),
+        Step::Filter(filter) => filter.predicate().into_iter().collect(),
         Step::To(to) => to
             .parameters
             .iter()
@@ -682,9 +693,11 @@ fn step_expressions(step: &Step) -> Vec<&Expression> {
                     .path_parameters
                     .values()
                     .chain(parameters.query.values())
+                    .cloned()
+                    .collect::<Vec<_>>()
             })
             .collect(),
-        Step::OnException(clause) => clause.on_when.iter().collect(),
+        Step::OnException(clause) => clause.on_when.iter().cloned().collect(),
         _ => Vec::new(),
     }
 }

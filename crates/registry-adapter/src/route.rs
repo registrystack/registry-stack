@@ -22,8 +22,8 @@ use std::pin::Pin;
 use std::time::{Duration, Instant, SystemTime};
 
 use registry_adapter_core::{
-    ErrorClass, Expression, HttpMethod, OnExceptionStep, SendComponent, SetPropertyStep, Step,
-    ToParameters, ToStep,
+    is_route_unwritable_header_name, ErrorClass, Expression, HttpMethod, OnExceptionStep,
+    SendComponent, SetPropertyStep, Step, ToParameters, ToStep,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -39,6 +39,8 @@ use crate::exchange::{
     Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
     REDELIVERY_MAX_COUNTER_HEADER, RESERVED_PROPERTY_PREFIX,
 };
+use crate::language::{compile_selector, JsonPathResult, LanguageError};
+use crate::processor;
 use crate::scripts::ScriptSet;
 
 /// The step kinds this runtime interprets. Every other kind of the route
@@ -90,7 +92,57 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
         match step {
             Step::To(to) => check_to(to)?,
             Step::SetBody(expression) => check_expression("setBody", expression)?,
+            Step::Transform(expression) => check_expression("transform", expression)?,
+            Step::SetHeader(header) => {
+                if is_route_unwritable_header_name(&header.name) {
+                    return Err(format!(
+                        "setHeader may not write the read-only header {}",
+                        header.name
+                    ));
+                }
+                check_expression("setHeader", &header.value)?;
+            }
             Step::SetProperty(property) => check_set_property(property)?,
+            Step::RemoveHeader(name) => {
+                if is_route_unwritable_header_name(name) {
+                    return Err(format!(
+                        "removeHeader may not remove the read-only header {name}"
+                    ));
+                }
+            }
+            Step::RemoveProperty(name) => {
+                if name.starts_with(RESERVED_PROPERTY_PREFIX) && name != NEXT_CONTINUATION_PROPERTY
+                {
+                    return Err(format!(
+                        "removeProperty may not remove the reserved property {name}"
+                    ));
+                }
+            }
+            Step::Script(expression) => check_expression("script", expression)?,
+            Step::Choice(choice) => {
+                for clause in &choice.when {
+                    check_predicate("choice", &clause.predicate())?;
+                    check_steps(&clause.steps, true)?;
+                }
+                if let Some(otherwise) = &choice.otherwise {
+                    check_steps(&otherwise.steps, true)?;
+                }
+            }
+            Step::Filter(filter) => {
+                check_predicate("filter", &filter.predicate())?;
+                if let Some(name) = &filter.status_property_name {
+                    if name.starts_with(RESERVED_PROPERTY_PREFIX) {
+                        return Err(format!(
+                            "filter statusPropertyName may not take the reserved name {name}"
+                        ));
+                    }
+                }
+                check_steps(&filter.steps, true)?;
+            }
+            Step::Validate(validate) => {
+                check_predicate_expression("validate", &validate.expression)?
+            }
+            Step::Stop(_) => {}
             Step::ThrowException(_) => {}
             Step::OnException(clause) if !in_clause => check_clause(clause)?,
             other => {
@@ -104,12 +156,40 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// A `jsonpath` expression compiles under the declared bounds before the
+/// route is registered, so nothing the bounds refuse evaluates per
+/// exchange (section 8.11.8).
 fn check_expression(site: &str, expression: &Expression) -> Result<(), String> {
-    match expression {
-        Expression::JsonPath(_) => Err(format!(
-            "a jsonpath expression in {site} is not served by this runtime yet"
+    if let Expression::JsonPath(selector) = expression {
+        compile_selector(selector).map_err(|fault| format!("the {site} jsonpath {fault}"))?;
+    }
+    Ok(())
+}
+
+/// A predicate additionally must be one singular query: a node list has
+/// no boolean meaning (section 8.11.8).
+fn check_predicate_expression(site: &str, expression: &Expression) -> Result<(), String> {
+    check_expression(site, expression)?;
+    if let Expression::JsonPath(selector) = expression {
+        let compiled =
+            compile_selector(selector).map_err(|fault| format!("the {site} jsonpath {fault}"))?;
+        if !compiled.is_singular() {
+            return Err(format!(
+                "a {site} predicate must be one singular jsonpath query, not a node list"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The inline single-language-key predicate of a `choice` clause or a
+/// `filter`: exactly one member, then the predicate rules.
+fn check_predicate(site: &str, predicate: &Option<Expression>) -> Result<(), String> {
+    match predicate {
+        Some(expression) => check_predicate_expression(site, expression),
+        None => Err(format!(
+            "a {site} clause must carry exactly one predicate language member"
         )),
-        _ => Ok(()),
     }
 }
 
@@ -132,7 +212,7 @@ fn check_clause(clause: &OnExceptionStep) -> Result<(), String> {
         return Err("onException handled and continued are not served by this runtime yet".into());
     }
     if let Some(expression) = &clause.on_when {
-        check_expression("onWhen", expression)?;
+        check_predicate_expression("onWhen", expression)?;
     }
     if let Some(policy) = &clause.redelivery_policy {
         if policy.use_exponential_back_off
@@ -271,7 +351,7 @@ pub struct RouteFailure {
 }
 
 impl RouteFailure {
-    fn of(class: ErrorClass) -> Self {
+    pub(crate) fn of(class: ErrorClass) -> Self {
         Self {
             class,
             message: None,
@@ -280,11 +360,32 @@ impl RouteFailure {
     }
 }
 
+/// A selector or predicate evaluation fault as a route failure: the
+/// matched-node budget is the script budget, every other fault is a
+/// script fault (sections 8.5 and 8.11.8).
+fn language_failure(fault: LanguageError) -> RouteFailure {
+    match fault {
+        LanguageError::MatchedNodeBudgetExceeded { .. } => {
+            RouteFailure::of(ErrorClass::ScriptBudgetExceeded)
+        }
+        _ => RouteFailure::of(ErrorClass::Script),
+    }
+}
+
 /// One run's result: the exchange as it ended or the failure, and the
 /// events in order.
 pub struct RouteOutcome {
     pub result: Result<Exchange, RouteFailure>,
     pub events: Vec<RouteEvent>,
+}
+
+/// How a step body ended: `stop` ends the route without failing the
+/// exchange (`products/adapter/CONCEPT.md` section 8.6), so it is not an
+/// error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Flow {
+    Continue,
+    Stop,
 }
 
 /// Run `steps` over `exchange` within the exchange deadline.
@@ -321,7 +422,11 @@ pub async fn run_route_within(
         .collect();
     let body = async {
         for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
-            run.step_with_clauses(step, &clauses).await?;
+            match run.step_with_clauses(step, &clauses).await {
+                Ok(Flow::Continue) => {}
+                Ok(Flow::Stop) => break,
+                Err(failure) => return Err(failure),
+            }
         }
         Ok(())
     };
@@ -337,9 +442,9 @@ pub async fn run_route_within(
     }
 }
 
-struct Run<'a, 'c> {
-    context: &'a RouteContext<'c>,
-    exchange: Exchange,
+pub(crate) struct Run<'a, 'c> {
+    pub(crate) context: &'a RouteContext<'c>,
+    pub(crate) exchange: Exchange,
     events: Vec<RouteEvent>,
     sends: u64,
 }
@@ -347,16 +452,17 @@ struct Run<'a, 'c> {
 impl Run<'_, '_> {
     /// Run one body step; on failure, apply the closest matching clause:
     /// redeliver an upstream send while the policy allows, then run the
-    /// clause's steps. An error inside a clause is final.
+    /// clause's steps. An error inside a clause is final. A `stop` in the
+    /// step or in the clause's steps ends the route without failing.
     async fn step_with_clauses(
         &mut self,
         step: &Step,
         clauses: &[&OnExceptionStep],
-    ) -> Result<(), RouteFailure> {
+    ) -> Result<Flow, RouteFailure> {
         let mut redeliveries = 0_u32;
         loop {
             let failure = match self.step(step).await {
-                Ok(()) => return Ok(()),
+                Ok(flow) => return Ok(flow),
                 Err(failure) => failure,
             };
             let Some(clause) = self.select_clause(&failure, clauses) else {
@@ -394,10 +500,31 @@ impl Run<'_, '_> {
             });
             for clause_step in &clause.steps {
                 // An error inside a clause replaces the failure and is final.
-                self.step(clause_step).await?;
+                if self.step(clause_step).await? == Flow::Stop {
+                    break;
+                }
             }
             return Err(failure);
         }
+    }
+
+    /// Run a nested step body (a `choice` branch, a `filter`'s steps): no
+    /// clause of its own, the failure bubbles to the enclosing step, and
+    /// a `stop` ends the whole route. Boxed, because a nested body can
+    /// hold another `choice` or `filter`, and the interpreter's call
+    /// graph is depth-bounded at load, not statically acyclic.
+    pub(crate) fn run_steps<'r>(
+        &'r mut self,
+        steps: &'r [Step],
+    ) -> Pin<Box<dyn Future<Output = Result<Flow, RouteFailure>> + Send + 'r>> {
+        Box::pin(async move {
+            for step in steps {
+                if self.step(step).await? == Flow::Stop {
+                    return Ok(Flow::Stop);
+                }
+            }
+            Ok(Flow::Continue)
+        })
     }
 
     /// The clause whose declared class is closest to the raised class,
@@ -415,8 +542,8 @@ impl Run<'_, '_> {
                 continue;
             };
             if let Some(condition) = &clause.on_when {
-                match self.eval(condition) {
-                    Ok(Value::Bool(true)) => {}
+                match self.predicate(condition) {
+                    Ok(true) => {}
                     _ => continue,
                 }
             }
@@ -428,28 +555,36 @@ impl Run<'_, '_> {
         best.map(|(_, clause)| clause)
     }
 
-    async fn step(&mut self, step: &Step) -> Result<(), RouteFailure> {
+    pub(crate) async fn step(&mut self, step: &Step) -> Result<Flow, RouteFailure> {
         match step {
-            Step::SetBody(expression) => {
-                self.exchange.message.body = self.eval(expression)?;
-                Ok(())
-            }
+            Step::SetBody(expression) => processor::set_body::assign(self, expression),
+            Step::Transform(expression) => processor::transform::run(self, expression),
+            Step::SetHeader(header) => processor::set_header::run(self, header),
             Step::SetProperty(property) => {
                 let value = self.eval(&property.value)?;
                 self.exchange.set_property(&property.name, value);
-                Ok(())
+                Ok(Flow::Continue)
             }
+            Step::RemoveHeader(name) => processor::remove_header::run(self, name),
+            Step::RemoveProperty(name) => processor::remove_property::run(self, name),
+            Step::Script(expression) => processor::script::run(self, expression),
+            Step::Choice(choice) => processor::choice::run(self, choice).await,
+            Step::Filter(filter) => processor::filter::run(self, filter).await,
+            Step::Validate(validate) => processor::validate::run(self, validate),
+            Step::Stop(_) => Ok(Flow::Stop),
             Step::ThrowException(throw) => Err(RouteFailure {
                 class: throw.exception_type,
                 message: throw.message.clone(),
                 auth: None,
             }),
             Step::To(to) => self.send(to).await,
+            // The unserved kinds never reach here: check_servable refuses
+            // them by name before a route is registered.
             _ => Err(RouteFailure::of(ErrorClass::Script)),
         }
     }
 
-    fn eval(&self, expression: &Expression) -> Result<Value, RouteFailure> {
+    pub(crate) fn eval(&self, expression: &Expression) -> Result<Value, RouteFailure> {
         match expression {
             Expression::Constant(value) => Ok(value.clone()),
             Expression::Header(name) => Ok(self
@@ -470,11 +605,66 @@ impl Run<'_, '_> {
                     &self.exchange.as_script_value(),
                 )
                 .map_err(|failure| RouteFailure::of(failure.class())),
-            Expression::JsonPath(_) => Err(RouteFailure::of(ErrorClass::Script)),
+            Expression::JsonPath(selector) => {
+                let compiled = compile_selector(selector)
+                    .map_err(|_| RouteFailure::of(ErrorClass::Validation))?;
+                match compiled.evaluate(&self.exchange.message.body) {
+                    Ok(JsonPathResult::Singular(None)) => Ok(Value::Null),
+                    Ok(JsonPathResult::Singular(Some(value))) => Ok(value.clone()),
+                    Ok(JsonPathResult::List(nodes)) => {
+                        Ok(Value::Array(nodes.into_iter().cloned().collect()))
+                    }
+                    Err(fault) => Err(language_failure(fault)),
+                }
+            }
         }
     }
 
-    async fn send(&mut self, to: &ToStep) -> Result<(), RouteFailure> {
+    /// An expression whose site requires a value: an absent singular
+    /// jsonpath result raises `validation` instead of null (section
+    /// 8.11.8 names `setBody` and a `pathParameters` entry; the path
+    /// slot rule already refuses null in `fill_path`).
+    pub(crate) fn eval_required(&self, expression: &Expression) -> Result<Value, RouteFailure> {
+        match expression {
+            Expression::JsonPath(selector) => {
+                let compiled = compile_selector(selector)
+                    .map_err(|_| RouteFailure::of(ErrorClass::Validation))?;
+                match compiled.evaluate(&self.exchange.message.body) {
+                    Ok(JsonPathResult::Singular(None)) => {
+                        Err(RouteFailure::of(ErrorClass::Validation))
+                    }
+                    Ok(JsonPathResult::Singular(Some(value))) => Ok(value.clone()),
+                    Ok(JsonPathResult::List(nodes)) => {
+                        Ok(Value::Array(nodes.into_iter().cloned().collect()))
+                    }
+                    Err(fault) => Err(language_failure(fault)),
+                }
+            }
+            other => self.eval(other),
+        }
+    }
+
+    /// An expression used as a predicate: its result is a boolean or the
+    /// evaluation fails, never a truthiness guess (section 8.5). A jsonpath
+    /// predicate follows section 8.11.8's singular-boolean rule, absent
+    /// counting as false.
+    pub(crate) fn predicate(&self, expression: &Expression) -> Result<bool, RouteFailure> {
+        match expression {
+            Expression::JsonPath(selector) => {
+                let compiled = compile_selector(selector)
+                    .map_err(|_| RouteFailure::of(ErrorClass::Validation))?;
+                compiled
+                    .evaluate_predicate(&self.exchange.message.body)
+                    .map_err(language_failure)
+            }
+            other => match self.eval(other)? {
+                Value::Bool(flag) => Ok(flag),
+                _ => Err(RouteFailure::of(ErrorClass::Script)),
+            },
+        }
+    }
+
+    async fn send(&mut self, to: &ToStep) -> Result<Flow, RouteFailure> {
         let parameters = to
             .parameters
             .as_ref()
@@ -602,7 +792,7 @@ impl Run<'_, '_> {
                 for (name, value) in reply.headers.iter() {
                     message.set_header(name, Value::String(value.to_owned()));
                 }
-                Ok(())
+                Ok(Flow::Continue)
             }
             Err(error) => {
                 let class = error.class();
@@ -796,12 +986,16 @@ mod served_tests {
     }
 
     #[test]
-    fn a_send_with_query_expressions_is_served_and_a_jsonpath_one_is_not() {
+    fn a_send_with_query_expressions_is_served_including_jsonpath() {
         let served = steps(json!([
             {"to": {"uri": "http:tracker", "parameters": {
                 "httpMethod": "GET",
                 "path": "/api/items",
-                "query": {"page": {"exchangeProperty": "page"}, "all": {"constant": true}}
+                "query": {
+                    "page": {"exchangeProperty": "page"},
+                    "all": {"constant": true},
+                    "first": {"jsonpath": "$.items[0].id"}
+                }
             }}}
         ]));
         check_servable(&served).expect("served");
@@ -809,7 +1003,7 @@ mod served_tests {
             {"to": {"uri": "http:tracker", "parameters": {
                 "httpMethod": "GET",
                 "path": "/api/items",
-                "query": {"page": {"jsonpath": "$.page"}}
+                "query": {"page": {"jsonpath": "$["}}
             }}}
         ]));
         let refusal = check_servable(&refused).expect_err("refused");

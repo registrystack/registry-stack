@@ -114,6 +114,36 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/language.rs:a_selector_over_the_length_bound_is_refused",
         "engine:tests/language.rs:a_singular_query_yields_its_one_value",
         "engine:tests/language.rs:any_other_query_yields_the_node_list",
+        "engine:tests/camel_processors.rs:a_non_boolean_predicate_fails_and_a_non_singular_one_never_loads",
+    ],
+    "setBody, transform": [
+        "engine:tests/camel_processors.rs:transform_replaces_the_body_from_its_expression",
+        "engine:tests/camel_processors.rs:jsonpath_yields_its_singular_value_or_its_node_list",
+    ],
+    "setHeader, setProperty, removeHeader, removeProperty": [
+        "engine:tests/camel_processors.rs:set_header_sets_one_header_from_its_expression",
+        "engine:tests/camel_processors.rs:header_writes_refuse_the_read_only_targets_at_load",
+        "engine:tests/camel_processors.rs:remove_header_removes_a_route_set_header",
+        "engine:tests/camel_processors.rs:remove_property_removes_a_route_property_and_refuses_facade_names",
+        "engine:src/route.rs:a_route_may_set_its_own_property_and_the_next_continuation_only",
+    ],
+    "script": [
+        "engine:tests/camel_processors.rs:script_sets_properties_from_a_returned_map_and_leaves_the_body",
+        "engine:tests/camel_processors.rs:script_writes_the_next_continuation_and_no_other_reserved_property",
+        "engine:tests/camel_processors.rs:script_returning_no_map_fails_the_exchange",
+    ],
+    "Content-Based Router": [
+        "engine:tests/camel_processors.rs:choice_runs_the_first_matching_when_and_otherwise_when_none_matches",
+        "engine:tests/camel_processors.rs:a_non_boolean_predicate_fails_and_a_non_singular_one_never_loads",
+    ],
+    "Message Filter": [
+        "engine:tests/camel_processors.rs:filter_runs_its_steps_only_on_match_and_records_the_outcome",
+    ],
+    "validate": [
+        "engine:tests/camel_processors.rs:validate_raises_validation_on_a_failing_predicate",
+    ],
+    "stop": [
+        "engine:tests/camel_processors.rs:stop_ends_the_route_without_failing",
     ],
     "Route, YAML DSL": [
         "checks.rs:routes_accept_a_well_formed_direct_call",

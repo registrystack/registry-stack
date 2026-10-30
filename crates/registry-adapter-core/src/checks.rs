@@ -4613,6 +4613,7 @@ mod tests {
                     file: "scripts/guard.rhai".to_string(),
                     entrypoint: "admits".to_string(),
                 }),
+                status_property_name: None,
                 steps: vec![],
             }),
         ];
@@ -6122,6 +6123,7 @@ mod tests {
                     exchange_property: None,
                     jsonpath: None,
                     rhai: None,
+                    status_property_name: None,
                     steps,
                 })];
             }
@@ -6693,6 +6695,7 @@ mod tests {
                     exchange_property: None,
                     jsonpath: None,
                     rhai: None,
+                    status_property_name: None,
                     steps: vec![],
                 }),
             ],
@@ -6985,6 +6988,7 @@ mod tests {
                 exchange_property: None,
                 jsonpath: None,
                 rhai: None,
+                status_property_name: None,
                 steps,
             })];
         }
