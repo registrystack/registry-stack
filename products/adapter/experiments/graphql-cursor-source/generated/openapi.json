@@ -1,0 +1,221 @@
+{
+  "components": {
+    "schemas": {
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "httpStatus": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "more": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "family",
+          "httpStatus",
+          "message"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "graphql-cases-experiment",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v2/cases/benefit_case": {
+      "post": {
+        "operationId": "cases-find.benefit_case",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "maxResults",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 10,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageStateToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "applicant_national_id": {
+                        "type": "string"
+                      },
+                      "opened_on": {
+                        "format": "date",
+                        "type": "string"
+                      },
+                      "programme": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cases": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "applicant_national_id": {
+                            "type": "string"
+                          },
+                          "opened_on": {
+                            "format": "date",
+                            "type": "string"
+                          },
+                          "programme": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "pageStateToken": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The operation's response envelope for the bound record type."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v2/cases/benefit_case/{case_id}": {
+      "get": {
+        "operationId": "cases-get.benefit_case",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "case": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "applicant_national_id": {
+                          "type": "string"
+                        },
+                        "opened_on": {
+                          "format": "date",
+                          "type": "string"
+                        },
+                        "programme": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ],
+                      "type": "object"
+                    },
+                    "retrievedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "case",
+                    "retrievedAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The operation's response envelope for the bound record type."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  }
+}

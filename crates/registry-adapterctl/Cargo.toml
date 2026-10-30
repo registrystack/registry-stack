@@ -29,4 +29,5 @@ serde_json.workspace = true
 
 [dev-dependencies]
 jsonschema.workspace = true
+registry-record.workspace = true
 tempfile.workspace = true

@@ -2,16 +2,18 @@
 
 //! `adapterctl`, the Registry Stack Adapter authoring and operator tooling.
 //!
-//! This crate owns the `adapterctl` binary. Increment 0 carries two
-//! commands: `check`, the offline check over authored artifacts (project,
-//! profile, pack, fixtures, and with `--runtime` the runtime config), and
-//! `schemas`, the generator and drift gate of the five format JSON Schemas.
-//! Per-deployment compilation, fixture replay, and live verification are
-//! later increments (`products/adapter/CONCEPT.md` section 8.1). It reads
-//! the same source-neutral model the runtime serves, so an artifact
-//! `adapterctl check` accepts is one the runtime can interpret.
+//! This crate owns the `adapterctl` binary. Its commands: `check`, the
+//! offline check over authored artifacts (project, profile, pack, fixtures,
+//! and with `--runtime` the runtime config); `project lock`, the pin
+//! rewriter; `schemas`, the generator and drift gate of the five format
+//! JSON Schemas; and `compile`, the per-deployment contract compiler.
+//! Fixture replay and live verification are later increments
+//! (`products/adapter/CONCEPT.md` section 8.1). It reads the same
+//! source-neutral model the runtime serves, so an artifact `adapterctl
+//! check` accepts is one the runtime can interpret.
 
 mod check;
+mod compile;
 mod project;
 mod report;
 mod schemas;
@@ -53,6 +55,9 @@ enum Command {
     /// Write the generated JSON Schemas of the five Adapter formats, or
     /// check the committed ones for drift.
     Schemas(schemas::SchemasArgs),
+    /// Compile the deployment's concrete OpenAPI contract beside the
+    /// project, or check the written one for drift.
+    Compile(compile::CompileArgs),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -122,11 +127,13 @@ where
             project::ProjectCommand::Lock(_) => "project lock",
         },
         Command::Schemas(_) => "schemas",
+        Command::Compile(_) => "compile",
     };
     let outcome = match command {
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
+        Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
     };
     match outcome {
         Ok(exit) => exit,
@@ -322,6 +329,42 @@ fn schemas_command(
     }
 }
 
+/// Run `compile` and write its verdict.
+fn compile_command(
+    args: compile::CompileArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    match compile::run(&args) {
+        Ok(run) => {
+            let mut report = json!({
+                "command": command_name,
+                "check": run.check,
+                "project": run.project,
+                "output": run.output,
+                "operations": run.operations,
+            });
+            report["ok"] = json!(true);
+            report["status"] = json!("complete");
+            let mut out = Vec::new();
+            report::write(&report, &mut out).map_err(|_| ())?;
+            if format == OutputFormat::Json {
+                let _ = stdout.write_all(&out);
+            } else {
+                let _ = writeln!(stdout, "{}", human_lead(&report));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            let (exit, diagnostics) = compile::failure(&error);
+            let report = failure(command_name, exit, diagnostics);
+            write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
+        }
+    }
+}
+
 /// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
 /// or, with `--format json`, the CFG-DIAG-1 diagnostics in the report
 /// envelope on stdout.
@@ -388,6 +431,8 @@ fn human_lead(report: &Value) -> String {
         "check" => "Authoring check passed.".to_owned(),
         "schemas" if report["check"] == json!(true) => "Schema drift check passed.".to_owned(),
         "schemas" => "Generated schemas written; nothing drifted.".to_owned(),
+        "compile" if report["check"] == json!(true) => "Compile drift check passed.".to_owned(),
+        "compile" => "Compiled contract written.".to_owned(),
         other => format!("{other} completed."),
     }
 }
@@ -403,7 +448,7 @@ fn write_failure(
     }
     if matches!(
         report["command"].as_str(),
-        Some("check") | Some("project lock")
+        Some("check") | Some("compile") | Some("project lock")
     ) {
         let command = report["command"].as_str().unwrap_or_default();
         let _ = writeln!(stderr, "adapterctl {command} refused the input.");

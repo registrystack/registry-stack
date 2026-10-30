@@ -1,0 +1,159 @@
+{
+  "components": {
+    "schemas": {
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "status",
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "fhir-r4-conditional-create-experiment",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/records/patient": {
+      "post": {
+        "operationId": "records-create.patient",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "data": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "birth_date": {
+                        "format": "date",
+                        "type": "string"
+                      },
+                      "family_name": {
+                        "type": "string"
+                      },
+                      "gender": {
+                        "type": "string"
+                      },
+                      "given_names": {
+                        "type": "string"
+                      },
+                      "national_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "national_id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "birth_date": {
+                          "format": "date",
+                          "type": "string"
+                        },
+                        "family_name": {
+                          "type": "string"
+                        },
+                        "gender": {
+                          "type": "string"
+                        },
+                        "given_names": {
+                          "type": "string"
+                        },
+                        "national_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "national_id"
+                      ],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "datasetIdentifier": {
+                          "type": "string"
+                        },
+                        "entityTypeIdentifier": {
+                          "type": "string"
+                        },
+                        "registryIdentifier": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "datasetIdentifier",
+                        "entityTypeIdentifier",
+                        "registryIdentifier"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The operation's response envelope for the bound record type."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  }
+}

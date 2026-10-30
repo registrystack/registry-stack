@@ -1,0 +1,253 @@
+{
+  "components": {
+    "schemas": {
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "issue": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "details": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "diagnostics": {
+                  "type": "string"
+                },
+                "severity": {
+                  "const": "error",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "details",
+                "diagnostics",
+                "severity"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "resourceType": {
+            "const": "OperationOutcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue",
+          "resourceType"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "fhir-facade-households-experiment",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/fhir/household": {
+      "get": {
+        "operationId": "fhir-search-type.household",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "_count",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "_page_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entry": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "household_number": {
+                            "type": "string"
+                          },
+                          "member_count": {
+                            "type": "integer"
+                          },
+                          "region_code": {
+                            "type": "string"
+                          },
+                          "registered_on": {
+                            "format": "date",
+                            "type": "string"
+                          }
+                        },
+                        "required": [],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "link": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "relation": {
+                            "const": "next",
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "relation"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "resourceType": {
+                      "const": "Bundle",
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "searchset",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "entry",
+                    "link",
+                    "resourceType",
+                    "type"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The operation's response envelope for the bound record type."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/fhir/household/{record_id}": {
+      "get": {
+        "operationId": "fhir-read.household",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "extension": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "url": {
+                            "const": "https://id.example.invalid/fhir/StructureDefinition/registry-record",
+                            "type": "string"
+                          },
+                          "valueRecord": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "household_number": {
+                                "type": "string"
+                              },
+                              "member_count": {
+                                "type": "integer"
+                              },
+                              "region_code": {
+                                "type": "string"
+                              },
+                              "registered_on": {
+                                "format": "date",
+                                "type": "string"
+                              }
+                            },
+                            "required": [],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "url",
+                          "valueRecord"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "resourceType": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "extension",
+                    "id",
+                    "resourceType"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The operation's response envelope for the bound record type."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  }
+}

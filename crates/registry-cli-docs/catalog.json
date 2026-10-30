@@ -304,6 +304,87 @@
           ],
           "constraints": [],
           "subcommands": []
+        },
+        {
+          "name": "compile",
+          "invocation": "adapterctl compile",
+          "about": "Compile the deployment's concrete OpenAPI contract beside the project, or check the written one for drift",
+          "long_about": null,
+          "usage": "adapterctl compile [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authored adapter project: its directory (holding `project.yaml`) or the `project.yaml` file itself. The profile and pack are read beside the project either way",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--profile <FILE>",
+              "description": "Profile file read instead of the `profile.yaml` beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--pack <FILE>",
+              "description": "Pack file read instead of the `pack.yaml` beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--check",
+              "description": "Compare the compiled bytes with the written file and refuse on drift instead of writing anything. A file that is not there counts as drift",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <FILE>",
+              "description": "File the compiled contract is written to or compared against, instead of `generated/openapi.json` beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
         }
       ]
     },
