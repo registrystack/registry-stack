@@ -3339,38 +3339,37 @@ fn is_plain_http(url: &registry_platform_yaml::Url) -> bool {
     !is_loopback_origin(url)
 }
 
-/// The problem code a non-2xx entry expects is checked against the
-/// profile's declared problem codes: the facade's error path emits a code
-/// the profile fills its problem envelope with, so an entry expecting an
-/// undeclared code can never pass a run. The check sits at the entry; the
-/// body shape itself is the response-schema check's concern.
-fn problem_code_check(
+/// The problem an entry expects is checked against the profile's declared
+/// problems: the expectation names a class and a code, and it resolves
+/// when a declared problem carries the code and one of its classes covers
+/// the expected class, by the same segment rule the profile's own
+/// totality check applies (`ErrorClass::is_within`: a declared root covers
+/// its branch). An expectation no declared problem can answer can never
+/// pass a run. The check sits at the expectation; a recorded response
+/// expectation's body shape is the response-schema check's concern.
+fn problem_expectation_check(
     entry_pointer: &str,
-    expected: &crate::fixture::RecordedResponse,
+    expected: &crate::fixture::ExpectedFacade,
     profile: &AdapterProfile,
 ) -> Vec<Diagnostic> {
-    let non_2xx =
-        registry_platform_yaml::BoundedU32::<200, 299>::new(expected.status.get()).is_err();
-    let code = expected
-        .body
-        .as_ref()
-        .and_then(|body| body.get("code"))
-        .and_then(|code| code.as_str());
-    let (Some(code), true) = (code, non_2xx) else {
+    let crate::fixture::ExpectedFacade::Problem { class, code } = expected else {
         return Vec::new();
     };
-    if profile
-        .problems
-        .iter()
-        .any(|declared| declared.code.as_str() == code)
-    {
+    let resolved = profile.problems.iter().any(|declared| {
+        declared.code.as_str() == code.as_str()
+            && declared
+                .classes
+                .iter()
+                .any(|declared_class| class.is_within(*declared_class))
+    });
+    if resolved {
         Vec::new()
     } else {
         vec![finding(
             CheckCode::FixtureUnknownProblemCode,
             entry_pointer,
-            "the entry expects a problem code the bound profile does not declare",
-            "Expect a problem code the pinned profile declares, or declare the code in the profile.",
+            "the entry expects a problem no declared problem of the bound profile answers by class and code",
+            "Expect the class and code of a problem the pinned profile declares, or declare the problem in the profile.",
         )]
     }
 }
@@ -3404,24 +3403,63 @@ pub fn check_fixtures(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
             }
         }
         for (entry_index, entry) in fixture.entries.iter().enumerate() {
-            if !endpoint_ids.contains(entry.given.endpoint.as_str()) {
+            // An entry with no recorded exchange replays nothing: the
+            // facade expectation would hang on a send nothing answers.
+            if entry.upstream.is_empty() {
                 findings.push(finding(
-                    CheckCode::FixtureUnknownEndpoint,
-                    &format!("{prefix}/entries/{entry_index}/given/endpoint"),
-                    "the recorded request names no endpoint the pack declares",
-                    "Record the exchange against an endpoint the pinned pack declares.",
+                    CheckCode::FixtureEmptyUpstream,
+                    &format!("{prefix}/entries/{entry_index}/upstream"),
+                    "the entry records no upstream exchange to replay",
+                    "Record at least the one exchange the route makes, or drop the entry.",
                 ));
             }
-            // The entry's operation is the facade-side primary key: the
-            // deployment must be able to exercise it, so it must be a
-            // profile operation the project binds to a route.
-            let operation_pointer = &format!("{prefix}/entries/{entry_index}/operation");
-            let declared = workspace.profile.operations.get(entry.operation.as_str());
-            let bound = workspace
-                .project
-                .bindings
-                .iter()
-                .any(|binding| binding.operation.as_str() == entry.operation.as_str());
+            // Every recorded exchange names a declared endpoint, and one
+            // of the suite's intercepts answers a send of its kind to
+            // that endpoint: a recording nothing intercepts can never be
+            // produced by a replay (CONCEPT 13.3, 10.2).
+            for (exchange_index, exchange) in entry.upstream.iter().enumerate() {
+                let request_pointer =
+                    &format!("{prefix}/entries/{entry_index}/upstream/{exchange_index}/request");
+                let declared = endpoint_ids.contains(exchange.request.endpoint.as_str());
+                let intercepted = crate::fixture::intercepts_send(
+                    &fixture.intercepts,
+                    &crate::fixture::Send {
+                        endpoint: exchange.request.endpoint.as_str(),
+                        token_request: exchange.request.token_request,
+                        method: exchange.request.method,
+                        path: &exchange.request.path,
+                        query: exchange.request.query.as_deref(),
+                        body: exchange.request.body.as_ref().map(|body| body.as_value()),
+                    },
+                );
+                match (declared, intercepted) {
+                    (false, _) => findings.push(finding(
+                        CheckCode::FixtureUnknownEndpoint,
+                        &format!("{request_pointer}/endpoint"),
+                        "the recorded request names no endpoint the pack declares",
+                        "Record the exchange against an endpoint the pinned pack declares.",
+                    )),
+                    (true, false) => findings.push(finding(
+                        CheckCode::FixtureUncoveredExchange,
+                        &format!("{request_pointer}/endpoint"),
+                        "no intercept the suite declares answers a send of this kind to the recorded endpoint",
+                        "Declare the endpoint's intercept, or the token intercept for a token request.",
+                    )),
+                    (true, true) => {}
+                }
+            }
+            // The entry's facade-request operation is the facade-side
+            // primary key: the deployment must be able to exercise it, so
+            // it must be a profile operation the project binds to a route.
+            let operation_pointer =
+                &format!("{prefix}/entries/{entry_index}/facadeRequest/operation");
+            let declared = workspace
+                .profile
+                .operations
+                .get(entry.facade_request.operation.as_str());
+            let bound = workspace.project.bindings.iter().any(|binding| {
+                binding.operation.as_str() == entry.facade_request.operation.as_str()
+            });
             match (declared, bound) {
                 (None, _) => findings.push(finding(
                     CheckCode::FixtureUnknownOperation,
@@ -3436,9 +3474,9 @@ pub fn check_fixtures(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     "Name an operation a binding of the project binds to a route.",
                 )),
                 (Some(_), true) => {
-                    findings.extend(problem_code_check(
-                        &format!("{prefix}/entries/{entry_index}"),
-                        &entry.expected_facade_response,
+                    findings.extend(problem_expectation_check(
+                        &format!("{prefix}/entries/{entry_index}/expected"),
+                        &entry.expected,
                         workspace.profile,
                     ));
                 }
@@ -3453,8 +3491,8 @@ mod tests {
     use super::*;
     use crate::auth::{CredentialPlacement, MtlsIdentity};
     use crate::fixture::{
-        AdapterFixture, FixtureEntry, FixtureProvenance, Intercept, RecordedRequest,
-        RecordedResponse,
+        AdapterFixture, ExpectedFacade, FixtureEntry, FixtureProvenance, Intercept,
+        RecordedExchange, RecordedHeaders, RecordedRequest, RecordedResponse,
     };
     use crate::model::{ComponentKind, HttpMethod, RhaiExpression, SendUri};
     use crate::pack::{AdapterPack, Capabilities, Endpoint, EndpointOperation};
@@ -8223,6 +8261,49 @@ mod tests {
 
     // ----- fixture checks -----
 
+    /// One recorded exchange against the pack endpoint, and the facade
+    /// request entry shape every fixture test composes from.
+    fn recorded_exchange(endpoint: &str, token_request: bool) -> RecordedExchange {
+        RecordedExchange {
+            request: RecordedRequest {
+                endpoint: id(endpoint),
+                token_request,
+                method: HttpMethod::Get,
+                path: "/v2/cases/person/123".to_string(),
+                query: None,
+                headers: RecordedHeaders::new(),
+                body: None,
+            },
+            response: RecordedResponse {
+                status: BoundedU32::new(200).expect("a status"),
+                headers: RecordedHeaders::new(),
+                body: None,
+            },
+        }
+    }
+
+    fn recorded_entry(operation: &str, expected: ExpectedFacade) -> FixtureEntry {
+        FixtureEntry {
+            facade_request: crate::fixture::RecordedFacadeRequest {
+                operation: id(operation),
+                path: "/cases/person/123".to_string(),
+                query: None,
+                headers: RecordedHeaders::new(),
+                body: None,
+            },
+            upstream: vec![recorded_exchange("case-api", false)],
+            expected,
+        }
+    }
+
+    fn success_expectation() -> ExpectedFacade {
+        ExpectedFacade::Response {
+            status: BoundedU32::new(200).expect("a status"),
+            headers: RecordedHeaders::new(),
+            body: None,
+        }
+    }
+
     #[test]
     fn fixtures_accept_declared_intercepts_and_entries() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
@@ -8247,24 +8328,7 @@ mod tests {
             intercepts: vec![Intercept::Endpoint {
                 endpoint: id("case-api"),
             }],
-            entries: vec![FixtureEntry {
-                operation: id("cases-find"),
-                given: RecordedRequest {
-                    endpoint: id("case-api"),
-                    method: HttpMethod::Get,
-                    path: "/v2/cases/person/123".to_string(),
-                    query: None,
-                    body: None,
-                },
-                upstream_response: RecordedResponse {
-                    status: BoundedU32::new(200).expect("a status"),
-                    body: None,
-                },
-                expected_facade_response: RecordedResponse {
-                    status: BoundedU32::new(200).expect("a status"),
-                    body: None,
-                },
-            }],
+            entries: vec![recorded_entry("cases-find", success_expectation())],
         };
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&fixture);
@@ -8280,24 +8344,6 @@ mod tests {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
-        let entry = |op: &str| FixtureEntry {
-            operation: id(op),
-            given: RecordedRequest {
-                endpoint: id("case-api"),
-                method: HttpMethod::Get,
-                path: "/v2/cases/person/123".to_string(),
-                query: None,
-                body: None,
-            },
-            upstream_response: RecordedResponse {
-                status: BoundedU32::new(200).expect("a status"),
-                body: None,
-            },
-            expected_facade_response: RecordedResponse {
-                status: BoundedU32::new(200).expect("a status"),
-                body: None,
-            },
-        };
         let fixture = |op: &str| AdapterFixture {
             id: local("case-api-fixtures"),
             pack: id("case-api-pack"),
@@ -8305,8 +8351,10 @@ mod tests {
             provenance: FixtureProvenance::Captured {
                 reference: "staging".to_string(),
             },
-            intercepts: vec![],
-            entries: vec![entry(op)],
+            intercepts: vec![Intercept::Endpoint {
+                endpoint: id("case-api"),
+            }],
+            entries: vec![recorded_entry(op, success_expectation())],
         };
 
         // Known to the profile but bound by no route: refused.
@@ -8316,7 +8364,10 @@ mod tests {
         let findings = check_fixtures(&ws);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, CheckCode::FixtureUnknownOperation.code());
-        assert_eq!(findings[0].path, "/fixtures/0/entries/0/operation");
+        assert_eq!(
+            findings[0].path,
+            "/fixtures/0/entries/0/facadeRequest/operation"
+        );
 
         // Unknown to the profile: refused with the same code.
         let unknown = fixture("cases-missing");
@@ -8342,11 +8393,13 @@ mod tests {
         assert_clean(check_fixtures(&ws));
     }
 
-    /// A non-2xx entry expects a problem code the profile declares: an
-    /// undeclared code refuses at the entry, the declared code passes, and
-    /// the check stays out of 2xx entries (addendum C).
+    /// A problem expectation resolves against the profile's declared
+    /// problems by class and code: a declared root covers its branch
+    /// (the same `is_within` rule the totality check applies), a code no
+    /// declared problem carries refuses, and a class no problem carrying
+    /// the code covers refuses (addendum C, G-FIXTURES).
     #[test]
-    fn fixtures_resolve_the_expected_problem_code_against_the_profile() {
+    fn fixtures_resolve_the_expected_problem_against_the_profile() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
@@ -8359,55 +8412,180 @@ mod tests {
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
-        let entry = |status: u32, code: Option<&str>| FixtureEntry {
-            operation: id("cases-find"),
-            given: RecordedRequest {
-                endpoint: id("case-api"),
-                method: HttpMethod::Get,
-                path: "/v2/cases/person/123".to_string(),
-                query: None,
-                body: None,
-            },
-            upstream_response: RecordedResponse {
-                status: BoundedU32::new(200).expect("a status"),
-                body: None,
-            },
-            expected_facade_response: RecordedResponse {
-                status: BoundedU32::new(status).expect("a status"),
-                body: code.map(|code| serde_json::json!({ "code": code })),
-            },
+        let class = |name: &str| {
+            crate::model::ErrorClass::from_class(name).expect("a class of the hierarchy")
         };
-        let fixture = |status: u32, code: Option<&str>| AdapterFixture {
+        let fixture = |class: crate::model::ErrorClass, code: &str| AdapterFixture {
             id: local("case-api-fixtures"),
             pack: id("case-api-pack"),
             upstream_version: "2.7".to_string(),
             provenance: FixtureProvenance::Captured {
                 reference: "staging".to_string(),
             },
-            intercepts: vec![],
-            entries: vec![entry(status, code)],
+            intercepts: vec![Intercept::Endpoint {
+                endpoint: id("case-api"),
+            }],
+            entries: vec![recorded_entry(
+                "cases-find",
+                ExpectedFacade::Problem {
+                    class,
+                    code: id(code),
+                },
+            )],
+        };
+        let findings_of = |fixture: &AdapterFixture| {
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.fixtures = std::slice::from_ref(fixture);
+            check_fixtures(&ws)
         };
 
-        // An undeclared problem code refuses, at the entry.
-        let undeclared = fixture(404, Some("cases.smashed"));
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.fixtures = std::slice::from_ref(&undeclared);
-        let findings = check_fixtures(&ws);
+        // A code no declared problem carries refuses, at the expectation.
+        let undeclared = fixture(class("upstream"), "cases.smashed");
+        let findings = findings_of(&undeclared);
         assert_eq!(findings.len(), 1);
         assert_eq!(
             findings[0].code,
             CheckCode::FixtureUnknownProblemCode.code()
         );
-        assert_eq!(findings[0].path, "/fixtures/0/entries/0");
+        assert_eq!(findings[0].path, "/fixtures/0/entries/0/expected");
 
-        // The declared code passes; a 2xx entry is not a problem body.
-        let declared = fixture(404, Some("cases.outcome"));
+        // A declared code whose classes do not cover the expected class
+        // refuses with the same code.
+        let uncovered = fixture(class("validation"), "cases.upstream");
+        let findings = findings_of(&uncovered);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::FixtureUnknownProblemCode.code()
+        );
+
+        // A class a declared root covers resolves; so does the exact
+        // class, and a response expectation is not the check's concern.
+        let branch = fixture(class("upstream.connection"), "cases.upstream");
+        assert!(findings_of(&branch).is_empty());
+        let root = fixture(class("upstream"), "cases.upstream");
+        assert!(findings_of(&root).is_empty());
+        let response = AdapterFixture {
+            entries: vec![recorded_entry("cases-find", success_expectation())],
+            ..root
+        };
+        assert!(findings_of(&response).is_empty());
+    }
+
+    /// An entry that records no upstream exchange replays nothing: it is
+    /// refused at its upstream list (G-FIXTURES: several exchanges per
+    /// entry, at least one).
+    #[test]
+    fn fixtures_refuse_entries_without_upstream_exchanges() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("find-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("fetch-case"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
+        }])
+        .expect("unique");
+        let mut entry = recorded_entry("cases-find", success_expectation());
+        entry.upstream = Vec::new();
+        let fixture = AdapterFixture {
+            id: local("case-api-fixtures"),
+            pack: id("case-api-pack"),
+            upstream_version: "2.7".to_string(),
+            provenance: FixtureProvenance::Captured {
+                reference: "staging".to_string(),
+            },
+            intercepts: vec![Intercept::Endpoint {
+                endpoint: id("case-api"),
+            }],
+            entries: vec![entry],
+        };
         let mut ws = workspace(&profile, &pack, &project);
-        ws.fixtures = std::slice::from_ref(&declared);
+        ws.fixtures = std::slice::from_ref(&fixture);
+        let findings = check_fixtures(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::FixtureEmptyUpstream.code());
+        assert_eq!(findings[0].path, "/fixtures/0/entries/0/upstream");
+    }
+
+    /// Every recorded exchange must be answerable by an intercept the
+    /// suite declares: an endpoint intercept answers ordinary sends, a
+    /// token intercept answers token requests, and neither answers the
+    /// other kind (CONCEPT 10.2, 13.3).
+    #[test]
+    fn fixtures_refuse_exchanges_no_intercept_answers() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("find-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("fetch-case"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
+        }])
+        .expect("unique");
+        let fixture = |intercepts: Vec<Intercept>, exchange: RecordedExchange| AdapterFixture {
+            id: local("case-api-fixtures"),
+            pack: id("case-api-pack"),
+            upstream_version: "2.7".to_string(),
+            provenance: FixtureProvenance::Captured {
+                reference: "staging".to_string(),
+            },
+            intercepts,
+            entries: vec![FixtureEntry {
+                upstream: vec![exchange],
+                ..recorded_entry("cases-find", success_expectation())
+            }],
+        };
+        let mut ws = workspace(&profile, &pack, &project);
+
+        // An ordinary send with no endpoint intercept: refused.
+        let token_only = fixture(
+            vec![Intercept::TokenEndpoint {
+                endpoint: id("case-api"),
+            }],
+            recorded_exchange("case-api", false),
+        );
+        ws.fixtures = std::slice::from_ref(&token_only);
+        let findings = check_fixtures(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::FixtureUncoveredExchange.code());
+        assert_eq!(
+            findings[0].path,
+            "/fixtures/0/entries/0/upstream/0/request/endpoint"
+        );
+
+        // A token request with no token intercept: refused.
+        let endpoint_only = fixture(
+            vec![Intercept::Endpoint {
+                endpoint: id("case-api"),
+            }],
+            recorded_exchange("case-api", true),
+        );
+        ws.fixtures = std::slice::from_ref(&endpoint_only);
+        let findings = check_fixtures(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::FixtureUncoveredExchange.code());
+
+        // The matching intercept kind answers each: clean.
+        let ordinary = fixture(
+            vec![Intercept::Endpoint {
+                endpoint: id("case-api"),
+            }],
+            recorded_exchange("case-api", false),
+        );
+        ws.fixtures = std::slice::from_ref(&ordinary);
         assert_clean(check_fixtures(&ws));
-        let success = fixture(200, Some("cases.smashed"));
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.fixtures = std::slice::from_ref(&success);
+        let token = fixture(
+            vec![Intercept::TokenEndpoint {
+                endpoint: id("case-api"),
+            }],
+            recorded_exchange("case-api", true),
+        );
+        ws.fixtures = std::slice::from_ref(&token);
         assert_clean(check_fixtures(&ws));
     }
 
@@ -8471,22 +8649,8 @@ mod tests {
                 },
             ],
             entries: vec![FixtureEntry {
-                operation: id("cases-find"),
-                given: RecordedRequest {
-                    endpoint: id("also-missing"),
-                    method: HttpMethod::Get,
-                    path: "/".to_string(),
-                    query: None,
-                    body: None,
-                },
-                upstream_response: RecordedResponse {
-                    status: BoundedU32::new(200).expect("a status"),
-                    body: None,
-                },
-                expected_facade_response: RecordedResponse {
-                    status: BoundedU32::new(200).expect("a status"),
-                    body: None,
-                },
+                upstream: vec![recorded_exchange("also-missing", false)],
+                ..recorded_entry("cases-find", success_expectation())
             }],
         };
         let mut ws = workspace(&profile, &pack, &project);

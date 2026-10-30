@@ -23,7 +23,9 @@ pub enum CheckCode {
     // adapter.envelope.*
     EnvelopeInvalidPlaceholder,
     // adapter.fixture.*
+    FixtureEmptyUpstream,
     FixtureResponseSchema,
+    FixtureUncoveredExchange,
     FixtureUnknownEndpoint,
     FixtureUnknownIntercept,
     FixtureUnknownOperation,
@@ -117,7 +119,9 @@ impl CheckCode {
         Self::AuthKindMismatch,
         Self::AuthNoneNotLoopback,
         Self::EnvelopeInvalidPlaceholder,
+        Self::FixtureEmptyUpstream,
         Self::FixtureResponseSchema,
+        Self::FixtureUncoveredExchange,
         Self::FixtureUnknownEndpoint,
         Self::FixtureUnknownIntercept,
         Self::FixtureUnknownOperation,
@@ -206,7 +210,9 @@ impl CheckCode {
             Self::AuthKindMismatch => "adapter.auth.kind-mismatch",
             Self::AuthNoneNotLoopback => "adapter.auth.none-not-loopback",
             Self::EnvelopeInvalidPlaceholder => "adapter.envelope.invalid-placeholder",
+            Self::FixtureEmptyUpstream => "adapter.fixture.empty-upstream",
             Self::FixtureResponseSchema => "adapter.fixture.response-schema",
+            Self::FixtureUncoveredExchange => "adapter.fixture.uncovered-exchange",
             Self::FixtureUnknownEndpoint => "adapter.fixture.unknown-endpoint",
             Self::FixtureUnknownIntercept => "adapter.fixture.unknown-intercept",
             Self::FixtureUnknownOperation => "adapter.fixture.unknown-operation",
@@ -330,7 +336,9 @@ impl CheckCode {
             | Self::ProfileUnknownRecordTypeParameter
             | Self::ProfileUnknownSlot
             | Self::ProfileUnresolvedPathParameter => crate::naming::ADAPTER_PROFILE_KIND,
-            Self::FixtureResponseSchema
+            Self::FixtureEmptyUpstream
+            | Self::FixtureResponseSchema
+            | Self::FixtureUncoveredExchange
             | Self::FixtureUnknownEndpoint
             | Self::FixtureUnknownIntercept
             | Self::FixtureUnknownOperation

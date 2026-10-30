@@ -10,7 +10,6 @@
 
 use crate::checks::is_placeholder_name;
 use crate::diagnostics::{finding, CheckCode};
-use crate::fixture::RecordedResponse;
 use crate::profile::{AdapterProfile, ParameterizedPart};
 use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
@@ -494,27 +493,32 @@ fn escape_token(token: &str) -> String {
 /// operation's result schema; any other expected status validates
 /// against the profile's problem envelope (CONCEPT section 6), so an
 /// honest error-path suite is not refused as if it promised a record.
-/// Both schemas come pre-derived: the caller derives each once per
-/// workspace check and reuses it (addendum ruling). The caller pairs
-/// entries with operations; core stays no-I/O.
+/// A problem expectation carries no body to validate: the class-and-code
+/// resolution is the fixture checks' concern. Both schemas come
+/// pre-derived: the caller derives each once per workspace check and
+/// reuses it (addendum ruling). The caller pairs entries with
+/// operations; core stays no-I/O.
 #[must_use]
 pub fn check_fixture_expected_response(
     entry_index: usize,
-    expected: &RecordedResponse,
+    expected: &crate::fixture::ExpectedFacade,
     result_schema: &Value,
     problem_schema: &Value,
 ) -> Vec<Diagnostic> {
-    let two_hundred = registry_platform_yaml::BoundedU32::<200, 299>::new(expected.status.get());
+    let crate::fixture::ExpectedFacade::Response { status, body, .. } = expected else {
+        return Vec::new();
+    };
+    let two_hundred = registry_platform_yaml::BoundedU32::<200, 299>::new(status.get());
     let is_result = two_hundred.is_ok();
     let kind = if is_result {
         "the operation's result schema"
     } else {
         "the profile's problem envelope"
     };
-    let Some(body) = expected.body.as_ref() else {
+    let Some(body) = body.as_ref() else {
         return vec![finding(
             CheckCode::FixtureResponseSchema,
-            &format!("/entries/{entry_index}/expectedFacadeResponse"),
+            &format!("/entries/{entry_index}/expected"),
             &format!("the fixture expects no facade response body where {kind} requires one"),
             if is_result {
                 "Give the entry the facade body the profile envelope and the bound record type produce."
@@ -523,6 +527,9 @@ pub fn check_fixture_expected_response(
             },
         )];
     };
+    // An explicit JSON `null` body is a body (G-FIXTURES): it validates
+    // as the null value, never as an absent one.
+    let body = body.as_value();
     let schema = if is_result {
         result_schema
     } else {
@@ -533,7 +540,7 @@ pub fn check_fixture_expected_response(
         .map(|violation| {
             finding(
                 CheckCode::FixtureResponseSchema,
-                &format!("/entries/{entry_index}/expectedFacadeResponse/body{violation}"),
+                &format!("/entries/{entry_index}/expected/body{violation}"),
                 &format!("the fixture's expected facade response body does not match {kind}"),
                 if is_result {
                     "Bring the expected body in line with the profile envelope and the bound record type."
@@ -548,7 +555,7 @@ pub fn check_fixture_expected_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixture::RecordedResponse as Expected;
+    use crate::fixture::{ExpectedFacade, RecordedHeaders};
     use crate::profile::{EnvelopeTemplate, ParameterizedPart, ProfileOperation};
     use crate::project::{Binding, PinnedRef, ProjectIdentity, RecordField};
     use crate::route::TemplatedRoute;
@@ -793,11 +800,12 @@ mod tests {
         let schema =
             derive_operation_result_schema(&profile, &project(true), "cases-find").expect("derive");
         let problem = derive_problem_envelope_schema(&profile).expect("derive");
-        let expected = |status: u32, body: Option<Value>| Expected {
+        let expected = |status: u32, body: Option<Value>| ExpectedFacade::Response {
             status: crate::fixture::HttpStatus::new(status).expect("a status"),
-            body,
+            headers: RecordedHeaders::new(),
+            body: body.map(crate::fixture::RecordedBody),
         };
-        let check = |index: usize, expected: &Expected| {
+        let check = |index: usize, expected: &ExpectedFacade| {
             check_fixture_expected_response(index, expected, &schema, &problem)
         };
 
@@ -810,26 +818,24 @@ mod tests {
         );
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, CheckCode::FixtureResponseSchema.code());
-        assert_eq!(
-            findings[0].path,
-            "/entries/0/expectedFacadeResponse/body/record/ghost"
-        );
+        assert_eq!(findings[0].path, "/entries/0/expected/body/record/ghost");
 
         let findings = check(2, &expected(200, Some(json!({"record": {"id": 7}}))));
-        assert_eq!(
-            findings[0].path,
-            "/entries/2/expectedFacadeResponse/body/record/id"
-        );
+        assert_eq!(findings[0].path, "/entries/2/expected/body/record/id");
 
         let findings = check(0, &expected(200, Some(json!({"record": {}}))));
-        assert_eq!(
-            findings[0].path,
-            "/entries/0/expectedFacadeResponse/body/record/id"
-        );
+        assert_eq!(findings[0].path, "/entries/0/expected/body/record/id");
 
+        // An absent body refuses at the expectation; an explicit JSON
+        // `null` body is a body (G-FIXTURES) and validates as the null
+        // value, refusing at the body root when the schema asks for an
+        // object.
         let findings = check(0, &expected(200, None));
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].path, "/entries/0/expectedFacadeResponse");
+        assert_eq!(findings[0].path, "/entries/0/expected");
+        let findings = check(0, &expected(200, Some(Value::Null)));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].path, "/entries/0/expected/body");
     }
 
     /// The problem-envelope derivation closes the profile's problem
@@ -931,12 +937,14 @@ mod tests {
             .expect("derive");
         let problem_code_only = profile(r#"{"code": "{{problemCode}}"}"#);
         let problem = derive_problem_envelope_schema(&problem_code_only).expect("derive");
-        let expected = |status: u32, body: Option<Value>| Expected {
+        let expected = |status: u32, body: Option<Value>| ExpectedFacade::Response {
             status: crate::fixture::HttpStatus::new(status).expect("a status"),
-            body,
+            headers: RecordedHeaders::new(),
+            body: body.map(crate::fixture::RecordedBody),
         };
-        let check =
-            |expected: &Expected| check_fixture_expected_response(0, expected, &schema, &problem);
+        let check = |expected: &ExpectedFacade| {
+            check_fixture_expected_response(0, expected, &schema, &problem)
+        };
 
         let good = expected(404, Some(json!({"code": "cases.conflict"})));
         assert!(check(&good).is_empty(), "an honest error-path entry passes");
@@ -946,24 +954,18 @@ mod tests {
             Some(json!({"code": "cases.conflict", "ghost": 1})),
         ));
         assert_eq!(findings.len(), 1);
-        assert_eq!(
-            findings[0].path,
-            "/entries/0/expectedFacadeResponse/body/ghost"
-        );
+        assert_eq!(findings[0].path, "/entries/0/expected/body/ghost");
         assert!(
             findings[0].message.contains("problem envelope"),
             "the message names which envelope kind failed"
         );
 
         let findings = check(&expected(404, Some(json!({"code": 7}))));
-        assert_eq!(
-            findings[0].path,
-            "/entries/0/expectedFacadeResponse/body/code"
-        );
+        assert_eq!(findings[0].path, "/entries/0/expected/body/code");
 
         let findings = check(&expected(404, None));
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].path, "/entries/0/expectedFacadeResponse");
+        assert_eq!(findings[0].path, "/entries/0/expected");
 
         // A 2xx entry carrying a problem body refuses against the result
         // schema.

@@ -385,6 +385,114 @@
           ],
           "constraints": [],
           "subcommands": []
+        },
+        {
+          "name": "fixtures",
+          "invocation": "adapterctl fixtures",
+          "about": "Replay the project's fixture suites, offline",
+          "long_about": null,
+          "usage": "adapterctl fixtures [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "replay",
+              "invocation": "adapterctl fixtures replay",
+              "about": "Replay the project's fixture suites against the compiled deployment contract, offline, and print the verdict",
+              "long_about": null,
+              "usage": "adapterctl fixtures replay [OPTIONS] <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Authored adapter project: its directory (holding `project.yaml`) or the `project.yaml` file itself. The profile, pack, and fixtures are read beside the project either way",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--profile <FILE>",
+                  "description": "Profile file read instead of the `profile.yaml` beside the project",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--pack <FILE>",
+                  "description": "Pack file read instead of the `pack.yaml` beside the project",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--fixtures <FILE>",
+                  "description": "Fixture file read instead of the `fixtures/` directory beside the project; repeatable, and each given file replaces the whole set",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },

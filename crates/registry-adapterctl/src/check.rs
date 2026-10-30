@@ -99,7 +99,7 @@ pub(crate) const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The fixture suite format.
-const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_FIXTURE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_FIXTURE_API_VERSION)],
@@ -402,7 +402,7 @@ fn read_runtime(
 /// The fixture files of a project directory, in file-name order. A missing
 /// `fixtures/` directory means no fixtures; a directory that cannot be
 /// read is an environment failure, never a silently empty fixture set.
-fn discovered_fixtures(directory: &Path) -> Result<Vec<PathBuf>, CheckFailure> {
+pub(crate) fn discovered_fixtures(directory: &Path) -> Result<Vec<PathBuf>, CheckFailure> {
     let fixtures = directory.join("fixtures");
     let entries = match std::fs::read_dir(&fixtures) {
         Ok(entries) => entries,
@@ -772,10 +772,11 @@ pub(crate) fn digest_of(bytes: &[u8]) -> Digest {
 /// Check every fixture entry's expected facade response body against the
 /// schema its expected status selects: the operation's derived result
 /// schema for a 2xx status, the profile's derived problem envelope for any
-/// other (CONCEPT 6). Core owns the derivation and the check; a derivation
-/// fault is already reported by the workspace check, so an entry whose
-/// schema cannot derive checks no body here.
-fn check_fixture_bodies(
+/// other (CONCEPT 6). A problem expectation carries no body: its class and
+/// code resolve in the core fixture checks. Core owns the derivation and
+/// the check; a derivation fault is already reported by the workspace
+/// check, so an entry whose schema cannot derive checks no body here.
+pub(crate) fn check_fixture_bodies(
     profile: &registry_adapter_core::AdapterProfile,
     project: &registry_adapter_core::AdapterProject,
     fixtures: &[registry_adapter_core::AdapterFixture],
@@ -791,13 +792,20 @@ fn check_fixture_bodies(
     let problem = derive_problem_envelope_schema(profile);
     for fixture in fixtures {
         for (entry_index, entry) in fixture.entries.iter().enumerate() {
-            let status = entry.expected_facade_response.status.get();
-            let is_result = (200..=299).contains(&status);
-            let result_schema =
-                match derive_operation_result_schema(profile, project, entry.operation.as_str()) {
-                    Ok(schema) => schema,
-                    Err(_) => continue,
-                };
+            let is_result = match &entry.expected {
+                registry_adapter_core::ExpectedFacade::Response { status, .. } => {
+                    (200..=299).contains(&status.get())
+                }
+                registry_adapter_core::ExpectedFacade::Problem { .. } => continue,
+            };
+            let result_schema = match derive_operation_result_schema(
+                profile,
+                project,
+                entry.facade_request.operation.as_str(),
+            ) {
+                Ok(schema) => schema,
+                Err(_) => continue,
+            };
             if !is_result && problem.is_err() {
                 continue;
             }
@@ -808,7 +816,7 @@ fn check_fixture_bodies(
             let problem_schema = problem.as_ref().unwrap_or(&stand_in);
             for diagnostic in check_fixture_expected_response(
                 entry_index,
-                &entry.expected_facade_response,
+                &entry.expected,
                 &result_schema,
                 problem_schema,
             ) {

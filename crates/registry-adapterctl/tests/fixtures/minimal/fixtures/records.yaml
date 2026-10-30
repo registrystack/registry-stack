@@ -9,18 +9,79 @@ provenance:
 intercepts:
   - type: endpoint
     endpoint: case-api
+  - type: token-endpoint
+    endpoint: case-api
 entries:
-  - operation: cases-get
-    given:
-      endpoint: case-api
-      method: GET
-      path: /api/cases/case
-    upstreamResponse:
+  # A found record: the token request and the case read answer in order,
+  # with request and response headers recorded on both sides, and the
+  # facade returns the mapped record.
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case
+      query: nationalId=123
+      headers:
+        accept: application/json
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+          headers:
+            authorization: Basic aWQ6c2VjcmV0
+          body:
+            grant_type: client_credentials
+        response:
+          status: 200
+          headers:
+            content-type: application/json
+          body:
+            access_token: staging-token
+      - request:
+          endpoint: case-api
+          method: GET
+          path: /api/cases/case
+          query: nationalId=123
+          headers:
+            accept: application/json
+        response:
+          status: 200
+          body:
+            id: "123"
+    expected:
+      type: response
       status: 200
-      body:
-        id: "123"
-    expectedFacadeResponse:
-      status: 200
+      headers:
+        content-type: application/json
       body:
         record:
           national_id: "123"
+  # An unreachable source: the read answers 503 with an explicit null body,
+  # and the facade answers the declared upstream problem by class and code.
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case
+      body: null
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+          body:
+            grant_type: client_credentials
+        response:
+          status: 200
+          body:
+            access_token: staging-token
+      - request:
+          endpoint: case-api
+          method: GET
+          path: /api/cases/case
+        response:
+          status: 503
+          body: null
+    expected:
+      type: problem
+      class: upstream
+      code: cases.upstream

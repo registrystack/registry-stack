@@ -350,7 +350,7 @@ fn an_expected_body_with_an_unknown_member_refuses_with_the_response_schema_code
     assert_refused(exit, &report, "adapter.fixture.response-schema");
     assert_eq!(
         diagnostic_path(&report, "adapter.fixture.response-schema"),
-        "/entries/0/expectedFacadeResponse/body/record/ghost"
+        "/entries/0/expected/body/record/ghost"
     );
 }
 
@@ -369,7 +369,7 @@ fn an_expected_body_with_a_wrong_typed_member_refuses_with_the_response_schema_c
     assert_refused(exit, &report, "adapter.fixture.response-schema");
     assert_eq!(
         diagnostic_path(&report, "adapter.fixture.response-schema"),
-        "/entries/0/expectedFacadeResponse/body/record/national_id"
+        "/entries/0/expected/body/record/national_id"
     );
 }
 
@@ -388,7 +388,7 @@ fn an_expected_body_missing_a_required_member_refuses_with_the_response_schema_c
     assert_refused(exit, &report, "adapter.fixture.response-schema");
     assert_eq!(
         diagnostic_path(&report, "adapter.fixture.response-schema"),
-        "/entries/0/expectedFacadeResponse/body/record/national_id"
+        "/entries/0/expected/body/record/national_id"
     );
 }
 
@@ -407,7 +407,7 @@ fn an_expected_body_absent_refuses_with_the_response_schema_code() {
     assert_refused(exit, &report, "adapter.fixture.response-schema");
     assert_eq!(
         diagnostic_path(&report, "adapter.fixture.response-schema"),
-        "/entries/0/expectedFacadeResponse"
+        "/entries/0/expected"
     );
 }
 
@@ -419,8 +419,8 @@ fn an_entry_with_an_unknown_operation_refuses_with_the_operation_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("fixtures/records.yaml"),
-            "- operation: cases-get",
-            "- operation: cases.ghost",
+            "      operation: cases-get",
+            "      operation: cases.ghost",
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);

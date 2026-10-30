@@ -6,14 +6,16 @@
 //! offline check over authored artifacts (project, profile, pack, fixtures,
 //! and with `--runtime` the runtime config); `project lock`, the pin
 //! rewriter; `schemas`, the generator and drift gate of the five format
-//! JSON Schemas; and `compile`, the per-deployment contract compiler.
-//! Fixture replay and live verification are later increments
+//! JSON Schemas; `compile`, the per-deployment contract compiler; and
+//! `fixtures replay`, the offline replay of a project's fixture suites
+//! against its compiled contract. Live verification is a later increment
 //! (`products/adapter/CONCEPT.md` section 8.1). It reads the same
 //! source-neutral model the runtime serves, so an artifact `adapterctl
 //! check` accepts is one the runtime can interpret.
 
 mod check;
 mod compile;
+mod fixtures;
 mod project;
 mod report;
 mod schemas;
@@ -58,6 +60,8 @@ enum Command {
     /// Compile the deployment's concrete OpenAPI contract beside the
     /// project, or check the written one for drift.
     Compile(compile::CompileArgs),
+    /// Replay the project's fixture suites, offline.
+    Fixtures(fixtures::FixturesArgs),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -128,12 +132,16 @@ where
         },
         Command::Schemas(_) => "schemas",
         Command::Compile(_) => "compile",
+        Command::Fixtures(fixtures) => match fixtures.command {
+            fixtures::FixturesCommand::Replay(_) => "fixtures replay",
+        },
     };
     let outcome = match command {
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
         Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
+        Command::Fixtures(args) => fixtures_command(args, format, command_name, stdout, stderr),
     };
     match outcome {
         Ok(exit) => exit,
@@ -365,6 +373,45 @@ fn compile_command(
     }
 }
 
+/// Run `fixtures replay` and write its verdict: the replayed counts, a
+/// refusal carrying the findings, or a failure naming the broken
+/// environment.
+fn fixtures_command(
+    args: fixtures::FixturesArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    let fixtures::FixturesCommand::Replay(args) = args.command;
+    match fixtures::run(&args) {
+        Ok(run) => {
+            let mut report = json!({
+                "command": command_name,
+                "project": run.project,
+                "fixtures": run.fixtures,
+                "entries": run.entries,
+                "upstreamExchanges": run.exchanges,
+            });
+            report["ok"] = json!(true);
+            report["status"] = json!("complete");
+            let mut out = Vec::new();
+            report::write(&report, &mut out).map_err(|_| ())?;
+            if format == OutputFormat::Json {
+                let _ = stdout.write_all(&out);
+            } else {
+                let _ = writeln!(stdout, "{}", human_lead(&report));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            let (exit, diagnostics) = fixtures::failure(&error);
+            let report = failure(command_name, exit, diagnostics);
+            write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
+        }
+    }
+}
+
 /// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
 /// or, with `--format json`, the CFG-DIAG-1 diagnostics in the report
 /// envelope on stdout.
@@ -433,6 +480,7 @@ fn human_lead(report: &Value) -> String {
         "schemas" => "Generated schemas written; nothing drifted.".to_owned(),
         "compile" if report["check"] == json!(true) => "Compile drift check passed.".to_owned(),
         "compile" => "Compiled contract written.".to_owned(),
+        "fixtures replay" => "Fixture replay passed.".to_owned(),
         other => format!("{other} completed."),
     }
 }

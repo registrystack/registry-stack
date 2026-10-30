@@ -8,7 +8,7 @@
 //! the pins, and runs the same core checks over the workspace before any
 //! byte is written, so a refused authoring never reaches a contract file.
 
-mod document;
+pub(crate) mod document;
 
 use clap::Args;
 use registry_adapter_core::{
