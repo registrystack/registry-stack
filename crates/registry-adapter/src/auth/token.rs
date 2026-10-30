@@ -772,6 +772,24 @@ impl Default for TokenCache {
 /// ceiling bounds, and each waiter holds the lock for at most the
 /// cache's admission bound before refusing. The lifetime anchor is
 /// taken just before the send, the earliest moment the issuer could
+/// The one event a fault records: every journal line about a token
+/// fault comes from this total mapping, so the journal and the fault
+/// can never disagree about what happened.
+fn fault_event(fault: &TokenFault) -> AuthEvent {
+    match fault {
+        TokenFault::Transport { kind } => AuthEvent::TokenTransportFailed { kind: kind.kind() },
+        TokenFault::EgressRefused => AuthEvent::TokenEgressRefused,
+        TokenFault::AdmissionShed => AuthEvent::TokenAdmissionShed,
+        TokenFault::Refused { code } => AuthEvent::TokenRefused { code },
+        TokenFault::Redirect => AuthEvent::TokenRedirected,
+        TokenFault::Unavailable { status } => AuthEvent::TokenUnavailable { status: *status },
+        TokenFault::Unreadable
+        | TokenFault::ScopeNarrowed
+        | TokenFault::NoLifetime
+        | TokenFault::Invalid => AuthEvent::TokenProtocolRefused,
+    }
+}
+
 /// have issued, so a cached credential can never outlive its real
 /// expiry. An issuance that earns no cache lifetime is never stored,
 /// Evidence's rule, so the returned generation is `None` for it and a
@@ -791,7 +809,7 @@ pub(crate) async fn acquire_token(
             // No request was sent, so the journal records the shed and
             // never a transport failure; the class stays the catchable
             // timeout a route may treat as a transient outage.
-            events.push(AuthEvent::TokenAdmissionShed);
+            events.push(fault_event(&TokenFault::AdmissionShed));
             return Err(AuthError::Token(TokenFault::AdmissionShed));
         }
     };
@@ -824,26 +842,32 @@ pub(crate) async fn acquire_token(
         Ok(Ok(wire)) => wire,
         Ok(Err(failure)) => {
             let fault = match failure {
-                TransportFailure::Transport(kind) => {
-                    events.push(AuthEvent::TokenTransportFailed { kind: kind.kind() });
-                    TokenFault::Transport { kind }
-                }
-                TransportFailure::PolicyRefused => {
-                    events.push(AuthEvent::TokenEgressRefused);
+                TransportFailure::Transport(
+                    kind @ (TransportKind::Connect
+                    | TransportKind::Timeout
+                    | TransportKind::Exchange
+                    | TransportKind::ResponseTooLarge),
+                ) => TokenFault::Transport { kind },
+                // A kind this build predates may be a policy refusal in
+                // disguise: the engine got no answer it understands, so
+                // the fault is the egress refusal, the same fault a
+                // destination policy raises, never a transport failure
+                // the class denies.
+                TransportFailure::PolicyRefused | TransportFailure::Transport(_) => {
                     TokenFault::EgressRefused
                 }
             };
+            events.push(fault_event(&fault));
             return Err(AuthError::Token(fault));
         }
         // The send outlived the ceiling: the request went out and no
         // answer came back in time, which is a transport timeout.
         Err(_elapsed) => {
-            events.push(AuthEvent::TokenTransportFailed {
-                kind: TransportKind::Timeout.kind(),
-            });
-            return Err(AuthError::Token(TokenFault::Transport {
+            let fault = TokenFault::Transport {
                 kind: TransportKind::Timeout,
-            }));
+            };
+            events.push(fault_event(&fault));
+            return Err(AuthError::Token(fault));
         }
     };
     match read_answer(
@@ -866,32 +890,11 @@ pub(crate) async fn acquire_token(
             Ok((token, generation))
         }
         Err(fault) => {
-            match fault {
-                TokenFault::Refused { code } => {
-                    events.push(AuthEvent::TokenRefused { code });
-                }
-                TokenFault::Transport { kind } => {
-                    events.push(AuthEvent::TokenTransportFailed { kind: kind.kind() });
-                }
-                TokenFault::Redirect => {
-                    events.push(AuthEvent::TokenRedirected);
-                }
-                TokenFault::EgressRefused => {
-                    events.push(AuthEvent::TokenEgressRefused);
-                }
-                TokenFault::AdmissionShed => {
-                    events.push(AuthEvent::TokenAdmissionShed);
-                }
-                TokenFault::Unavailable { status } => {
-                    events.push(AuthEvent::TokenUnavailable { status });
-                }
-                TokenFault::Unreadable
-                | TokenFault::ScopeNarrowed
-                | TokenFault::NoLifetime
-                | TokenFault::Invalid => {
-                    events.push(AuthEvent::TokenProtocolRefused);
-                }
-            }
+            // The answer's own fault decides the event, through the one
+            // total mapping; the transport, egress, and shed faults
+            // never reach this arm, because they are decided before the
+            // answer is read.
+            events.push(fault_event(&fault));
             Err(AuthError::Token(fault))
         }
     }
