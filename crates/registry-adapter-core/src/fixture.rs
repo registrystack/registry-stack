@@ -134,7 +134,10 @@ pub enum Intercept {
         endpoint: ExternalId,
     },
     /// Intercept the token requests of the named endpoint's OAuth2 kind
-    /// (`products/adapter/CONCEPT.md` section 10.2).
+    /// (`products/adapter/CONCEPT.md` section 10.2). Replay runs without
+    /// a credential: the recorded token request carries no credential
+    /// header or body, and the recorded reply's token is a synthetic
+    /// value a captured recording must replace before it is committed.
     TokenEndpoint {
         /// The pack endpoint whose token requests replay from the
         /// fixtures.
@@ -388,10 +391,13 @@ fn canonical_body(body: Option<&serde_json::Value>) -> String {
 
 /// Answer one send from the entry's recorded exchanges, in order: the
 /// exchange at the cursor must name the send's endpoint and kind (token
-/// or ordinary) and match the send's method, path, query, and body
-/// digest, and answering consumes it, so the next send matches the next
-/// recording (CONCEPT 13.3). The runtime engine calls this for every
-/// `http` and `graphql` send it is about to make; nothing here does I/O.
+/// or ordinary) and match the send's method, path, and, for an ordinary
+/// send, its query and body digest; a token request matches by endpoint,
+/// method, and path alone, because replay runs without a credential
+/// (CONCEPT 10.2, 13.3). Answering consumes the exchange, so the next
+/// send matches the next recording. The runtime engine calls this for
+/// every `http` and `graphql` send it is about to make; nothing here
+/// does I/O.
 pub fn answer_send<'a>(
     intercepts: &[Intercept],
     exchanges: &'a [RecordedExchange],
@@ -416,13 +422,18 @@ pub fn answer_send<'a>(
     if request.path != send.path {
         return Err(ReplayMismatch::Path);
     }
-    if request_query != send.query {
-        return Err(ReplayMismatch::Query);
-    }
-    if canonical_body(request.body.as_ref().map(RecordedBody::as_value))
-        != canonical_body(send.body)
-    {
-        return Err(ReplayMismatch::BodyDigest);
+    // A token request matches by endpoint, method, and path alone:
+    // replay runs without a credential (CONCEPT 10.2), so the engine's
+    // token send carries no recorded query or body to compare.
+    if !send.token_request {
+        if request_query != send.query {
+            return Err(ReplayMismatch::Query);
+        }
+        if canonical_body(request.body.as_ref().map(RecordedBody::as_value))
+            != canonical_body(send.body)
+        {
+            return Err(ReplayMismatch::BodyDigest);
+        }
     }
     *cursor += 1;
     Ok(&recorded.response)
@@ -959,5 +970,28 @@ mod tests {
             ),
             Err(ReplayMismatch::NotIntercepted)
         );
+    }
+
+    /// A token-request send matches its recording by endpoint, method,
+    /// and path only: replay runs without a credential (CONCEPT 10.2),
+    /// so the engine's token send carries no recorded query or body to
+    /// compare, and neither member decides the answer.
+    #[test]
+    fn token_sends_match_by_endpoint_method_and_path_only() {
+        let intercepts = [Intercept::TokenEndpoint {
+            endpoint: ExternalId::new("case-api").expect("id"),
+        }];
+        let mut recording = exchange(crate::model::HttpMethod::Post, "/oauth/token");
+        recording.request.token_request = true;
+        recording.request.query = Some("scope=read".to_owned());
+        recording.request.body = body(serde_json::json!({"grant_type": "client_credentials"}));
+        let mut send = send(crate::model::HttpMethod::Post, "/oauth/token");
+        send.token_request = true;
+        send.query = Some("client_id=replay");
+        let grant = serde_json::json!({"grant_type": "refresh_token"});
+        send.body = Some(&grant);
+        let mut cursor = 0usize;
+        answer_send(&intercepts, &[recording], &mut cursor, &send)
+            .expect("the token send answers by endpoint, method, and path alone");
     }
 }

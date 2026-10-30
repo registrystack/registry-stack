@@ -204,6 +204,7 @@ Fixture files sit in the member's `fixtures/` directory, which
 | `adapter.fixture.response-schema` | Expected facade response's record violates the derived result schema (`case_type` integer, declared string) | `adapter.fixture.response-schema` | checks |
 | `adapter.fixture.unknown-problem-code` | Expected 404 problem body names code `cases.spectre`, which the profile does not declare; the member's profile spells the problem slot as a literal `code` member, the member the check reads | `adapter.fixture.unknown-problem-code` | checks |
 | `adapter.fixture.unknown-operation` | Entry names operation `nope`, which the profile does not declare | `adapter.fixture.unknown-operation` | checks |
+| `adapter.fixture.credential-recorded` | Recorded read request carries the reserved header `authorization`; a fixture never sees credentials (CONCEPT 10.2), and replay supplies credentials from the runtime configuration | `adapter.fixture.credential-recorded` | checks |
 
 ### Reader-level members
 

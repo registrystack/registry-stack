@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.credential-recorded: this artifact set must be refused with
+# exactly adapter.fixture.credential-recorded. The recorded fixture's read request carries the
+# reserved header `authorization`, and a fixture never sees credentials (CONCEPT 10.2).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.credential-recorded/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:ae1fbcea598cc820ec3fdb15804f22d0920b152429ff44180ebaced49f209e78
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:6d73438adcacebcb4b326e342f95aa16337dcda2bdf1c03656a4c93792e9f65b
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

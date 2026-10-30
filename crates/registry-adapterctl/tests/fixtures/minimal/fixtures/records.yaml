@@ -12,9 +12,10 @@ intercepts:
   - type: token-endpoint
     endpoint: case-api
 entries:
-  # A found record: the token request and the case read answer in order,
-  # with request and response headers recorded on both sides, and the
-  # facade returns the mapped record.
+  # A found record: the token request and the case read answer in order.
+  # The token exchange records no credential (CONCEPT 10.2): no
+  # authorization header, no request body; the reply's token is a
+  # synthetic value, never a captured one.
   - facadeRequest:
       operation: cases-get
       path: /v2/cases/case
@@ -27,16 +28,12 @@ entries:
           tokenRequest: true
           method: POST
           path: /oauth/token
-          headers:
-            authorization: Basic aWQ6c2VjcmV0
-          body:
-            grant_type: client_credentials
         response:
           status: 200
           headers:
             content-type: application/json
           body:
-            access_token: staging-token
+            access_token: synthetic-replay-token
       - request:
           endpoint: case-api
           method: GET
@@ -68,12 +65,10 @@ entries:
           tokenRequest: true
           method: POST
           path: /oauth/token
-          body:
-            grant_type: client_credentials
         response:
           status: 200
           body:
-            access_token: staging-token
+            access_token: synthetic-replay-token
       - request:
           endpoint: case-api
           method: GET

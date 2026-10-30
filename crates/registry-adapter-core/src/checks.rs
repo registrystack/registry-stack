@@ -3447,6 +3447,53 @@ pub fn check_fixtures(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     )),
                     (true, true) => {}
                 }
+                // Credential material never travels in a recording
+                // (CONCEPT 10.2: fixtures never see tokens or secrets, and
+                // replay runs without a credential). Reserved header names
+                // and the endpoint's own api-key header are refused on
+                // either side of the exchange; a recorded token response
+                // may still carry a synthetic token, the reply replay
+                // answers with.
+                let response_pointer =
+                    format!("{prefix}/entries/{entry_index}/upstream/{exchange_index}/response");
+                let api_key_header = workspace
+                    .pack
+                    .endpoints
+                    .get(exchange.request.endpoint.as_str())
+                    .and_then(|endpoint| match &endpoint.authentication {
+                        EndpointAuthentication::StaticApiKey { header_name } => {
+                            Some(header_name.as_str())
+                        }
+                        _ => None,
+                    });
+                for (side, headers, pointer) in [
+                    ("request", &exchange.request.headers, request_pointer),
+                    ("response", &exchange.response.headers, &response_pointer),
+                ] {
+                    for name in headers.keys() {
+                        if crate::auth::is_reserved_header_name(name)
+                            || api_key_header
+                                .is_some_and(|header| name.eq_ignore_ascii_case(header))
+                        {
+                            findings.push(finding(
+                                CheckCode::FixtureCredentialRecorded,
+                                &format!("{pointer}/headers/{name}"),
+                                &format!(
+                                    "the recorded {side} carries the credential header `{name}`, and a fixture never sees credentials"
+                                ),
+                                "Drop the recorded header; replay supplies credentials from the runtime configuration, never from a recording.",
+                            ));
+                        }
+                    }
+                }
+                if exchange.request.token_request && exchange.request.body.is_some() {
+                    findings.push(finding(
+                        CheckCode::FixtureCredentialRecorded,
+                        &format!("{request_pointer}/body"),
+                        "the token request records a body, which replay could only fill from a credential",
+                        "Record the token exchange without a request body; replay runs without a credential.",
+                    ));
+                }
             }
             // The entry's facade-request operation is the facade-side
             // primary key: the deployment must be able to exercise it, so
@@ -8587,6 +8634,124 @@ mod tests {
         );
         ws.fixtures = std::slice::from_ref(&token);
         assert_clean(check_fixtures(&ws));
+    }
+
+    /// Credential material never travels in a recording (CONCEPT 10.2:
+    /// fixtures never see tokens or secrets, and replay runs without a
+    /// credential): reserved header names and the endpoint's own api-key
+    /// header are refused on recorded requests and responses both, and a
+    /// token request records no body, because replay has no secret to put
+    /// in one. A synthetic token in a recorded token RESPONSE stays
+    /// allowed: it is the reply replay answers with, never a credential
+    /// the engine presents.
+    #[test]
+    fn fixtures_refuse_recorded_credential_material() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let mut api_key_endpoint = oauth_endpoint();
+        api_key_endpoint.authentication = EndpointAuthentication::StaticApiKey {
+            header_name: "X-Api-Key".to_string(),
+        };
+        let pack = pack_builder(vec![api_key_endpoint], vec![]);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("find-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("fetch-case"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
+        }])
+        .expect("unique");
+        let base = || AdapterFixture {
+            id: local("case-api-fixtures"),
+            pack: id("case-api-pack"),
+            upstream_version: "2.7".to_string(),
+            provenance: FixtureProvenance::Captured {
+                reference: "staging".to_string(),
+            },
+            intercepts: vec![
+                Intercept::Endpoint {
+                    endpoint: id("case-api"),
+                },
+                Intercept::TokenEndpoint {
+                    endpoint: id("case-api"),
+                },
+            ],
+            entries: vec![recorded_entry("cases-find", success_expectation())],
+        };
+        // A reserved request header, the endpoint's own api-key header
+        // (case-insensitively), and a reserved response header each
+        // refuse at the recorded header that carries them.
+        for (header, value, on_response, pointer) in [
+            (
+                "authorization",
+                "Bearer recorded",
+                false,
+                "/fixtures/0/entries/0/upstream/0/request/headers/authorization",
+            ),
+            (
+                "x-api-key",
+                "recorded-key",
+                false,
+                "/fixtures/0/entries/0/upstream/0/request/headers/x-api-key",
+            ),
+            (
+                "set-cookie",
+                "sid=recorded",
+                true,
+                "/fixtures/0/entries/0/upstream/0/response/headers/set-cookie",
+            ),
+        ] {
+            let mut fixture = base();
+            let exchange = &mut fixture.entries[0].upstream[0];
+            let headers = if on_response {
+                &mut exchange.response.headers
+            } else {
+                &mut exchange.request.headers
+            };
+            headers.insert(header.to_string(), value.to_string());
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.fixtures = std::slice::from_ref(&fixture);
+            let findings = check_fixtures(&ws);
+            assert_eq!(findings.len(), 1, "{header}: {findings:?}");
+            assert_eq!(
+                findings[0].code,
+                CheckCode::FixtureCredentialRecorded.code(),
+                "{header}"
+            );
+            assert_eq!(findings[0].path, pointer, "{header}");
+        }
+
+        // A body on a token request records credential material by
+        // construction: replay runs without a credential, so there is no
+        // secret to fill it from.
+        let mut fixture = base();
+        fixture.entries[0].upstream[0].request.token_request = true;
+        fixture.entries[0].upstream[0].request.body = Some(crate::fixture::RecordedBody(
+            serde_json::json!({"grant_type": "client_credentials"}),
+        ));
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&fixture);
+        let findings = check_fixtures(&ws);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(
+            findings[0].code,
+            CheckCode::FixtureCredentialRecorded.code()
+        );
+        assert_eq!(
+            findings[0].path,
+            "/fixtures/0/entries/0/upstream/0/request/body"
+        );
+
+        // A synthetic token in the recorded token response stays allowed.
+        let mut fixture = base();
+        fixture.entries[0].upstream[0].request.token_request = true;
+        fixture.entries[0].upstream[0].response.body =
+            Some(crate::fixture::RecordedBody(serde_json::json!({
+                "access_token": "synthetic-replay-token"
+            })));
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&fixture);
+        assert!(check_fixtures(&ws).is_empty());
     }
 
     /// The workspace check derives every envelope once, independent of

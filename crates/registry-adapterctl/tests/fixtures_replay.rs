@@ -201,7 +201,7 @@ fn replay_refuses_an_exchange_no_intercept_answers() {
 fn replay_refuses_an_entry_without_upstream_exchanges() {
     let (_root, project) = edited_tree(|text| {
         text.replace(
-            "    upstream:\n      - request:\n          endpoint: case-api\n          tokenRequest: true\n          method: POST\n          path: /oauth/token\n          body:\n            grant_type: client_credentials\n        response:\n          status: 200\n          body:\n            access_token: staging-token\n      - request:\n          endpoint: case-api\n          method: GET\n          path: /api/cases/case\n        response:\n          status: 503\n          body: null\n",
+            "    upstream:\n      - request:\n          endpoint: case-api\n          tokenRequest: true\n          method: POST\n          path: /oauth/token\n        response:\n          status: 200\n          body:\n            access_token: synthetic-replay-token\n      - request:\n          endpoint: case-api\n          method: GET\n          path: /api/cases/case\n        response:\n          status: 503\n          body: null\n",
             "    upstream: []\n",
         )
     });
