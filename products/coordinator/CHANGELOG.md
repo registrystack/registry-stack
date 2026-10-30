@@ -6,10 +6,17 @@
   observation to each wait that follows a BReg Proposal. Version 4 namespaces
   from 0.44.0 are refused. Settle their runs with the 0.44.0 binaries, then
   apply to a fresh namespace and database identity.
-- Breaking: the pure Function interpreter ABI is now `v2` because the profile gained helpers. A
-  definition frozen under `v1` is refused with `definition.abi`; re-author the project and promote
-  it. Drain or finish runs started on 0.44.0 before upgrading: a run whose Function was frozen under
-  `v1` cannot continue on `v2`. A 1.0 install starts on `v2`.
+- BREAKING: the pure Function interpreter ABI is now `v2` because the
+  profile gained helpers. Every definition frozen by 0.44.0 records `v1` and
+  is refused with `definition.abi`, whether or not it has a Function, so no
+  0.44.0 run continues on this version. Settle runs with the 0.44.0
+  binaries, then check and promote the project again. A 1.0 install starts
+  on `v2`.
+- BREAKING: upgrade the Coordinator clients with the server. The 0.44.0
+  Rust, Python and Node clients refuse unknown fields, so they refuse an
+  inspection that carries `holdDetail`, `lastObservation` or `requestLink`.
+  Rust callers that build `RunListQuery`, `WaitStatus`, `StepStatus` or
+  `BRegProposalSubmission` as struct literals must set the new fields.
 - Add the BReg Proposal operations `breg.read-proposal/v1`,
   `breg.start-proposal/v1`, `breg.submit-proposal/v1` and
   `breg.cancel-proposal/v1`. Each names a Proposal of one pinned Proposal
@@ -79,7 +86,7 @@
   method such as `map` as a function name. It is an authoring aid; the engine still refuses an
   unknown name when the Function runs.
 - `coordinatorctl explain functions` lists the helpers a Function may call, the interpreter ABI
-  and the limits. `coordinatorctl explain --project DIR` is unchanged.
+  and the limits.
 
 ## 0.44.0 - 2026-10-27
 
