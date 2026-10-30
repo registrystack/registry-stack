@@ -304,7 +304,7 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
                 CheckCode::ProfileInvalidPath,
                 &format!("{prefix}/path"),
                 fault,
-                "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+                "Author the path origin-relative: a leading slash, no scheme, authority, backslash, query, or fragment, and no `..` segment in any spelling.",
             ));
         }
         findings.extend(facade_path_parameter_checks(
@@ -385,15 +385,25 @@ fn problems_faults(profile: &AdapterProfile) -> Vec<Diagnostic> {
 }
 
 /// The path-parameter correspondence faults of a send's static path,
-/// each with the parameters member it points at: a `{{name}}` placeholder
-/// no `pathParameters` entry binds (pointed at `path`), and an entry
-/// naming no placeholder the path carries (pointed at `pathParameters`).
-/// A `{{?name}}` optional placeholder may stay unbound.
+/// each with the parameters member it points at: a facade-style
+/// single-brace `{name}` placeholder refuses at the path member alone
+/// (the pack layer binds `{{name}}` only, so no correspondence exists to
+/// judge), a `{{name}}` placeholder no `pathParameters` entry binds
+/// (pointed at `path`), and an entry naming no placeholder the path
+/// carries (pointed at `pathParameters`). A `{{?name}}` optional
+/// placeholder may stay unbound.
 fn path_parameter_faults(
     path: &str,
     bindings: &std::collections::BTreeMap<String, Expression>,
 ) -> Vec<(&'static str, &'static str)> {
     let mut faults: Vec<(&'static str, &'static str)> = Vec::new();
+    if !facade_path_placeholders(path).is_empty() {
+        faults.push((
+            "path",
+            "the path carries a facade-style {name} placeholder the pack layer never binds",
+        ));
+        return faults;
+    }
     let mut seen: HashSet<&'static str> = HashSet::new();
     let mut placed: HashSet<String> = HashSet::new();
     for (name, optional) in placeholders(path) {
@@ -454,8 +464,11 @@ fn ok_status_code_range_fault(text: &str) -> Option<&'static str> {
 }
 
 /// The origin-relative fault of an authored static path, if any: no
-/// scheme or authority, no `..` segment, and a leading slash. The fault
-/// text never quotes the path.
+/// scheme or authority, a leading slash, no backslash, no query or
+/// fragment delimiter, and no `..` segment in any spelling a URL parser
+/// resolves, plain or percent-encoded, all judged on the static skeleton
+/// with `{{name}}` placeholders removed. The fault text never quotes the
+/// path.
 fn origin_relative_path_fault(path: &str) -> Option<&'static str> {
     if path.contains("://") {
         return Some("the path carries a scheme");
@@ -466,10 +479,75 @@ fn origin_relative_path_fault(path: &str) -> Option<&'static str> {
     if !path.starts_with('/') {
         return Some("the path lacks a leading slash");
     }
-    if path.split(['/', '?', '#']).any(|segment| segment == "..") {
+    let skeleton = static_path_skeleton(path);
+    if skeleton.contains('\\') {
+        return Some("the path carries a backslash");
+    }
+    if skeleton.contains(['?', '#']) {
+        return Some("the path carries a query or fragment delimiter");
+    }
+    if skeleton.split('/').any(|segment| segment == "..") {
         return Some("the path escapes the origin with a `..` segment");
     }
+    if skeleton.split('/').any(percent_decodes_to_dot_dot) {
+        return Some("a path segment percent-decodes to a `..` segment");
+    }
     None
+}
+
+/// The static skeleton of an authored path: every `{{name}}` and
+/// `{{?name}}` placeholder token removed, leaving the literal text the
+/// engine sends around the substituted values. The origin-relative
+/// delimiters and dot segments are judged on this skeleton because the
+/// optional form carries a `?` inside its token while a bound value
+/// arrives percent-encoded, so neither can put a delimiter or a dot
+/// segment on the wire.
+fn static_path_skeleton(path: &str) -> String {
+    let mut skeleton = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(open) = rest.find("{{") {
+        let Some(close) = rest[open..].find("}}") else {
+            break;
+        };
+        let inner = &rest[open + 2..open + close];
+        let name = inner.strip_prefix('?').unwrap_or(inner);
+        if is_placeholder_name(name) {
+            skeleton.push_str(&rest[..open]);
+            rest = &rest[open + close + 2..];
+        } else {
+            skeleton.push_str(&rest[..open + 2]);
+            rest = &rest[open + 2..];
+        }
+    }
+    skeleton.push_str(rest);
+    skeleton
+}
+
+/// Whether a path segment percent-decodes to the double-dot segment: the
+/// URL parser resolves `%2e`, any case, exactly as a dot, so every spelling
+/// of `..` through percent encoding (`%2e%2e`, `.%2e`, `%2e.`) escapes the
+/// origin the way a plain `..` does. A malformed escape decodes to nothing
+/// here; the dot comparison is what matters.
+fn percent_decodes_to_dot_dot(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && bytes[index + 1].is_ascii_hexdigit()
+            && bytes[index + 2].is_ascii_hexdigit()
+        {
+            let high = (bytes[index + 1] as char).to_digit(16).expect("hex digit");
+            let low = (bytes[index + 2] as char).to_digit(16).expect("hex digit");
+            decoded.push((high * 16 + low) as u8);
+            index += 3;
+            continue;
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    decoded == b".."
 }
 
 /// The single-brace `{name}` placeholders of a facade path template
@@ -1025,7 +1103,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 CheckCode::RouteInvalidPath,
                                 &format!("{prefix}/steps{path}/parameters/path"),
                                 fault,
-                                "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+                                "Author the path origin-relative: a leading slash, no scheme, authority, backslash, query, or fragment, and no `..` segment in any spelling.",
                             ));
                         }
                         for (member, fault) in
@@ -1035,7 +1113,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 CheckCode::RoutePathParameterMismatch,
                                 &format!("{prefix}/steps{path}/parameters/{member}"),
                                 fault,
-                                "Bind every {{name}} placeholder of the path in pathParameters, and keep no entry the path does not name.",
+                                "Bind every {{name}} placeholder of the path in pathParameters, keep no entry the path does not name, and never write a facade-style single-brace {name} form.",
                             ));
                         }
                     }
@@ -1111,7 +1189,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 CheckCode::RouteInvalidPath,
                                 &format!("{prefix}/steps{path}/parameters/path"),
                                 fault,
-                                "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+                                "Author the path origin-relative: a leading slash, no scheme, authority, backslash, query, or fragment, and no `..` segment in any spelling.",
                             ));
                         }
                         for (member, fault) in
@@ -1121,7 +1199,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 CheckCode::RoutePathParameterMismatch,
                                 &format!("{prefix}/steps{path}/parameters/{member}"),
                                 fault,
-                                "Bind every {{name}} placeholder of the path in pathParameters, and keep no entry the path does not name.",
+                                "Bind every {{name}} placeholder of the path in pathParameters, keep no entry the path does not name, and never write a facade-style single-brace {name} form.",
                             ));
                         }
                     }
@@ -3444,6 +3522,14 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
                 "Serve the origin over TLS.",
             ));
         }
+        if carries_query_or_fragment(&binding.base_url) {
+            findings.push(finding(
+                CheckCode::RuntimeInvalidOrigin,
+                &format!("{prefix}/baseUrl"),
+                "the endpoint's origin carries a query or fragment",
+                "Bind the origin as scheme, host, port, and optional path prefix, with no query or fragment.",
+            ));
+        }
         if let Some(profile) = &binding.tls_trust_profile {
             if !runtime
                 .outbound_tls
@@ -3574,6 +3660,14 @@ fn check_credential_pair(
             "Serve the token endpoint over TLS.",
         ));
     }
+    if carries_query_or_fragment(token_endpoint) {
+        findings.push(finding(
+            CheckCode::RuntimeInvalidOrigin,
+            &format!("{prefix}/credential/tokenEndpoint"),
+            "the token endpoint carries a query or fragment",
+            "Bind the token endpoint as scheme, host, port, and path, with no query or fragment; the engine adds the grant parameters itself.",
+        ));
+    }
 }
 
 /// Whether a bound origin's host is a numeric loopback address.
@@ -3590,6 +3684,15 @@ fn is_plain_http(url: &registry_platform_yaml::Url) -> bool {
         return false;
     }
     !is_loopback_origin(url)
+}
+
+/// Whether a bound origin carries a query or fragment, which the pinned
+/// origin the engine dials never accepts: an origin is scheme, host,
+/// port, and an optional path prefix, and the token request's grant
+/// parameters are the engine's to add, never the configuration's.
+fn carries_query_or_fragment(url: &registry_platform_yaml::Url) -> bool {
+    let parsed = url.to_url();
+    parsed.query().is_some() || parsed.fragment().is_some()
 }
 
 /// The problem an entry expects is checked against the profile's declared
@@ -8102,6 +8205,51 @@ mod tests {
         ));
     }
 
+    /// A bound origin is scheme, authority, and base path only: a query or
+    /// fragment on a `baseUrl` or a `tokenEndpoint` refuses, the same rule
+    /// the runtime's origin pinning and token-endpoint validation apply
+    /// when the plan is built, so a checked config never fails at load.
+    #[test]
+    fn runtime_refuses_a_query_or_fragment_on_a_bound_origin() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let findings_of = |base: &str, token: &str| {
+            let mut binding = oauth_binding(base);
+            if let Some(RuntimeCredential::Oauth2ClientCredentials { token_endpoint, .. }) =
+                &mut binding.credential
+            {
+                *token_endpoint = Url::new(token).expect("url");
+            }
+            let runtime = runtime_builder(vec![binding]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&runtime);
+            check_runtime(&ws, &runtime)
+        };
+        for base in [
+            "https://cases.example.invalid/base?tenant=records",
+            "https://cases.example.invalid/base#records",
+        ] {
+            let findings = findings_of(base, "https://token.example.invalid/token");
+            assert_eq!(findings.len(), 1, "at {base}: {:?}", codes(&findings));
+            assert_eq!(findings[0].code, CheckCode::RuntimeInvalidOrigin.code());
+            assert_eq!(findings[0].path, "/endpoints/0/baseUrl");
+        }
+        for token in [
+            "https://token.example.invalid/token?grant=records",
+            "https://token.example.invalid/token#records",
+        ] {
+            let findings = findings_of("https://cases.example.invalid", token);
+            assert_eq!(findings.len(), 1, "at {token}: {:?}", codes(&findings));
+            assert_eq!(findings[0].code, CheckCode::RuntimeInvalidOrigin.code());
+            assert_eq!(findings[0].path, "/endpoints/0/credential/tokenEndpoint");
+        }
+        assert_clean(findings_of(
+            "https://cases.example.invalid/base",
+            "https://token.example.invalid/token",
+        ));
+    }
+
     #[test]
     fn runtime_refuses_unknown_and_missing_endpoint_bindings() {
         let profile = profile_builder(vec![]);
@@ -8120,7 +8268,8 @@ mod tests {
     // ----- origin-relative paths (round 6 C1) -----
 
     /// An authored operation path is origin-relative: no scheme or
-    /// authority, no `..` segment, and a leading slash.
+    /// authority, no `..` segment in any spelling a URL parser resolves,
+    /// no backslash, no query or fragment delimiter, and a leading slash.
     #[test]
     fn profile_refuses_paths_that_leave_the_origin() {
         for path in [
@@ -8128,6 +8277,12 @@ mod tests {
             "//cases.example.invalid/v2/{type}",
             "v2/cases/{type}",
             "/v2/../admin/{type}",
+            "/v2/%2e%2e/admin/{type}",
+            "/v2/.%2e/admin/{type}",
+            "/v2/%2E./admin/{type}",
+            "/v2/cases/{type}?filter=x",
+            "/v2/cases/{type}#section",
+            "/v2\\cases/{type}",
         ] {
             let mut bad = operation("cases-find", HttpMethod::Get);
             bad.path = path.to_string();
@@ -8144,7 +8299,9 @@ mod tests {
     }
 
     /// A send's static path answers to the same origin-relative rule,
-    /// refused at the step's parameters.
+    /// refused at the step's parameters. The percent-encoded forms are
+    /// refused because the URL parser resolves them as dot segments when
+    /// the target is built, which the assertion beside this test pins.
     #[test]
     fn routes_refuse_send_paths_that_leave_the_origin() {
         let to_with_path = |path: &str| {
@@ -8161,6 +8318,14 @@ mod tests {
             "//cases.example.invalid/v2",
             "v2/cases",
             "/v2/../admin",
+            "/v2/%2e%2e/admin",
+            "/v2/%2E%2e/admin",
+            "/v2/.%2e/admin",
+            "/v2/cases?filter=x",
+            "/v2/cases#section",
+            "/v2\\cases",
+            "/v2/cases/{{?filter}}?x",
+            "/v2/{{?caseId}}/../admin",
         ] {
             let route = RouteDefinition {
                 id: local("fetch-case"),
@@ -8178,6 +8343,13 @@ mod tests {
                 "/routes/fetch-case/steps/0/parameters/path"
             );
         }
+        // Why the percent-encoded forms refuse: the URL parser resolves a
+        // `%2e%2e` segment as a double-dot segment, so the encoded path
+        // escapes the origin the same way a plain `..` does.
+        let parsed = Url::new("https://cases.example.invalid/v2/%2e%2e/admin")
+            .expect("url")
+            .to_url();
+        assert_eq!(parsed.path(), "/admin");
     }
 
     // ----- graphql send safety (round 6 C19) -----
@@ -8673,6 +8845,42 @@ mod tests {
             &[("caseId", "x")],
         )));
         assert_clean(route_with(send_with(Some("/v2/cases/{{?filter}}"), &[])));
+        // A facade-style single-brace placeholder never binds in the pack
+        // layer, bound or not: `pathParameters` answers the `{{name}}`
+        // form only, so the path member refuses.
+        let findings = route_with(send_with(Some("/v2/cases/{caseId}"), &[]));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RoutePathParameterMismatch.code()
+        );
+        assert_eq!(
+            findings[0].path,
+            "/routes/fetch-case/steps/0/parameters/path"
+        );
+        let findings = route_with(send_with(Some("/v2/cases/{caseId}"), &[("caseId", "x")]));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RoutePathParameterMismatch.code()
+        );
+        assert_eq!(
+            findings[0].path,
+            "/routes/fetch-case/steps/0/parameters/path"
+        );
+        // A single-brace token refuses wherever it sits, whole segment or
+        // not: the pack layer binds `{{name}}` only, and a brace on the
+        // wire is never what the author meant.
+        let findings = route_with(send_with(Some("/v2/cases/a{b}c"), &[]));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RoutePathParameterMismatch.code()
+        );
+        assert_eq!(
+            findings[0].path,
+            "/routes/fetch-case/steps/0/parameters/path"
+        );
     }
 
     // ----- header hygiene (round 6 C3) -----

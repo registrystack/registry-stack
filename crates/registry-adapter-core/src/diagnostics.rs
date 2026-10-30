@@ -113,6 +113,7 @@ pub enum CheckCode {
     RouteWriteWithoutIdempotency,
     // adapter.runtime.*
     RuntimeInsecureOrigin,
+    RuntimeInvalidOrigin,
     RuntimeInvalidOutboundTls,
     RuntimeMissingEndpoint,
     RuntimeUnknownEndpoint,
@@ -210,6 +211,7 @@ impl CheckCode {
         Self::RouteUnknownOperation,
         Self::RouteWriteWithoutIdempotency,
         Self::RuntimeInsecureOrigin,
+        Self::RuntimeInvalidOrigin,
         Self::RuntimeInvalidOutboundTls,
         Self::RuntimeMissingEndpoint,
         Self::RuntimeUnknownEndpoint,
@@ -323,6 +325,7 @@ impl CheckCode {
             Self::RouteUnknownOperation => "adapter.route.unknown-operation",
             Self::RouteWriteWithoutIdempotency => "adapter.route.write-without-idempotency",
             Self::RuntimeInsecureOrigin => "adapter.runtime.insecure-origin",
+            Self::RuntimeInvalidOrigin => "adapter.runtime.invalid-origin",
             Self::RuntimeInvalidOutboundTls => "adapter.runtime.invalid-outbound-tls",
             Self::RuntimeMissingEndpoint => "adapter.runtime.missing-endpoint",
             Self::RuntimeUnknownEndpoint => "adapter.runtime.unknown-endpoint",
@@ -338,6 +341,7 @@ impl CheckCode {
             Self::AuthKindMismatch
             | Self::AuthNoneNotLoopback
             | Self::RuntimeInsecureOrigin
+            | Self::RuntimeInvalidOrigin
             | Self::RuntimeInvalidOutboundTls
             | Self::RuntimeMissingEndpoint
             | Self::RuntimeUnknownEndpoint
