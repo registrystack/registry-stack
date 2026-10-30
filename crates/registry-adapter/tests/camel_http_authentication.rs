@@ -832,7 +832,7 @@ mod outbound_tls {
         )
         .expect("an unconfigured binding resolves");
         assert!(!plain.is_configured());
-        assert!(plain.material().expect("no material is demanded").is_none());
+        assert!(plain.material().is_none());
 
         let path = bundle_path("root");
         std::fs::write(&path, ROOT_CERTIFICATE_PEM).expect("write bundle");
@@ -843,7 +843,7 @@ mod outbound_tls {
             EndpointTls::resolve(&tls_binding, &runtime, &resolver()).expect("the bundle resolves");
         std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
-        assert!(tls.material().expect("valid bundle material").is_some());
+        assert!(tls.material().is_some());
         assert!(
             !format!("{tls:?}").contains("BEGIN CERTIFICATE"),
             "the rendering never carries the PEM"
@@ -853,6 +853,16 @@ mod outbound_tls {
             EndpointTls::resolve(&tls_binding, &runtime_config(None), &resolver()).unwrap_err();
         assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
         assert!(!fault.to_string().contains("private-ca"), "{fault}");
+        assert_eq!(fault.class(), CREDENTIAL_REJECTED_CLASS);
+
+        let garbage = bundle_path("garbage");
+        std::fs::write(&garbage, "not a pem bundle").expect("write garbage bundle");
+        let garbage_runtime = runtime_config(Some(garbage.to_str().expect("utf-8 path")));
+        let fault = EndpointTls::resolve(&tls_binding, &garbage_runtime, &resolver()).unwrap_err();
+        std::fs::remove_file(&garbage).expect("remove garbage bundle");
+        assert_eq!(fault, AuthError::Tls(TlsFault::Material));
+        assert_eq!(fault.class(), "egress.refused");
+        assert!(!fault.to_string().contains("garbage"), "{fault}");
     }
 }
 

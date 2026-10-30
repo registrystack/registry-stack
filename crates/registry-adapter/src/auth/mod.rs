@@ -66,7 +66,8 @@ pub const BUDGET_EXHAUSTED_CLASS: &str = "budget.exhausted";
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuthError {
     /// The endpoint's declared kind and its runtime binding do not form
-    /// a usable plan.
+    /// a usable plan; a deployment load refusal, never the caller's
+    /// `validation`.
     Plan(AuthPlanFault),
     /// The deployment's credential is unusable: a secret could not be
     /// resolved, or the value cannot travel as configured.
@@ -77,16 +78,25 @@ pub enum AuthError {
     /// The token endpoint did not issue a usable credential.
     Token(TokenFault),
     /// The endpoint's outbound TLS material could not be resolved or
-    /// built.
+    /// built; a deployment load refusal, never the caller's
+    /// `validation`.
     Tls(TlsFault),
 }
 
 impl AuthError {
     /// The section 8.7 error class this fault maps to.
+    ///
+    /// Plan and TLS faults are deployment misconfiguration: both are
+    /// refused at startup, so an occurrence here means the deployment
+    /// ignored that refusal, and neither is catchable at exchange time.
     #[must_use]
     pub fn class(&self) -> &'static str {
         match self {
-            Self::Plan(_) | Self::Tls(_) => "validation",
+            Self::Plan(_) | Self::Tls(TlsFault::CaBundle | TlsFault::ClientIdentity) => {
+                CREDENTIAL_REJECTED_CLASS
+            }
+            // The engine refuses to send without the configured trust.
+            Self::Tls(TlsFault::Material) => "egress.refused",
             Self::Credential => CREDENTIAL_REJECTED_CLASS,
             Self::BudgetExhausted => BUDGET_EXHAUSTED_CLASS,
             Self::Token(fault) => match fault {
@@ -179,11 +189,24 @@ mod tests {
     fn faults_render_fixed_text_and_classes() {
         assert_eq!(
             AuthError::Plan(AuthPlanFault::KindMismatch).class(),
-            "validation"
+            CREDENTIAL_REJECTED_CLASS,
+            "a plan fault is never the caller's validation"
         );
         assert_eq!(AuthError::Credential.class(), CREDENTIAL_REJECTED_CLASS);
         assert_eq!(AuthError::BudgetExhausted.class(), BUDGET_EXHAUSTED_CLASS);
-        assert_eq!(AuthError::Tls(TlsFault::Material).class(), "validation");
+        assert_eq!(
+            AuthError::Tls(TlsFault::CaBundle).class(),
+            CREDENTIAL_REJECTED_CLASS
+        );
+        assert_eq!(
+            AuthError::Tls(TlsFault::ClientIdentity).class(),
+            CREDENTIAL_REJECTED_CLASS
+        );
+        assert_eq!(
+            AuthError::Tls(TlsFault::Material).class(),
+            "egress.refused",
+            "the engine refuses to send without the configured trust"
+        );
 
         let transport = |kind| AuthError::Token(TokenFault::Transport { kind });
         assert_eq!(

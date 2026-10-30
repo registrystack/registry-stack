@@ -4,14 +4,14 @@
 //! (`products/adapter/CONCEPT.md` section 10.2): the trust profile's
 //! CA bundle, read from the profile's process-local file, and the mTLS
 //! client identity, resolved from the binding's secret references into
-//! zeroizing buffers, and rebuilt into platform destination material for
-//! each client the engine builds.
+//! zeroizing buffers, and built once into platform destination material.
 //!
 //! TLS is orthogonal to the credential kinds: any kind may send under a
-//! private root, under a client identity, or both, and the material is
-//! installed on the endpoint's data policy and its token policy alike,
-//! which is why [`EndpointTls::material`] builds fresh material per
-//! call instead of holding one platform value.
+//! private root, under a client identity, or both, and the one built
+//! material is installed on the endpoint's data policy and its token
+//! policy alike. Resolution runs at deployment load, and any failure
+//! refuses startup: the resolved PEM buffers are dropped here, so the
+//! material the engine holds is the only copy.
 
 use crate::auth::token::resolve_binary;
 use crate::auth::{AuthError, ProtectedText};
@@ -57,8 +57,7 @@ impl fmt::Display for TlsFault {
 /// One endpoint's resolved outbound TLS material.
 #[derive(Debug, Default)]
 pub struct EndpointTls {
-    ca: Option<ProtectedText>,
-    identity: Option<ProtectedText>,
+    material: Option<DestinationTlsMaterial>,
 }
 
 impl EndpointTls {
@@ -66,17 +65,19 @@ impl EndpointTls {
     /// identity.
     #[must_use]
     pub const fn none() -> Self {
-        Self {
-            ca: None,
-            identity: None,
-        }
+        Self { material: None }
     }
 
     /// Resolve a binding's TLS material: the CA bundle of the trust
     /// profile the binding names, read from that profile's process-local
     /// file, and the client identity resolved from its secret references
     /// as the certificate chain followed by exactly one private key,
-    /// concatenated into one zeroizing buffer.
+    /// concatenated into one zeroizing buffer, then built into the one
+    /// platform material the endpoint's clients install.
+    ///
+    /// This runs at deployment load, never per exchange: a failure
+    /// refuses startup with a value-free diagnostic that names the
+    /// endpoint id and the fault.
     pub fn resolve(
         binding: &EndpointBinding,
         runtime: &AdapterRuntimeConfig,
@@ -100,28 +101,36 @@ impl EndpointTls {
             }
             None => None,
         };
-        Ok(Self { ca, identity })
+        let material = if ca.is_some() || identity.is_some() {
+            Some(
+                DestinationTlsMaterial::from_pem(
+                    ca.as_ref().map(|bundle| bundle.as_bytes()),
+                    identity.as_ref().map(|identity| identity.as_bytes()),
+                )
+                .map_err(|_| AuthError::Tls(TlsFault::Material))?,
+            )
+        } else {
+            None
+        };
+        // The resolved PEM buffers are dropped here; the built material
+        // the engine holds is the only copy.
+        drop(ca);
+        drop(identity);
+        Ok(Self { material })
     }
 
     /// Whether any trust material is configured.
     #[must_use]
     pub fn is_configured(&self) -> bool {
-        self.ca.is_some() || self.identity.is_some()
+        self.material.is_some()
     }
 
-    /// Platform TLS material for one client build; fresh on each call
-    /// so the endpoint's data policy and token policy install the same
-    /// material without sharing one platform value.
-    pub fn material(&self) -> Result<Option<DestinationTlsMaterial>, AuthError> {
-        if !self.is_configured() {
-            return Ok(None);
-        }
-        let material = DestinationTlsMaterial::from_pem(
-            self.ca.as_ref().map(|bundle| bundle.as_bytes()),
-            self.identity.as_ref().map(|identity| identity.as_bytes()),
-        )
-        .map_err(|_| AuthError::Tls(TlsFault::Material))?;
-        Ok(Some(material))
+    /// The platform TLS material this binding resolved, built once at
+    /// deployment load; the endpoint's data policy and token policy
+    /// install the same material.
+    #[must_use]
+    pub fn material(&self) -> Option<&DestinationTlsMaterial> {
+        self.material.as_ref()
     }
 }
 
@@ -259,11 +268,8 @@ mod tests {
         let tls = EndpointTls::resolve(&binding(None, None), &runtime_config(None), &resolver())
             .expect("an unconfigured binding resolves");
         assert!(!tls.is_configured());
-        assert!(tls.material().expect("no material").is_none());
-        assert!(EndpointTls::none()
-            .material()
-            .expect("no material")
-            .is_none());
+        assert!(tls.material().is_none());
+        assert!(EndpointTls::none().material().is_none());
     }
 
     /// A declared trust profile's CA bundle file resolves and builds
@@ -277,8 +283,7 @@ mod tests {
             .expect("the bundle resolves");
         std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
-        let material = tls.material().expect("valid bundle material");
-        assert!(material.is_some(), "a bundle alone configures TLS");
+        assert!(tls.material().is_some(), "a bundle alone configures TLS");
         let rendered = format!("{tls:?}");
         assert!(!rendered.contains("BEGIN CERTIFICATE"), "{rendered}");
     }
@@ -307,28 +312,29 @@ mod tests {
         .expect("the identity resolves");
         std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
-        assert!(tls.material().expect("valid identity material").is_some());
+        assert!(tls.material().is_some());
     }
 
-    /// Resolved but unusable material refuses value-free: a bundle that
-    /// is not PEM, an identity whose certificate is not PEM.
+    /// Resolved but unusable material refuses at deployment load,
+    /// value-free: a bundle that is not PEM, an identity whose
+    /// certificate is not PEM.
     #[test]
-    fn garbage_material_refuses() {
+    fn garbage_material_refuses_at_load() {
         let path = bundle_path("garbage");
         std::fs::write(&path, "not a pem bundle").expect("write bundle");
         let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
-        let tls = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
-            .expect("any file content resolves");
+        let fault = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
+            .unwrap_err();
         std::fs::remove_file(&path).expect("remove bundle");
         assert_eq!(
-            tls.material().unwrap_err(),
+            fault,
             AuthError::Tls(TlsFault::Material),
-            "a non-PEM bundle is unusable"
+            "a non-PEM bundle is unusable at load"
         );
 
         std::env::set_var("ADAPTER_TEST_BAD_CERT", "not a certificate");
         std::env::set_var("ADAPTER_TEST_CLIENT_KEY", CLIENT_PRIVATE_KEY_PEM);
-        let tls = EndpointTls::resolve(
+        let fault = EndpointTls::resolve(
             &binding(
                 None,
                 Some(identity_refs(
@@ -339,11 +345,11 @@ mod tests {
             &runtime_config(None),
             &resolver(),
         )
-        .expect("any bytes resolve");
+        .unwrap_err();
         assert_eq!(
-            tls.material().unwrap_err(),
+            fault,
             AuthError::Tls(TlsFault::Material),
-            "a non-PEM identity is unusable"
+            "a non-PEM identity is unusable at load"
         );
     }
 

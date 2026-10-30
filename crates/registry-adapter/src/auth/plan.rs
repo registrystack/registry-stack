@@ -204,7 +204,9 @@ impl AuthPlan {
     ///
     /// One rule for callers: compile once per deployment start and hold
     /// the plan in runtime state; never per exchange: each compile owns
-    /// a fresh cache.
+    /// a fresh cache. Compilation runs at deployment load, and a
+    /// failure refuses startup with a value-free diagnostic that
+    /// names the endpoint id and the fault.
     ///
     /// This re-runs, defensively, the refusals `adapterctl check` owns;
     /// a deployment whose artifacts were never checked still cannot send
@@ -1308,7 +1310,7 @@ mod tests {
                     maximum_cache_seconds: BoundedU64::new(3600).expect("cache"),
                     assumed_lifetime_seconds: None,
                 }),
-                ca_bundle_ref: None,
+                tls_trust_profile: None,
                 mtls_identity: None,
             }
         }
