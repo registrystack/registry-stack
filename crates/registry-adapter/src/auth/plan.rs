@@ -237,7 +237,9 @@ impl AuthPlan {
                 // loopback keeps plain HTTP off the network, and an mTLS
                 // identity is only a credential when the handshake itself
                 // is encrypted, so plain HTTP refuses even with one bound.
-                let loopback = is_numeric_loopback(&binding.base_url);
+                let loopback = is_numeric_loopback(&binding.base_url)
+                    && (binding.base_url.is_https()
+                        || has_canonical_loopback_authority(binding.base_url.as_str()));
                 let identity_over_https = binding.mtls_identity.is_some()
                     && binding.base_url.to_url().scheme() == "https";
                 if !loopback && !identity_over_https {
@@ -528,16 +530,18 @@ fn authorize_static(
 
 /// Whether the fixed token endpoint is usable, Evidence's rules: an
 /// absolute `http`/`https` URL without query, fragment, or userinfo, with
-/// plain HTTP confined to numeric loopback. The `Url` type already
-/// refuses userinfo and non-HTTP schemes; these re-checks are the runtime
-/// side of the authoring checks.
+/// plain HTTP confined to a canonically spelled numeric loopback. The
+/// `Url` type already refuses userinfo and non-HTTP schemes; these
+/// re-checks are the runtime side of the authoring checks.
 fn validate_token_endpoint(endpoint: &registry_platform_yaml::Url) -> Result<(), AuthPlanFault> {
     let parsed = endpoint.to_url();
     let usable = parsed.query().is_none()
         && parsed.fragment().is_none()
         && parsed.username().is_empty()
         && parsed.password().is_none()
-        && (parsed.scheme() == "https" || is_numeric_loopback(endpoint));
+        && (parsed.scheme() == "https"
+            || (is_numeric_loopback(endpoint)
+                && has_canonical_loopback_authority(endpoint.as_str())));
     if usable {
         Ok(())
     } else {
@@ -592,6 +596,48 @@ fn is_numeric_loopback(url: &registry_platform_yaml::Url) -> bool {
         .unwrap_or(host);
     host.parse::<std::net::IpAddr>()
         .is_ok_and(|address| address.is_loopback())
+}
+
+/// Whether the plain-HTTP loopback authority is spelled the way the
+/// address prints, Evidence's rule: a full `127` dotted quad with no
+/// leading-zero octet, or exactly `[::1]`, with any explicit port. The
+/// URL schema refuses a host the parser rewrites, but IPv6 has several
+/// ordinary spellings of one address, and a plain-HTTP credential
+/// travels over an origin everyone reads the same way or not at all.
+fn has_canonical_loopback_authority(written: &str) -> bool {
+    let Some(rest) = written.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if let Some(suffix) = authority.strip_prefix("[::1]") {
+        return suffix.is_empty() || valid_port_suffix(suffix);
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+        .map_or((authority, None), |(host, port)| (host, Some(port)));
+    if port.is_some_and(|port| !valid_port(port)) {
+        return false;
+    }
+    let octets = host.split('.').collect::<Vec<_>>();
+    octets.len() == 4
+        && octets[0] == "127"
+        && octets.iter().all(|octet| {
+            !octet.is_empty()
+                && (octet == &"0" || !octet.starts_with('0'))
+                && octet.bytes().all(|byte| byte.is_ascii_digit())
+                && octet.parse::<u8>().is_ok()
+        })
+}
+
+/// One `:` followed by a usable plain-HTTP port.
+fn valid_port_suffix(value: &str) -> bool {
+    value.strip_prefix(':').is_some_and(valid_port)
+}
+
+/// A non-zero port without a leading zero, Evidence's bound.
+fn valid_port(value: &str) -> bool {
+    !value.starts_with('0') && value.parse::<u16>().is_ok_and(|port| port != 0)
 }
 
 /// Whether `scheme` is 1 to 32 HTTP token bytes.
@@ -757,10 +803,12 @@ mod tests {
         );
     }
 
-    /// `none` reaches numeric loopback, either family, with or without
-    /// mTLS, and any origin over `https` with an mTLS client identity;
-    /// a loopback name, a non-loopback origin without mTLS, and plain
-    /// HTTP with mTLS, whose handshake no identity can protect, refuse.
+    /// `none` reaches canonically spelled numeric loopback, either
+    /// family, with or without mTLS, and any origin over `https` with an
+    /// mTLS client identity; a loopback name, a non-canonical IPv6
+    /// spelling over plain HTTP, a non-loopback origin without mTLS,
+    /// and plain HTTP with mTLS, whose handshake no identity can
+    /// protect, refuse.
     #[test]
     fn none_is_admitted_only_on_numeric_loopback_or_mtls() {
         for base_url in ["http://127.0.0.1:9/", "http://[::1]:9/"] {
@@ -773,6 +821,15 @@ mod tests {
             AuthPlan::compile(&EndpointAuthentication::None {}, &named).unwrap_err(),
             AuthPlanFault::NoneNotAdmitted,
             "a loopback name is resolved off-host and is not numeric loopback"
+        );
+        let alternate = binding(
+            "http://[0:0:0:0:0:0:0:1]:9/",
+            Some(RuntimeCredential::None {}),
+        );
+        assert_eq!(
+            AuthPlan::compile(&EndpointAuthentication::None {}, &alternate).unwrap_err(),
+            AuthPlanFault::NoneNotAdmitted,
+            "a plain-http credential travels over an origin everyone reads the same way"
         );
         let public = binding(
             "https://cases.example.invalid",
@@ -801,6 +858,42 @@ mod tests {
             AuthPlanFault::NoneNotAdmitted,
             "an mTLS identity over plain http is not a credential"
         );
+    }
+
+    /// A plain-HTTP loopback authority is spelled the way the address
+    /// prints: the full dotted quad or exactly `[::1]`, never a
+    /// shorthand or an alternate IPv6 spelling a reader could parse
+    /// differently.
+    #[test]
+    fn plain_http_loopback_is_admitted_only_canonically_spelled() {
+        for written in [
+            "http://127.0.0.1:9/",
+            "http://127.0.0.1/",
+            "http://127.0.0.1",
+            "http://[::1]",
+            "http://[::1]:8080/",
+            "http://127.0.0.1/path?q=1",
+        ] {
+            assert!(
+                has_canonical_loopback_authority(written),
+                "{written} is canonical"
+            );
+        }
+        for written in [
+            "http://127.1/",
+            "http://127.0.0.01/",
+            "http://0127.0.0.1/",
+            "http://[0:0:0:0:0:0:0:1]/",
+            "http://[::1]:0/",
+            "http://[::1]:99999/",
+            "http://localhost:9/",
+            "https://127.0.0.1:9/",
+        ] {
+            assert!(
+                !has_canonical_loopback_authority(written),
+                "{written} is not canonical"
+            );
+        }
     }
 
     /// A scheme is 1 to 32 HTTP token bytes; anything else refuses.
@@ -870,9 +963,10 @@ mod tests {
 
     /// The token endpoint must be absolute `http`/`https` without
     /// userinfo, query, or fragment; plain HTTP is confined to numeric
-    /// loopback. Userinfo cannot be constructed through the `Url` type
-    /// (it refuses one at parse), so the compile-time re-check of
-    /// userinfo stays a defense no test can reach.
+    /// loopback spelled the way the address prints. Userinfo cannot be
+    /// constructed through the `Url` type (it refuses one at parse), so
+    /// the compile-time re-check of userinfo stays a defense no test
+    /// can reach.
     #[test]
     fn token_endpoints_are_usable_or_refused() {
         for endpoint in [
@@ -894,6 +988,7 @@ mod tests {
             "https://token.example.invalid/token#fragment",
             "http://localhost:9/token",
             "http://10.0.0.5:9/token",
+            "http://[0:0:0:0:0:0:0:1]:9/token",
         ] {
             let binding = binding(
                 "https://cases.example.invalid",
