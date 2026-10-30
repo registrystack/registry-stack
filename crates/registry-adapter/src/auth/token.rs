@@ -559,7 +559,16 @@ impl TokenEndpointPlan {
 /// than signing an assertion stamped `iat = 0`, which the server would
 /// reject as a confusing token refusal.
 fn unix_now() -> Result<i64, AuthError> {
-    let elapsed = SystemTime::now()
+    unix_instant(SystemTime::now())
+}
+
+/// The Unix seconds of one instant, the pure half of [`unix_now`] so
+/// the refusals are testable. A `SystemTime` on the platforms this
+/// builds for can neither precede the epoch nor overflow `i64` seconds;
+/// a platform that reports either refuses rather than sign a false
+/// instant.
+fn unix_instant(now: SystemTime) -> Result<i64, AuthError> {
+    let elapsed = now
         .duration_since(UNIX_EPOCH)
         .map_err(|_| AuthError::Credential)?;
     i64::try_from(elapsed.as_secs()).map_err(|_| AuthError::Credential)
@@ -610,10 +619,37 @@ impl TokenBudget {
 }
 
 /// One cached credential, erased when dropped, with the instant it
-/// stops being fresh.
+/// stops being fresh and the generation that names its issuance.
 struct CachedToken {
     token: ProtectedText,
     expires_at: Instant,
+    generation: u64,
+}
+
+/// The guarded cache state: the cached issuance, if any, and the
+/// generation counter every store advances. The counter lives under the
+/// same lock as the store, so generations are handed out in store
+/// order, and an issuance's name survives its own replacement.
+#[derive(Default)]
+struct CacheState {
+    cached: Option<CachedToken>,
+    generation: u64,
+}
+
+impl CacheState {
+    /// Store one issued credential under the next generation; returns
+    /// the generation stored. The acquisition calls this on its success
+    /// path, holding the guard it kept across the send.
+    fn store_next(&mut self, token: ProtectedText, expires_at: Instant) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        let generation = self.generation;
+        self.cached = Some(CachedToken {
+            token,
+            expires_at,
+            generation,
+        });
+        generation
+    }
 }
 
 /// One endpoint's token cache, owned by that endpoint's
@@ -623,7 +659,7 @@ struct CachedToken {
 /// poisons: a send that panics releases it, and the next waiter starts
 /// a fresh acquisition.
 pub struct TokenCache {
-    state: Mutex<Option<CachedToken>>,
+    state: Mutex<CacheState>,
     admission_timeout: Duration,
 }
 
@@ -632,23 +668,48 @@ impl TokenCache {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(None),
+            state: Mutex::new(CacheState::default()),
             admission_timeout: TOKEN_ADMISSION_TIMEOUT,
         }
     }
 
-    /// Discard any cached credential; the 401 rule calls this before
-    /// the single refresh.
-    pub async fn invalidate(&self) {
-        *self.state.lock().await = None;
+    /// Discard the cached credential only when it is still the issuance
+    /// `sent` names, the 401 rule's compare-and-invalidate: the send
+    /// that drew the 401 clears its own issuance, and a concurrent
+    /// refresh's fresher issuance survives it. `None` clears
+    /// unconditionally, the fallback for an engine that lost track of
+    /// what it sent.
+    ///
+    /// The lock wait is one handoff, never a queue: the lock is held
+    /// only across one in-flight token send, whose own request timeout
+    /// bounds it, and one 401 cannot accumulate waiters behind it. That
+    /// is why this call takes no admission bound; a bounded give-up
+    /// would skip the invalidation and strand the credential that just
+    /// drew the 401.
+    pub async fn invalidate_if(&self, sent: Option<u64>) {
+        let mut guard = self.state.lock().await;
+        let matches = match sent {
+            Some(sent) => guard
+                .cached
+                .as_ref()
+                .is_some_and(|cached| cached.generation == sent),
+            None => true,
+        };
+        if matches {
+            guard.cached = None;
+        }
     }
 
     /// How much cached freshness remains, for operators and tests;
-    /// `None` when nothing is cached.
+    /// `None` when nothing is cached. The lock wait is one handoff, for
+    /// the same reason as [`TokenCache::invalidate_if`]: a single
+    /// operator query cannot form the queue the acquisition's admission
+    /// bound exists to break.
     pub async fn remaining_lifetime(&self) -> Option<Duration> {
         self.state
             .lock()
             .await
+            .cached
             .as_ref()
             .map(|cached| cached.expires_at.saturating_duration_since(Instant::now()))
     }
@@ -676,7 +737,7 @@ pub(crate) async fn acquire_token(
     send: &dyn TokenSend,
     signer: &dyn ClientAssertionSigner,
     events: &mut Vec<AuthEvent>,
-) -> Result<ProtectedText, AuthError> {
+) -> Result<(ProtectedText, u64), AuthError> {
     let cache = plan.cache.as_ref();
     let mut guard = match timeout(cache.admission_timeout, cache.state.lock()).await {
         Ok(guard) => guard,
@@ -689,10 +750,10 @@ pub(crate) async fn acquire_token(
             }));
         }
     };
-    if let Some(cached) = guard.as_ref() {
+    if let Some(cached) = guard.cached.as_ref() {
         if Instant::now() < cached.expires_at {
             events.push(AuthEvent::TokenCacheHit);
-            return Ok(cached.token.clone());
+            return Ok((cached.token.clone(), cached.generation));
         }
     }
     budget
@@ -719,12 +780,9 @@ pub(crate) async fn acquire_token(
     ) {
         Ok((token, lifetime)) => {
             let expires_at = anchored + clamped_lifetime(lifetime, plan.maximum_cache);
-            *guard = Some(CachedToken {
-                token: token.clone(),
-                expires_at,
-            });
+            let generation = guard.store_next(token.clone(), expires_at);
             events.push(AuthEvent::TokenIssued);
-            Ok(token)
+            Ok((token, generation))
         }
         Err(fault) => {
             match fault {
@@ -1228,7 +1286,7 @@ mod tests {
         let plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
-        let first = acquire_token(
+        let (first, _) = acquire_token(
             &plan,
             &mut budget,
             &resolver(),
@@ -1239,7 +1297,7 @@ mod tests {
         .await
         .expect("the first acquisition issues");
         assert_eq!(first.as_bytes(), b"at");
-        let second = acquire_token(
+        let (second, _) = acquire_token(
             &plan,
             &mut budget,
             &resolver(),
@@ -1559,6 +1617,53 @@ mod tests {
         assert_eq!(send.peak.load(Ordering::SeqCst), 1, "no concurrent sends");
     }
 
+    /// The 401 rule's compare-and-invalidate: only the generation the
+    /// send carried clears; a concurrent refresh's fresher issuance
+    /// survives a stale 401, an unknown generation clears nothing, and
+    /// `None` clears unconditionally. The counter keeps advancing past
+    /// invalidations, so a stale generation can never alias a future
+    /// issuance.
+    #[tokio::test]
+    async fn invalidate_if_only_clears_the_matching_issuance() {
+        async fn store(cache: &TokenCache, token: &str) -> u64 {
+            let mut guard = cache.state.lock().await;
+            guard.store_next(
+                ProtectedText::from_str_value(token),
+                Instant::now() + Duration::from_secs(600),
+            )
+        }
+        let cache = TokenCache::new();
+        let gen1 = store(&cache, "token-one").await;
+        let gen2 = store(&cache, "token-two").await;
+        assert_eq!(gen1, 1);
+        assert_eq!(gen2, 2, "every store advances the counter");
+        // Exchange X drew the 401 on its issuance while exchange Y had
+        // already refreshed past it: X's invalidation names gen1 and
+        // must leave Y's gen2 in place.
+        cache.invalidate_if(Some(gen1)).await;
+        assert!(
+            cache.remaining_lifetime().await.is_some(),
+            "the fresher issuance survives a stale 401"
+        );
+        cache.invalidate_if(Some(99)).await;
+        assert!(
+            cache.remaining_lifetime().await.is_some(),
+            "a generation the cache never issued clears nothing"
+        );
+        cache.invalidate_if(Some(gen2)).await;
+        assert!(
+            cache.remaining_lifetime().await.is_none(),
+            "the generation the cache holds clears"
+        );
+        let gen3 = store(&cache, "token-three").await;
+        assert_eq!(gen3, 3, "the counter survives invalidation");
+        cache.invalidate_if(None).await;
+        assert!(
+            cache.remaining_lifetime().await.is_none(),
+            "None is the unconditional fallback"
+        );
+    }
+
     /// A waiter queued behind a stalled refresh gives up at the
     /// admission bound instead of parking its caller: the refusal is a
     /// transport timeout, no request was sent, and no budget was spent.
@@ -1573,7 +1678,7 @@ mod tests {
         );
         let mut plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
         plan.cache = Arc::new(TokenCache {
-            state: Mutex::new(None),
+            state: Mutex::new(CacheState::default()),
             admission_timeout: Duration::from_millis(30),
         });
         // Hold the cache lock the way a stalled refresh would.
@@ -1646,6 +1751,21 @@ mod tests {
         );
     }
 
+    /// A clock before the epoch refuses outright: the assertion is
+    /// never signed with `iat = 0`, and the refusal's rendering is
+    /// fixed text that carries no time value.
+    #[test]
+    fn a_pre_epoch_clock_refuses_without_signing() {
+        let before_epoch = UNIX_EPOCH - Duration::from_secs(1);
+        let error = unix_instant(before_epoch).unwrap_err();
+        assert_eq!(error, AuthError::Credential);
+        assert_eq!(
+            error.to_string(),
+            "the deployment's credential is unusable",
+            "the rendering carries no time value"
+        );
+    }
+
     /// The assertion's issuance instant is the real current Unix time:
     /// a clock the platform reports before the epoch refuses instead of
     /// signing `iat = 0`, and the signed instant tracks the clock.
@@ -1656,10 +1776,8 @@ mod tests {
             now > 1_600_000_000,
             "a plausible present instant, not the epoch: {now}"
         );
-        // The refusal branch cannot be injected here: it needs a clock
-        // the harness reports before the epoch, and the layer reads the
-        // platform clock directly. The signed instant is pinned below by
-        // a signer that records it.
+        // The signed instant is pinned below by a signer that records
+        // it.
         let before = unix_now().expect("a second reading");
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("ASSERTION_KEY", "key-pem");

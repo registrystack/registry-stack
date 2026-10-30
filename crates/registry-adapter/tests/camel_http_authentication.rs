@@ -16,8 +16,9 @@
 mod upstream;
 
 use registry_adapter::auth::{
-    AuthError, AuthEvent, AuthPlan, AuthorizeContext, ClientAssertion, ClientAssertionSigner,
-    ProtectedText, TokenBudget, CREDENTIAL_REJECTED_CLASS, UNREGISTERED_ERROR_CODE,
+    AuthError, AuthEvent, AuthPlan, AuthorizeContext, AuthorizedCredential, ClientAssertion,
+    ClientAssertionSigner, ProtectedText, TokenBudget, CREDENTIAL_REJECTED_CLASS,
+    UNREGISTERED_ERROR_CODE,
 };
 use registry_adapter_core::{
     CredentialPlacement, EndpointAuthentication, EndpointBinding, RuntimeCredential,
@@ -94,7 +95,7 @@ async fn authorize_with_plan(
     plan: &registry_adapter::auth::AuthPlan,
     send: &dyn registry_adapter::auth::TokenSend,
     events: &mut Vec<AuthEvent>,
-) -> Result<Option<registry_adapter::auth::AuthHeader>, AuthError> {
+) -> Result<Option<AuthorizedCredential>, AuthError> {
     let mut budget = TokenBudget::new_exchange();
     let mut context = AuthorizeContext {
         resolver: &resolver(),
@@ -162,11 +163,11 @@ async fn none_sends_nothing_and_stays_loopbound() {
     )
     .expect("numeric loopback admits none");
     let mut events = Vec::new();
-    let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+    let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
         .await
         .expect("none resolves");
     assert!(
-        header.is_none(),
+        credential.is_none(),
         "the none kind produces no header material"
     );
 
@@ -203,12 +204,12 @@ async fn basic_sends_one_preemptive_header() {
     )
     .expect("a usable plan");
     let mut events = Vec::new();
-    let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+    let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
         .await
         .expect("the pair resolves")
         .expect("basic sends a header");
-    assert_eq!(header.name(), "authorization");
-    assert_eq!(header.value().as_bytes(), b"Basic dXNlcjpwYXNz");
+    assert_eq!(credential.header.name(), "authorization");
+    assert_eq!(credential.header.value().as_bytes(), b"Basic dXNlcjpwYXNz");
     assert!(events.is_empty(), "a static kind records no token events");
     assert_eq!(double.request_count(), 0, "the auth layer sends nothing");
 }
@@ -237,12 +238,12 @@ async fn static_authorization_presents_the_declared_scheme() {
         )
         .expect("a usable plan");
         let mut events = Vec::new();
-        let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
             .await
             .expect("the token resolves")
             .expect("a header is sent");
-        assert_eq!(header.name(), "authorization");
-        assert_eq!(header.value().as_bytes(), expected);
+        assert_eq!(credential.header.name(), "authorization");
+        assert_eq!(credential.header.value().as_bytes(), expected);
     }
 }
 
@@ -264,12 +265,12 @@ async fn static_api_key_uses_the_declared_header() {
     )
     .expect("a usable plan");
     let mut events = Vec::new();
-    let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+    let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
         .await
         .expect("the key resolves")
         .expect("a header is sent");
-    assert_eq!(header.name(), "X-Api-Key");
-    assert_eq!(header.value().as_bytes(), b"key123");
+    assert_eq!(credential.header.name(), "X-Api-Key");
+    assert_eq!(credential.header.value().as_bytes(), b"key123");
 }
 
 /// The client-credentials kind takes its bearer from the fixed token
@@ -305,11 +306,11 @@ mod oauth2_client_credentials {
         )
         .expect("a usable plan");
         let mut events = Vec::new();
-        let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(header.value().as_bytes(), b"Bearer issued-bh");
+        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-bh");
 
         let requests = double.requests();
         assert_eq!(requests.len(), 1, "one token request");
@@ -361,11 +362,11 @@ mod oauth2_client_credentials {
         )
         .expect("a usable plan");
         let mut events = Vec::new();
-        let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(header.value().as_bytes(), b"Bearer issued-fb");
+        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-fb");
         let request = &double.requests()[0];
         assert!(
             request.header("authorization").is_none(),
@@ -416,7 +417,8 @@ mod oauth2_client_credentials {
             signer: &KeyBindingSigner,
             events: &mut events,
         };
-        plan.authorize(&mut first)
+        let primed = plan
+            .authorize(&mut first)
             .await
             .expect("the first credential issues")
             .expect("a header is sent");
@@ -427,12 +429,12 @@ mod oauth2_client_credentials {
             signer: &KeyBindingSigner,
             events: &mut events,
         };
-        let header = plan
+        let credential = plan
             .authorize(&mut second)
             .await
             .expect("the cache answers")
             .expect("a header is sent");
-        assert_eq!(header.value().as_bytes(), b"Bearer issued-cache");
+        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-cache");
         assert_eq!(double.request_count(), 1, "the second send is a cache hit");
         assert!(events.contains(&AuthEvent::TokenCacheHit));
 
@@ -447,7 +449,7 @@ mod oauth2_client_credentials {
         let mut events = Vec::new();
         let mut refresh_used = false;
         let action = plan
-            .on_upstream_status(401, &mut refresh_used, &mut events)
+            .on_upstream_status(401, primed.generation, &mut refresh_used, &mut events)
             .await;
         assert_eq!(
             action,
@@ -510,12 +512,12 @@ mod oauth2_client_credentials {
                 signer: &KeyBindingSigner,
                 events: &mut events,
             };
-            let header = plan
+            let credential = plan
                 .authorize(&mut context)
                 .await
                 .expect("a credential issues")
                 .expect("a header is sent");
-            assert_eq!(header.value().as_bytes(), b"Bearer issued-reuse");
+            assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-reuse");
         }
         assert_eq!(
             double.request_count(),
@@ -655,7 +657,8 @@ mod oauth2_client_credentials {
             signer: &KeyBindingSigner,
             events: &mut events,
         };
-        plan.authorize(&mut context)
+        let primed = plan
+            .authorize(&mut context)
             .await
             .expect("the credential issues")
             .expect("a header is sent");
@@ -663,7 +666,7 @@ mod oauth2_client_credentials {
 
         let mut refresh_used = false;
         let action = plan
-            .on_upstream_status(401, &mut refresh_used, &mut events)
+            .on_upstream_status(401, primed.generation, &mut refresh_used, &mut events)
             .await;
         assert_eq!(
             action,
@@ -671,8 +674,9 @@ mod oauth2_client_credentials {
         );
         assert!(refresh_used);
         assert!(cache.remaining_lifetime().await.is_none());
+        // The spent refresh short-circuits before the generation is read.
         let action = plan
-            .on_upstream_status(401, &mut refresh_used, &mut events)
+            .on_upstream_status(401, None, &mut refresh_used, &mut events)
             .await;
         assert_eq!(
             action,
@@ -684,7 +688,7 @@ mod oauth2_client_credentials {
             "the class a route cannot catch"
         );
         let action = plan
-            .on_upstream_status(403, &mut refresh_used, &mut events)
+            .on_upstream_status(403, None, &mut refresh_used, &mut events)
             .await;
         assert_eq!(
             action,
@@ -737,11 +741,11 @@ mod oauth2_private_key_jwt {
         )
         .expect("a usable plan");
         let mut events = Vec::new();
-        let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(header.value().as_bytes(), b"Bearer issued-pj");
+        assert_eq!(credential.header.value().as_bytes(), b"Bearer issued-pj");
 
         let request = &double.requests()[0];
         assert!(
@@ -934,11 +938,11 @@ mod marker_secret_absence {
             )
             .unwrap_or_else(|fault| panic!("{tag} must compile: {fault}"));
             let mut events = Vec::new();
-            let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
                 .await
                 .unwrap_or_else(|error| panic!("{tag} must resolve: {error}"))
                 .expect("a header is sent");
-            let value = String::from_utf8_lossy(header.value().as_bytes()).into_owned();
+            let value = String::from_utf8_lossy(credential.header.value().as_bytes()).into_owned();
             match tag {
                 // The Basic kind carries the marker base64-encoded, so the
                 // raw marker appears nowhere at all; the decoded pair is
@@ -961,7 +965,7 @@ mod marker_secret_absence {
                 }
             }
             assert_marker_absent(
-                &[format!("{header:?}"), format!("{events:?}")],
+                &[format!("{credential:?}"), format!("{events:?}")],
                 &format!("the {tag} kind's renderings"),
             );
             assert_eq!(
@@ -1004,12 +1008,12 @@ mod marker_secret_absence {
             )
             .unwrap_or_else(|fault| panic!("{tag} must compile: {fault}"));
             let mut events = Vec::new();
-            let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
                 .await
                 .unwrap_or_else(|error| panic!("{tag} must issue: {error}"))
                 .expect("a header is sent");
             assert_eq!(
-                header.value().as_bytes(),
+                credential.header.value().as_bytes(),
                 format!("Bearer {MARKER_SECRET}").as_bytes(),
                 "the issued credential is the bearer"
             );
@@ -1049,7 +1053,12 @@ mod marker_secret_absence {
                     );
                 }
             }
-            let mut scanned = vec![format!("{header:?}"), format!("{events:?}"), method, target];
+            let mut scanned = vec![
+                format!("{credential:?}"),
+                format!("{events:?}"),
+                method,
+                target,
+            ];
             for (name, value) in &request.headers {
                 // A header is text on the wire, so scan it as text. The
                 // Basic placement's authorization header is base64, which
@@ -1090,11 +1099,14 @@ mod marker_secret_absence {
         )
         .expect("a usable plan");
         let mut events = Vec::new();
-        let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        let credential = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
             .await
             .expect("a credential issues")
             .expect("a header is sent");
-        assert_eq!(header.value().as_bytes(), b"Bearer issued-pj-mark");
+        assert_eq!(
+            credential.header.value().as_bytes(),
+            b"Bearer issued-pj-mark"
+        );
         let request = &double.requests()[0];
         let body = request.body_text();
         assert!(
@@ -1115,7 +1127,7 @@ mod marker_secret_absence {
         );
         let _ = after;
         assert_marker_absent(
-            &[format!("{header:?}"), format!("{events:?}")],
+            &[format!("{credential:?}"), format!("{events:?}")],
             "the private-key-jwt renderings",
         );
     }

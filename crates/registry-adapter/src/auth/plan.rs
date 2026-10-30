@@ -199,6 +199,20 @@ pub struct AuthorizeContext<'a> {
     pub events: &'a mut Vec<AuthEvent>,
 }
 
+/// One credential the engine may send: the header to append and, when
+/// the credential came from an OAuth2 endpoint's cache, the generation
+/// of that cached issuance. The engine hands the generation back to the
+/// 401 rule with the status, which clears only the issuance its send
+/// carried, never one a concurrent refresh already replaced.
+#[derive(Debug)]
+pub struct AuthorizedCredential {
+    /// The header to append to the send.
+    pub header: AuthHeader,
+    /// The cached issuance the header carries; `None` when the kind
+    /// holds no cache to invalidate (the static kinds).
+    pub generation: Option<u64>,
+}
+
 impl AuthPlan {
     /// Compile one endpoint's declared kind against its runtime binding.
     ///
@@ -378,30 +392,37 @@ impl AuthPlan {
         self.token.as_ref()
     }
 
-    /// The header material for one upstream send, or `None` under the
+    /// The credential for one upstream send, or `None` under the
     /// `none` kind.
     ///
     /// Static kinds resolve their secret on every send. The OAuth2 kinds
     /// acquire a credential through the fixed token endpoint under the
     /// exchange's budget; the acquisition holds the endpoint's cache
     /// lock until it completes, which is the single-flight refresh of
-    /// section 10.2. The future is `Send`, so the engine may poll it on
-    /// any worker.
+    /// section 10.2. The returned generation names the cached issuance
+    /// the header carries; the engine passes it back to
+    /// [`AuthPlan::on_upstream_status`] when the send draws a 401. The
+    /// future is `Send`, so the engine may poll it on any worker.
     pub async fn authorize(
         &self,
         context: &mut AuthorizeContext<'_>,
-    ) -> Result<Option<AuthHeader>, AuthError> {
+    ) -> Result<Option<AuthorizedCredential>, AuthError> {
         if self.kind == AuthKind::None {
             return Ok(None);
         }
         if let Some(credential) = &self.static_credential {
-            return authorize_static(credential, context.resolver).map(Some);
+            return authorize_static(credential, context.resolver).map(|header| {
+                Some(AuthorizedCredential {
+                    header,
+                    generation: None,
+                })
+            });
         }
         let plan = self
             .token
             .as_ref()
             .expect("an OAuth2 plan carries its token endpoint");
-        let token = acquire_token(
+        let (token, generation) = acquire_token(
             plan,
             context.budget,
             context.resolver,
@@ -411,21 +432,31 @@ impl AuthPlan {
         )
         .await?;
         let value = scheme_value("Bearer", token.as_bytes()).map_err(|_| AuthError::Credential)?;
-        Ok(Some(AuthHeader::new("authorization", value)))
+        Ok(Some(AuthorizedCredential {
+            header: AuthHeader::new("authorization", value),
+            generation: Some(generation),
+        }))
     }
 
     /// Apply the 401 rule of section 10.2 to one upstream status.
     ///
     /// The rule holds whatever `okStatusCodeRange` and
     /// `throwExceptionOnFailure` say: an upstream 401 under an OAuth2
-    /// kind invalidates the cached credential and the send repeats once
-    /// with a fresh one; a 401 after that, or any 401 under a static
-    /// kind, raises the uncatchable `credential.rejected`. A 403 stays
-    /// the caller's `upstream.http`: it answers about the request, not
-    /// the credential.
+    /// kind invalidates the cached credential the send carried, named by
+    /// `sent_generation` from the [`AuthorizedCredential`], and the send
+    /// repeats once with a fresh one. The comparison is what keeps the
+    /// rule from racing a concurrent refresh: a 401 that arrives late,
+    /// about an issuance another exchange has already replaced, leaves
+    /// the newer issuance cached instead of forcing another token
+    /// request. `None` invalidates unconditionally, the fallback for an
+    /// engine that lost track of what it sent. A 401 after the one
+    /// refresh, or any 401 under a static kind, raises the uncatchable
+    /// `credential.rejected`. A 403 stays the caller's `upstream.http`:
+    /// it answers about the request, not the credential.
     pub async fn on_upstream_status(
         &self,
         status: u16,
+        sent_generation: Option<u64>,
         refresh_used: &mut bool,
         events: &mut Vec<AuthEvent>,
     ) -> UpstreamStatusAction {
@@ -438,7 +469,7 @@ impl AuthPlan {
         if self.kind.is_oauth2() && !*refresh_used {
             *refresh_used = true;
             if let Some(plan) = &self.token {
-                plan.cache().invalidate().await;
+                plan.cache().invalidate_if(sent_generation).await;
             }
             events.push(AuthEvent::TokenInvalidatedAfterUnauthorized);
             return UpstreamStatusAction::RetryWithFreshCredential;
@@ -1034,6 +1065,7 @@ mod tests {
             plan.authorize(&mut context)
                 .await
                 .expect("a resolved credential")
+                .map(|credential| credential.header)
         }
 
         let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
@@ -1178,16 +1210,18 @@ mod tests {
             signer: &NeverSigns,
             events: &mut events,
         };
-        plan.authorize(&mut context)
+        let primed = plan
+            .authorize(&mut context)
             .await
-            .expect("the cache is primed with one credential");
+            .expect("the cache is primed with one credential")
+            .expect("a header is sent");
         assert!(cache.remaining_lifetime().await.is_some());
         // The priming's token events are not this rule's record.
         events.clear();
 
         let mut refresh_used = false;
         assert_eq!(
-            plan.on_upstream_status(401, &mut refresh_used, &mut events)
+            plan.on_upstream_status(401, primed.generation, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::RetryWithFreshCredential
         );
@@ -1199,14 +1233,16 @@ mod tests {
         assert_eq!(events, vec![AuthEvent::TokenInvalidatedAfterUnauthorized]);
 
         assert_eq!(
-            plan.on_upstream_status(401, &mut refresh_used, &mut events)
+            // The spent refresh short-circuits before the generation is
+            // read, so `None` stands for the send this test never made.
+            plan.on_upstream_status(401, None, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::CredentialRejected
         );
         assert_eq!(events.last(), Some(&AuthEvent::CredentialRejected));
 
         assert_eq!(
-            plan.on_upstream_status(403, &mut refresh_used, &mut events)
+            plan.on_upstream_status(403, None, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::Continue,
             "a 403 stays the caller's upstream.http"
@@ -1224,17 +1260,165 @@ mod tests {
         let mut refresh_used = false;
         assert_eq!(
             basic
-                .on_upstream_status(401, &mut refresh_used, &mut events)
+                .on_upstream_status(401, None, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::CredentialRejected,
             "a static kind holds nothing to refresh"
         );
         assert_eq!(
             basic
-                .on_upstream_status(403, &mut refresh_used, &mut events)
+                .on_upstream_status(403, None, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::Continue
         );
+    }
+
+    /// A 401 about an issuance the engine has already replaced leaves
+    /// the newer issuance cached: the rule clears only the generation
+    /// the refused send carried, so a late refusal neither drops a
+    /// healthy credential nor buys a refresh with an allowance the
+    /// exchange may not have.
+    #[tokio::test]
+    async fn a_stale_401_leaves_the_fresher_issuance() {
+        use crate::auth::{TokenRequest, TokenWire};
+        use std::future::Future;
+        use std::pin::Pin;
+        use zeroize::Zeroizing;
+
+        std::env::set_var("CLIENT_ID", "cid");
+        std::env::set_var("CLIENT_SECRET", "csecret");
+
+        /// Answers the first ask with one token and every later ask with
+        /// another, so the test can tell which issuance serves.
+        struct IssuesInSequence {
+            asks: std::sync::Mutex<u32>,
+        }
+        impl TokenSend for IssuesInSequence {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    let mut asks = self.asks.lock().expect("asks");
+                    *asks += 1;
+                    let issuance = if *asks == 1 { "issued-1" } else { "issued-2" };
+                    Ok(TokenWire {
+                        status: 200,
+                        media_type: Some("application/json".to_owned()),
+                        body: Zeroizing::new(
+                            format!(
+                                r#"{{"access_token":"{issuance}","token_type":"Bearer","expires_in":600}}"#
+                            )
+                            .into_bytes(),
+                        ),
+                    })
+                })
+            }
+        }
+
+        /// The client-credentials kind never signs an assertion; a call
+        /// is a bug.
+        struct NeverSigns;
+        impl ClientAssertionSigner for NeverSigns {
+            fn sign_client_assertion(
+                &self,
+                _request: crate::auth::ClientAssertion<'_>,
+            ) -> Result<crate::auth::ProtectedText, AuthError> {
+                panic!("client-credentials never signs an assertion");
+            }
+        }
+
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let send = IssuesInSequence {
+            asks: std::sync::Mutex::new(0),
+        };
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let plan = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &binding(
+                "https://cases.example.invalid",
+                Some(oauth_credential("https://token.example.invalid/token")),
+            ),
+        )
+        .expect("a usable plan");
+        let cache = plan
+            .token_plan()
+            .expect("the OAuth2 plan carries its token endpoint")
+            .cache();
+
+        let first = {
+            let mut context = AuthorizeContext {
+                resolver: &resolver,
+                budget: &mut budget,
+                send: &send,
+                signer: &NeverSigns,
+                events: &mut events,
+            };
+            plan.authorize(&mut context)
+                .await
+                .expect("the first issuance")
+                .expect("a header is sent")
+        };
+        assert_eq!(first.header.value().as_bytes(), b"Bearer issued-1");
+
+        // The first send's 401 invalidates the only issuance there is.
+        let mut refresh_used = false;
+        assert_eq!(
+            plan.on_upstream_status(401, first.generation, &mut refresh_used, &mut events)
+                .await,
+            UpstreamStatusAction::RetryWithFreshCredential
+        );
+        assert!(cache.remaining_lifetime().await.is_none());
+
+        // The refresh issues a second credential; the send carrying it
+        // has not drawn an answer yet.
+        let second = {
+            let mut context = AuthorizeContext {
+                resolver: &resolver,
+                budget: &mut budget,
+                send: &send,
+                signer: &NeverSigns,
+                events: &mut events,
+            };
+            plan.authorize(&mut context)
+                .await
+                .expect("the second issuance")
+                .expect("a header is sent")
+        };
+        assert_eq!(second.header.value().as_bytes(), b"Bearer issued-2");
+
+        // A late 401 about the first send arrives: the newer issuance
+        // stays cached because its generation is not the one named.
+        let mut refresh_used = false;
+        assert_eq!(
+            plan.on_upstream_status(401, first.generation, &mut refresh_used, &mut events)
+                .await,
+            UpstreamStatusAction::RetryWithFreshCredential
+        );
+        assert!(
+            cache.remaining_lifetime().await.is_some(),
+            "the fresher issuance survived the stale 401"
+        );
+
+        // The engine's retry reuses the surviving cache; no third ask.
+        let third = {
+            let mut context = AuthorizeContext {
+                resolver: &resolver,
+                budget: &mut budget,
+                send: &send,
+                signer: &NeverSigns,
+                events: &mut events,
+            };
+            plan.authorize(&mut context)
+                .await
+                .expect("the cache answers")
+                .expect("a header is sent")
+        };
+        assert_eq!(third.header.value().as_bytes(), b"Bearer issued-2");
+        let asks = *send.asks.lock().expect("asks");
+        assert_eq!(asks, 2, "the stale 401 sent nothing");
     }
 
     /// Two OAuth2 endpoints over one exchange keep separate caches and
@@ -1351,6 +1535,7 @@ mod tests {
         // Each endpoint issues its own credential and then serves its
         // own cache; a shared cache would have handed endpoint B the
         // credential endpoint A issued.
+        let mut sent_generations = Vec::new();
         for (plan, expected) in [
             (&plan_a, &b"Bearer issued-a.example.invalid"[..]),
             (&plan_b, b"Bearer issued-b.example.invalid"),
@@ -1363,12 +1548,13 @@ mod tests {
                     signer: &NeverSigns,
                     events: &mut events,
                 };
-                let header = plan
+                let credential = plan
                     .authorize(&mut context)
                     .await
                     .expect("a credential issues")
                     .expect("a header is sent");
-                assert_eq!(header.value().as_bytes(), expected);
+                assert_eq!(credential.header.value().as_bytes(), expected);
+                sent_generations.push(credential.generation);
             }
         }
         // Count the asks inside a block, so the recorder's lock is
@@ -1399,7 +1585,7 @@ mod tests {
         let mut refresh_used = false;
         assert_eq!(
             plan_a
-                .on_upstream_status(401, &mut refresh_used, &mut events)
+                .on_upstream_status(401, sent_generations[0], &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::RetryWithFreshCredential
         );
@@ -1410,16 +1596,17 @@ mod tests {
             signer: &NeverSigns,
             events: &mut events,
         };
-        plan_a
+        let refreshed = plan_a
             .authorize(&mut context)
             .await
-            .expect("the refreshed credential issues");
+            .expect("the refreshed credential issues")
+            .expect("a header is sent");
         assert_eq!(budget.remaining(&endpoint_a), 0, "A's allowance is spent");
 
         let mut refresh_used = false;
         assert_eq!(
             plan_a
-                .on_upstream_status(401, &mut refresh_used, &mut events)
+                .on_upstream_status(401, refreshed.generation, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::RetryWithFreshCredential
         );
@@ -1443,13 +1630,13 @@ mod tests {
             signer: &NeverSigns,
             events: &mut events,
         };
-        let header = plan_b
+        let credential = plan_b
             .authorize(&mut context)
             .await
             .expect("B's cache still answers")
             .expect("a header is sent");
         assert_eq!(
-            header.value().as_bytes(),
+            credential.header.value().as_bytes(),
             b"Bearer issued-b.example.invalid"
         );
     }

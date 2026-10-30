@@ -21,10 +21,13 @@
 //!   static kinds resolve their secret; the OAuth2 kinds acquire a
 //!   bearer credential through the fixed token endpoint, under the
 //!   exchange's token budget, through the endpoint's own outbound
-//!   client, with a cache clamped to the operator's ceiling.
+//!   client, with a cache clamped to the operator's ceiling. Each
+//!   [`AuthorizedCredential`] names the cached issuance it carries so a
+//!   late 401 can be matched to the send that drew it.
 //! - [`AuthPlan::on_upstream_status`] applies the 401 rule: one refresh
-//!   under an OAuth2 kind, then the uncatchable `credential.rejected`;
-//!   403 stays the caller's `upstream.http`.
+//!   under an OAuth2 kind, invalidating only the issuance the refused
+//!   send carried, then the uncatchable `credential.rejected`; 403
+//!   stays the caller's `upstream.http`.
 //!
 //! Secrets live in zeroizing buffers inside this layer and inside the
 //! outbound request builder, nowhere else. The exchange, scripts, packs,
@@ -39,7 +42,9 @@ mod tls;
 mod token;
 
 pub use material::{AuthHeader, ProtectedText};
-pub use plan::{AuthKind, AuthPlan, AuthPlanFault, AuthorizeContext, StaticCredential};
+pub use plan::{
+    AuthKind, AuthPlan, AuthPlanFault, AuthorizeContext, AuthorizedCredential, StaticCredential,
+};
 pub use tls::{EndpointMaterials, EndpointTls, TlsFault};
 pub use token::{
     ClientAssertion, ClientAssertionSigner, TokenBudget, TokenCache, TokenEndpointPlan, TokenFault,
