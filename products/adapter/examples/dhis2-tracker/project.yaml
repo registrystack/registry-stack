@@ -14,9 +14,23 @@
 #   - person-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
 #   - person-import: 1 send x (1 + 1 redelivery) = 2; budget 4.
 #
-# Check with (the profile, pack, and fixtures live in their own product
-# directories, so the paths are passed explicitly):
-#   target/debug/adapterctl check \
+# Check with the plain command of DELIVERY-PLAN acceptance 2; the check
+# resolves the profile and pack beside the project:
+#   target/debug/adapterctl check products/adapter/examples/dhis2-tracker/project.yaml
+#
+# The profile.yaml, pack.yaml, and scripts/ beside this project are
+# byte-identical copies of the maintained artifacts the pins name
+# (products/adapter/profiles/breg-records/profile.yaml and
+# products/adapter/packs/dhis2-tracker/pack.yaml with its scripts/).
+# Refresh them with `cp` in the same commit that moves the maintained
+# bytes: the digest pins refuse a stale copy, and the contract check
+# (products/adapter/scripts/check-contracts.sh) also runs the
+# explicit-path replay form below against the maintained bytes, so a
+# drifted copy fails one of the two.
+#
+# The fixtures live in their own product directory, so replay passes them
+# explicitly:
+#   target/debug/adapterctl fixtures replay \
 #     products/adapter/examples/dhis2-tracker/project.yaml \
 #     --profile products/adapter/profiles/breg-records/profile.yaml \
 #     --pack products/adapter/packs/dhis2-tracker/pack.yaml \
