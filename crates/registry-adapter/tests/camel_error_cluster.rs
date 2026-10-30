@@ -115,10 +115,12 @@ async fn run_over(step_list: Value, replies: Vec<upstream::Response>) -> (RouteO
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
     let endpoints = error_endpoints(&double.url("/"), &resolver);
+    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
     let context = RouteContext {
         endpoints: &endpoints,
         scripts: &ScriptSet::default(),
         resolver: &resolver,
+        resilience: &resilience,
         maximum_upstream_calls: 12,
     };
     let mut exchange = Exchange::new("error-cluster".to_owned());

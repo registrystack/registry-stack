@@ -95,9 +95,12 @@ INCREMENT_DELIVERED = 0
 #: "file.rs:function_name" resolves against crates/registry-adapter-core/src/;
 #: "engine:file.rs:function_name" resolves against the engine crate's own
 #: tree (tests/ conformance suites and src/ unit tests), because the runtime
-#: rows are proven by the engine's suites, not by core authoring checks.
-#: Every entry is held to existence even while its row's increment is still
-#: pending, so the map cannot rot before the increment lands.
+#: rows are proven by the engine's suites, not by core authoring checks;
+#: "platform:crate/file.rs:function_name" resolves against crates/, for the
+#: generic mechanisms the engine leans on but does not own (the resilience
+#: and rate-limit primitives). Every entry is held to existence even while
+#: its row's increment is still pending, so the map cannot rot before the
+#: increment lands.
 EVIDENCE: dict[str, list[str]] = {
     "HeaderFilterStrategy": [
         "engine:tests/camel_header_filter.rs:every_reserved_name_is_refused_in_either_list",
@@ -208,11 +211,12 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_error_cluster.rs:the_route_error_handler_does_not_wrap_a_do_try_block",
     ],
     "Redelivery policy": [
-        "engine:src/processor/redelivery.rs:the_first_delay_is_the_retry_delay_whatever_the_growth",
-        "engine:src/processor/redelivery.rs:the_delay_grows_only_with_back_off_and_a_multiplier_above_one",
-        "engine:src/processor/redelivery.rs:the_variance_applies_after_the_growth_and_the_cap_bounds_it",
-        "engine:src/processor/redelivery.rs:a_delay_sequence_follows_the_whole_order",
+        "engine:src/processor/redelivery.rs:the_model_policy_maps_onto_the_platform_computation",
         "engine:src/processor/redelivery.rs:a_draw_stays_inside_the_factor",
+        "platform:registry-platform-resilience/src/redelivery.rs:the_first_delay_is_the_retry_delay_whatever_the_growth",
+        "platform:registry-platform-resilience/src/redelivery.rs:the_delay_grows_only_with_back_off_and_a_multiplier_above_one",
+        "platform:registry-platform-resilience/src/redelivery.rs:the_variance_applies_after_the_growth_and_the_cap_bounds_it",
+        "platform:registry-platform-resilience/src/redelivery.rs:a_delay_sequence_follows_the_whole_order",
         "engine:tests/camel_error_cluster.rs:retry_while_narrows_redelivery_without_raising_the_cap",
     ],
     "Exception clause": [
@@ -226,6 +230,24 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_error_cluster.rs:do_try_catches_its_block_and_resumes_the_route",
         "engine:tests/camel_error_cluster.rs:a_do_catch_on_when_narrows_or_fails",
         "engine:tests/camel_error_cluster.rs:do_finally_runs_on_every_path_and_yields_to_a_pending_failure",
+    ],
+    "Circuit Breaker": [
+        "engine:tests/camel_resilience.rs:a_failure_storm_opens_the_breaker_and_refuses_without_calling",
+        "engine:tests/camel_resilience.rs:on_fallback_answers_on_failure_and_on_rejection",
+        "engine:tests/camel_resilience.rs:an_open_breaker_recovers_through_half_open_trials",
+        "engine:tests/camel_resilience.rs:the_route_error_handler_does_not_wrap_a_breaker_block",
+        "engine:tests/camel_resilience.rs:the_resilience_steps_refuse_their_unservable_shapes_at_load",
+        "platform:registry-platform-resilience/src/circuit_breaker.rs:acquire",
+        "platform:registry-platform-resilience/src/circuit_breaker.rs:record",
+    ],
+    "Throttler": [
+        "engine:tests/camel_resilience.rs:the_throttler_paces_requests_over_the_period",
+        "engine:tests/camel_resilience.rs:reject_execution_refuses_instead_of_waiting",
+        "engine:tests/camel_resilience.rs:a_wait_past_the_deadline_raises_throttle_rejected",
+        "engine:tests/camel_resilience.rs:concurrent_requests_mode_bounds_in_flight_calls",
+        "engine:tests/camel_resilience.rs:concurrent_requests_mode_rejects_over_the_limit",
+        "engine:tests/camel_resilience.rs:a_non_integer_limit_fails_the_exchange",
+        "platform:registry-platform-ratelimit/src/rolling_window.rs:acquire",
     ],
 }
 
@@ -288,15 +310,25 @@ def function_exists(relative: str) -> bool:
 
     A plain `file.rs:function` resolves against the core sources; an
     `engine:file.rs:function` resolves against the engine crate's own
-    tree, where the runtime conformance suites live.
+    tree, where the runtime conformance suites live; a
+    `platform:crate/file.rs:function` resolves against crates/, naming
+    the crate in the file part.
     """
     engine = relative.startswith("engine:")
+    platform = relative.startswith("platform:")
     if engine:
         relative = relative[len("engine:") :]
+    elif platform:
+        relative = relative[len("platform:") :]
     file, _, function = relative.partition(":")
     if not file or not function:
         return False
-    source = (ENGINE_ROOT if engine else CORE_SRC) / file
+    if engine:
+        source = ENGINE_ROOT / file
+    elif platform:
+        source = REPO_ROOT / "crates" / file
+    else:
+        source = CORE_SRC / file
     if not source.is_file():
         return False
     return re.search(rf"\bfn {re.escape(function)}\b", source.read_text(encoding="utf-8")) is not None

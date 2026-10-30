@@ -435,6 +435,7 @@ async fn answer(
         endpoints: &state.loaded.endpoints,
         scripts: &state.loaded.scripts,
         resolver: &state.loaded.resolver,
+        resilience: &operation.resilience,
         maximum_upstream_calls: operation.maximum_upstream_calls,
     };
     let outcome = run_route(&context, &operation.steps, exchange).await;
@@ -1304,6 +1305,7 @@ mod tests {
             record_type: record_type.to_owned(),
             route_id: String::new(),
             steps: Vec::new(),
+            resilience: crate::resilience::ResilienceRuntime::empty(),
             maximum_upstream_calls: 1,
             item_envelope: None,
             response_envelope: crate::envelope::CompiledEnvelope::compile("{}", &BTreeMap::new())

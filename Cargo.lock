@@ -5090,6 +5090,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-ratelimit",
+ "registry-platform-resilience",
  "registry-platform-script",
  "registry-platform-testing",
  "registry-platform-yaml",
@@ -6857,6 +6858,14 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ratelimit"
+version = "0.45.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "registry-platform-resilience"
 version = "0.45.0"
 dependencies = [
  "thiserror 2.0.21",

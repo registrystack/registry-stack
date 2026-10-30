@@ -25,10 +25,12 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> registry_adapter::rou
     let endpoints = BTreeMap::new();
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
+    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
     let context = RouteContext {
         endpoints: &endpoints,
         scripts,
         resolver: &resolver,
+        resilience: &resilience,
         maximum_upstream_calls: 4,
     };
     let mut exchange = Exchange::new("test".to_owned());

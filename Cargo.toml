@@ -46,6 +46,7 @@ members = [
     "crates/registry-platform-objectstore",
     "crates/registry-platform-oidc",
     "crates/registry-platform-ratelimit",
+    "crates/registry-platform-resilience",
     "crates/registry-platform-script",
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-sqlite",
@@ -183,6 +184,7 @@ registry-platform-httputil = { path = "crates/registry-platform-httputil", versi
 registry-platform-objectstore = { path = "crates/registry-platform-objectstore", version = "0.45.0" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.45.0" }
 registry-platform-ratelimit = { path = "crates/registry-platform-ratelimit", version = "0.45.0" }
+registry-platform-resilience = { path = "crates/registry-platform-resilience", version = "0.45.0" }
 registry-platform-script = { path = "crates/registry-platform-script", version = "0.45.0" }
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.45.0" }
 registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.45.0" }

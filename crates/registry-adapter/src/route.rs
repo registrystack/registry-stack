@@ -208,6 +208,40 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 check_enrich(enrich)?;
                 check_strategy(enrich.aggregation_strategy.as_ref())?;
             }
+            Step::CircuitBreaker(breaker) => {
+                if breaker.steps.is_empty() {
+                    return Err("a circuitBreaker guards no steps".to_owned());
+                }
+                // A minimum above the window can never be reached inside
+                // it, so the breaker would never judge (section 8.7).
+                if breaker.minimum_number_of_calls.get() > breaker.sliding_window_calls.get() {
+                    return Err(
+                        "a circuitBreaker judges from more calls than its window holds".to_owned(),
+                    );
+                }
+                if let Some(fallback) = &breaker.on_fallback {
+                    if fallback.steps.is_empty() {
+                        return Err("an onFallback declares no steps".to_owned());
+                    }
+                    check_steps(&fallback.steps, true)?;
+                }
+                check_steps(&breaker.steps, true)?;
+            }
+            Step::Throttle(throttle) => {
+                if throttle.steps.is_empty() {
+                    return Err("a throttle paces no steps".to_owned());
+                }
+                // A constant limit is whole and checkable at load; every
+                // other expression form is read per exchange and fails
+                // the exchange when it is not a positive integer.
+                if let Expression::Constant(Value::Number(number)) = &throttle.limit {
+                    if number.as_u64().is_none_or(|limit| limit == 0) {
+                        return Err("a throttle limit must be a positive integer".to_owned());
+                    }
+                }
+                check_expression("throttle", &throttle.limit)?;
+                check_steps(&throttle.steps, true)?;
+            }
             Step::OnException(clause) if !in_clause => check_clause(clause)?,
             Step::OnException(_) => {
                 return Err("an onException clause is served at route top level only".to_owned())
@@ -494,6 +528,9 @@ pub struct RouteContext<'a> {
     pub endpoints: &'a BTreeMap<String, EndpointRuntime>,
     pub scripts: &'a ScriptSet,
     pub resolver: &'a SecretResolver,
+    /// The process-local breaker and throttle state of the served
+    /// operation's step tree, built at load.
+    pub resilience: &'a crate::resilience::ResilienceRuntime,
     /// The binding's `maximumUpstreamCalls`.
     pub maximum_upstream_calls: u64,
 }
@@ -616,6 +653,7 @@ pub async fn run_route_within(
         exchange,
         events: Vec::new(),
         sends: 0,
+        deadline: tokio::time::Instant::now() + deadline,
     };
     // The route's error handler (section 8.7): `noErrorHandler`
     // withdraws every clause, `defaultErrorHandler` supplies the
@@ -644,7 +682,14 @@ pub async fn run_route_within(
     };
     let body = async {
         for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
-            match run.step_with_clauses(step, &clauses, handler_policy).await {
+            // A breaker and its steps run bare (section 8.7): the route
+            // error handler does not wrap them, so no clause claims
+            // their failures and no policy redelivers them.
+            let attempted = match step {
+                Step::CircuitBreaker(_) => run.step(step).await,
+                other => run.step_with_clauses(other, &clauses, handler_policy).await,
+            };
+            match attempted {
                 Ok(Flow::Continue) => {}
                 Ok(Flow::Stop) => break,
                 Err(failure) => return Err(failure),
@@ -669,6 +714,11 @@ pub(crate) struct Run<'a, 'c> {
     pub(crate) exchange: Exchange,
     events: Vec<RouteEvent>,
     sends: u64,
+    /// The instant the whole run must end by: a step that waits (the
+    /// throttler's pause, a redelivery delay) refuses with its own class
+    /// when the wait cannot finish before this, instead of letting the
+    /// run's budget expire it as `budget.exhausted`.
+    pub(crate) deadline: tokio::time::Instant,
 }
 
 impl Run<'_, '_> {
@@ -853,6 +903,16 @@ impl Run<'_, '_> {
             // Boxed the same way: the block's steps dispatch through
             // this dispatcher too.
             Step::DoTry(block) => Box::pin(processor::do_try::run(self, block)).await,
+            // Boxed for the same reason, and keyed by the step's address
+            // into the operation's resilience state.
+            Step::CircuitBreaker(breaker) => {
+                let key = std::ptr::from_ref(step) as usize;
+                Box::pin(processor::circuit_breaker::run(self, breaker, key)).await
+            }
+            Step::Throttle(throttle) => {
+                let key = std::ptr::from_ref(step) as usize;
+                Box::pin(processor::throttle::run(self, throttle, key)).await
+            }
             // Configuration the runner collected before the first step;
             // in the body it runs nothing.
             Step::ErrorHandler(_) => Ok(Flow::Continue),
@@ -1441,10 +1501,12 @@ testedVersions: []
         let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
         let endpoints = compiled("http://127.0.0.1:9/", key_env, &resolver);
         let scripts = ScriptSet::default();
+        let resilience = crate::resilience::ResilienceRuntime::empty();
         let context = RouteContext {
             endpoints: &endpoints,
             scripts: &scripts,
             resolver: &resolver,
+            resilience: &resilience,
             maximum_upstream_calls: 4,
         };
         // The key resolved at compile time; it is gone when the send needs it.
@@ -1484,10 +1546,12 @@ testedVersions: []
         let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
         let endpoints = compiled(&format!("http://127.0.0.1:{port}/"), key_env, &resolver);
         let scripts = ScriptSet::default();
+        let resilience = crate::resilience::ResilienceRuntime::empty();
         let context = RouteContext {
             endpoints: &endpoints,
             scripts: &scripts,
             resolver: &resolver,
+            resilience: &resilience,
             maximum_upstream_calls: 4,
         };
 

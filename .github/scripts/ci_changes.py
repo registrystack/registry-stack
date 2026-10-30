@@ -39,6 +39,7 @@ SHARDS = {
         "registry-platform-objectstore",
         "registry-platform-oidc",
         "registry-platform-ratelimit",
+        "registry-platform-resilience",
         "registry-platform-script",
         "registry-platform-sdjwt",
         "registry-platform-sqlite",

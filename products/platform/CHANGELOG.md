@@ -13,6 +13,18 @@
   `require_trusted_runtime_path()`, which refuse an unsafe file with
   `platform.runtime-config.unsafe-file`.
 
+- `registry-platform-resilience` joins the platform: the retry delay
+  computation (first delay, back-off growth, collision-avoidance
+  variance, maximum cap) and a process-local circuit breaker state
+  machine over `Closed`, `Open`, and `HalfOpen` with a count-based
+  window, failure-rate and slow-call-rate thresholds, a lazy open to
+  half-open, and bounded half-open trials. No I/O, no background task,
+  no product vocabulary.
+- `registry-platform-ratelimit` adds `RollingWindowLimiter`: one unkeyed
+  budget of at most `limit` admissions inside a rolling `window`, the
+  limit supplied per acquire, with a refused acquire carrying the rest of
+  the oldest admission's window as `retry_after`.
+
 - `registry-platform-httputil` adds
   `CredentialDestinationRequestTemplate::oauth2_client_credentials_form_basic`,
   the client-credentials shape that carries the client credential as one

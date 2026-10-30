@@ -100,6 +100,9 @@ pub struct ServedOperation {
     pub record_type: String,
     pub route_id: String,
     pub steps: Vec<Step>,
+    /// The breaker and throttle state of this operation's step tree,
+    /// built once here and addressed by node for the process lifetime.
+    pub resilience: crate::resilience::ResilienceRuntime,
     pub maximum_upstream_calls: u64,
     pub response_envelope: CompiledEnvelope,
     /// The per-record template filled into the response envelope's
@@ -536,6 +539,7 @@ fn compile_binding(
         );
     }
     check_servable(&steps)?;
+    let resilience = crate::resilience::ResilienceRuntime::compile(&steps);
 
     let mut refusal: Option<String> = None;
     let mut script_uses: Vec<(String, String)> = Vec::new();
@@ -595,6 +599,7 @@ fn compile_binding(
         record_type: binding.record_type.as_str().to_owned(),
         route_id: route_id.to_owned(),
         steps,
+        resilience,
         maximum_upstream_calls: binding.maximum_upstream_calls.get(),
         response_envelope: CompiledEnvelope::compile(
             operation.response_envelope.text(),
@@ -701,6 +706,7 @@ fn step_expressions(step: &Step) -> Vec<Expression> {
         Step::Filter(filter) => filter.predicate().into_iter().collect(),
         Step::Split(split) => vec![split.expression.clone()],
         Step::Loop(looped) => looped.expression().into_iter().collect(),
+        Step::Throttle(throttle) => vec![throttle.limit.clone()],
         Step::To(to) => send_expressions(to.parameters.as_ref()),
         Step::Enrich(enrich) => send_expressions(enrich.parameters.as_ref()),
         Step::OnException(clause) => clause
@@ -818,6 +824,7 @@ mod tests {
             record_type: "person".to_owned(),
             route_id: "route".to_owned(),
             steps: Vec::new(),
+            resilience: crate::resilience::ResilienceRuntime::empty(),
             maximum_upstream_calls: 1,
             item_envelope: None,
             response_envelope: CompiledEnvelope::compile("{}", &BTreeMap::new()).unwrap(),

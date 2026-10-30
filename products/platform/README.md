@@ -31,6 +31,7 @@ integration-test fixtures.
 | [`registry-platform-objectstore`](../../crates/registry-platform-objectstore/README.md) | S3-compatible object storage and HTTP content verification transports, bound to a caller-supplied namespace, with fixed refusals and no retries. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
 | [`registry-platform-ratelimit`](crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
+| [`registry-platform-resilience`](crates/registry-platform-resilience/README.md) | Bounded in-process resilience: the retry delay computation and a process-local circuit breaker state machine. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
 | [`registry-platform-sqlite`](crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution for Evidence source adapters. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |

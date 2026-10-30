@@ -51,6 +51,7 @@ registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
+registry-platform-resilience.workspace = true
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
 axum.workspace = true

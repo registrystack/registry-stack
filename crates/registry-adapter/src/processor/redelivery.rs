@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The redelivery delay computation of `RedeliveryPolicy` at the pinned
-//! tag (`products/adapter/CONCEPT.md` section 8.7,
+//! The redelivery delay of `RedeliveryPolicy` at the pinned tag
+//! (`products/adapter/CONCEPT.md` section 8.7,
 //! `RedeliveryPolicy.calculateRedeliveryDelay`): the first delay is
 //! `retryDelaySeconds`, each later one the previous delay (times the
 //! multiplier when backing off), then the collision variance, then the
 //! `maximumRetryDelaySeconds` cap, so the cap bounds the varied delay.
+//! The computation itself lives in `registry-platform-resilience`; what
+//! stays here is the mapping from the model's policy onto it and the
+//! collision-avoidance draw.
 
 use std::time::Duration;
 
 use registry_adapter_core::RedeliveryOptions;
+use registry_platform_resilience::redelivery::{self, RedeliveryDelayOptions};
 
 /// The delay before the next redelivery, from the delay before the
 /// previous one (`None` on the first). `variance` is the
@@ -20,22 +24,18 @@ pub(crate) fn calculate_redelivery_delay(
     policy: &RedeliveryOptions,
     variance: f64,
 ) -> Duration {
-    let base = match previous {
-        None => f64::from(policy.retry_delay_seconds.get()),
-        Some(previous) => {
-            let seconds = previous.as_secs_f64();
-            // The multiplier grows the delay only with back-off on and a
-            // multiplier above 1, as at the pinned tag.
-            if policy.use_exponential_back_off && policy.back_off_multiplier > 1.0 {
-                seconds * policy.back_off_multiplier
-            } else {
-                seconds
-            }
-        }
-    };
-    let varied = base * (1.0 + variance);
-    let capped = varied.min(f64::from(policy.maximum_retry_delay_seconds.get()));
-    Duration::from_secs_f64(capped.max(0.0))
+    redelivery::calculate_redelivery_delay(
+        previous,
+        &RedeliveryDelayOptions {
+            retry_delay: Duration::from_secs(u64::from(policy.retry_delay_seconds.get())),
+            maximum_retry_delay: Duration::from_secs(u64::from(
+                policy.maximum_retry_delay_seconds.get(),
+            )),
+            use_exponential_back_off: policy.use_exponential_back_off,
+            back_off_multiplier: policy.back_off_multiplier,
+        },
+        variance,
+    )
 }
 
 /// One collision-avoidance draw: a uniform fraction of the delay, plus
@@ -67,7 +67,12 @@ mod tests {
     }
 
     #[test]
-    fn the_first_delay_is_the_retry_delay_whatever_the_growth() {
+    fn the_model_policy_maps_onto_the_platform_computation() {
+        // The whole order, through the model's own field shapes: the
+        // first delay is the retry delay whatever the growth, a later one
+        // grows with back-off and a multiplier above one, then variance,
+        // then the cap. The computation's own tests live in
+        // `registry-platform-resilience`.
         let growing = policy(json!({
             "retryDelaySeconds": 2,
             "useExponentialBackOff": true,
@@ -78,52 +83,14 @@ mod tests {
             2.5
         );
         assert_eq!(
-            seconds(calculate_redelivery_delay(None, &growing, -0.25)),
-            1.5
-        );
-    }
-
-    #[test]
-    fn the_delay_grows_only_with_back_off_and_a_multiplier_above_one() {
-        let flat = policy(json!({"retryDelaySeconds": 1, "backOffMultiplier": 3}));
-        let previous = Duration::from_secs(1);
-        assert_eq!(
-            seconds(calculate_redelivery_delay(Some(previous), &flat, 0.0)),
-            1.0,
-            "no back-off, no growth"
-        );
-        let unit = policy(
-            json!({"retryDelaySeconds": 1, "useExponentialBackOff": true, "backOffMultiplier": 1}),
-        );
-        assert_eq!(
-            seconds(calculate_redelivery_delay(Some(previous), &unit, 0.0)),
-            1.0,
-            "a multiplier of one grows nothing"
-        );
-        let growing = policy(
-            json!({"retryDelaySeconds": 1, "useExponentialBackOff": true, "backOffMultiplier": 3}),
-        );
-        assert_eq!(
-            seconds(calculate_redelivery_delay(Some(previous), &growing, 0.0)),
-            3.0
-        );
-    }
-
-    #[test]
-    fn the_variance_applies_after_the_growth_and_the_cap_bounds_it() {
-        let growing = policy(
-            json!({"retryDelaySeconds": 1, "useExponentialBackOff": true, "backOffMultiplier": 3}),
-        );
-        // The second delay grows to three, then varies.
-        assert_eq!(
             seconds(calculate_redelivery_delay(
-                Some(Duration::from_secs(1)),
+                Some(Duration::from_secs(2)),
                 &growing,
-                0.15
+                0.0
             )),
-            3.45
+            6.0,
+            "the previous delay grows by the multiplier"
         );
-        // The cap bounds the varied delay, not the delay before it.
         let capped = policy(json!({
             "retryDelaySeconds": 1,
             "useExponentialBackOff": true,
@@ -138,22 +105,6 @@ mod tests {
             )),
             5.0,
             "three grown to four and a half, varied to six, capped at five"
-        );
-    }
-
-    #[test]
-    fn a_delay_sequence_follows_the_whole_order() {
-        let options = policy(json!({
-            "retryDelaySeconds": 1,
-            "useExponentialBackOff": true,
-            "backOffMultiplier": 2
-        }));
-        let first = calculate_redelivery_delay(None, &options, 0.0);
-        let second = calculate_redelivery_delay(Some(first), &options, 0.0);
-        let third = calculate_redelivery_delay(Some(second), &options, 0.0);
-        assert_eq!(
-            [seconds(first), seconds(second), seconds(third)],
-            [1.0, 2.0, 4.0]
         );
     }
 
