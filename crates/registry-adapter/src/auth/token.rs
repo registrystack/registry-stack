@@ -1790,8 +1790,9 @@ mod tests {
                 },
                 CREDENTIAL_REJECTED_CLASS,
             ),
-            // A 503 outage with an error body is unavailable, not a
-            // judged credential; the body is not read.
+            // A 503 outage is unavailable, not a judged credential,
+            // whatever error body it carries: the status decides the
+            // fault, and this case observes the fault, not the read.
             (
                 503,
                 Some("application/json"),
@@ -1915,7 +1916,7 @@ mod tests {
         ));
         let mut tasks = Vec::new();
         for _ in 0..4 {
-            // Clones share the endpoint's one cache.
+            // Arc clones of the plan share the endpoint's one cache.
             let plan = std::sync::Arc::clone(&plan);
             let send = std::sync::Arc::clone(&send);
             tasks.push(tokio::spawn(async move {
@@ -2217,11 +2218,12 @@ mod tests {
         );
     }
 
-    /// A clock before the epoch refuses outright: the assertion is
-    /// never signed with `iat = 0`, and the refusal's rendering is
-    /// fixed text that carries no time value.
+    /// A platform instant before the epoch refuses outright: the
+    /// assertion stamp has no usable value, and the refusal's rendering
+    /// is fixed text that carries no time value. This pins the instant
+    /// check itself; the stamp tests pin the signing that consumes it.
     #[test]
-    fn a_pre_epoch_clock_refuses_without_signing() {
+    fn a_pre_epoch_clock_refuses_the_instant() {
         let before_epoch = UNIX_EPOCH - Duration::from_secs(1);
         let error = unix_instant(before_epoch).unwrap_err();
         assert_eq!(error, AuthError::Credential);
@@ -2334,12 +2336,12 @@ mod tests {
     #[test]
     fn oversized_renders_refuse() {
         std::env::set_var("ADAPTER_TEST_OVERSIZE_ID", "cid");
-        std::env::set_var("HUGE_CLIENT_SECRET", "k".repeat(20 * 1024));
+        std::env::set_var("ADAPTER_TEST_OVERSIZE_SECRET", "k".repeat(20 * 1024));
         let plan = TokenEndpointPlan::client_secret(
             endpoint_id("case-api"),
             "https://token.example.invalid/token".to_owned(),
             secret("ADAPTER_TEST_OVERSIZE_ID"),
-            secret("HUGE_CLIENT_SECRET"),
+            secret("ADAPTER_TEST_OVERSIZE_SECRET"),
             CredentialPlacement::FormBody,
             TokenRequestParameters::default(),
             CacheBounds {

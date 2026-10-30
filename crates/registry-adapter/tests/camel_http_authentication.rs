@@ -853,9 +853,18 @@ mod outbound_tls {
             EndpointTls::resolve(&tls_binding, &runtime, &resolver()).expect("the bundle resolves");
         std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
+        // The rendering states the material shape and nothing else: the
+        // positive half pins what Debug shows, the negative half pins
+        // that the PEM is not part of it.
+        let rendered = format!("{tls:?}");
         assert!(
-            !format!("{tls:?}").contains("BEGIN CERTIFICATE"),
-            "the rendering never carries the PEM"
+            rendered.contains("configured_root_count: 1")
+                && rendered.contains("client_identity: false"),
+            "the rendering reports the material shape: {rendered}"
+        );
+        assert!(
+            !rendered.contains("BEGIN CERTIFICATE"),
+            "the rendering never carries the PEM: {rendered}"
         );
         let materials = tls.into_materials();
         assert!(materials.data.is_some());
@@ -864,7 +873,11 @@ mod outbound_tls {
         let fault =
             EndpointTls::resolve(&tls_binding, &runtime_config(None), &resolver()).unwrap_err();
         assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
-        assert!(!fault.to_string().contains("private-ca"), "{fault}");
+        assert_eq!(
+            fault.to_string(),
+            "the endpoint's CA bundle could not be resolved",
+            "the rendering is fixed text that names no profile"
+        );
         assert_eq!(fault.class(), CREDENTIAL_REJECTED_CLASS);
 
         let garbage = bundle_path("garbage");
@@ -874,7 +887,11 @@ mod outbound_tls {
         std::fs::remove_file(&garbage).expect("remove garbage bundle");
         assert_eq!(fault, AuthError::Tls(TlsFault::Material));
         assert_eq!(fault.class(), "egress.refused");
-        assert!(!fault.to_string().contains("garbage"), "{fault}");
+        assert_eq!(
+            fault.to_string(),
+            "the endpoint's outbound TLS material is not usable",
+            "the rendering is fixed text that names no path"
+        );
     }
 }
 
@@ -1119,14 +1136,13 @@ mod marker_secret_absence {
             1,
             "the key text appears exactly once, inside the assertion: {body}"
         );
-        let (before, after) = body
-            .split_once(&format!(".{MARKER_SECRET}"))
+        let before = body
+            .strip_suffix(&format!(".{MARKER_SECRET}"))
             .expect("the assertion ends with the bound key");
         assert!(
             before.contains("client_assertion=") && !before.contains(MARKER_SECRET),
             "the marker precedes only the assertion member: {body}"
         );
-        let _ = after;
         assert_marker_absent(
             &[format!("{credential:?}"), format!("{events:?}")],
             "the private-key-jwt renderings",
