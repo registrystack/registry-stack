@@ -73,22 +73,35 @@
                       "items": {
                         "additionalProperties": false,
                         "properties": {
-                          "created_at": {
-                            "type": "string"
+                          "domainData": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "created_at": {
+                                "type": "string"
+                              },
+                              "org_unit": {
+                                "type": "string"
+                              },
+                              "tracked_entity_type": {
+                                "type": "string"
+                              },
+                              "updated_at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "org_unit",
+                              "tracked_entity_type"
+                            ],
+                            "type": "object"
                           },
-                          "org_unit": {
-                            "type": "string"
-                          },
-                          "tracked_entity_type": {
-                            "type": "string"
-                          },
-                          "updated_at": {
+                          "recordIdentifier": {
                             "type": "string"
                           }
                         },
                         "required": [
-                          "org_unit",
-                          "tracked_entity_type"
+                          "domainData",
+                          "recordIdentifier"
                         ],
                         "type": "object"
                       },
@@ -455,22 +468,35 @@
                     "data": {
                       "additionalProperties": false,
                       "properties": {
-                        "created_at": {
-                          "type": "string"
+                        "domainData": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "org_unit": {
+                              "type": "string"
+                            },
+                            "tracked_entity_type": {
+                              "type": "string"
+                            },
+                            "updated_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "org_unit",
+                            "tracked_entity_type"
+                          ],
+                          "type": "object"
                         },
-                        "org_unit": {
-                          "type": "string"
-                        },
-                        "tracked_entity_type": {
-                          "type": "string"
-                        },
-                        "updated_at": {
+                        "recordIdentifier": {
                           "type": "string"
                         }
                       },
                       "required": [
-                        "org_unit",
-                        "tracked_entity_type"
+                        "domainData",
+                        "recordIdentifier"
                       ],
                       "type": "object"
                     },

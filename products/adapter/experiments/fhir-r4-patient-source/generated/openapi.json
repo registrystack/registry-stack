@@ -73,24 +73,37 @@
                       "items": {
                         "additionalProperties": false,
                         "properties": {
-                          "birth_date": {
-                            "format": "date",
-                            "type": "string"
+                          "domainData": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "birth_date": {
+                                "format": "date",
+                                "type": "string"
+                              },
+                              "family_name": {
+                                "type": "string"
+                              },
+                              "gender": {
+                                "type": "string"
+                              },
+                              "given_names": {
+                                "type": "string"
+                              },
+                              "national_id": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [],
+                            "type": "object"
                           },
-                          "family_name": {
-                            "type": "string"
-                          },
-                          "gender": {
-                            "type": "string"
-                          },
-                          "given_names": {
-                            "type": "string"
-                          },
-                          "national_id": {
+                          "recordIdentifier": {
                             "type": "string"
                           }
                         },
-                        "required": [],
+                        "required": [
+                          "domainData",
+                          "recordIdentifier"
+                        ],
                         "type": "object"
                       },
                       "type": "array"

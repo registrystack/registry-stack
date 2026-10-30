@@ -60,13 +60,15 @@ entries:
       status: 200
       body:
         items:
-          - event_id: 00000000-0000-4000-8000-000000000003
-            tracking_id: EVT-SYNTHETIC-003
-            status: REGISTERED
-            event_type: birth
-            date_of_event: "2015-04-03"
-            mother_reference: PERSON-SYNTHETIC-A
-            father_reference: PERSON-SYNTHETIC-B
+          - recordIdentifier: EVT-SYNTHETIC-003
+            domainData:
+              event_id: 00000000-0000-4000-8000-000000000003
+              tracking_id: EVT-SYNTHETIC-003
+              status: REGISTERED
+              event_type: birth
+              date_of_event: "2015-04-03"
+              mother_reference: PERSON-SYNTHETIC-A
+              father_reference: PERSON-SYNTHETIC-B
         pageInfo:
           nextCursor: ""
         meta:

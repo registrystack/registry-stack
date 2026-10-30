@@ -33,10 +33,13 @@ async fn a_found_record_comes_back_shaped_through_the_served_binary() {
         body,
         json!({
             "data": {
-                "tracked_entity_type": "cQWYtUfH6Vx",
-                "org_unit": "slSrf7H9lMf",
-                "created_at": "2017-01-20T10:44:02.770",
-                "updated_at": "2017-05-26T11:46:22.372"
+                "recordIdentifier": "EeBJ3Sn9uLg",
+                "domainData": {
+                    "tracked_entity_type": "cQWYtUfH6Vx",
+                    "org_unit": "slSrf7H9lMf",
+                    "created_at": "2017-01-20T10:44:02.770",
+                    "updated_at": "2017-05-26T11:46:22.372"
+                }
             },
             "meta": {
                 "registryIdentifier": "dhis2-tracker-registry",
@@ -405,8 +408,8 @@ async fn a_success_status_other_than_200_leaves_the_binding_unserved() {
     copy_example_project(directory.path());
     replace_profile_text(
         directory.path(),
-        "    recordIdParameter: record_id\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
-        "    recordIdParameter: record_id\n    successStatus: 202\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+        "    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+        "    successStatus: 202\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
     );
     let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
 
@@ -487,8 +490,8 @@ async fn an_item_envelope_carries_the_record_identifier_beside_the_record() {
     copy_example_project(directory.path());
     replace_profile_text(
         directory.path(),
-        "    recordIdParameter: record_id\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
-        "    recordIdParameter: record_id\n    itemEnvelope: '{\"recordId\": \"{{recordId}}\", \"data\": {{record}}}'\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+        "    itemEnvelope: '{\"recordIdentifier\": \"{{recordId}}\", \"domainData\": {{record}}}'\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+        "    itemEnvelope: '{\"recordId\": \"{{recordId}}\", \"data\": {{record}}}'\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
     );
     let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
 

@@ -54,7 +54,7 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:51c949cae55ba424d66ef7d4a3a82ab7a9c58e5097c6667f2ef04a14a57b8078
+  digest: sha256:2588ac9ec2b6ecc245cc1e345879d4f623eb48b155470555eeff1a22e2d5d34c
 pack:
   id: opencrvs-events
   version: "1"

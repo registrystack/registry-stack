@@ -73,21 +73,34 @@
                       "items": {
                         "additionalProperties": false,
                         "properties": {
-                          "household_number": {
-                            "type": "string"
+                          "domainData": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "household_number": {
+                                "type": "string"
+                              },
+                              "member_count": {
+                                "type": "integer"
+                              },
+                              "region_code": {
+                                "type": "string"
+                              },
+                              "registered_on": {
+                                "format": "date",
+                                "type": "string"
+                              }
+                            },
+                            "required": [],
+                            "type": "object"
                           },
-                          "member_count": {
-                            "type": "integer"
-                          },
-                          "region_code": {
-                            "type": "string"
-                          },
-                          "registered_on": {
-                            "format": "date",
+                          "recordIdentifier": {
                             "type": "string"
                           }
                         },
-                        "required": [],
+                        "required": [
+                          "domainData",
+                          "recordIdentifier"
+                        ],
                         "type": "object"
                       },
                       "type": "array"
@@ -255,21 +268,34 @@
                     "data": {
                       "additionalProperties": false,
                       "properties": {
-                        "household_number": {
-                          "type": "string"
+                        "domainData": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "household_number": {
+                              "type": "string"
+                            },
+                            "member_count": {
+                              "type": "integer"
+                            },
+                            "region_code": {
+                              "type": "string"
+                            },
+                            "registered_on": {
+                              "format": "date",
+                              "type": "string"
+                            }
+                          },
+                          "required": [],
+                          "type": "object"
                         },
-                        "member_count": {
-                          "type": "integer"
-                        },
-                        "region_code": {
-                          "type": "string"
-                        },
-                        "registered_on": {
-                          "format": "date",
+                        "recordIdentifier": {
                           "type": "string"
                         }
                       },
-                      "required": [],
+                      "required": [
+                        "domainData",
+                        "recordIdentifier"
+                      ],
                       "type": "object"
                     },
                     "meta": {

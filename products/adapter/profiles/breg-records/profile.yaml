@@ -19,6 +19,11 @@
 # envelope members of these names at instantiation. The envelope literals
 # below carry the part names themselves as the stand-in text that names the
 # binding point.
+#
+# The record is served as Registry Record v1 holds it: `itemEnvelope` places
+# the source's record identifier beside the record's domain fields, so a
+# route that returns a record without an identifier is a disclosure violation
+# at the call. `revisionIdentifier` is not a slot of the item envelope yet.
 apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
 kind: AdapterProfile
 id: breg-records
@@ -30,6 +35,7 @@ operations:
     pathParameters:
       - type
     recordTypeParameter: type
+    itemEnvelope: '{"recordIdentifier": "{{recordId}}", "domainData": {{record}}}'
     responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": "{{?nextCursor}}"}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
     pagination:
       cursorParameter: cursor
@@ -44,6 +50,7 @@ operations:
       - record_id
     recordTypeParameter: type
     recordIdParameter: record_id
+    itemEnvelope: '{"recordIdentifier": "{{recordId}}", "domainData": {{record}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
   - id: records-create
     method: POST

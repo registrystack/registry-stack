@@ -69,20 +69,24 @@ entries:
       status: 200
       body:
         items:
-          - event_id: 00000000-0000-4000-8000-000000000001
-            tracking_id: EVT-SYNTHETIC-001
-            status: REGISTERED
-            event_type: birth
-            date_of_event: "2015-04-01"
-            mother_reference: PERSON-SYNTHETIC-A
-            father_reference: PERSON-SYNTHETIC-B
-          - event_id: 00000000-0000-4000-8000-000000000002
-            tracking_id: EVT-SYNTHETIC-002
-            status: REGISTERED
-            event_type: birth
-            date_of_event: "2015-04-02"
-            mother_reference: PERSON-SYNTHETIC-A
-            father_reference: PERSON-SYNTHETIC-B
+          - recordIdentifier: EVT-SYNTHETIC-001
+            domainData:
+              event_id: 00000000-0000-4000-8000-000000000001
+              tracking_id: EVT-SYNTHETIC-001
+              status: REGISTERED
+              event_type: birth
+              date_of_event: "2015-04-01"
+              mother_reference: PERSON-SYNTHETIC-A
+              father_reference: PERSON-SYNTHETIC-B
+          - recordIdentifier: EVT-SYNTHETIC-002
+            domainData:
+              event_id: 00000000-0000-4000-8000-000000000002
+              tracking_id: EVT-SYNTHETIC-002
+              status: REGISTERED
+              event_type: birth
+              date_of_event: "2015-04-02"
+              mother_reference: PERSON-SYNTHETIC-A
+              father_reference: PERSON-SYNTHETIC-B
         pageInfo:
           nextCursor: "2"
         meta:
