@@ -120,6 +120,12 @@ impl AuthError {
                 // went out; the engine refusing to egress is
                 // uncatchable, like every other pre-send refusal.
                 TokenFault::EgressRefused => "egress.refused",
+                // The shed is local, not an upstream outcome, but its
+                // class is the catchable timeout: the caller waited and
+                // got nothing, so a route may treat it as a transient
+                // outage. The journal records the shed, never a
+                // transport failure that did not happen.
+                TokenFault::AdmissionShed => "upstream.timeout",
                 TokenFault::Refused { .. }
                 | TokenFault::ScopeNarrowed
                 | TokenFault::NoLifetime
@@ -185,6 +191,10 @@ pub enum AuthEvent {
     /// The token request was refused by the destination policy before
     /// it was sent; the engine refusing to egress is uncatchable.
     TokenEgressRefused,
+    /// The acquisition gave up at the endpoint's admission bound before
+    /// any request was sent: the deliberate shed of a wedged endpoint,
+    /// catchable as a timeout, never a recorded transport failure.
+    TokenAdmissionShed,
     /// A cached credential was discarded after an upstream 401. A stale
     /// 401 about an issuance a concurrent refresh already replaced
     /// pushes nothing, because nothing was discarded.
@@ -247,6 +257,11 @@ mod tests {
             "egress.refused",
             "a policy refusal is the engine refusing to egress"
         );
+        assert_eq!(
+            AuthError::Token(TokenFault::AdmissionShed).class(),
+            "upstream.timeout",
+            "the admission shed stays catchable as a timeout"
+        );
 
         assert_eq!(
             AuthError::Token(TokenFault::Refused {
@@ -298,6 +313,11 @@ mod tests {
         assert_eq!(
             rendered,
             "the token request was refused by the destination policy before it was sent"
+        );
+        let rendered = AuthError::Token(TokenFault::AdmissionShed).to_string();
+        assert_eq!(
+            rendered,
+            "the token acquisition was shed at the admission bound before any request was sent"
         );
         let rendered = AuthError::Tls(TlsFault::CaBundle).to_string();
         assert_eq!(rendered, "the endpoint's CA bundle could not be resolved");

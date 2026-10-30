@@ -12,9 +12,11 @@
 //! the send, which is the single-flight refresh: concurrent exchanges
 //! over one endpoint serialize behind one token request, and a waiter
 //! wakes to a fresh credential. Waiters queue for at most
-//! [`TOKEN_ADMISSION_TIMEOUT`]; past that bound a waiter refuses with a
-//! transport timeout instead of parking an engine worker behind a
-//! stalled authorization server.
+//! [`TOKEN_ADMISSION_TIMEOUT`]; past that bound a waiter is shed before
+//! any request is sent, a deliberate refusal that keeps a stalled
+//! authorization server from parking engine workers, and the send
+//! itself is bounded by [`TOKEN_SEND_CEILING`], the platform's request
+//! timeout.
 //!
 //! Token responses are read as Evidence reads them: `token_type` must be
 //! `Bearer` in any case; a missing `expires_in` takes the operator's
@@ -68,7 +70,10 @@ pub const UNREGISTERED_ERROR_CODE: &str = "unregistered-error-code";
 /// How long one waiter may queue for the endpoint's cache lock behind an
 /// in-flight refresh before its own acquisition refuses, the admission
 /// bound of the single-flight refresh: a stalled authorization server
-/// must not park every engine worker that shares the endpoint.
+/// must not park every engine worker that shares the endpoint. Five
+/// seconds, deliberately shorter than the send ceiling: a waiter that
+/// would wait out a whole send is shed instead, and the journal records
+/// the shed, never a transport failure that did not happen.
 pub(crate) const TOKEN_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
 /// The ceiling one token send may take, the platform's request timeout.
 /// The layer enforces it around the send itself, so the single-flight
@@ -110,6 +115,10 @@ pub enum TokenFault {
         /// The coarse transport failure kind.
         kind: TransportKind,
     },
+    /// The acquisition gave up at the endpoint's admission bound before
+    /// any request was sent: the deliberate shed of a wedged endpoint,
+    /// catchable as a timeout, never recorded as a transport failure.
+    AdmissionShed,
     /// The platform's destination policy refused the token send before
     /// it went out: the engine refusing to egress is never a transport
     /// outcome and is never catchable.
@@ -150,6 +159,9 @@ impl fmt::Display for TokenFault {
             Self::Transport { kind } => {
                 write!(formatter, "the token request did not complete: {kind}")
             }
+            Self::AdmissionShed => formatter.write_str(
+                "the token acquisition was shed at the admission bound before any request was sent",
+            ),
             Self::EgressRefused => formatter.write_str(
                 "the token request was refused by the destination policy before it was sent",
             ),
@@ -776,12 +788,11 @@ pub(crate) async fn acquire_token(
     let mut guard = match timeout(cache.admission_timeout, cache.state.lock()).await {
         Ok(guard) => guard,
         Err(_elapsed) => {
-            events.push(AuthEvent::TokenTransportFailed {
-                kind: TransportKind::Timeout.kind(),
-            });
-            return Err(AuthError::Token(TokenFault::Transport {
-                kind: TransportKind::Timeout,
-            }));
+            // No request was sent, so the journal records the shed and
+            // never a transport failure; the class stays the catchable
+            // timeout a route may treat as a transient outage.
+            events.push(AuthEvent::TokenAdmissionShed);
+            return Err(AuthError::Token(TokenFault::AdmissionShed));
         }
     };
     if let Some(cached) = guard.cached.as_ref() {
@@ -859,6 +870,9 @@ pub(crate) async fn acquire_token(
                 }
                 TokenFault::EgressRefused => {
                     events.push(AuthEvent::TokenEgressRefused);
+                }
+                TokenFault::AdmissionShed => {
+                    events.push(AuthEvent::TokenAdmissionShed);
                 }
                 TokenFault::Unavailable { status } => {
                     events.push(AuthEvent::TokenUnavailable { status });
@@ -1918,8 +1932,9 @@ mod tests {
     }
 
     /// A waiter queued behind a stalled refresh gives up at the
-    /// admission bound instead of parking its caller: the refusal is a
-    /// transport timeout, no request was sent, and no budget was spent.
+    /// admission bound instead of parking its caller: the refusal is the
+    /// admission shed, recorded as its own event and never as a
+    /// transport failure, no request was sent, and no budget was spent.
     #[tokio::test]
     async fn waiters_give_up_at_the_admission_bound() {
         std::env::set_var("ADAPTER_TEST_WAIT_ID", "cid-wait");
@@ -1957,13 +1972,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error,
-            AuthError::Token(TokenFault::Transport {
-                kind: TransportKind::Timeout
-            })
+            AuthError::Token(TokenFault::AdmissionShed),
+            "the shed is its own fault, not a transport outcome"
+        );
+        assert_eq!(
+            error.class(),
+            "upstream.timeout",
+            "the shed stays catchable"
         );
         assert_eq!(
             events,
-            vec![AuthEvent::TokenTransportFailed { kind: "timeout" }]
+            vec![AuthEvent::TokenAdmissionShed],
+            "no transport failure is recorded: no packet left"
         );
         assert_eq!(send.token_request_count(), 0);
         assert_eq!(
