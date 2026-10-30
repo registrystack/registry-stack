@@ -41,4 +41,3 @@ registry-platform-testing = { workspace = true, features = ["test-authorization-
 reqwest.workspace = true
 tokio.workspace = true
 tower.workspace = true
-
