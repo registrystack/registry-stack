@@ -33,6 +33,7 @@ use crate::auth::{
     ClientAssertionSigner, ProtectedText, TokenBudget, TokenRequest, TokenSend, TokenWire,
     TransportFailure, UpstreamStatusAction,
 };
+use crate::component::http::uri::{encode_path_segment, percent_encode};
 use crate::exchange::{
     Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
     REDELIVERY_MAX_COUNTER_HEADER, RESERVED_PROPERTY_PREFIX,
@@ -630,9 +631,9 @@ impl Run<'_, '_> {
 }
 
 /// Fill a path template's `{{name}}` slots from `value`. A slot is one path
-/// segment value: it must be a non-empty string or a number, and never `.`
-/// or `..`, which the outbound URI parser would collapse into a different
-/// path once the request is built.
+/// segment value: it must be a string or a number whose percent-encoded form
+/// is one canonical path segment (see `encode_path_segment`), so the outbound
+/// origin pin never refuses a path the interpreter built.
 fn fill_path(
     template: &str,
     mut value: impl FnMut(&str) -> Result<Value, RouteFailure>,
@@ -646,28 +647,17 @@ fn fill_path(
             .find("}}")
             .ok_or_else(|| RouteFailure::of(ErrorClass::Validation))?;
         let text = match value(&after[..end])? {
-            Value::String(text) if !text.is_empty() && text != "." && text != ".." => text,
+            Value::String(text) => text,
             Value::Number(number) => number.to_string(),
             _ => return Err(RouteFailure::of(ErrorClass::Validation)),
         };
-        path.push_str(&percent_encode(&text));
+        let segment =
+            encode_path_segment(&text).ok_or_else(|| RouteFailure::of(ErrorClass::Validation))?;
+        path.push_str(&segment);
         rest = &after[end + 2..];
     }
     path.push_str(rest);
     Ok(path)
-}
-
-/// Percent-encode everything but the RFC 3986 unreserved set.
-fn percent_encode(text: &str) -> String {
-    let mut encoded = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
 }
 
 /// The kinds of endpoint authentication this runtime serves: those that need
@@ -770,12 +760,12 @@ mod served_tests {
     }
 
     #[test]
-    fn a_path_slot_that_is_a_dot_segment_is_refused_anywhere_in_the_path() {
+    fn a_path_slot_that_is_not_one_segment_is_refused_anywhere_in_the_path() {
         for template in [
             "/api/v1/patients/{{id}}",
             "/api/v1/patients/{{id}}/consents",
         ] {
-            for refused in ["", ".", ".."] {
+            for refused in ["", ".", "..", "a.b/..c", "a?b", "a%b"] {
                 let result = fill_path(template, |_| Ok(json!(refused)));
                 let failure = result.expect_err("refused");
                 assert_eq!(
@@ -784,8 +774,8 @@ mod served_tests {
                     "{template} {refused}"
                 );
             }
-            let filled = fill_path(template, |_| Ok(json!("a.b/..c"))).expect("filled");
-            assert!(filled.contains("a.b%2F..c"), "{filled}");
+            let filled = fill_path(template, |_| Ok(json!("a.b ..c"))).expect("filled");
+            assert!(filled.contains("a.b%20..c"), "{filled}");
         }
     }
 

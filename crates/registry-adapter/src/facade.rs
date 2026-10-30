@@ -27,6 +27,7 @@ use registry_adapter_core::{
 };
 use serde_json::{json, Value};
 
+use crate::component::http::uri::encode_path_segment;
 use crate::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
 };
@@ -206,6 +207,7 @@ async fn answer(
         .get(&operation.record_type_parameter)
         .cloned()
         .unwrap_or_default();
+    let mut names_record_id = operation.record_id_parameter.is_some();
     let mut record_id = operation
         .record_id_parameter
         .as_ref()
@@ -317,6 +319,7 @@ async fn answer(
         match template.capture(&parsed, &operation.filters) {
             Ok(captured) => {
                 if let Some(id) = captured.record_id {
+                    names_record_id = true;
                     record_id = id;
                 }
                 inputs.cursor = captured.cursor;
@@ -355,14 +358,15 @@ async fn answer(
         }
     }
 
-    if !is_path_segment_value(&record_id) {
-        return refuse_request(
+    if names_record_id && !is_path_segment_value(&record_id) {
+        return refuse_call(
             state,
             operation,
             &caller,
             &record_type,
             &request_id,
-            Refusal::invalid_request("the record identifier is not a usable path value"),
+            ErrorClass::FacadeNotFound,
+            StatusCode::NOT_FOUND,
         )
         .await;
     }
@@ -751,11 +755,11 @@ fn disclosed_slots(
 }
 
 /// Whether a caller-supplied identifier can stand as one path segment of the
-/// source call: a `.` or `..` would be collapsed by the outbound URI parser
-/// into a different path. A record id the operation does not take is empty
-/// and passes.
+/// source call: its percent-encoded form must pass the canonical-path rule
+/// the outbound origin pin applies, so the source is never asked for a path
+/// the pin would refuse. An empty identifier is not one.
 fn is_path_segment_value(record_id: &str) -> bool {
-    record_id != "." && record_id != ".."
+    encode_path_segment(record_id).is_some()
 }
 
 /// The inputs of one read as the caller supplied them, from the query

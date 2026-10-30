@@ -504,3 +504,83 @@ fn is_under(path: &str, base_path: &str) -> bool {
             .strip_prefix(base_path)
             .is_some_and(|rest| rest.starts_with('/'))
 }
+
+/// Percent-encode everything but the RFC 3986 unreserved set.
+pub(crate) fn percent_encode(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+/// `text` percent-encoded as one path segment, when that encoding is a
+/// segment [`PinnedOrigin::pin`] admits: not empty, not a dot segment, and
+/// canonical by the same rule the pin applies to a link's path. `None` for a
+/// value that cannot stand as one segment of a pinned link.
+pub(crate) fn encode_path_segment(text: &str) -> Option<String> {
+    let encoded = percent_encode(text);
+    if encoded.is_empty() || is_dot_segment(encoded.as_bytes()) {
+        return None;
+    }
+    is_canonical_path(&format!("/{encoded}")).then_some(encoded)
+}
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+
+    #[test]
+    fn a_value_that_would_leave_its_segment_or_alias_another_is_not_a_segment() {
+        for hostile in [
+            "", ".", "..", "a/b", "a%2Fb", "a\\b", "a?b", "a;b", "a:b", "a%b", "a\u{1}b",
+            "a\u{7f}b", "a\nb",
+        ] {
+            assert_eq!(encode_path_segment(hostile), None, "{hostile:?}");
+        }
+    }
+
+    #[test]
+    fn a_value_with_a_space_or_a_non_ascii_character_is_one_encoded_segment() {
+        assert_eq!(encode_path_segment("a b").as_deref(), Some("a%20b"));
+        assert_eq!(
+            encode_path_segment("caf\u{e9}").as_deref(),
+            Some("caf%C3%A9")
+        );
+        assert_eq!(
+            encode_path_segment("EeBJ3Sn9uLg").as_deref(),
+            Some("EeBJ3Sn9uLg")
+        );
+        assert_eq!(
+            encode_path_segment("a.b-c_d~e").as_deref(),
+            Some("a.b-c_d~e")
+        );
+    }
+
+    #[test]
+    fn every_segment_it_admits_passes_the_pin() {
+        let origin = PinnedOrigin::new("https://source.example.invalid/api").expect("origin");
+        for value in [
+            "a b",
+            "caf\u{e9}",
+            "x!y",
+            "a'b",
+            "a(b)",
+            "a,b",
+            "a=b",
+            "a@b",
+            "a#b",
+        ] {
+            let Some(segment) = encode_path_segment(value) else {
+                continue;
+            };
+            origin
+                .pin(&format!("https://source.example.invalid/api/{segment}"))
+                .unwrap_or_else(|refusal| panic!("{value:?}: {refusal}"));
+        }
+    }
+}

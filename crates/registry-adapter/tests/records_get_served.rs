@@ -118,22 +118,55 @@ async fn a_request_without_a_valid_token_is_refused_before_any_upstream_call() {
 }
 
 #[tokio::test]
-async fn a_dot_segment_record_identifier_never_reaches_the_upstream() {
+async fn a_record_identifier_that_cannot_be_one_path_segment_is_not_found_before_any_upstream_call()
+{
     let upstream = UpstreamDouble::start();
     let (status, body) = capture("get-found");
     upstream.respond_with(vec![Response::json(status, &body)]);
     let served = Served::start(&upstream.url("")).await;
     let token = served.token("records.read");
 
-    for spelling in ["..", "%2E%2E", "%2e%2e", ".", "%2E", ".%2e"] {
+    // The spellings are as a caller writes them; the router decodes each
+    // once, so `a%252Fb` reaches the facade as `a%2Fb`.
+    for spelling in [
+        "..", "%2E%2E", "%2e%2e", ".", "%2E", ".%2e", "a%2Fb", "a%2fb", "a%252Fb", "a%5Cb",
+        "a%3Fb", "a%3Bb", "a%3Ab", "a%01b", "a%7Fb", "a%25b",
+    ] {
         let (status, _, body) = served.get(&format!("/v1/records/person/{spelling}"), Some(&token));
-        assert_eq!(status, 400, "{spelling}: {body}");
-        assert_eq!(body["code"], "source.facade", "{spelling}");
+        assert_eq!(status, 404, "{spelling}: {body}");
+        assert_eq!(body["status"], 404, "{spelling}");
     }
     assert_eq!(
         upstream.request_count(),
         0,
-        "no dot segment was sent upstream"
+        "no hostile identifier was sent upstream"
+    );
+    let kinds = served.journal_kinds().await;
+    assert!(
+        kinds.iter().all(|kind| kind != "exchangeSending"),
+        "no route ran: {kinds:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_identifier_with_a_space_or_a_non_ascii_character_is_sent_as_one_encoded_segment() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body); 2]);
+    let served = Served::start(&upstream.url("")).await;
+    let token = served.token("records.read");
+
+    for spelling in ["a%20b", "caf%C3%A9"] {
+        let (status, _, body) = served.get(&format!("/v1/records/person/{spelling}"), Some(&token));
+        assert_eq!(status, 200, "{spelling}: {body}");
+    }
+    let targets: Vec<String> = upstream.requests().into_iter().map(|r| r.target).collect();
+    assert_eq!(
+        targets,
+        [
+            "/api/tracker/trackedEntities/a%20b",
+            "/api/tracker/trackedEntities/caf%C3%A9"
+        ]
     );
 }
 

@@ -401,6 +401,29 @@ async fn a_lookup_refuses_what_its_closed_shape_does_not_name() {
 }
 
 #[tokio::test]
+async fn a_lookup_identifier_that_cannot_be_one_path_segment_is_not_found_before_any_upstream_call()
+{
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![found()]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    for hostile in [
+        ".", "..", "a/b", "a%2Fb", "a\\b", "a?b", "a;b", "a:b", "a\u{1}b", "a%b",
+    ] {
+        let (status, _, body) = served.post(
+            LOOKUP_PATH,
+            Some(&token),
+            &json!({"selector": "byRecordId", "values": {"recordId": hostile}}),
+        );
+        assert_eq!(status, 404, "{hostile:?}: {body}");
+        // The profile maps the facade not-found class to this problem.
+        contract::assert_problem(&body, 404, "collection-not-available");
+    }
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
 async fn a_search_narrows_to_the_organisation_unit_and_pages() {
     let upstream = UpstreamDouble::start();
     upstream.respond_with(vec![page_of(1, 4)]);
