@@ -199,6 +199,31 @@ impl EgressRefusal {
     pub const fn class(&self) -> ErrorClass {
         ErrorClass::EgressRefused
     }
+
+    /// The fixed journal word naming the kind of refusal. It carries no
+    /// value from the link, the headers, or the credential.
+    #[must_use]
+    pub const fn journal_name(&self) -> &'static str {
+        match self {
+            Self::Link(LinkRefusal::TooLong) => "link-too-long",
+            Self::Link(LinkRefusal::InvalidCharacter) => "link-invalid-character",
+            Self::Link(LinkRefusal::NotAbsolute) => "link-not-absolute",
+            Self::Link(LinkRefusal::Unparseable) => "link-unparseable",
+            Self::Link(LinkRefusal::SchemeMismatch) => "link-scheme-mismatch",
+            Self::Link(LinkRefusal::Userinfo) => "link-userinfo",
+            Self::Link(LinkRefusal::HostMismatch) => "link-host-mismatch",
+            Self::Link(LinkRefusal::PortMismatch) => "link-port-mismatch",
+            Self::Link(LinkRefusal::Fragment) => "link-fragment",
+            Self::Link(LinkRefusal::QueryNotAsWritten) => "link-query-not-as-written",
+            Self::Link(LinkRefusal::NonCanonicalPath) => "link-non-canonical-path",
+            Self::Link(LinkRefusal::OutsideBasePath) => "link-outside-base-path",
+            Self::Header(_) => "header",
+            Self::Request(_) => "request",
+            Self::Destination { journal_name, .. } => journal_name,
+            Self::Credential => "credential",
+            Self::AttemptAboveMaximum => "attempt-above-maximum",
+        }
+    }
 }
 
 impl fmt::Display for EgressRefusal {
@@ -1436,6 +1461,43 @@ mod tests {
                 "no journal name carries a marker"
             );
         }
+    }
+
+    /// A refusal's journal name is a fixed word per kind, a link refusal
+    /// is named by its variant, and a destination refusal keeps its own
+    /// closed name.
+    #[test]
+    fn a_refusal_names_its_kind_with_a_fixed_word() {
+        let links = [
+            (LinkRefusal::TooLong, "link-too-long"),
+            (LinkRefusal::InvalidCharacter, "link-invalid-character"),
+            (LinkRefusal::NotAbsolute, "link-not-absolute"),
+            (LinkRefusal::Unparseable, "link-unparseable"),
+            (LinkRefusal::SchemeMismatch, "link-scheme-mismatch"),
+            (LinkRefusal::Userinfo, "link-userinfo"),
+            (LinkRefusal::HostMismatch, "link-host-mismatch"),
+            (LinkRefusal::PortMismatch, "link-port-mismatch"),
+            (LinkRefusal::Fragment, "link-fragment"),
+            (LinkRefusal::QueryNotAsWritten, "link-query-not-as-written"),
+            (LinkRefusal::NonCanonicalPath, "link-non-canonical-path"),
+            (LinkRefusal::OutsideBasePath, "link-outside-base-path"),
+        ];
+        for (fault, name) in links {
+            assert_eq!(EgressRefusal::Link(fault).journal_name(), name);
+        }
+        assert_eq!(EgressRefusal::Credential.journal_name(), "credential");
+        assert_eq!(
+            EgressRefusal::AttemptAboveMaximum.journal_name(),
+            "attempt-above-maximum"
+        );
+        assert_eq!(
+            EgressRefusal::Destination {
+                fault: DestinationSendError::ResolutionFailed,
+                journal_name: "resolution-failed",
+            }
+            .journal_name(),
+            "resolution-failed"
+        );
     }
 
     /// The destination profile follows the pinned origin: HTTPS is

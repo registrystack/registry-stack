@@ -577,8 +577,15 @@ impl Run<'_, '_> {
                     tracing::warn!(endpoint = %to.uri.id, reason = %reason, "an upstream send was refused");
                 }
                 let mut sent = json!({ "endpoint": to.uri.id, "class": class.class(), "status": status, "durationMs": elapsed });
-                if let EgressError::Upstream(failure) = &error {
-                    sent["certainty"] = json!(failure.certainty_journal_name());
+                match &error {
+                    EgressError::Upstream(failure) => {
+                        sent["certainty"] = json!(failure.certainty_journal_name());
+                    }
+                    // A refusal happens before any byte leaves.
+                    EgressError::Refused(reason) => {
+                        sent["certainty"] = json!("not-sent");
+                        sent["refusal"] = json!(reason.journal_name());
+                    }
                 }
                 if !auth_events.is_empty() {
                     sent["auth"] = auth_events_detail(&auth_events);
