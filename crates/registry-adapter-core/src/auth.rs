@@ -15,7 +15,7 @@
 //! authored files carry no secrets (CFG-SEC-1). No caller token is ever
 //! forwarded upstream.
 
-use registry_platform_yaml::{BoundedU64, SecretReference};
+use registry_platform_yaml::{BoundedU64, SecretReference, Url};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use crate::model::serialize_tagged_union;
@@ -147,9 +147,10 @@ pub enum RuntimeCredential {
     /// or fixed strings.
     Oauth2ClientCredentials {
         /// The token endpoint, a fixed destination never derived from a
-        /// response.
+        /// response; an absolute `http`/`https` URL the origin check
+        /// confines like any other destination.
         #[serde(rename = "tokenEndpoint")]
-        token_endpoint: String,
+        token_endpoint: Url,
         /// The client id secret reference.
         #[serde(rename = "clientIdRef")]
         client_id_ref: SecretReference,
@@ -185,9 +186,10 @@ pub enum RuntimeCredential {
     /// parameter.
     Oauth2PrivateKeyJwt {
         /// The token endpoint, a fixed destination never derived from a
-        /// response.
+        /// response; an absolute `http`/`https` URL the origin check
+        /// confines like any other destination.
         #[serde(rename = "tokenEndpoint")]
-        token_endpoint: String,
+        token_endpoint: Url,
         /// The client id secret reference.
         #[serde(rename = "clientIdRef")]
         client_id_ref: SecretReference,
@@ -402,6 +404,22 @@ mod tests {
         assert!(oauth.needs_token_endpoint());
         assert!(!none.needs_token_endpoint());
         assert!(!EndpointAuthentication::Basic {}.needs_token_endpoint());
+    }
+
+    /// A token endpoint parses as an absolute `http`/`https` URL: prose
+    /// and other schemes refuse at the reader.
+    #[test]
+    fn a_malformed_token_endpoint_is_refused_at_the_reader() {
+        for json in [
+            r#"{"type": "oauth2-client-credentials", "tokenEndpoint": "not a url at all", "clientIdRef": "secret:env/ID", "clientSecretRef": "secret:env/S", "credentialPlacement": "basic-header", "maximumCacheSeconds": 0}"#,
+            r#"{"type": "oauth2-client-credentials", "tokenEndpoint": "ftp://token.example.invalid/token", "clientIdRef": "secret:env/ID", "clientSecretRef": "secret:env/S", "credentialPlacement": "basic-header", "maximumCacheSeconds": 0}"#,
+            r#"{"type": "oauth2-private-key-jwt", "tokenEndpoint": "token.example.invalid/oauth/token", "clientIdRef": "secret:env/ID", "clientAssertionKeyRef": "secret:file/assertion.pem", "maximumCacheSeconds": 0}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<RuntimeCredential>(json).is_err(),
+                "a malformed token endpoint refuses at the reader"
+            );
+        }
     }
 
     /// Reserved header names are refused, case-insensitively; ordinary

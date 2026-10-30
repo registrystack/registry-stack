@@ -2283,6 +2283,22 @@ fn check_credential_pair(
             ));
         }
     }
+    // The token endpoint is a fixed destination the engine dials with the
+    // shared secret in hand, so it answers to the same origin rule as the
+    // binding's base URL (`products/adapter/CONCEPT.md` section 10.2).
+    let token_endpoint = match credential {
+        RuntimeCredential::Oauth2ClientCredentials { token_endpoint, .. } => token_endpoint,
+        RuntimeCredential::Oauth2PrivateKeyJwt { token_endpoint, .. } => token_endpoint,
+        _ => return,
+    };
+    if is_plain_http(token_endpoint) {
+        findings.push(finding(
+            CheckCode::RuntimeInsecureOrigin,
+            &format!("{prefix}/credential/tokenEndpoint"),
+            "the token endpoint's origin is plain HTTP outside the loopback exception",
+            "Serve the token endpoint over TLS.",
+        ));
+    }
 }
 
 /// Whether a bound origin's host is a numeric loopback address.
@@ -5254,7 +5270,7 @@ mod tests {
             endpoint: id("case-api"),
             base_url: Url::new(base).expect("url"),
             credential: Some(RuntimeCredential::Oauth2ClientCredentials {
-                token_endpoint: "https://token.example.invalid/token".to_string(),
+                token_endpoint: Url::new("https://token.example.invalid/token").expect("url"),
                 client_id_ref: SecretReference::new("secret:env/CLIENT_ID").expect("secret"),
                 client_secret_ref: SecretReference::new("secret:env/CLIENT_SECRET")
                     .expect("secret"),
@@ -5359,6 +5375,38 @@ mod tests {
         ws.runtime = Some(&loopback);
         assert!(!codes(&check_runtime(&ws, &loopback))
             .contains(&CheckCode::RuntimeInsecureOrigin.code()));
+    }
+
+    /// A token endpoint answers to the same origin rule as a binding's
+    /// base URL: `https` anywhere, plain HTTP on a numeric loopback only.
+    #[test]
+    fn runtime_refuses_a_plain_http_token_endpoint() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let with_token = |base: &str, token: &str| {
+            let mut binding = oauth_binding(base);
+            if let Some(RuntimeCredential::Oauth2ClientCredentials { token_endpoint, .. }) =
+                &mut binding.credential
+            {
+                *token_endpoint = Url::new(token).expect("url");
+            }
+            let runtime = runtime_builder(vec![binding]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&runtime);
+            check_runtime(&ws, &runtime)
+        };
+        let findings = with_token(
+            "https://cases.example.invalid",
+            "http://token.example.invalid/token",
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::RuntimeInsecureOrigin.code());
+        assert_eq!(findings[0].path, "/endpoints/0/credential/tokenEndpoint");
+        assert_clean(with_token(
+            "https://cases.example.invalid",
+            "http://127.0.0.1:8081/token",
+        ));
     }
 
     #[test]

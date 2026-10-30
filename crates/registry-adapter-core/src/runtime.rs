@@ -163,7 +163,7 @@ mod tests {
             endpoint: ExternalId::new("case-api").expect("id"),
             base_url: Url::new("https://cases.example.invalid").expect("url"),
             credential: Some(RuntimeCredential::Oauth2ClientCredentials {
-                token_endpoint: "https://token.example.invalid/token".to_string(),
+                token_endpoint: Url::new("https://token.example.invalid/token").expect("url"),
                 client_id_ref: SecretReference::new("secret:env/CLIENT_ID").expect("secret"),
                 client_secret_ref: SecretReference::new("secret:env/CLIENT_SECRET")
                     .expect("secret"),
