@@ -104,6 +104,14 @@ pub struct ProfileOperation {
     pub request_envelope: Option<EnvelopeTemplate>,
     /// The response envelope; must name its result slot.
     pub response_envelope: EnvelopeTemplate,
+    /// The per-record template: when declared, every record the response
+    /// envelope's `record` or `records` slot carries is rendered through
+    /// it first. It may name `record`, `recordId` (the identifier the
+    /// route's record carries beside its domain data), `recordType`, and
+    /// `requestId`. A call whose route yields no identifier for a template
+    /// that names `recordId` is a disclosure violation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_envelope: Option<EnvelopeTemplate>,
     /// The pagination parameters of a search operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pagination: Option<PaginationParameters>,
@@ -226,6 +234,7 @@ mod tests {
             success_status: default_success_status(),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }
     }

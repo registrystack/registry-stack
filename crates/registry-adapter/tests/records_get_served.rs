@@ -477,3 +477,26 @@ async fn a_journal_that_fails_mid_exchange_answers_500_and_discloses_nothing() {
         "{kinds:?}"
     );
 }
+
+#[tokio::test]
+async fn an_item_envelope_carries_the_record_identifier_beside_the_record() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    copy_example_project(directory.path());
+    replace_profile_text(
+        directory.path(),
+        "    recordIdParameter: record_id\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+        "    recordIdParameter: record_id\n    itemEnvelope: '{\"recordId\": \"{{recordId}}\", \"data\": {{record}}}'\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+    );
+    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
+
+    let token = served.token("records.read");
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["recordId"], "EeBJ3Sn9uLg");
+    assert_eq!(body["data"]["data"]["org_unit"], "slSrf7H9lMf");
+    assert_eq!(body["meta"]["entityTypeIdentifier"], "person");
+}

@@ -12,7 +12,7 @@ use crate::diagnostics::{finding, CheckCode};
 use crate::envelope::{
     decode_slot, parse_envelope_template, SlotForm, ENVELOPE_GRAMMAR_RULE, SLOT_MARK,
 };
-use crate::profile::{AdapterProfile, ParameterizedPart};
+use crate::profile::{AdapterProfile, ParameterizedPart, SLOT_RECORD, SLOT_RECORDS};
 use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Map, Value};
@@ -36,7 +36,7 @@ pub fn derive_operation_result_schema(
         .operations
         .get(operation_id)
         .ok_or_else(|| format!("the profile declares no operation {operation_id}"))?;
-    let template = parse_envelope_template(operation.response_envelope.text())?;
+    let template = response_template(operation)?;
     let binding = project
         .bindings
         .iter()
@@ -47,6 +47,42 @@ pub fn derive_operation_result_schema(
         Some(project),
         &profile.parameterized_parts,
     )
+}
+
+/// The operation's response envelope as a parsed template with its item
+/// envelope, when it declares one, written in: the `record` slot becomes
+/// the item template, and the `records` slot an array of it. The item
+/// template keeps its own slots, which derive like any other.
+fn response_template(operation: &crate::profile::ProfileOperation) -> Result<Value, String> {
+    let template = parse_envelope_template(operation.response_envelope.text())?;
+    let Some(item) = &operation.item_envelope else {
+        return Ok(template);
+    };
+    let item = parse_envelope_template(item.text())?;
+    Ok(expand_items(template, &item))
+}
+
+fn expand_items(template: Value, item: &Value) -> Value {
+    match template {
+        Value::String(text) => match decode_slot(&text) {
+            Some((name, _)) if name == SLOT_RECORD => item.clone(),
+            Some((name, _)) if name == SLOT_RECORDS => Value::Array(vec![item.clone()]),
+            _ => Value::String(text),
+        },
+        Value::Object(members) => Value::Object(
+            members
+                .into_iter()
+                .map(|(key, member)| (key, expand_items(member, item)))
+                .collect(),
+        ),
+        Value::Array(members) => Value::Array(
+            members
+                .into_iter()
+                .map(|member| expand_items(member, item))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 /// The derived schema of one binding's response body: the bound
@@ -71,7 +107,7 @@ pub fn derive_binding_result_schema(
                 binding.operation.as_str()
             )
         })?;
-    let template = parse_envelope_template(operation.response_envelope.text())?;
+    let template = response_template(operation)?;
     derive_value(
         &template,
         Some(binding),
@@ -674,6 +710,7 @@ mod tests {
             success_status: registry_platform_yaml::BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(envelope.to_string()),
+            item_envelope: None,
             pagination: None,
         }
     }
@@ -850,6 +887,25 @@ mod tests {
             schema["properties"]["recordType"],
             json!({"type": "string"})
         );
+    }
+
+    /// An item envelope is written into the `record` and `records` slots
+    /// before the derivation, so the schema describes each served item.
+    #[test]
+    fn derive_writes_the_item_envelope_into_the_record_slots() {
+        let mut profile = profile(r#"{"one": {{record}}, "many": {{records}}}"#);
+        let mut with_item = operation(r#"{"one": {{record}}, "many": {{records}}}"#);
+        with_item.item_envelope = Some(EnvelopeTemplate(
+            r#"{"recordId": "{{recordId}}", "data": {{record}}}"#.to_string(),
+        ));
+        profile.operations = UniqueIdList::new(vec![with_item]).expect("unique");
+        let schema =
+            derive_operation_result_schema(&profile, &project(true), "cases-find").expect("derive");
+        let item = &schema["properties"]["one"];
+        assert_eq!(item["required"], json!(["data", "recordId"]));
+        assert_eq!(item["properties"]["recordId"], json!({"type": "string"}));
+        assert_eq!(item["properties"]["data"]["required"], json!(["id"]));
+        assert_eq!(schema["properties"]["many"]["items"], *item);
     }
 
     /// A whole-body record slot derives the record schema itself; an

@@ -248,7 +248,13 @@ async fn answer(
     // journal never records `exchangeCompleted` for an exchange whose body
     // the facade then failed to seal or render.
     let rendered = match outcome.result {
-        Ok(done) => match disclosed_slots(operation, &done.message.body, requested_page_size) {
+        Ok(done) => match disclosed_slots(
+            operation,
+            &done.message.body,
+            requested_page_size,
+            &record_type,
+            &request_id,
+        ) {
             Ok(slots) => {
                 match seal_next(state, operation, &caller, search_binding, &done).and_then(
                     |next_cursor| {
@@ -432,15 +438,27 @@ const RECORD_WRAPPER_MEMBERS: [&str; 3] = ["recordIdentifier", "revisionIdentifi
 /// field the record type does not declare, missing a declared one or typed
 /// differently is a disclosure violation, never served. The error is the
 /// count of violations: key names stay out of every log and journal.
+#[cfg(test)]
 fn disclosed_record(body: &Value, schema: &Value) -> Result<Value, usize> {
+    disclosed_parts(body, schema).map(|(record, _)| record)
+}
+
+/// [`disclosed_record`] and the source's record identifier, when the route's
+/// record was wrapped beside one. An identifier that is not a string is a
+/// disclosure violation.
+fn disclosed_parts(body: &Value, schema: &Value) -> Result<(Value, Option<String>), usize> {
+    let mut identifier = None;
     let record = match body {
         Value::Object(map) if map.contains_key("recordIdentifier") => {
             let wrapper_shaped = map.len() <= RECORD_WRAPPER_MEMBERS.len()
                 && map
                     .keys()
                     .all(|key| RECORD_WRAPPER_MEMBERS.contains(&key.as_str()));
-            match map.get("domainData") {
-                Some(domain) if wrapper_shaped => domain,
+            match (map.get("domainData"), map.get("recordIdentifier")) {
+                (Some(domain), Some(Value::String(id))) if wrapper_shaped => {
+                    identifier = Some(id.clone());
+                    domain
+                }
                 _ => return Err(1),
             }
         }
@@ -448,10 +466,38 @@ fn disclosed_record(body: &Value, schema: &Value) -> Result<Value, usize> {
     };
     let violations = registry_adapter_core::validate_result_schema(record, schema);
     if violations.is_empty() {
-        Ok(record.clone())
+        Ok((record.clone(), identifier))
     } else {
         Err(violations.len())
     }
+}
+
+/// One record as the response envelope receives it: the disclosed record
+/// itself, or, when the operation declares an item envelope, that template
+/// filled for the record. A template that names `recordId` over a record the
+/// route returned without an identifier is a disclosure violation.
+fn disclosed_item(
+    operation: &ServedOperation,
+    body: &Value,
+    record_type: &str,
+    request_id: &str,
+) -> Result<Value, usize> {
+    let (record, identifier) = disclosed_parts(body, &operation.record_schema)?;
+    let Some(item) = &operation.item_envelope else {
+        return Ok(record);
+    };
+    let mut slots: BTreeMap<&str, Value> = BTreeMap::new();
+    slots.insert("record", record);
+    slots.insert("recordType", Value::String(record_type.to_owned()));
+    slots.insert("requestId", Value::String(request_id.to_owned()));
+    match identifier {
+        Some(id) => {
+            slots.insert("recordId", Value::String(id));
+        }
+        None if item.names_record_id => return Err(1),
+        None => {}
+    }
+    item.envelope.render(&slots).map_err(|_| 1)
 }
 
 /// The slots the response envelope is filled from: one record, or every
@@ -462,6 +508,8 @@ fn disclosed_slots(
     operation: &ServedOperation,
     body: &Value,
     page_size: Option<u64>,
+    record_type: &str,
+    request_id: &str,
 ) -> Result<BTreeMap<&'static str, Value>, usize> {
     let mut slots = BTreeMap::new();
     if operation.pagination.is_some() {
@@ -473,11 +521,14 @@ fn disclosed_slots(
         }
         let disclosed = records
             .iter()
-            .map(|record| disclosed_record(record, &operation.record_schema))
+            .map(|record| disclosed_item(operation, record, record_type, request_id))
             .collect::<Result<Vec<_>, _>>()?;
         slots.insert("records", Value::Array(disclosed));
     } else {
-        slots.insert("record", disclosed_record(body, &operation.record_schema)?);
+        slots.insert(
+            "record",
+            disclosed_item(operation, body, record_type, request_id)?,
+        );
     }
     Ok(slots)
 }
@@ -856,6 +907,7 @@ mod tests {
             route_id: String::new(),
             steps: Vec::new(),
             maximum_upstream_calls: 1,
+            item_envelope: None,
             response_envelope: crate::envelope::CompiledEnvelope::compile("{}", &BTreeMap::new())
                 .expect("an empty envelope compiles"),
             record_schema: json!({}),
@@ -918,5 +970,32 @@ mod tests {
         assert!(disclosed_record(&extra, &schema).is_err());
         let bare = json!({ "recordIdentifier": "r1", "name": "A" });
         assert!(disclosed_record(&bare, &schema).is_err());
+    }
+
+    #[test]
+    fn an_item_envelope_fills_the_record_and_its_identifier() {
+        let mut operation = served("records-get", "person");
+        operation.record_schema = person_schema();
+        operation.item_envelope = Some(crate::load::ServedItem {
+            envelope: CompiledEnvelope::compile(
+                r#"{"recordId": "{{recordId}}", "data": {{record}}}"#,
+                &BTreeMap::new(),
+            )
+            .unwrap(),
+            names_record_id: true,
+        });
+        let wrapped = json!({
+            "recordIdentifier": "r-1",
+            "domainData": { "name": "A" },
+        });
+        assert_eq!(
+            disclosed_item(&operation, &wrapped, "person", "id").unwrap(),
+            json!({ "recordId": "r-1", "data": { "name": "A" } })
+        );
+        // A bare record carries no identifier for the template to name.
+        assert!(disclosed_item(&operation, &json!({ "name": "A" }), "person", "id").is_err());
+        // An identifier that is not a string is never served.
+        let numeric = json!({ "recordIdentifier": 7, "domainData": { "name": "A" } });
+        assert!(disclosed_item(&operation, &numeric, "person", "id").is_err());
     }
 }

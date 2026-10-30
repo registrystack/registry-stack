@@ -164,6 +164,10 @@
           "$ref": "#/$defs/LocalId",
           "description": "The profile-declared operation id a binding names."
         },
+        "itemEnvelope": {
+          "$ref": "#/$defs/EnvelopeTemplate",
+          "description": "The per-record template: when declared, every record the response\nenvelope's `record` or `records` slot carries is rendered through\nit first. It may name `record`, `recordId` (the identifier the\nroute's record carries beside its domain data), `recordType`, and\n`requestId`. A call whose route yields no identifier for a template\nthat names `recordId` is a disclosure violation."
+        },
         "method": {
           "$ref": "#/$defs/HttpMethod",
           "description": "The facade method."

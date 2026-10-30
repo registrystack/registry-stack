@@ -96,11 +96,20 @@ pub struct ServedOperation {
     pub steps: Vec<Step>,
     pub maximum_upstream_calls: u64,
     pub response_envelope: CompiledEnvelope,
+    /// The per-record template filled into the response envelope's
+    /// `record` and `records` slots, when the operation declares one.
+    pub item_envelope: Option<ServedItem>,
     /// The closed schema of one record this operation may disclose: the
     /// bound record type's declared fields and nothing else.
     pub record_schema: Value,
     /// The cursor and page-size parameters of a search operation.
     pub pagination: Option<ServedPagination>,
+}
+
+/// A compiled item envelope and whether it needs the record's identifier.
+pub struct ServedItem {
+    pub envelope: CompiledEnvelope,
+    pub names_record_id: bool,
 }
 
 /// The pagination parameters one served search operation declares.
@@ -507,6 +516,21 @@ fn compile_binding(
         .map_err(|reason| {
             BindingRefusal::Fault(format!("the response envelope is unusable: {reason}"))
         })?,
+        item_envelope: operation
+            .item_envelope
+            .as_ref()
+            .map(|item| {
+                CompiledEnvelope::compile(item.text(), &project.parameterized_parts).map(
+                    |envelope| ServedItem {
+                        envelope,
+                        names_record_id: item.mentions("recordId"),
+                    },
+                )
+            })
+            .transpose()
+            .map_err(|reason| {
+                BindingRefusal::Fault(format!("the item envelope is unusable: {reason}"))
+            })?,
         record_schema: registry_adapter_core::binding_record_schema(project, binding)?,
         pagination: operation
             .pagination
@@ -651,6 +675,7 @@ mod tests {
             route_id: "route".to_owned(),
             steps: Vec::new(),
             maximum_upstream_calls: 1,
+            item_envelope: None,
             response_envelope: CompiledEnvelope::compile("{}", &BTreeMap::new()).unwrap(),
             record_schema: json!({}),
             pagination: None,

@@ -349,6 +349,12 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
         ));
         findings.extend(record_parameter_checks(&prefix, operation));
         findings.extend(envelope_checks(&prefix, &operation.response_envelope));
+        if let Some(item) = &operation.item_envelope {
+            findings.extend(item_envelope_checks(
+                &format!("{prefix}/itemEnvelope"),
+                item,
+            ));
+        }
         if !(operation.response_envelope.mentions(SLOT_RECORD)
             || operation.response_envelope.mentions(SLOT_RECORDS))
         {
@@ -864,6 +870,34 @@ fn request_envelope_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Di
             &format!("{prefix}/requestEnvelope"),
             "the request envelope of a write operation names no {{record}} slot",
             "Place the record slot where the writable record sits in the body.",
+        ));
+    }
+    findings
+}
+
+/// The slots a per-record template may name.
+pub const ITEM_ENVELOPE_SLOTS: &[&str] = &["record", "recordId", "recordType", "requestId"];
+
+fn item_envelope_checks(path: &str, envelope: &EnvelopeTemplate) -> Vec<Diagnostic> {
+    let mut findings = envelope_checks(path, envelope);
+    for (name, _) in envelope_placeholders(envelope.text()) {
+        if crate::profile::ENVELOPE_SLOTS.contains(&name.as_str())
+            && !ITEM_ENVELOPE_SLOTS.contains(&name.as_str())
+        {
+            findings.push(finding(
+                CheckCode::ProfileUnknownSlot,
+                path,
+                "the item envelope names a slot a single record does not fill",
+                "Use record, recordId, recordType, or requestId in an item envelope.",
+            ));
+        }
+    }
+    if !envelope.mentions(SLOT_RECORD) {
+        findings.push(finding(
+            CheckCode::ProfileResponseEnvelopeMissingResultSlot,
+            path,
+            "the item envelope names no {{record}} slot",
+            "Place the record slot where the record's domain fields land.",
         ));
     }
     findings
@@ -4332,6 +4366,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }
     }
@@ -4615,6 +4650,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{{mysterySlot}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         assert_has(&check_profile(&profile), CheckCode::ProfileUnknownSlot);
@@ -4690,11 +4726,39 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"empty": true}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         assert_has(
             &check_profile(&profile),
             CheckCode::ProfileResponseEnvelopeMissingResultSlot,
+        );
+    }
+
+    #[test]
+    fn profile_refuses_an_item_envelope_with_a_foreign_slot_or_no_record() {
+        let mut operation = operation("records-get", HttpMethod::Get);
+        operation.item_envelope = Some(EnvelopeTemplate(
+            r#"{"data": {{record}}, "next": "{{?nextCursor}}"}"#.to_string(),
+        ));
+        assert_has(
+            &check_profile(&profile_builder(vec![operation.clone()])),
+            CheckCode::ProfileUnknownSlot,
+        );
+        operation.item_envelope = Some(EnvelopeTemplate(r#"{"id": "{{recordId}}"}"#.to_string()));
+        assert_has(
+            &check_profile(&profile_builder(vec![operation.clone()])),
+            CheckCode::ProfileResponseEnvelopeMissingResultSlot,
+        );
+        operation.item_envelope = Some(EnvelopeTemplate(
+            r#"{"id": "{{recordId}}", "data": {{record}}}"#.to_string(),
+        ));
+        let findings = check_profile(&profile_builder(vec![operation]));
+        assert!(
+            findings
+                .iter()
+                .all(|finding| !finding.path.contains("itemEnvelope")),
+            "{findings:?}"
         );
     }
 
@@ -4912,6 +4976,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{{records}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         assert_has(
@@ -4928,6 +4993,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         assert_clean(check_profile(&good));
@@ -4974,6 +5040,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: Some(PaginationParameters {
                 cursor_parameter: id("cursor"),
                 page_size_parameter: id("limit"),
@@ -5932,6 +5999,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         let writer = RouteDefinition {
@@ -6072,6 +6140,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         let pack = pack_builder(
@@ -7715,6 +7784,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         let bare = RouteDefinition {
@@ -8177,6 +8247,7 @@ mod tests {
             success_status: BoundedU32::new(200).expect("status"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            item_envelope: None,
             pagination: None,
         }]);
         let bare = RouteDefinition {
