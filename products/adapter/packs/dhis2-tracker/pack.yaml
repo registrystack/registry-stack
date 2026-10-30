@@ -39,13 +39,21 @@
 # this pack's concern (scripts/import-failed.rhai) through the grammar's
 # choice step, never an inline check.
 #
-# Error clauses: DHIS2 errors map to the breg-records profile's problem
-# vocabulary (`profiles/breg-records/profile.yaml`: source.not-found,
-# source.unavailable, source.upstream-error, source.write-rejected,
-# source.write-partial). The clause bodies carry that profile's problem
-# shape (type, title, status, code) per CONCEPT 8.7, so binding this pack
-# to a profile with a different problem vocabulary requires a reviewed
-# pack update.
+# Error clauses: the pack raises the closed error classes of CONCEPT 8.7
+# and never names a profile's problem codes or writes a problem body
+# (CONCEPT 8.11.6). A clause that translates a source answer ends with
+# `throwException` carrying an `outcome.*` class (the 404 answer and the
+# soft-deleted entity raise `outcome.not-found`, the ERROR import summary
+# raises `outcome.rejected`); redelivery stays a clause of its own and
+# every other error propagates as its own class. The bound profile's
+# `problems` list decides the problem the caller sees, so the pack binds
+# any profile; the example deploys breg-records, which maps
+# `outcome.not-found` to its 404 and `outcome.rejected` to its 409.
+#
+# Code maps: the tracker import summary (OK, WARNING, ERROR) is read by
+# scripts/import-failed.rhai today. A `convert` step over a code map
+# returns with the core convert steps (CONCEPT 8.6); this pack declares
+# none until then.
 #
 # Paging assumption, to be proven by a captured fixture: the tracker
 # export reply's page block is read at $.page.totalPage; DHIS2 fills it
@@ -85,44 +93,9 @@ routeTemplates:
           exception:
             - upstream.timeout
             - upstream.connection
-          handled: true
           redeliveryPolicy:
             maximumRedeliveries: 1
             retryDelaySeconds: 2
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
-                  title: The source did not answer in time.
-                  status: 503
-                  code: source.unavailable
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.http
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
-                  title: The source refused the search.
-                  status: 502
-                  code: source.upstream-error
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.malformed
-            - upstream.too-large
-            - script
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
-                  title: The source answered something unusable.
-                  status: 502
-                  code: source.upstream-error
-            - stop: {}
       - setProperty:
           name: dhis2Program
           value:
@@ -173,57 +146,17 @@ routeTemplates:
             rhai:
               file: scripts/is-not-found.rhai
               entrypoint: is_not_found
-          handled: true
           steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.not-found
-                  title: No record with that identifier exists at the source.
-                  status: 404
-                  code: source.not-found
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.http
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
-                  title: The source refused the lookup.
-                  status: 502
-                  code: source.upstream-error
-            - stop: {}
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No tracked entity with that identifier exists at the source.
       - onException:
           exception:
             - upstream.timeout
             - upstream.connection
-          handled: true
           redeliveryPolicy:
             maximumRedeliveries: 1
             retryDelaySeconds: 2
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
-                  title: The source did not answer in time.
-                  status: 503
-                  code: source.unavailable
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.malformed
-            - upstream.too-large
-            - script
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
-                  title: The source answered something unusable.
-                  status: 502
-                  code: source.upstream-error
-            - stop: {}
       - to:
           uri: http:tracker
           parameters:
@@ -239,13 +172,9 @@ routeTemplates:
                 file: scripts/soft-deleted.rhai
                 entrypoint: soft_deleted
               steps:
-                - setBody:
-                    constant:
-                      type: https://id.registrystack.org/problems/registry-adapter/source.not-found
-                      title: No record with that identifier exists at the source.
-                      status: 404
-                      code: source.not-found
-                - stop: {}
+                - throwException:
+                    exceptionType: outcome.not-found
+                    message: The tracked entity is deleted or deactivated at the source.
           otherwise:
             steps:
               - setBody:
@@ -257,52 +186,12 @@ routeTemplates:
     steps:
       - onException:
           exception:
+            - upstream.http
             - upstream.timeout
             - upstream.connection
-          handled: true
           redeliveryPolicy:
             maximumRedeliveries: 1
             retryDelaySeconds: 2
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
-                  title: The source did not answer in time.
-                  status: 503
-                  code: source.unavailable
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.http
-          handled: true
-          redeliveryPolicy:
-            maximumRedeliveries: 1
-            retryDelaySeconds: 2
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
-                  title: The source refused the write.
-                  status: 409
-                  code: source.write-rejected
-            - stop: {}
-      - onException:
-          exception:
-            - upstream.malformed
-            - upstream.too-large
-            - script
-            - validation
-            - conversion.unmapped
-            - aggregation.duplicate
-          handled: true
-          steps:
-            - setBody:
-                constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
-                  title: The write could not be prepared for the source.
-                  status: 409
-                  code: source.write-rejected
-            - stop: {}
       - idempotentConsumer:
           expression:
             header: Idempotency-Key
@@ -333,13 +222,9 @@ routeTemplates:
                       file: scripts/import-failed.rhai
                       entrypoint: import_failed
                     steps:
-                      - setBody:
-                          constant:
-                            type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
-                            title: The source refused the write.
-                            status: 409
-                            code: source.write-rejected
-                      - stop: {}
+                      - throwException:
+                          exceptionType: outcome.rejected
+                          message: The source refused the write.
                 otherwise:
                   steps:
                     - setBody:
@@ -368,25 +253,6 @@ routes:
                 constant: true
               order:
                 constant: "createdAt:desc"
-      - setProperty:
-          name: dhis2TotalPages
-          value:
-            jsonpath: "$.page.totalPage"
-      - setProperty:
-          name: pages
-          value:
-            jsonpath: "$.instances"
-codeMaps:
-  - id: tracker-import-status
-    entries:
-      OK:
-        outcome: accepted
-      WARNING:
-        outcome: accepted-with-warnings
-      ERROR:
-        outcome: refused
-        problemCode: source.write-rejected
-        httpStatus: 409
 scripts:
   - path: scripts/has-more-pages.rhai
     digest: sha256:1fe96b2aeb6c87828fdab1248b5e3ba1ec40d8db29089e14f3e9d1d97bff8788
@@ -422,7 +288,6 @@ capabilities:
     - loop
     - onException
     - setBody
-    - setHeader
     - setProperty
-    - stop
+    - throwException
     - to
