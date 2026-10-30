@@ -560,41 +560,23 @@ fn value_matches_type(value: &serde_json::Value, expected: TemplateParameterType
     }
 }
 
-/// Every Rhai reference in every route body must resolve to a digest-pinned
-/// inventory entry (CFG-EMBED-1: `rhai` always names a digest-pinned file).
-/// Findings carry the owning body's full document position: /routes/{id}
-/// or /routeTemplates/{index}.
+/// Every Rhai reference in every route body, route template body, and
+/// endpoint variables must resolve to a digest-pinned inventory entry
+/// (CFG-EMBED-1: `rhai` always names a digest-pinned file). Findings carry
+/// the site's full document position from [`script_references`].
 fn script_reference_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
-    let mut findings = Vec::new();
-    let mut bodies: Vec<(String, &[Step])> = pack
-        .routes
+    script_references(pack)
         .iter()
-        .map(|route| {
-            (
-                format!("/routes/{}", route.id.as_str()),
-                route.steps.as_slice(),
+        .filter(|site| pack.pinned_file(&site.file).is_none())
+        .map(|site| {
+            finding(
+                CheckCode::PackUnknownScript,
+                &site.path,
+                "the script file is not in the pack's digest-pinned inventory",
+                "List the script in scripts with its sha256 digest.",
             )
         })
-        .collect();
-    bodies.extend(
-        pack.route_templates
-            .iter()
-            .enumerate()
-            .map(|(index, t)| (format!("/routeTemplates/{index}"), t.steps.as_slice())),
-    );
-    for (prefix, steps) in bodies {
-        for script in script_references(steps) {
-            if pack.pinned_file(&script.file).is_none() {
-                findings.push(finding(
-                    CheckCode::PackUnknownScript,
-                    &format!("{prefix}/steps{}/rhai", script.path),
-                    "the script file is not in the pack's digest-pinned inventory",
-                    "List the script in scripts with its sha256 digest.",
-                ));
-            }
-        }
-    }
-    findings
+        .collect()
 }
 
 /// Route checks over one pack and the project that instantiates it
@@ -1889,25 +1871,72 @@ pub fn check_project_pins(
     findings
 }
 
-/// One Rhai script site reachable in a route body.
+/// The role a Rhai script site plays (`products/adapter/CONCEPT.md`
+/// section 8.11.3): the role fixes the script's return contract and,
+/// derived from it, how many exchange arguments the runtime passes the
+/// entrypoint.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ScriptRole {
+    /// A value expression slot: receives the current exchange, returns
+    /// the slot value.
+    Expression,
+    /// A predicate (choice `when`, filter, validate, loop `doWhile`):
+    /// receives the current exchange, returns a boolean.
+    Predicate,
+    /// A split aggregation strategy: `fn(old, new)`; `old` is `()` on the
+    /// first call.
+    Aggregation,
+    /// An enrich aggregation strategy: `fn(original, resource)`, returns
+    /// `#{body, properties}`.
+    EnrichAggregation,
+    /// A `script` step run for effect: receives the current exchange and
+    /// returns the property map.
+    Processor,
+}
+
+impl ScriptRole {
+    /// How many exchange arguments the runtime passes the entrypoint.
+    #[must_use]
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::Expression | Self::Predicate | Self::Processor => 1,
+            Self::Aggregation | Self::EnrichAggregation => 2,
+        }
+    }
+}
+
+/// One Rhai script site reachable in a pack: a route or route-template
+/// body slot, or an endpoint's `variables` script.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScriptSite {
-    /// The relative step path inside the walked body.
+    /// The full RFC 6901 pointer to the script slot in the pack document,
+    /// e.g. `/routes/fetch-case/steps/2/when/0` or `/endpoints/1/variables`.
     pub path: String,
+    /// The role the script plays; [`ScriptRole::arity`] derives from it.
+    pub role: ScriptRole,
     /// The pack inventory file the script runs.
     pub file: String,
     /// The function the script calls.
     pub entrypoint: String,
 }
 
-/// Every Rhai script site in a route body, covering the language
-/// members of predicates (`when` and `filter`) as well as every
-/// expression [`step_expressions`] reaches. Public so adopter tooling
-/// reuses core's exhaustive walk instead of duplicating it.
-pub fn script_references(steps: &[Step]) -> Vec<ScriptSite> {
-    fn push(rhai: Option<&crate::model::RhaiExpression>, path: &str, refs: &mut Vec<ScriptSite>) {
+/// Every Rhai script site in a pack, covering the language members of
+/// predicates (`when`, `filter`, `validate`, loop `doWhile`), every
+/// expression [`step_expressions`] reaches, the split and enrich
+/// aggregation strategies, the `script` EIP, and each endpoint's
+/// `variables` script. Public so adopter tooling compiles exactly what
+/// core enumerates instead of duplicating the walk.
+pub fn script_references(pack: &AdapterPack) -> Vec<ScriptSite> {
+    fn push(
+        rhai: Option<&crate::model::RhaiExpression>,
+        role: ScriptRole,
+        path: String,
+        refs: &mut Vec<ScriptSite>,
+    ) {
         if let Some(rhai) = rhai {
             refs.push(ScriptSite {
-                path: path.to_string(),
+                path,
+                role,
                 file: rhai.file.clone(),
                 entrypoint: rhai.entrypoint.clone(),
             });
@@ -1915,22 +1944,170 @@ pub fn script_references(steps: &[Step]) -> Vec<ScriptSite> {
     }
 
     let mut refs = Vec::new();
-    walk_steps(steps, &mut |step, path| {
-        for expression in step_expressions(step) {
-            if let Expression::Rhai(rhai) = &expression {
-                push(Some(rhai), path, &mut refs);
-            }
-        }
-        match step {
-            Step::Choice(choice) => {
-                for when in &choice.when {
-                    push(when.rhai.as_ref(), path, &mut refs);
+    let mut bodies: Vec<(String, &[Step])> = pack
+        .routes
+        .iter()
+        .map(|route| {
+            (
+                format!("/routes/{}", route.id.as_str()),
+                route.steps.as_slice(),
+            )
+        })
+        .collect();
+    bodies.extend(
+        pack.route_templates
+            .iter()
+            .enumerate()
+            .map(|(index, t)| (format!("/routeTemplates/{index}"), t.steps.as_slice())),
+    );
+    for (prefix, steps) in bodies {
+        walk_steps(steps, &mut |step, path| {
+            let base = format!("{prefix}/steps{path}");
+            match step {
+                // The script EIP runs for effect; its slot is the step.
+                Step::Script(Expression::Rhai(rhai)) => {
+                    push(Some(rhai), ScriptRole::Processor, base, &mut refs);
+                }
+                Step::Split(split) => {
+                    if let Expression::Rhai(rhai) = &split.expression {
+                        push(Some(rhai), ScriptRole::Expression, base.clone(), &mut refs);
+                    }
+                    if let Some(crate::model::AggregationStrategy::Rhai { expression }) =
+                        &split.aggregation_strategy
+                    {
+                        push(
+                            Some(expression),
+                            ScriptRole::Aggregation,
+                            format!("{base}/aggregationStrategy"),
+                            &mut refs,
+                        );
+                    }
+                }
+                Step::Enrich(enrich) => {
+                    if let Some(crate::model::AggregationStrategy::Rhai { expression }) =
+                        &enrich.aggregation_strategy
+                    {
+                        push(
+                            Some(expression),
+                            ScriptRole::EnrichAggregation,
+                            format!("{base}/aggregationStrategy"),
+                            &mut refs,
+                        );
+                    }
+                    if let Some(parameters) = enrich.parameters.as_ref() {
+                        for (name, expression) in &parameters.path_parameters {
+                            if let Expression::Rhai(rhai) = expression {
+                                push(
+                                    Some(rhai),
+                                    ScriptRole::Expression,
+                                    format!("{base}/parameters/pathParameters/{name}"),
+                                    &mut refs,
+                                );
+                            }
+                        }
+                        for (name, expression) in &parameters.query {
+                            if let Expression::Rhai(rhai) = expression {
+                                push(
+                                    Some(rhai),
+                                    ScriptRole::Expression,
+                                    format!("{base}/parameters/query/{name}"),
+                                    &mut refs,
+                                );
+                            }
+                        }
+                        if let Some(Expression::Rhai(rhai)) = &parameters.body {
+                            push(
+                                Some(rhai),
+                                ScriptRole::Expression,
+                                format!("{base}/parameters/body"),
+                                &mut refs,
+                            );
+                        }
+                    }
+                }
+                Step::Choice(choice) => {
+                    for (index, when) in choice.when.iter().enumerate() {
+                        push(
+                            when.rhai.as_ref(),
+                            ScriptRole::Predicate,
+                            format!("{base}/when/{index}"),
+                            &mut refs,
+                        );
+                    }
+                }
+                Step::Filter(filter) => {
+                    push(filter.rhai.as_ref(), ScriptRole::Predicate, base, &mut refs);
+                }
+                Step::Validate(validate) => {
+                    if let Expression::Rhai(rhai) = &validate.expression {
+                        push(Some(rhai), ScriptRole::Predicate, base, &mut refs);
+                    }
+                }
+                Step::Loop(loop_step) => {
+                    // A `doWhile` loop's script is evaluated after each
+                    // iteration as a predicate; otherwise it is the count.
+                    let role = if loop_step.do_while {
+                        ScriptRole::Predicate
+                    } else {
+                        ScriptRole::Expression
+                    };
+                    push(loop_step.rhai.as_ref(), role, base, &mut refs);
+                }
+                Step::To(to) => {
+                    if let Some(parameters) = to.parameters.as_ref() {
+                        for (name, expression) in &parameters.path_parameters {
+                            if let Expression::Rhai(rhai) = expression {
+                                push(
+                                    Some(rhai),
+                                    ScriptRole::Expression,
+                                    format!("{base}/parameters/pathParameters/{name}"),
+                                    &mut refs,
+                                );
+                            }
+                        }
+                        for (name, expression) in &parameters.query {
+                            if let Expression::Rhai(rhai) = expression {
+                                push(
+                                    Some(rhai),
+                                    ScriptRole::Expression,
+                                    format!("{base}/parameters/query/{name}"),
+                                    &mut refs,
+                                );
+                            }
+                        }
+                        if let Some(Expression::Rhai(rhai)) = &parameters.body {
+                            push(
+                                Some(rhai),
+                                ScriptRole::Expression,
+                                format!("{base}/parameters/body"),
+                                &mut refs,
+                            );
+                        }
+                    }
+                }
+                // Whole-step expression slots: setBody, transform,
+                // setHeader/setProperty values, throttle limit,
+                // idempotentConsumer key.
+                _ => {
+                    for expression in step_expressions(step) {
+                        if let Expression::Rhai(rhai) = &expression {
+                            push(Some(rhai), ScriptRole::Expression, base.clone(), &mut refs);
+                        }
+                    }
                 }
             }
-            Step::Filter(filter) => push(filter.rhai.as_ref(), path, &mut refs),
-            _ => {}
+        });
+    }
+    for (index, endpoint) in pack.endpoints.iter().enumerate() {
+        if let Some(crate::model::Expression::Rhai(rhai)) = &endpoint.variables {
+            push(
+                Some(rhai),
+                ScriptRole::Expression,
+                format!("/endpoints/{index}/variables"),
+                &mut refs,
+            );
         }
-    });
+    }
     refs
 }
 
@@ -2842,7 +3019,8 @@ mod tests {
         EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
         OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, RouteDefinition,
         RouteFrom, RouteTemplate, SetHeaderStep, SplitStep, TemplateParameter,
-        TemplateParameterType, TemplatedRoute, ThrottleStep, ToParameters, ToStep, When,
+        TemplateParameterType, TemplatedRoute, ThrottleStep, ToParameters, ToStep, ValidateStep,
+        When,
     };
     use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
     use registry_platform_yaml::Url;
@@ -3096,13 +3274,162 @@ mod tests {
                 steps: vec![],
             }),
         ];
-        let files: Vec<String> = script_references(&steps)
-            .into_iter()
-            .map(|script| script.file)
-            .collect();
+        let route = RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps,
+        };
+        let pack = pack_builder(vec![], vec![route]);
+        let sites = script_references(&pack);
+        let files: Vec<String> = sites.iter().map(|site| site.file.clone()).collect();
         assert_eq!(files, ["scripts/map.rhai", "scripts/guard.rhai"]);
+        assert_eq!(sites[0].path, "/routes/fetch-case/steps/0");
+        assert_eq!(sites[0].role, ScriptRole::Expression);
+        assert_eq!(sites[1].path, "/routes/fetch-case/steps/1");
+        assert_eq!(sites[1].role, ScriptRole::Predicate);
         // The expression walk stays public for the ctl's own consumers.
-        assert_eq!(step_expressions(&steps[0]), vec![rhai("scripts/map.rhai")]);
+        assert_eq!(
+            step_expressions(&pack.routes[0].steps[0]),
+            vec![rhai("scripts/map.rhai")]
+        );
+    }
+
+    /// Script sites carry their role, and the runtime arity derives from
+    /// it: aggregation slots over split and enrich, the script EIP as
+    /// Processor, predicates where a boolean is the contract, and each
+    /// endpoint's `variables` script as an Expression site.
+    #[test]
+    fn script_sites_carry_roles_and_derived_arities() {
+        let route = RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps: vec![
+                Step::Script(rhai("scripts/effect.rhai")),
+                Step::Split(SplitStep {
+                    expression: Expression::JsonPath("$.items".to_string()),
+                    maximum_items: None,
+                    aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai {
+                        expression: RhaiExpression {
+                            file: "scripts/aggregate.rhai".to_string(),
+                            entrypoint: "merge".to_string(),
+                        },
+                    }),
+                    stop_on_exception: false,
+                    error_threshold: None,
+                    maximum_failed_records: None,
+                    steps: vec![],
+                }),
+                Step::Enrich(EnrichStep {
+                    uri: send("case-api"),
+                    aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai {
+                        expression: RhaiExpression {
+                            file: "scripts/enrich-merge.rhai".to_string(),
+                            entrypoint: "merge".to_string(),
+                        },
+                    }),
+                    aggregate_on_exception: false,
+                    parameters: None,
+                }),
+                Step::Validate(ValidateStep {
+                    expression: rhai("scripts/admits.rhai"),
+                }),
+                Step::Loop(LoopStep {
+                    maximum_iterations: None,
+                    constant: None,
+                    header: None,
+                    exchange_property: None,
+                    jsonpath: None,
+                    rhai: Some(RhaiExpression {
+                        file: "scripts/more.rhai".to_string(),
+                        entrypoint: "main".to_string(),
+                    }),
+                    do_while: true,
+                    copy: false,
+                    steps: vec![],
+                }),
+                Step::To(ToStep {
+                    uri: send("case-api"),
+                    parameters: Some(ToParameters {
+                        http_method: Some(HttpMethod::Get),
+                        path: None,
+                        path_parameters: BTreeMap::from([(
+                            "caseId".to_string(),
+                            rhai("scripts/id.rhai"),
+                        )]),
+                        query: BTreeMap::new(),
+                        body: None,
+                        operation: None,
+                        throw_exception_on_failure: false,
+                        ok_status_code_range: None,
+                        resume_bindings: Vec::new(),
+                    }),
+                }),
+            ],
+        };
+        let mut endpoint = basic_endpoint();
+        endpoint.variables = Some(rhai("scripts/vars.rhai"));
+        let mut pack = pack_builder(vec![endpoint], vec![route]);
+        pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            id: local("pager"),
+            parameters: Vec::new(),
+            steps: vec![Step::SetBody(rhai("scripts/tpl.rhai"))],
+        }])
+        .expect("unique");
+        let sites = script_references(&pack);
+        let by_path = |path: &str| {
+            sites
+                .iter()
+                .find(|site| site.path == path)
+                .unwrap_or_else(|| panic!("no site at {path}; have {:?}", sites))
+        };
+        assert_eq!(
+            by_path("/routes/fetch-case/steps/0").role,
+            ScriptRole::Processor
+        );
+        assert_eq!(
+            by_path("/routes/fetch-case/steps/1/aggregationStrategy").role,
+            ScriptRole::Aggregation
+        );
+        assert_eq!(
+            by_path("/routes/fetch-case/steps/2/aggregationStrategy").role,
+            ScriptRole::EnrichAggregation
+        );
+        assert_eq!(
+            by_path("/routes/fetch-case/steps/3").role,
+            ScriptRole::Predicate
+        );
+        assert_eq!(
+            by_path("/routes/fetch-case/steps/4").role,
+            ScriptRole::Predicate
+        );
+        assert_eq!(
+            by_path("/routes/fetch-case/steps/5/parameters/pathParameters/caseId").role,
+            ScriptRole::Expression
+        );
+        assert_eq!(
+            by_path("/endpoints/0/variables").role,
+            ScriptRole::Expression
+        );
+        assert_eq!(
+            by_path("/routeTemplates/0/steps/0").role,
+            ScriptRole::Expression
+        );
+        // Arity is derived from the role, never stored per site.
+        assert_eq!(ScriptRole::Expression.arity(), 1);
+        assert_eq!(ScriptRole::Predicate.arity(), 1);
+        assert_eq!(ScriptRole::Processor.arity(), 1);
+        assert_eq!(ScriptRole::Aggregation.arity(), 2);
+        assert_eq!(ScriptRole::EnrichAggregation.arity(), 2);
+        // No site is emitted twice.
+        let mut paths: Vec<&str> = sites.iter().map(|site| site.path.as_str()).collect();
+        paths.sort_unstable();
+        let count = paths.len();
+        paths.dedup();
+        assert_eq!(paths.len(), count, "duplicate site paths: {paths:?}");
     }
 
     // ----- envelope and profile checks -----
@@ -3319,11 +3646,11 @@ mod tests {
             .map(|f| f.path.clone())
             .collect();
         assert!(
-            pointers.contains(&"/routes/fetch-case/steps/0/rhai".to_string()),
+            pointers.contains(&"/routes/fetch-case/steps/0".to_string()),
             "route script pointer: {pointers:?}"
         );
         assert!(
-            pointers.contains(&"/routeTemplates/0/steps/0/rhai".to_string()),
+            pointers.contains(&"/routeTemplates/0/steps/0".to_string()),
             "template script pointer: {pointers:?}"
         );
     }
