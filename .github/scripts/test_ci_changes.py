@@ -3732,6 +3732,7 @@ class LockfileSelectionTest(unittest.TestCase):
             change.members,
             frozenset(
                 {
+                    "registry-adapter",
                     "registry-breg",
                     "registry-coordinator",
                     "registry-evidence",
