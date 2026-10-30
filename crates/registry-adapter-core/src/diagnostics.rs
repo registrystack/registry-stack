@@ -32,6 +32,7 @@ pub enum CheckCode {
     PackDigestPinRequired,
     PackEndpointComponentInvalid,
     PackGraphQlQueryRequired,
+    PackInvalidHeaderName,
     PackReservedHeaderName,
     PackScriptUncompilable,
     PackUnknownScript,
@@ -65,7 +66,9 @@ pub enum CheckCode {
     RouteFromNotDirect,
     RouteGraphQlSendMembers,
     RouteHandledAndContinued,
+    RouteInvalidHeaderName,
     RouteInvalidPath,
+    RouteInvalidQueryKey,
     RouteInvalidStatusCodeRange,
     RouteLoopCountAboveBound,
     RouteMaximumItemsRequired,
@@ -107,6 +110,7 @@ impl CheckCode {
         Self::PackDigestPinRequired,
         Self::PackEndpointComponentInvalid,
         Self::PackGraphQlQueryRequired,
+        Self::PackInvalidHeaderName,
         Self::PackReservedHeaderName,
         Self::PackScriptUncompilable,
         Self::PackUnknownScript,
@@ -137,7 +141,9 @@ impl CheckCode {
         Self::RouteFromNotDirect,
         Self::RouteGraphQlSendMembers,
         Self::RouteHandledAndContinued,
+        Self::RouteInvalidHeaderName,
         Self::RouteInvalidPath,
+        Self::RouteInvalidQueryKey,
         Self::RouteInvalidStatusCodeRange,
         Self::RouteLoopCountAboveBound,
         Self::RouteMaximumItemsRequired,
@@ -178,6 +184,7 @@ impl CheckCode {
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
+            Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
             Self::PackUnknownScript => "adapter.pack.unknown-script",
@@ -219,7 +226,9 @@ impl CheckCode {
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
             Self::RouteGraphQlSendMembers => "adapter.route.graphql-send-members",
             Self::RouteHandledAndContinued => "adapter.route.handled-and-continued",
+            Self::RouteInvalidHeaderName => "adapter.route.invalid-header-name",
             Self::RouteInvalidPath => "adapter.route.invalid-path",
+            Self::RouteInvalidQueryKey => "adapter.route.invalid-query-key",
             Self::RouteInvalidStatusCodeRange => "adapter.route.invalid-status-code-range",
             Self::RouteLoopCountAboveBound => "adapter.route.loop-count-above-bound",
             Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
@@ -276,6 +285,7 @@ impl CheckCode {
             Self::PackDigestPinRequired
             | Self::PackEndpointComponentInvalid
             | Self::PackGraphQlQueryRequired
+            | Self::PackInvalidHeaderName
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable
             | Self::PackUnknownScript
@@ -286,6 +296,8 @@ impl CheckCode {
             | Self::RouteErrorHandlerShape
             | Self::RouteFromNotDirect
             | Self::RouteGraphQlSendMembers
+            | Self::RouteInvalidHeaderName
+            | Self::RouteInvalidQueryKey
             | Self::RoutePathParameterMismatch
             | Self::RouteHandledAndContinued
             | Self::RouteInvalidPath

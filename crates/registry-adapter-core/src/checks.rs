@@ -453,6 +453,16 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
                 ));
             }
         }
+        for (header_index, header) in endpoint.response_headers.iter().enumerate() {
+            if !is_header_token(header.as_str()) {
+                findings.push(finding(
+                    CheckCode::PackInvalidHeaderName,
+                    &format!("{prefix}/responseHeaders/{header_index}"),
+                    "the response header name is not an RFC 9110 header-name token",
+                    "Write the header name as an RFC 9110 token.",
+                ));
+            }
+        }
         if let Some(crate::model::Expression::Rhai(rhai)) = &endpoint.variables {
             if pack.pinned_file(&rhai.file).is_none() {
                 findings.push(finding(
@@ -669,6 +679,16 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
                         ));
                     }
+                    for key in parameters.query.keys() {
+                        if let Some(fault) = query_key_fault(key.as_str()) {
+                            route_findings.push(finding(
+                                CheckCode::RouteInvalidQueryKey,
+                                &format!("/routes/{id}/steps{path}/parameters/query"),
+                                fault,
+                                "Write query keys as upstream wire names: non-empty, at most 128 bytes, no control characters, and no unescaped `=` or `&`.",
+                            ));
+                        }
+                    }
                 }
                 if target.component == SendComponent::GraphQl {
                     if let Some(parameters) = to.parameters.as_ref() {
@@ -738,6 +758,16 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             fault,
                             "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
                         ));
+                    }
+                    for key in parameters.query.keys() {
+                        if let Some(fault) = query_key_fault(key.as_str()) {
+                            route_findings.push(finding(
+                                CheckCode::RouteInvalidQueryKey,
+                                &format!("/routes/{id}/steps{path}/parameters/query"),
+                                fault,
+                                "Write query keys as upstream wire names: non-empty, at most 128 bytes, no control characters, and no unescaped `=` or `&`.",
+                            ));
+                        }
                     }
                 }
                 if enrich.uri.component == SendComponent::GraphQl {
@@ -1089,6 +1119,14 @@ fn check_route_headers(
             }
         }
         match step {
+            Step::SetHeader(header) if !is_header_token(&header.name) => {
+                findings.push(finding(
+                    CheckCode::RouteInvalidHeaderName,
+                    &pointer,
+                    "the setHeader name is not an RFC 9110 header-name token",
+                    "Write the header name as an RFC 9110 token.",
+                ));
+            }
             Step::SetHeader(header) if is_reserved_header_write(&header.name) => {
                 findings.push(finding(
                     CheckCode::RouteReservedHeaderName,
@@ -1184,6 +1222,39 @@ fn graphql_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'
         members.push("query");
     }
     members
+}
+
+/// Whether a header name is an RFC 9110 token: one or more `tchar`
+/// octets, compared without case.
+fn is_header_token(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^'
+                    | b'_' | b'`' | b'|' | b'~' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z'
+            )
+        })
+}
+
+/// Whether a query key is a valid upstream wire name: non-empty, at most
+/// 128 bytes, no ASCII control characters, and no `=` or `&` (their
+/// unescaped meaning; the engine percent-encodes names and values on
+/// send). Returns the value-free fault text.
+fn query_key_fault(key: &str) -> Option<&'static str> {
+    if key.is_empty() {
+        return Some("the query key is empty");
+    }
+    if key.len() > 128 {
+        return Some("the query key is longer than 128 bytes");
+    }
+    if key
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || byte == b'=' || byte == b'&')
+    {
+        return Some("the query key carries an ASCII control character or an unescaped `=` or `&`");
+    }
+    None
 }
 
 /// Whether any step in the body declares redelivery beyond the first
@@ -6150,6 +6221,106 @@ mod tests {
         );
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, CheckCode::RouteUnknownHeader.code());
+    }
+
+    // ----- header names and query keys (round 6 C24) -----
+
+    /// A header name is an RFC 9110 token at every position: a
+    /// `setHeader` name and an endpoint `responseHeaders` entry refuse
+    /// anything else (`products/adapter/CONCEPT.md` section 8.11.4).
+    #[test]
+    fn header_names_are_rfc_9110_tokens() {
+        let route = |steps: Vec<Step>| RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps,
+        };
+        let set = |name: &str| {
+            Step::SetHeader(SetHeaderStep {
+                name: name.to_string(),
+                value: Expression::Header("recordId".to_string()),
+            })
+        };
+        let check = |steps: Vec<Step>| {
+            let pack = pack_builder(vec![oauth_endpoint()], vec![route(steps)]);
+            check_routes(&pack, &project_builder(&pack))
+        };
+        // A space, an equals sign, and an empty name are not tokens.
+        for name in ["Content Type", "a=b", ""] {
+            let findings = check(vec![set(name)]);
+            assert_has(&findings, CheckCode::RouteInvalidHeaderName);
+        }
+        // A valid token that nothing reserves sets cleanly.
+        assert_clean(check(vec![set("X-Custom-Trace")]));
+
+        // The same rule holds for the endpoint response allowlist.
+        let mut endpoint = oauth_endpoint();
+        endpoint.response_headers = UniqueList::new(vec![id("not a token")]).expect("unique");
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_has(&findings, CheckCode::PackInvalidHeaderName);
+        let mut endpoint = oauth_endpoint();
+        endpoint.response_headers = UniqueList::new(vec![id("ETag")]).expect("unique");
+        assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
+    }
+
+    /// A query key is the upstream's wire name: `_format` and
+    /// `filter[region]` pass; a key with an unescaped `=` or `&`, or one
+    /// longer than 128 bytes, refuses.
+    #[test]
+    fn query_keys_are_upstream_wire_names() {
+        let send = |query: std::collections::BTreeMap<String, Expression>| {
+            let mut step = to_get("case-api");
+            if let Step::To(to) = &mut step {
+                if let Some(parameters) = &mut to.parameters {
+                    parameters.query = query
+                        .into_iter()
+                        .map(|(key, value)| (id(&key), value))
+                        .collect();
+                }
+            }
+            step
+        };
+        let check = |query: std::collections::BTreeMap<String, Expression>| {
+            let pack = pack_builder(
+                vec![oauth_endpoint()],
+                vec![RouteDefinition {
+                    id: local("fetch-page"),
+                    from: RouteFrom {
+                        uri: direct("fetch-page"),
+                    },
+                    steps: vec![send(query)],
+                }],
+            );
+            check_routes(&pack, &project_builder(&pack))
+        };
+        // Upstream wire names pass.
+        assert_clean(check(BTreeMap::from([
+            (
+                "_format".to_string(),
+                Expression::Constant(serde_json::json!("json")),
+            ),
+            (
+                "filter[region]".to_string(),
+                Expression::Constant(serde_json::json!("north")),
+            ),
+        ])));
+        // An unescaped `=` or `&` refuses.
+        for key in ["a=b", "a&b"] {
+            let findings = check(BTreeMap::from([(
+                key.to_string(),
+                Expression::Constant(serde_json::json!("x")),
+            )]));
+            assert_has(&findings, CheckCode::RouteInvalidQueryKey);
+        }
+        // A key longer than 128 bytes refuses.
+        let long = "k".repeat(129);
+        let findings = check(BTreeMap::from([(
+            long,
+            Expression::Constant(serde_json::json!("x")),
+        )]));
+        assert_has(&findings, CheckCode::RouteInvalidQueryKey);
     }
 
     // ----- fixture checks -----
