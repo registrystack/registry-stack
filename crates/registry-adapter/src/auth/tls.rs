@@ -59,7 +59,13 @@ impl fmt::Display for TlsFault {
 /// The two platform TLS materials one resolved binding yields: the
 /// data destination's and the token destination's. The platform
 /// material is not `Clone` (it holds a private key), so resolution
-/// parses the PEM twice and each policy takes ownership exactly once.
+/// parses the PEM twice and each policy takes ownership exactly once;
+/// there is never one shared material per endpoint. The bound that
+/// buys this is deliberate: every mTLS endpoint holds two parsed
+/// copies of its private key for the process's life, even when its
+/// credential kind names no token endpoint. A copy with no token
+/// destination to install it on is the engine's to drop, never to
+/// share or re-parse.
 #[derive(Debug)]
 pub struct EndpointMaterials {
     /// The endpoint's data destination policy installs this material.
@@ -94,8 +100,10 @@ impl EndpointTls {
     /// platform materials the endpoint's policies install.
     ///
     /// This runs at deployment load, never per exchange: a failure
-    /// refuses startup with a value-free diagnostic that names the
-    /// endpoint id and the fault.
+    /// refuses startup with a value-free fault rendering that names
+    /// neither the endpoint, the profile, nor any material. The fault
+    /// carries no endpoint id; the caller that reports the refusal adds
+    /// the endpoint's name to its own diagnostic.
     pub fn resolve(
         binding: &EndpointBinding,
         runtime: &AdapterRuntimeConfig,

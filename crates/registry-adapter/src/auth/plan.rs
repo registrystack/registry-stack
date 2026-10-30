@@ -610,11 +610,16 @@ fn is_numeric_loopback(url: &registry_platform_yaml::Url) -> bool {
 }
 
 /// Whether the plain-HTTP loopback authority is spelled the way the
-/// address prints, Evidence's rule: a full `127` dotted quad with no
-/// leading-zero octet, or exactly `[::1]`, with any explicit port. The
-/// URL schema refuses a host the parser rewrites, but IPv6 has several
-/// ordinary spellings of one address, and a plain-HTTP credential
-/// travels over an origin everyone reads the same way or not at all.
+/// address prints: a full `127` dotted quad with no leading-zero octet,
+/// or exactly `[::1]`, with any explicit port. The spelling discipline
+/// is Evidence's canonical-loopback rule, applied more widely than the
+/// credential-free boundary Evidence draws with it: Evidence's
+/// unauthenticated local mode also demands an explicit non-zero port
+/// and a pathless exact origin, where this layer admits any port and a
+/// path. The URL schema refuses a host the parser rewrites, but IPv6
+/// has several ordinary spellings of one address, and a plain-HTTP
+/// credential travels over an origin everyone reads the same way or
+/// not at all.
 fn has_canonical_loopback_authority(written: &str) -> bool {
     let Some(rest) = written.strip_prefix("http://") else {
         return false;

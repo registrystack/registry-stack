@@ -9,9 +9,12 @@
 //! adapter-local over no JSON dependency: it accepts exactly the grammar
 //! RFC 8259 defines, bounds the document before parsing, bounds nesting,
 //! and hands back only the members a caller names. The platform's JSON
-//! reader cannot serve this decode: its string values arrive as plain
-//! `String` allocations that never zeroize, so an `access_token` read
-//! through it would stay recoverable from released memory. Member names
+//! reader cannot serve this decode: the zeroizing value reader it
+//! builds internally is private to the platform crate, and its
+//! ordinary string members arrive as plain `String` allocations that
+//! never zeroize, so an `access_token` read through them would stay
+//! recoverable from released memory. Rather than widen the platform's
+//! public surface for one caller, the decode lives here. Member names
 //! and string values are always decoded and allocated, and text values
 //! come back in zeroizing buffers so a credential that rode in one (as
 //! `access_token` does) is erased when the members drop; a skipped
