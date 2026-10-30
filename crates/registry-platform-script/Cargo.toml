@@ -37,7 +37,7 @@ serde_json = { workspace = true, optional = true }
 # (so the proposal stays off even if another crate unifies the feature on), and
 # `parallel-compilation` keeps multi-MiB handler modules from compiling on one
 # thread. Text-format parsing (`wat`) is a dev-dependency only.
-wasmtime = { version = "=48.0.7", default-features = false, features = [
+wasmtime = { version = "=48.0.8", default-features = false, features = [
     "cranelift",
     "parallel-compilation",
     "pulley",
