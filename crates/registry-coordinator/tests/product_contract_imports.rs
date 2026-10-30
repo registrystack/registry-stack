@@ -104,9 +104,12 @@ fn read_record_import_checks_names_without_requiring_visible_fields_or_value_typ
     assert_eq!(restored.digest, definition.digest);
 }
 
+/// An operation id, its request, and a builder for a reply holding the given `domainData`.
+type ProvenanceRead = (&'static str, Value, fn(Value) -> Value);
+
 /// The operations that return a record's `domainData` besides
-/// `breg.read-record/v1`, each with a request and a reply builder.
-fn provenance_reads() -> Vec<(&'static str, Value, fn(Value) -> Value)> {
+/// `breg.read-record/v1`.
+fn provenance_reads() -> Vec<ProvenanceRead> {
     fn read_v2(domain_data: Value) -> Value {
         let mut reply = record(domain_data);
         reply["provenance"] = json!({"recordIdentifier": "r-1", "revisionIdentifier": "v-1",
