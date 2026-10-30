@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real OpenCRVS system):
+# no registered birth under the tracking ID (total 0), the facade's not-found.
+# No OpenCRVS server was contacted; the available credentials were
+# rejected. The upstream shapes are derived from the reviewed Evidence
+# reference (products/evidence/reference/request-adapter/
+# opencrvs-event-search/, response-match.json and
+# expected-request-parts.json) and every value is a made-up stand-in. The
+# meta registry and dataset identifiers are deployment values the engine
+# writes at instantiation, so the replay expectation carries the envelope
+# template's stand-in literals.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: opencrvs-events-get-missing
+pack: opencrvs-events
+upstreamVersion: "unverified"
+provenance:
+  type: documented
+  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+intercepts:
+  - type: endpoint
+    endpoint: events
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/birth/EVT-SYNTHETIC-404
+    upstream:
+      - request:
+          endpoint: events
+          method: POST
+          path: /events/search
+          body:
+            query:
+              type: and
+              clauses:
+                - eventType: birth
+                  status:
+                    type: exact
+                    term: REGISTERED
+                  trackingId:
+                    type: exact
+                    term: EVT-SYNTHETIC-404
+            limit: 2
+            offset: 0
+        response:
+          status: 200
+          body:
+            total: 0
+            results: []
+    expected:
+      type: problem
+      class: outcome.not-found
+      code: source.not-found

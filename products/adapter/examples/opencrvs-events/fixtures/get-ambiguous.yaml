@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real OpenCRVS system):
+# two events under one tracking ID (total 2), a source problem and never a guessed record.
+# No OpenCRVS server was contacted; the available credentials were
+# rejected. The upstream shapes are derived from the reviewed Evidence
+# reference (products/evidence/reference/request-adapter/
+# opencrvs-event-search/, response-match.json and
+# expected-request-parts.json) and every value is a made-up stand-in. The
+# meta registry and dataset identifiers are deployment values the engine
+# writes at instantiation, so the replay expectation carries the envelope
+# template's stand-in literals.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: opencrvs-events-get-ambiguous
+pack: opencrvs-events
+upstreamVersion: "unverified"
+provenance:
+  type: documented
+  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+intercepts:
+  - type: endpoint
+    endpoint: events
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/birth/EVT-SYNTHETIC-002
+    upstream:
+      - request:
+          endpoint: events
+          method: POST
+          path: /events/search
+          body:
+            query:
+              type: and
+              clauses:
+                - eventType: birth
+                  status:
+                    type: exact
+                    term: REGISTERED
+                  trackingId:
+                    type: exact
+                    term: EVT-SYNTHETIC-002
+            limit: 2
+            offset: 0
+        response:
+          status: 200
+          body:
+            total: 2
+            results:
+              - id: 00000000-0000-4000-8000-000000000002
+                trackingId: EVT-SYNTHETIC-002
+                type: birth
+                status: REGISTERED
+                dateOfEvent: "2015-04-02"
+                declaration:
+                  mother.personReference: PERSON-SYNTHETIC-A
+                  father.personReference: PERSON-SYNTHETIC-B
+                  unrelated.field: SOURCE-UNRELATED-CANARY
+              - id: 00000000-0000-4000-8000-000000000003
+                trackingId: EVT-SYNTHETIC-002
+                type: birth
+                status: REGISTERED
+                dateOfEvent: "2015-04-03"
+                declaration:
+                  mother.personReference: PERSON-SYNTHETIC-A
+                  father.personReference: PERSON-SYNTHETIC-B
+                  unrelated.field: SOURCE-UNRELATED-CANARY
+    expected:
+      type: problem
+      class: upstream.malformed
+      code: source.upstream-error
