@@ -250,9 +250,10 @@ registry_platform_yaml::tagged_union!(RuntimeCredential, tag = "type");
 serialize_tagged_union!(RuntimeCredential, tag = "type");
 
 /// The bound every token-request text parameter answers to at the
-/// reader: at least one byte and at most the shared ceiling, the same
-/// bound the auth plan enforces when it builds the request, so a
-/// credential that parses cannot be refused later by the plan.
+/// reader: at least one byte and at most the shared ceiling. The reader
+/// enforces the same size bound the auth plan carries, and the plan
+/// keeps the shape checks only it makes: no NUL in scope or audience, a
+/// non-blank audience, and a resource that is a valid RFC 8707 URI.
 fn bounded_token_parameter<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
