@@ -1212,7 +1212,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 CheckCode::RouteGraphQlSendMembers,
                                 &format!("{prefix}/steps{path}/parameters/{member}"),
                                 "the graphql send carries an HTTP-send member",
-                                "Remove the HTTP-send members (httpMethod, path, pathParameters, query); a graphql send carries operation and body only.",
+                                "Remove the HTTP-send members (httpMethod, path, pathParameters, query, okStatusCodeRange); a graphql send carries operation and body only.",
                             ));
                         }
                     }
@@ -1306,7 +1306,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 CheckCode::RouteGraphQlSendMembers,
                                 &format!("{prefix}/steps{path}/parameters/{member}"),
                                 "the graphql enrichment carries an HTTP-send member",
-                                "Remove the HTTP-send members (httpMethod, path, pathParameters, query); a graphql enrichment carries operation and body only.",
+                                "Remove the HTTP-send members (httpMethod, path, pathParameters, query, okStatusCodeRange); a graphql enrichment carries operation and body only.",
                             ));
                         }
                     }
@@ -1822,6 +1822,9 @@ fn graphql_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'
     }
     if !parameters.query.is_empty() {
         members.push("query");
+    }
+    if parameters.ok_status_code_range.is_some() {
+        members.push("okStatusCodeRange");
     }
     members
 }
@@ -8603,6 +8606,13 @@ mod tests {
                     ..clean()
                 },
             ),
+            (
+                "okStatusCodeRange",
+                ToParameters {
+                    ok_status_code_range: Some("200-299".to_string()),
+                    ..clean()
+                },
+            ),
         ];
         for (member, parameters) in cases {
             let pack = pack_builder(vec![graphql_endpoint()], vec![send_route(parameters)]);
@@ -8614,6 +8624,25 @@ mod tests {
         }
         // Without the HTTP-send members, the graphql send passes.
         let pack = pack_builder(vec![graphql_endpoint()], vec![send_route(clean())]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+        // The same range stays admitted on an http send, where the
+        // grammar and 401 rules own it.
+        let mut http_step = to_get("case-api");
+        if let Step::To(to) = &mut http_step {
+            if let Some(parameters) = &mut to.parameters {
+                parameters.ok_status_code_range = Some("200-299".to_string());
+            }
+        }
+        let pack = pack_builder(
+            vec![open_endpoint()],
+            vec![RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![http_step],
+            }],
+        );
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
