@@ -2397,7 +2397,7 @@ mod tests {
             id: id("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
-            response_headers: Vec::new(),
+            response_headers: UniqueList::new(Vec::new()).expect("empty"),
             operations: vec![EndpointOperation {
                 id: id("cases.create"),
                 idempotent_upstream: true,
@@ -2414,7 +2414,7 @@ mod tests {
             id: id("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Basic {},
-            response_headers: Vec::new(),
+            response_headers: UniqueList::new(Vec::new()).expect("empty"),
             operations: vec![EndpointOperation {
                 id: id("cases.find"),
                 idempotent_upstream: true,
@@ -2478,9 +2478,9 @@ mod tests {
             bindings: UniqueIdList::<Binding>::new(Vec::new()).expect("empty"),
             access_profiles: UniqueIdList::new(vec![AccessProfile {
                 id: id("registry-clerk"),
-                scopes: vec![id("cases:read")],
-                operations: vec![id("cases.find")],
-                record_types: vec![local("case")],
+                scopes: UniqueList::new(vec![id("cases:read")]).expect("unique"),
+                operations: UniqueList::new(vec![id("cases.find")]).expect("unique"),
+                record_types: UniqueList::new(vec![local("case")]).expect("unique"),
             }])
             .expect("unique"),
         }
@@ -3101,7 +3101,8 @@ mod tests {
                 }),
             }),
             Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                    .expect("unique"),
                 on_when: None,
                 handled: None,
                 continued: None,
@@ -3765,7 +3766,7 @@ mod tests {
                     uri: direct("fetchCase"),
                 },
                 steps: vec![Step::OnException(OnExceptionStep {
-                    exception: vec![class],
+                    exception: UniqueList::new(vec![class]).expect("unique"),
                     on_when: None,
                     handled: Some(true),
                     continued: None,
@@ -3786,7 +3787,7 @@ mod tests {
                 steps: vec![Step::DoTry(DoTryStep {
                     steps: vec![],
                     do_catch: vec![DoCatch {
-                        exception: vec![class],
+                        exception: UniqueList::new(vec![class]).expect("unique"),
                         on_when: None,
                         steps: vec![],
                     }],
@@ -3805,7 +3806,8 @@ mod tests {
                 uri: direct("fetchCase"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamHttp],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamHttp])
+                    .expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: None,
@@ -3830,7 +3832,8 @@ mod tests {
                 uri: direct("fetchCase"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::CredentialRejected],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::CredentialRejected])
+                    .expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: None,
@@ -3906,7 +3909,8 @@ mod tests {
                 uri: direct("fetchCase"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                    .expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: None,
@@ -3951,7 +3955,8 @@ mod tests {
             },
             steps: vec![
                 Step::OnException(OnExceptionStep {
-                    exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                    exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                        .expect("unique"),
                     on_when: None,
                     handled: Some(true),
                     continued: None,
@@ -4021,7 +4026,7 @@ mod tests {
                 uri: direct("fetchCase"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![],
+                exception: UniqueList::new(vec![]).expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: None,
@@ -4040,7 +4045,8 @@ mod tests {
                 uri: direct("fetchCase"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                    .expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: Some(true),
@@ -4061,7 +4067,7 @@ mod tests {
             steps: vec![Step::DoTry(crate::route::DoTryStep {
                 steps: vec![],
                 do_catch: vec![crate::route::DoCatch {
-                    exception: vec![],
+                    exception: UniqueList::new(vec![]).expect("unique"),
                     on_when: None,
                     steps: vec![],
                 }],
@@ -4080,7 +4086,8 @@ mod tests {
                 uri: direct("fetchCase"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                    .expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: None,
@@ -4228,7 +4235,8 @@ mod tests {
             Step::DoTry(DoTryStep {
                 steps: vec![to_get("case-api")],
                 do_catch: vec![DoCatch {
-                    exception: vec![crate::model::ErrorClass::UpstreamHttp],
+                    exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamHttp])
+                        .expect("unique"),
                     on_when: None,
                     steps: vec![to_get("case-api"), to_get("case-api")],
                 }],
@@ -4248,7 +4256,8 @@ mod tests {
         let steps = vec![Step::DoTry(DoTryStep {
             steps: vec![to_get("case-api")],
             do_catch: vec![DoCatch {
-                exception: vec![crate::model::ErrorClass::UpstreamHttp],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamHttp])
+                    .expect("unique"),
                 on_when: None,
                 steps: vec![to_get("case-api")],
             }],
@@ -4323,7 +4332,8 @@ mod tests {
     #[test]
     fn on_exception_inside_split_multiplies_by_maximum_items() {
         let clause = Step::OnException(OnExceptionStep {
-            exception: vec![crate::model::ErrorClass::UpstreamHttp],
+            exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamHttp])
+                .expect("unique"),
             on_when: None,
             handled: None,
             continued: Some(true),
@@ -4421,9 +4431,9 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(vec![AccessProfile {
             id: id("registry-clerk"),
-            scopes: vec![id("cases:read")],
-            operations: vec![id("cases.find")],
-            record_types: vec![local("case")],
+            scopes: UniqueList::new(vec![id("cases:read")]).expect("unique"),
+            operations: UniqueList::new(vec![id("cases.find")]).expect("unique"),
+            record_types: UniqueList::new(vec![local("case")]).expect("unique"),
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
@@ -4854,7 +4864,8 @@ mod tests {
         let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
         let clause = |continued: bool| {
             Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                    .expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: Some(continued),
@@ -4928,7 +4939,8 @@ mod tests {
                 uri: direct("fetchCase"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                    .expect("unique"),
                 on_when: None,
                 handled: Some(true),
                 continued: None,
@@ -5067,9 +5079,9 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(vec![AccessProfile {
             id: id("registry-clerk"),
-            scopes: vec![],
-            operations: vec![id("cases.missing")],
-            record_types: vec![local("ghost")],
+            scopes: UniqueList::new(vec![]).expect("unique"),
+            operations: UniqueList::new(vec![id("cases.missing")]).expect("unique"),
+            record_types: UniqueList::new(vec![local("ghost")]).expect("unique"),
         }])
         .expect("unique");
         let findings = check_project(&workspace(&profile, &pack, &project));

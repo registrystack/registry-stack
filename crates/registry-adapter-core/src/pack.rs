@@ -26,9 +26,9 @@ pub struct Endpoint {
     /// The upstream authentication kind, with its non-secret parameters.
     pub authentication: EndpointAuthentication,
     /// The response headers the engine copies onto the exchange, Camel's
-    /// `HeaderFilterStrategy` as an allowlist.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub response_headers: Vec<ExternalId>,
+    /// `HeaderFilterStrategy` as an allowlist, unique (CFG-ID-6).
+    #[serde(default, skip_serializing_if = "response_headers_empty")]
+    pub response_headers: UniqueList<ExternalId>,
     /// The operations this endpoint serves, each with its
     /// `idempotentUpstream` claim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -46,6 +46,12 @@ pub struct Endpoint {
     /// The GraphQL variables expression.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variables: Option<crate::model::Expression>,
+}
+
+/// The endpoint's response-header allowlist is omitted from the wire when
+/// empty, the shape `Vec`'s `skip_serializing_if = "Vec::is_empty"` gave.
+fn response_headers_empty(headers: &UniqueList<ExternalId>) -> bool {
+    headers.is_empty()
 }
 
 impl registry_platform_yaml::Identified for Endpoint {
@@ -169,7 +175,8 @@ mod tests {
             id: ExternalId::new("case-api").expect("id"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
-            response_headers: vec![ExternalId::new("etag").expect("header")],
+            response_headers: UniqueList::new(vec![ExternalId::new("etag").expect("header")])
+                .expect("unique"),
             operations: vec![EndpointOperation {
                 id: ExternalId::new("cases.upsert").expect("op"),
                 idempotent_upstream: true,
@@ -269,6 +276,27 @@ mod tests {
         let json = serde_json::to_string(&pack).expect("serialize");
         assert!(json.contains("idempotentUpstream"));
         assert_eq!(serde_json::from_str::<AdapterPack>(&json).ok(), Some(pack));
+    }
+
+    /// An endpoint's response-header allowlist is unique at the reader
+    /// (CFG-ID-6): a repeated header name is refused.
+    #[test]
+    fn response_header_allowlist_is_unique() {
+        let read = |headers: serde_json::Value| {
+            let mut endpoint = serde_json::to_value(endpoint()).expect("endpoint");
+            endpoint["responseHeaders"] = headers;
+            serde_json::from_value::<AdapterPack>(serde_json::json!({
+                "id": "case-api-pack",
+                "version": "1.0.0",
+                "testedVersions": ["2.7"],
+                "endpoints": [endpoint],
+            }))
+        };
+        assert!(read(serde_json::json!(["etag", "location"])).is_ok());
+        assert!(
+            read(serde_json::json!(["etag", "etag"])).is_err(),
+            "a repeated response header is refused"
+        );
     }
 
     /// Duplicate endpoint ids are refused at the reader (CFG-ID-5).

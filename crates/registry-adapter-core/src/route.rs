@@ -14,7 +14,7 @@
 use crate::model::{
     AggregationStrategy, ErrorClass, Expression, HttpMethod, RhaiExpression, SendUri,
 };
-use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId};
+use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId, UniqueList};
 use serde::{Deserialize, Serialize};
 
 /// A percentage the reader bounds to 1 through 100 (CFG-QTY-4).
@@ -715,8 +715,8 @@ pub struct NoErrorHandler {}
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OnExceptionStep {
-    /// The matched classes.
-    pub exception: Vec<ErrorClass>,
+    /// The matched classes, unique (CFG-ID-6).
+    pub exception: UniqueList<ErrorClass>,
     /// Narrow the clause with a predicate (Camel `onWhen`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_when: Option<Expression>,
@@ -815,8 +815,8 @@ impl Default for RedeliveryOptions {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DoCatch {
-    /// The matched classes.
-    pub exception: Vec<ErrorClass>,
+    /// The matched classes, unique (CFG-ID-6).
+    pub exception: UniqueList<ErrorClass>,
     /// Narrow the clause with a predicate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_when: Option<Expression>,
@@ -1733,7 +1733,7 @@ mod tests {
         let Step::OnException(clause) = &step else {
             panic!("expected an onException step");
         };
-        assert_eq!(clause.exception, vec![ErrorClass::UpstreamTimeout]);
+        assert_eq!(&clause.exception[..], &[ErrorClass::UpstreamTimeout]);
         assert_eq!(
             clause
                 .redelivery_policy
@@ -1775,6 +1775,30 @@ mod tests {
             serde_json::from_str::<Step>(&back).ok().as_ref(),
             Some(&step)
         );
+    }
+
+    /// An exception clause's class list is unique at the reader (CFG-ID-6):
+    /// a repeated class is refused on `onException` and on `doCatch`.
+    #[test]
+    fn exception_class_lists_are_unique() {
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "onException": { "exception": ["upstream.http", "upstream.http"] } }"#,
+            )
+            .is_err(),
+            "a repeated onException class is refused"
+        );
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "doTry": { "steps": [], "doCatch": [ { "exception": ["upstream.timeout", "upstream.timeout"] } ] } }"#,
+            )
+            .is_err(),
+            "a repeated doCatch class is refused"
+        );
+        assert!(serde_json::from_str::<Step>(
+            r#"{ "onException": { "exception": ["upstream.http", "upstream.timeout"] } }"#,
+        )
+        .is_ok());
     }
 
     /// Route templates and typed parameters, ported from

@@ -4,7 +4,7 @@
 //! pack over a declared record model (`products/adapter/CONCEPT.md`
 //! sections 6, 7, and 10.1).
 
-use registry_platform_yaml::{Digest, ExternalId, LocalId, UniqueIdList};
+use registry_platform_yaml::{Digest, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
 
 /// A pinned reference to a profile or pack: plain identifier plus the
@@ -104,12 +104,12 @@ impl registry_platform_yaml::Identified for Binding {
 pub struct AccessProfile {
     /// The access profile name a caller identity is granted.
     pub id: ExternalId,
-    /// The OIDC scopes the profile admits.
-    pub scopes: Vec<ExternalId>,
-    /// The profile operation ids the profile may call.
-    pub operations: Vec<ExternalId>,
-    /// The record types the profile may touch.
-    pub record_types: Vec<LocalId>,
+    /// The OIDC scopes the profile admits, unique (CFG-ID-6).
+    pub scopes: UniqueList<ExternalId>,
+    /// The profile operation ids the profile may call, unique (CFG-ID-6).
+    pub operations: UniqueList<ExternalId>,
+    /// The record types the profile may touch, unique (CFG-ID-6).
+    pub record_types: UniqueList<LocalId>,
 }
 
 impl registry_platform_yaml::Identified for AccessProfile {
@@ -224,9 +224,12 @@ mod tests {
             .expect("unique"),
             access_profiles: UniqueIdList::new(vec![AccessProfile {
                 id: ExternalId::new("registry-clerk").expect("id"),
-                scopes: vec![ExternalId::new("records:read").expect("scope")],
-                operations: vec![ExternalId::new("cases.find").expect("op")],
-                record_types: vec![LocalId::new("case").expect("type")],
+                scopes: UniqueList::new(vec![ExternalId::new("records:read").expect("scope")])
+                    .expect("unique"),
+                operations: UniqueList::new(vec![ExternalId::new("cases.find").expect("op")])
+                    .expect("unique"),
+                record_types: UniqueList::new(vec![LocalId::new("case").expect("type")])
+                    .expect("unique"),
             }])
             .expect("unique"),
         };
@@ -295,5 +298,32 @@ mod tests {
         // UniqueList dedups identical items (CFG-ID-6): the same field
         // twice is refused; same name with different shape is not.
         assert!(fields.is_err());
+    }
+
+    /// An access profile's scopes, operations, and record types are
+    /// unique at the reader (CFG-ID-6): a repeated member is refused.
+    #[test]
+    fn access_profile_members_are_unique() {
+        let read = |scopes: &[&str], operations: &[&str], record_types: &[&str]| {
+            serde_json::from_value::<AccessProfile>(serde_json::json!({
+                "id": "registry-clerk",
+                "scopes": scopes,
+                "operations": operations,
+                "recordTypes": record_types,
+            }))
+        };
+        assert!(read(&["cases:read"], &["cases.find"], &["case"]).is_ok());
+        assert!(
+            read(&["cases:read", "cases:read"], &["cases.find"], &["case"]).is_err(),
+            "a repeated scope is refused"
+        );
+        assert!(
+            read(&["cases:read"], &["cases.find", "cases.find"], &["case"]).is_err(),
+            "a repeated operation is refused"
+        );
+        assert!(
+            read(&["cases:read"], &["cases.find"], &["case", "case"]).is_err(),
+            "a repeated record type is refused"
+        );
     }
 }
