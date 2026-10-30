@@ -45,6 +45,11 @@ use crate::scripts::ScriptSet;
 /// model is refused at load by [`check_servable`], by name.
 const DEFAULT_OK_RANGE: (u16, u16) = (200, 299);
 
+/// The longest one exchange may run, across every attempt, redelivery
+/// pause, and script. It sits above the largest declared attempt timeout so
+/// a single attempt always finishes under its own timeout first.
+const EXCHANGE_DEADLINE: Duration = Duration::from_secs(60);
+
 /// The name a route author writes for a step kind, for refusal texts.
 fn step_name(step: &Step) -> &'static str {
     match step {
@@ -280,11 +285,24 @@ pub struct RouteOutcome {
     pub events: Vec<RouteEvent>,
 }
 
-/// Run `steps` over `exchange`.
+/// Run `steps` over `exchange` within the exchange deadline.
 pub async fn run_route(
     context: &RouteContext<'_>,
     steps: &[Step],
     exchange: Exchange,
+) -> RouteOutcome {
+    run_route_within(context, steps, exchange, EXCHANGE_DEADLINE).await
+}
+
+/// Run `steps` over `exchange`, failing it as `budget.exhausted` when
+/// `deadline` passes first. Every attempt, redelivery pause, and script
+/// spends the one clock; the failure keeps the events produced so far and
+/// carries no body.
+pub async fn run_route_within(
+    context: &RouteContext<'_>,
+    steps: &[Step],
+    exchange: Exchange,
+    deadline: Duration,
 ) -> RouteOutcome {
     let mut run = Run {
         context,
@@ -299,13 +317,15 @@ pub async fn run_route(
             _ => None,
         })
         .collect();
-    let mut result = Ok(());
-    for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
-        if let Err(failure) = run.step_with_clauses(step, &clauses).await {
-            result = Err(failure);
-            break;
+    let body = async {
+        for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
+            run.step_with_clauses(step, &clauses).await?;
         }
-    }
+        Ok(())
+    };
+    let result = tokio::time::timeout(deadline, body)
+        .await
+        .unwrap_or_else(|_| Err(RouteFailure::of(ErrorClass::BudgetExhausted)));
     let Run {
         exchange, events, ..
     } = run;
@@ -851,18 +871,16 @@ mod credential_order_tests {
     use registry_adapter_core::{AdapterRuntimeConfig, Endpoint};
     use registry_platform_yaml::SecretProvider;
 
-    const KEY_ENV: &str = "ROUTE_CREDENTIAL_ORDER_KEY";
-
-    fn runtime_config() -> AdapterRuntimeConfig {
+    fn runtime_config(base_url: &str, key_env: &str) -> AdapterRuntimeConfig {
         serde_norway::from_str(&format!(
             r#"
 id: credential-order
 endpoints:
   - endpoint: tracker
-    baseUrl: http://127.0.0.1:9/
+    baseUrl: {base_url}
     credential:
       type: static-api-key
-      valueRef: secret:env/{KEY_ENV}
+      valueRef: secret:env/{key_env}
 listener:
   bind: 127.0.0.1:8080
 database:
@@ -897,16 +915,14 @@ testedVersions: []
         .expect("the pack endpoint parses")
     }
 
-    /// A credential that cannot be produced fails the exchange before the
-    /// send is announced: the journal never says an exchange was sending
-    /// when no send could happen.
-    #[tokio::test]
-    async fn a_credential_failure_leaves_no_sending_event() {
-        std::env::set_var(KEY_ENV, "order-key");
-        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
-        let config = runtime_config();
+    fn compiled(
+        base_url: &str,
+        key_env: &str,
+        resolver: &SecretResolver,
+    ) -> BTreeMap<String, EndpointRuntime> {
+        let config = runtime_config(base_url, key_env);
         let binding = config.endpoints.iter().next().expect("binding");
-        let egress = EndpointEgress::compile(binding, &pack_endpoint(), &config, &resolver)
+        let egress = EndpointEgress::compile(binding, &pack_endpoint(), &config, resolver)
             .expect("compiled");
         let base = format!(
             "{}{}",
@@ -919,10 +935,29 @@ testedVersions: []
             EndpointRuntime {
                 egress,
                 base,
-                attempt: Duration::from_secs(1),
+                attempt: Duration::from_secs(10),
                 maximum_response_bytes: 1024,
             },
         );
+        endpoints
+    }
+
+    fn get_steps() -> Vec<Step> {
+        serde_json::from_value(json!([
+            {"to": {"uri": "http:tracker", "parameters": {"httpMethod": "GET", "path": "/x"}}}
+        ]))
+        .expect("the steps parse")
+    }
+
+    /// A credential that cannot be produced fails the exchange before the
+    /// send is announced: the journal never says an exchange was sending
+    /// when no send could happen.
+    #[tokio::test]
+    async fn a_credential_failure_leaves_no_sending_event() {
+        let key_env = "ROUTE_CREDENTIAL_ORDER_KEY";
+        std::env::set_var(key_env, "order-key");
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let endpoints = compiled("http://127.0.0.1:9/", key_env, &resolver);
         let scripts = ScriptSet::default();
         let context = RouteContext {
             endpoints: &endpoints,
@@ -930,14 +965,10 @@ testedVersions: []
             resolver: &resolver,
             maximum_upstream_calls: 4,
         };
-        let steps: Vec<Step> = serde_json::from_value(json!([
-            {"to": {"uri": "http:tracker", "parameters": {"httpMethod": "GET", "path": "/x"}}}
-        ]))
-        .expect("the steps parse");
         // The key resolved at compile time; it is gone when the send needs it.
-        std::env::remove_var(KEY_ENV);
+        std::env::remove_var(key_env);
 
-        let outcome = run_route(&context, &steps, Exchange::new("order".to_owned())).await;
+        let outcome = run_route(&context, &get_steps(), Exchange::new("order".to_owned())).await;
 
         assert!(outcome.result.is_err(), "the exchange fails");
         assert!(
@@ -946,6 +977,59 @@ testedVersions: []
                 .iter()
                 .all(|event| event.kind != "exchangeSending"),
             "no exchangeSending precedes a credential failure: {:?}",
+            outcome.events
+        );
+    }
+
+    /// An upstream that accepts and never answers cannot hold the exchange
+    /// past its deadline, however long the attempt timeout allows: the
+    /// exchange fails as budget-exhausted with the events it produced and
+    /// no response body.
+    #[tokio::test]
+    async fn a_hung_upstream_cannot_outlive_the_exchange_deadline() {
+        let key_env = "ROUTE_DEADLINE_KEY";
+        std::env::set_var(key_env, "deadline-key");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback listener");
+        let port = listener.local_addr().expect("the bound address").port();
+        let _hold = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let endpoints = compiled(&format!("http://127.0.0.1:{port}/"), key_env, &resolver);
+        let scripts = ScriptSet::default();
+        let context = RouteContext {
+            endpoints: &endpoints,
+            scripts: &scripts,
+            resolver: &resolver,
+            maximum_upstream_calls: 4,
+        };
+
+        let started = Instant::now();
+        let outcome = run_route_within(
+            &context,
+            &get_steps(),
+            Exchange::new("deadline".to_owned()),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the deadline cut it"
+        );
+        let failure = outcome.result.expect_err("the exchange fails");
+        assert_eq!(failure.class, ErrorClass::BudgetExhausted);
+        assert!(
+            outcome
+                .events
+                .iter()
+                .any(|event| event.kind == "exchangeSending"),
+            "the events the run produced are kept: {:?}",
             outcome.events
         );
     }
