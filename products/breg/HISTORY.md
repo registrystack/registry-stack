@@ -13,7 +13,7 @@ A single record uses:
   "meta": {
     "registryIdentifier": "example-registry",
     "datasetIdentifier": "example-dataset",
-    "entityTypeIdentifier": "example-record"
+    "recordTypeIdentifier": "example-record"
   }
 }
 ```
@@ -34,7 +34,7 @@ headers. ETags and idempotency request identity include the negotiated response
 representation.
 
 Selecting and authorizing a compiled record operation authorizes publication of
-its structural registry, primary-dataset, and entity-type identifiers. These
+its structural registry, primary-dataset, and record-type identifiers. These
 identifiers are not `$select` domain fields and are not gated by the optional
 Registry Manifest catalogue publication profile. Concealed requests complete
 before record I/O and disclose no profile, schema, context, or link hint.

@@ -170,14 +170,10 @@ fn record_response_schema_uses_only_record_type_identifier_in_meta() {
     });
     assert_valid(&schema, &canonical);
 
-    let mut retired = canonical;
-    let meta = retired["meta"]
-        .as_object_mut()
-        .expect("record meta is an object");
-    let record_type = meta
-        .remove("recordTypeIdentifier")
-        .expect("canonical record type exists");
-    meta.insert("entityTypeIdentifier".to_owned(), record_type);
+    let retired: Value = serde_json::from_str(include_str!(
+        "../../../../products/registry-record/fixtures/negative/retired-record-type-member.json"
+    ))
+    .expect("retired fixture parses");
     assert_invalid(&schema, &retired);
 }
 

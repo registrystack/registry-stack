@@ -52,7 +52,7 @@ fn profile_change<'a>(
         .iter()
         .find(|change| {
             change.change.code == Code::AccessProfileChanged
-                && change.change.target.entity_id.as_deref() == Some(entity)
+                && change.change.target.record_type_id.as_deref() == Some(entity)
                 && change.change.target.member_id.as_deref() == Some(profile)
         })
         .unwrap_or_else(|| panic!("{profile} over {entity} in {diff:#?}"))

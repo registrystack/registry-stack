@@ -1500,13 +1500,6 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
         wrong_record,
         Err(BRegEventRecordError::WrongRecordEvidence { .. })
     ));
-    let mut retired_record_type =
-        creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create");
-    retired_record_type["meta"]["entityTypeIdentifier"] = json!("incorporation");
-    assert!(matches!(
-        BRegCreationRevision::from_document(INCORPORATION_ID, &retired_record_type),
-        Err(BRegEventRecordError::WrongRecordEvidence { .. })
-    ));
     for (document, label) in [
         (
             creation_revision_envelope(INCORPORATION_ID, "1", json!(0), "create"),

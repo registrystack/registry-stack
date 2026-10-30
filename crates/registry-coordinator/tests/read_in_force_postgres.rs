@@ -99,7 +99,7 @@ fn collection(items: Vec<Value>) -> ResponseTemplate {
             "meta": {
                 "registryIdentifier": "registry",
                 "datasetIdentifier": "dataset",
-                "entityTypeIdentifier": "assignment"
+                "recordTypeIdentifier": "assignment"
             }
         }))
 }

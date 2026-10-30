@@ -611,7 +611,7 @@ fn address_record(identifier: &str, address: &Address) -> Value {
         "meta": {
             "registryIdentifier": "citizen-address-correction",
             "datasetIdentifier": "citizen-address-correction",
-            "entityTypeIdentifier": TARGET_ENTITY
+            "recordTypeIdentifier": TARGET_ENTITY
         }
     })
 }

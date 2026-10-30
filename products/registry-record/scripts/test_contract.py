@@ -15,7 +15,7 @@ VOCABULARY_URI = "https://id.registrystack.org/vocab/registry-record/"
 IDENTIFIER_TERMS = (
     "registryIdentifier",
     "datasetIdentifier",
-    "entityTypeIdentifier",
+    "recordTypeIdentifier",
     "recordIdentifier",
     "revisionIdentifier",
 )
@@ -26,7 +26,7 @@ INFRASTRUCTURE_MEMBERS = {
     "meta",
     "registryIdentifier",
     "datasetIdentifier",
-    "entityTypeIdentifier",
+    "recordTypeIdentifier",
     "recordIdentifier",
     "revisionIdentifier",
     "nextCursor",
@@ -217,7 +217,7 @@ class RegistryRecordContractTest(unittest.TestCase):
         )
         self.assertEqual(
             definitions["responseMeta"]["required"],
-            ["registryIdentifier", "datasetIdentifier", "entityTypeIdentifier"],
+            ["registryIdentifier", "datasetIdentifier", "recordTypeIdentifier"],
         )
         self.assertIn("not", definitions["singleResponse"])
         self.assertIn("not", definitions["collectionResponse"])

@@ -317,7 +317,7 @@ fn response(operation: Operation, marker: &str) -> CallOutcome {
             "meta": {
                 "registryIdentifier": "fixture",
                 "datasetIdentifier": "people",
-                "entityTypeIdentifier": "person"
+                "recordTypeIdentifier": "person"
             },
             "data": {
                 "recordIdentifier": "00000000-0000-4000-8000-000000000001",

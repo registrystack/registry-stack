@@ -39,7 +39,7 @@ async fn governed_successor_installs_the_record_timer_store_for_the_exact_baseli
             code: CompiledRegistryChangeCode::RecordTimerStoreAdded,
             target: CompiledRegistryChangeTarget {
                 kind: CompiledRegistryChangeTargetKind::Registry,
-                entity_id: None,
+                record_type_id: None,
                 member_id: None,
             },
         }]
@@ -140,7 +140,7 @@ async fn engine_transition_composes_with_a_governed_compiler_ddl_refresh() {
             code: CompiledRegistryChangeCode::RecordTimerStoreAdded,
             target: CompiledRegistryChangeTarget {
                 kind: CompiledRegistryChangeTargetKind::Registry,
-                entity_id: None,
+                record_type_id: None,
                 member_id: None,
             },
         }]

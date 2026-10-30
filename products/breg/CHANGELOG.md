@@ -2,6 +2,65 @@
 
 ## Unreleased
 
+- BREAKING: Registry Record v1 renames `entityTypeIdentifier` to
+  `recordTypeIdentifier` before the 1.0 freeze. The v1 identifiers, schema,
+  context and profile are edited in place, so a client keeps its profile check
+  and reads the renamed `meta.recordTypeIdentifier`, which is required. The Rust
+  client field `entity_type_identifier` becomes `record_type_identifier`.
+- BREAKING: Batch writes rename their members. A Patch item takes
+  `recordIdentifier` in place of `recordId`. A result carries
+  `recordIdentifier`, `revisionIdentifier` (a string) and `domainData` in place
+  of `id`, `revision` (a number) and `data`. The ingestion result and `bregctl`
+  data checks use the same names, and the Rust `BRegBatchResult` accessors are
+  `revision_identifier()` and `domain_data()`.
+- BREAKING: Direct Create, Patch and Tombstone responses no longer carry
+  `data.snapshot`, and the OpenAPI document drops it. The Rust client refuses a
+  response that still does. Take a snapshot token from a Batch response or a
+  `:snapshot` read.
+- BREAKING: An authorized caller of `GET /v1/proposals` or an ingestion run list
+  gets `400 query.invalid` for an unknown or malformed query parameter, where it
+  got a concealed `404`. `fieldPath` names a parameter the list recognizes and is
+  `query` for any other, without repeating the name. A caller without the grant
+  still gets the concealed `404`.
+- BREAKING: Proposal lifecycle event subjects carry `proposalReference` and
+  `proposalRevision`. Record events keep `recordReference` and `recordRevision`.
+  A subject that mixes the two shapes or adds other members is refused.
+- BREAKING: The Node SDK renames `entitySchema` to `recordSchema` and
+  `entityRoute` to `recordRoute`; the Python SDK renames `entity_schema` and
+  `entity_route` the same way. Node `startProposal`, `listProposals` and
+  `prepareProposal` take plain objects (`inputs`, `query`, `body`) in place of
+  JSON text (`inputsJson`, `queryJson`, `bodyJson`). Python patch arguments
+  `etag` and `operations` become `if_match` and `patch`, and a Python hook
+  receives `headers` as an ordered sequence of pairs in place of a dict.
+  `EngineReason` replaces `contract-changed` with `package-changed`;
+  `RecoveryHint` drops `terminal` and adds `rebase`.
+- BREAKING: Action `plan.capabilities` is removed; declare the Action's Evidence
+  dependencies in `evidence`. A named Function's `capabilities` list is closed
+  and accepts only `evidence`.
+- BREAKING: Database pool defaults change: wait 1000 ms (was 30000), create 2000
+  ms and recycle 2000 ms. Startup refuses a pool with
+  `breg.runtime.pool-budget-exceeded` when wait plus the larger of create and
+  recycle reaches the HTTP request deadline.
+- BREAKING: `authentication.oidc.deniedKids` is renamed `revokedKeyIds`. The old
+  key is refused with a rename hint.
+- BREAKING: A runtime configuration file is refused with
+  `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
+  owned by root or the runtime user, or is writable by group or others. A
+  root-owned sticky ancestor stays allowed.
+- BREAKING: `bregctl` adopts the shared report envelope. Machine-readable
+  reports open with `ok`, `command`, `status`, `apiVersion` and `kind`, command
+  members are flat, and every report carries the binary's displayed `version`
+  and a `diagnostics` array. `status` is `complete`, `domain-refusal`,
+  `usage-error` or `operational-failure`, matching exit codes 0 through 3.
+  Command-specific results such as `declined` or `ready` move to `outcome`. An
+  internal failure is reported as `bregctl.internal-error` and exits 3.
+  `bregctl` statistics report the numeric release as `releaseVersion`, `version`
+  being the binary version, and `instance-claim status` nests its domain object
+  under `instanceClaim`.
+- BREAKING: The migration descriptor names a changed Record type as kind
+  `record-type` in place of kind `entity`. A change target carries `recordTypeId`
+  in place of `entityId`, and a reviewed migration step or object carries
+  `recordType` in place of `entityId`.
 - Add `atLeastFromInput` and `atMostFromInput` Action commit guard keys beside
   `equalsFromInput`. A guard compares a stored `int64`, `date`, or `timestamp`
   field with a required Action input of the same type, with inclusive bounds,

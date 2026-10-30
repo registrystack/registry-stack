@@ -128,13 +128,13 @@ and keep the old one published while its tokens are valid. If the issuer is unre
 key stays usable for the cache lifetime plus `outageToleranceSeconds` (900 seconds), counted from
 the last successful fetch. A static JWKS document rotates only by editing it and restarting.
 
-For a compromised key, list its identifier under `authentication.oidc.deniedKids` and restart every
-replica; every token it signed is refused. The trap: once the last denied key leaves the issuer,
-delete `deniedKids` entirely. An empty list refuses the runtime file:
+For a compromised key, list its identifier under `authentication.oidc.revokedKeyIds` and restart every
+replica; every token it signed is refused. The trap: once the last revoked key leaves the issuer,
+delete `revokedKeyIds` entirely. An empty list refuses the runtime file:
 
 ```text
-error config.invalid-value /authentication/oidc/deniedKids
-expected at least one key identifier; next: List at least one key identifier to deny, or delete deniedKids to deny no key.
+error config.invalid-value /authentication/oidc/revokedKeyIds
+expected at least one key identifier; next: List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key.
 ```
 
 The runtime trusts one issuer, read at startup, so changing it is a coordinated restart with no
@@ -144,7 +144,7 @@ principal, so a retry under the new issuer is a fresh request and can write twic
 first page.
 
 {/* Evidence: crates/registry-platform-oidc/src/lib.rs, JwksFetcher and tolerated_age();
-    crates/registry-breg/src/runtime_config.rs, JwksCacheConfig and deniedKids validation;
+    crates/registry-breg/src/runtime_config.rs, JwksCacheConfig and revokedKeyIds validation;
     crates/registry-breg/src/idempotency.rs, canonical_claim_context();
     crates/registry-breg/src/cursor.rs, CursorBinding. */}
 

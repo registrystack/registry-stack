@@ -31,7 +31,7 @@ consumers to change parsing or interpretation publishes a new profile version.
   "meta": {
     "registryIdentifier": "business-registry",
     "datasetIdentifier": "legal-entities",
-    "entityTypeIdentifier": "company"
+    "recordTypeIdentifier": "company"
   }
 }
 ```
@@ -55,13 +55,13 @@ consumers to change parsing or interpretation publishes a new profile version.
   "meta": {
     "registryIdentifier": "business-registry",
     "datasetIdentifier": "legal-entities",
-    "entityTypeIdentifier": "company"
+    "recordTypeIdentifier": "company"
   }
 }
 ```
 
 All five identifiers, `registryIdentifier`, `datasetIdentifier`,
-`entityTypeIdentifier`, `recordIdentifier`, and `revisionIdentifier`, are
+`recordTypeIdentifier`, `recordIdentifier`, and `revisionIdentifier`, are
 opaque non-empty strings. `nextCursor` is either `null` or an opaque non-empty
 string. `domainData` is an object containing only fields released by the
 selected product access context and projection. It must not contain profile
@@ -108,7 +108,7 @@ IRIs belong in separate governed terms or links.
   "meta": {
     "registryIdentifier": "business-registry",
     "datasetIdentifier": "legal-entities",
-    "entityTypeIdentifier": "company"
+    "recordTypeIdentifier": "company"
   }
 }
 ```

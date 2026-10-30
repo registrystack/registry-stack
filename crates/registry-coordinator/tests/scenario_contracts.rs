@@ -39,7 +39,7 @@ fn record(revision: Value) -> Value {
     json!({
         "data": {"recordIdentifier": "r-1", "revisionIdentifier": revision, "domainData": {}},
         "meta": {"registryIdentifier": "registry", "datasetIdentifier": "dataset",
-            "entityTypeIdentifier": "application"}
+            "recordTypeIdentifier": "application"}
     })
 }
 

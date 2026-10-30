@@ -26,7 +26,6 @@ const RESERVED_DOMAIN_MEMBERS: &[&str] = &[
     "registryIdentifier",
     "datasetIdentifier",
     "recordTypeIdentifier",
-    "entityTypeIdentifier",
     "recordIdentifier",
     "revisionIdentifier",
     "domainData",

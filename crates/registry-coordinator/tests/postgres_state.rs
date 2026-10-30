@@ -276,7 +276,7 @@ workflow:
 "#;
 
 fn record(allowed: bool, contact: &str) -> Value {
-    json!({"meta":{"registryIdentifier":"fixture","datasetIdentifier":"people","entityTypeIdentifier":"person"},
+    json!({"meta":{"registryIdentifier":"fixture","datasetIdentifier":"people","recordTypeIdentifier":"person"},
         "data":{"recordIdentifier":"synthetic-contact-canary","revisionIdentifier":"1","domainData":{"allowed":allowed,"contact":contact}}})
 }
 fn receipt() -> Value {

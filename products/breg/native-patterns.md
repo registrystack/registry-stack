@@ -131,11 +131,11 @@ expect:
   outcome: refusal
   status: 409
   problemCode: mutation.conflict
-  entityId: person
+  recordType: person
   fieldId: identifier
 ```
 
-`entityId` and `fieldId` are optional together and allowed only for this conflict
+`recordType` and `fieldId` are optional together and allowed only for this conflict
 expectation. Preflight checks that the pair names a patterned field on a target
 of the step; execution requires that exact pair in the response. Preflight does
 not evaluate PostgreSQL expressions or infer the failed field from input values.

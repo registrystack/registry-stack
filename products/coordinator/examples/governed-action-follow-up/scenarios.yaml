@@ -11,7 +11,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address, email: person@example.invalid}}
     request-information:
     - type: success
@@ -38,7 +38,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: true}}
   expect:
     path: [read-application, needs-information, skipped]
@@ -52,7 +52,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address}}
     request-information:
     - type: refused
@@ -68,7 +68,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address}}
     request-information:
     - type: declared-refusal
@@ -85,7 +85,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address}}
     request-information:
     - type: uncertain
@@ -105,7 +105,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address}}
     request-information:
     - type: uncertain
@@ -121,7 +121,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address, email: person@example.invalid}}
     request-information:
     - type: uncertain
@@ -152,7 +152,7 @@ cases:
     read-application:
     - type: success
       value:
-        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, entityTypeIdentifier: application}
+        meta: {registryIdentifier: applications-registry, datasetIdentifier: applications, recordTypeIdentifier: application}
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address, email: person@example.invalid}}
     request-information:
     - type: success

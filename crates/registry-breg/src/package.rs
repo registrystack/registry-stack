@@ -2,6 +2,9 @@
 //! Closed Base Registry Engine package verification boundary.
 
 #[cfg(test)]
+#[path = "package/tests/change_target.rs"]
+mod change_target_tests;
+#[cfg(test)]
 #[path = "package/tests/immediate_actions.rs"]
 mod immediate_action_tests;
 #[cfg(test)]
@@ -406,7 +409,7 @@ pub enum CompiledRegistryChangeCode {
 pub struct CompiledRegistryChangeTarget {
     pub kind: CompiledRegistryChangeTargetKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entity_id: Option<String>,
+    pub record_type_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member_id: Option<String>,
 }
@@ -416,7 +419,7 @@ pub struct CompiledRegistryChangeTarget {
 #[serde(rename_all = "kebab-case")]
 pub enum CompiledRegistryChangeTargetKind {
     Registry,
-    Entity,
+    RecordType,
     Field,
     DerivedRelation,
     Constraint,
@@ -1230,7 +1233,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::DestructiveOrIrreversible,
                 CompiledRegistryChangeCode::EntityRemoved,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1243,7 +1246,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::DestructiveOrIrreversible,
                 CompiledRegistryChangeCode::EntityPhysicalNameChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1255,7 +1258,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityRouteChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1269,7 +1272,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityMutationModeChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1281,7 +1284,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityClassificationChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1293,7 +1296,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityAccessRequirementsChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1305,7 +1308,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityAccessLogChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1317,7 +1320,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::ConsentRecordChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1329,7 +1332,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityGeoJsonChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1341,7 +1344,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::DestructiveOrIrreversible,
                 CompiledRegistryChangeCode::EntityTemporalChanged,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -1475,7 +1478,7 @@ fn compare_entities(
                 CompiledRegistryChangeClass::CompatibleAdditive,
                 CompiledRegistryChangeCode::EntityAdded,
                 target(
-                    CompiledRegistryChangeTargetKind::Entity,
+                    CompiledRegistryChangeTargetKind::RecordType,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -3061,12 +3064,12 @@ fn sort_changes(changes: &mut [CompiledRegistryChange]) {
 
 fn target(
     kind: CompiledRegistryChangeTargetKind,
-    entity_id: Option<&str>,
+    record_type_id: Option<&str>,
     member_id: Option<&str>,
 ) -> CompiledRegistryChangeTarget {
     CompiledRegistryChangeTarget {
         kind,
-        entity_id: entity_id.map(str::to_owned),
+        record_type_id: record_type_id.map(str::to_owned),
         member_id: member_id.map(str::to_owned),
     }
 }

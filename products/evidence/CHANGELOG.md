@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- BREAKING: The Node and Python clients rename the `requirement` member of a
+  `request` to `handle`.
+- BREAKING: The clients add error kinds `invalid-request` and `unavailable`, with
+  Python `InvalidRequestError` and `UnavailableError`. A 4xx answer outside the
+  `denied` and `not-available` cases is now `invalid-request` and a 5xx answer is
+  `unavailable`; both were `protocol`. A 422 carrying `evidence.not-available` or
+  an unregistered problem code is `not-available`.
+- BREAKING: A downstream assertion is capped at the earliest `validUntil` of its
+  verified signed sources, and an already expired cap is refused.
+- BREAKING: Transit `key_version` policy pins are quoted strings.
+- BREAKING: `evidencectl` adopts the shared report envelope. Machine-readable
+  reports open with `ok`, `command`, `status`, `apiVersion` and `kind`, command
+  members are flat, and every report carries the binary's displayed `version`
+  and a `diagnostics` array. `status` is `complete`, `domain-refusal`,
+  `usage-error` or `operational-failure`, matching exit codes 0 through 3.
+  Command-specific results such as `declined` or `ready` move to `outcome`. An
+  internal failure is reported as `evidencectl.internal-error` and exits 3.
+- BREAKING: A runtime configuration file is refused with
+  `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
+  owned by root or the runtime user, or is writable by group or others. A
+  root-owned sticky ancestor stays allowed. This also covers OID4VCI
+  configuration and bundle paths.
 - The OID4VCI `jwt` proof ignores payload claims it does not use, such as
   `jti`, as RFC 7519 section 4 directs. `aud`, `iat` and `nonce` stay required,
   `exp` stays optional, `iss` stays refused, and header rules are unchanged. A

@@ -317,6 +317,7 @@ formats:
       - /authentication/oidc/maxTokenLifetimeSeconds
       - /authentication/oidc/jwksCache/maxDocumentBytes
       - /authentication/oidc/jwksCache/requestTimeoutMilliseconds
+      - /authentication/oidc/deniedKids
       - /audit/retainDays
       - /eventDelivery
       - /idempotency

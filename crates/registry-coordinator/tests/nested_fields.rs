@@ -96,7 +96,7 @@ fn input() -> Value {
 fn record() -> Value {
     json!({
         "data": {"recordIdentifier": "record-1", "revisionIdentifier": "1", "domainData": {}},
-        "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "entityTypeIdentifier": "e"}
+        "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "recordTypeIdentifier": "e"}
     })
 }
 
@@ -461,7 +461,7 @@ fn a_flat_mapping_is_unchanged() {
     );
     assert_eq!(
         definition.digest,
-        "sha256:3d3c8cfeaeddfb2ef1d00125d2f74f90098f8dbe144e76283158e0cba1e81219"
+        "sha256:f50dbad620b01d86d3f6214c4acfe82f92e8db4c81442e3beb8c807a2a0c0801"
     );
 }
 

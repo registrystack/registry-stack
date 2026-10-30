@@ -28,7 +28,7 @@ fn envelope() -> Value {
         },
         "meta": {
             "registryIdentifier": "registry", "datasetIdentifier": "dataset",
-            "entityTypeIdentifier": "registrant"
+            "recordTypeIdentifier": "registrant"
         }
     })
 }

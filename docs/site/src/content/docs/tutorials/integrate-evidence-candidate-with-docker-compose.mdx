@@ -115,6 +115,26 @@ restart, never by changing the mounted one.
     crates/registry-evidence/src/source_sqlite.rs, open;
     docker/runtime-preflight.py, validate_mounts. */}
 
+## Give the runtime file to the service user
+
+Startup refuses the runtime file unless it and every directory above it, as the container sees
+them, are owned by root or the runtime user (UID 65532 in the images) and not writable by group or
+others. A symbolic link anywhere in the path is refused. Docker shows the container the owner the
+file has on the host, so a file you wrote as yourself fails with
+`platform.runtime-config.unsafe-file`. The adapter mounts this one file under directories the image
+owns, so only the file needs changing. Do this once your edits are finished:
+
+```sh test-skip="needs root on the reader's host"
+sudo chown 65532:65532 "$EVIDENCE_RUNTIME_FILE"
+sudo chmod 0400 "$EVIDENCE_RUNTIME_FILE"
+```
+
+Use `sudo` to edit the file after this.
+
+{/* Evidence: crates/registry-platform-config/src/loader.rs, require_trusted_runtime_path,
+    require_trusted_ownership, unsafe_file; crates/registry-evidence/src/bundle.rs, RuntimeDocument::load;
+    docker/compose/docker-compose.yaml; docker/Dockerfile. */}
+
 ## Activate the target authority
 
 Run the one-shot activation service inside the container, so the authority store is created and

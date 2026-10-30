@@ -103,13 +103,13 @@
     "CompiledRegistryChangeTarget": {
       "additionalProperties": false,
       "properties": {
-        "entityId": {
-          "type": "string"
-        },
         "kind": {
           "$ref": "#/$defs/CompiledRegistryChangeTargetKind"
         },
         "memberId": {
+          "type": "string"
+        },
+        "recordTypeId": {
           "type": "string"
         }
       },
@@ -121,7 +121,7 @@
     "CompiledRegistryChangeTargetKind": {
       "enum": [
         "registry",
-        "entity",
+        "record-type",
         "field",
         "derived-relation",
         "constraint",
@@ -226,7 +226,7 @@
     },
     "ReviewedMigrationObjectKind": {
       "enum": [
-        "entity",
+        "record-type",
         "field",
         "constraint",
         "index"

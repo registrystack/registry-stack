@@ -105,7 +105,7 @@ class BRegQuickstartTests(unittest.TestCase):
                     "meta": {
                         "registryIdentifier": "local-directory-db",
                         "datasetIdentifier": "directory",
-                        "entityTypeIdentifier": "contact",
+                        "recordTypeIdentifier": "contact",
                     },
                 }
             ).encode()
@@ -137,7 +137,7 @@ class BRegQuickstartTests(unittest.TestCase):
             )
             created = {
                 "data": {"recordIdentifier": "x", "revisionIdentifier": "1", "domainData": {}},
-                "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "entityTypeIdentifier": "e"},
+                "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "recordTypeIdentifier": "e"},
             }
             geojson = {"type": "FeatureCollection", "features": [{}]}
 

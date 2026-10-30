@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- BREAKING: `discoveryctl` adopts the shared report envelope. `status` `passed`
+  and `failed` become `complete` and `domain-refusal`. Machine-readable reports
+  open with `ok`, `command`, `status`, `apiVersion` and `kind`, command members
+  are flat, and every report carries the binary's displayed `version` and a
+  `diagnostics` array. `status` is `complete`, `domain-refusal`, `usage-error`
+  or `operational-failure`, matching exit codes 0 through 3. Command-specific
+  results such as `declined` or `ready` move to `outcome`. An internal failure
+  is reported as `discoveryctl.internal-error` and exits 3.
+- BREAKING: A runtime configuration file is refused with
+  `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
+  owned by root or the runtime user, or is writable by group or others. A
+  root-owned sticky ancestor stays allowed.
+
 ## 0.44.0 - 2026-10-27
 
 - `discoveryctl check --project` reads an optional `check-acceptances.yaml`.

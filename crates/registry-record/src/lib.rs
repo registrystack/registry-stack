@@ -32,7 +32,6 @@ const INFRASTRUCTURE_MEMBERS: &[&str] = &[
     "registryIdentifier",
     "datasetIdentifier",
     "recordTypeIdentifier",
-    "entityTypeIdentifier",
     "recordIdentifier",
     "revisionIdentifier",
     "domainData",

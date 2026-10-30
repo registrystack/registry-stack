@@ -36,7 +36,7 @@ cases:
             agreementState: not-started
             capacityState: uncommitted
             reservationOutcome: pending
-        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, recordTypeIdentifier: reservation-request}
     submit-review:
     - type: success
       value:
@@ -74,7 +74,7 @@ cases:
             agreementCallbackId: agreement-callback-1
             capacityState: uncommitted
             reservationOutcome: pending
-        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, recordTypeIdentifier: reservation-request}
     metadata:
     - type: success
       value: {schedulingId: reservations, policyRevision: 7, policyDigest: 'sha256:policy'}
@@ -138,7 +138,7 @@ cases:
           recordIdentifier: 00000000-0000-4000-8000-000000000235
           revisionIdentifier: '1'
           domainData: {requestKey: test-request-0000000000000000, requesterReference: organization-42, notificationDestination: requester@example.invalid, offering: room-reservation, start: '2026-11-03T09:00:00Z', durationMinutes: 240, resourceId: room-a, attendees: 12, agreementRequired: true, capacityPolicy: request-only, reviewState: pending, agreementState: not-started, capacityState: uncommitted, reservationOutcome: pending}
-        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, recordTypeIdentifier: reservation-request}
     submit-review:
     - type: success
       value: {requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
@@ -173,7 +173,7 @@ cases:
           recordIdentifier: 00000000-0000-4000-8000-000000000235
           revisionIdentifier: '1'
           domainData: {requestKey: test-request-0000000000000000, requesterReference: organization-42, notificationDestination: requester@example.invalid, offering: room-reservation, start: '2026-11-03T09:00:00Z', durationMinutes: 240, resourceId: room-a, attendees: 12, agreementRequired: true, capacityPolicy: request-only, reviewState: pending, agreementState: not-started, capacityState: uncommitted, reservationOutcome: pending}
-        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, recordTypeIdentifier: reservation-request}
     submit-review:
     - type: success
       value: {requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
@@ -212,7 +212,7 @@ cases:
           recordIdentifier: 00000000-0000-4000-8000-000000000235
           revisionIdentifier: '1'
           domainData: {requestKey: test-request-0000000000000000, requesterReference: organization-42, notificationDestination: requester@example.invalid, offering: room-reservation, start: '2026-11-03T09:00:00Z', durationMinutes: 240, resourceId: room-a, attendees: 12, agreementRequired: true, capacityPolicy: request-only, reviewState: pending, agreementState: not-started, capacityState: uncommitted, reservationOutcome: pending}
-        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, recordTypeIdentifier: reservation-request}
     submit-review:
     - type: success
       value: {requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}

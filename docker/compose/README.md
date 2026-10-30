@@ -54,7 +54,19 @@ docker compose -f docker-compose.yaml config
 ```
 
 Set `authority.target` in the container runtime to the target named by
-`compiled-authority.yaml`. Activate that authority before any check or start:
+`compiled-authority.yaml`.
+
+Startup refuses the runtime file unless it and every directory above it, as the container sees
+them, are owned by root or the runtime user (UID 65532 in the images) and not writable by group or
+others. A symbolic link anywhere in the path is refused. This adapter mounts one file under
+directories the image owns, so when you have finished editing the file, give it to that user:
+
+```sh
+sudo chown 65532:65532 "$EVIDENCE_RUNTIME_FILE"
+sudo chmod 0400 "$EVIDENCE_RUNTIME_FILE"
+```
+
+Activate that authority before any check or start:
 
 ```sh
 docker compose -f docker-compose.yaml run --rm authority-activate

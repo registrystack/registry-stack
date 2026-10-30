@@ -54,7 +54,7 @@ fn input() -> Value {
 fn record(domain_data: Value) -> Value {
     json!({
         "meta": {"registryIdentifier": "applications-registry", "datasetIdentifier": "applications",
-            "entityTypeIdentifier": "application"},
+            "recordTypeIdentifier": "application"},
         "data": {"recordIdentifier": "00000000-0000-4000-8000-000000000001",
             "revisionIdentifier": "revision-1", "domainData": domain_data}
     })

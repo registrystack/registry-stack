@@ -55,7 +55,24 @@ fn record_schema() -> Value {
 
 fn record(domain_data: Value) -> Value {
     json!({"data": {"recordIdentifier": "r-1", "revisionIdentifier": "v-1", "domainData": domain_data},
-        "meta": {"registryIdentifier": "registry", "datasetIdentifier": "licences", "entityTypeIdentifier": "licence"}})
+        "meta": {"registryIdentifier": "registry", "datasetIdentifier": "licences", "recordTypeIdentifier": "licence"}})
+}
+
+#[test]
+fn read_record_output_schema_accepts_the_registry_record_type_member() {
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../../products/coordinator/generated/operations/breg.read-record.v1.output.schema.json"
+    ))
+    .unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let mut response = record(json!({"licenceNumber": "LIC-1"}));
+    assert!(validator.is_valid(&response));
+    let meta = response["meta"].as_object_mut().unwrap();
+    assert_eq!(meta.remove("recordTypeIdentifier"), Some(json!("licence")));
+    assert!(!validator.is_valid(&response));
 }
 
 #[test]
