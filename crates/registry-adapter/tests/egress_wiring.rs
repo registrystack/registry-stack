@@ -118,10 +118,15 @@ fn runtime_config_with(
             r#"{ "issuer": "https://issuer.example.invalid", "audience": "egress" }"#,
         )
         .expect("oidc"),
+        allowed_clients: UniqueList::new(vec![ExternalId::new("egress-client").expect("client")])
+            .expect("clients"),
         audit: registry_adapter_core::AuditRetention {
             retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
                 .expect("retention"),
         },
+        cursor_key_ref: None,
+        previous_cursor_key_ref: None,
+        cursor_ttl_seconds: None,
     }
 }
 
