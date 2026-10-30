@@ -2254,6 +2254,20 @@ class WrapperRefusalTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("ADAPTERCTL_BIN", done.stderr)
 
+    def test_the_wrapper_refuses_an_adapterctl_bin_with_another_name(self) -> None:
+        env = self.environment_without_binaries()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("adapterctl", "adapterctl-review"):
+                binary = root / name
+                binary.write_text("#!/bin/sh\ntouch marker\n")
+                binary.chmod(0o755)
+            env["ADAPTERCTL_BIN"] = str(root / "adapterctl-review")
+            done = self.run_wrapper(env=env)
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertIn("adapterctl-review", done.stderr)
+            self.assertFalse((root / "marker").exists(), done.stderr)
+
     def test_the_wrapper_refuses_a_bin_dir_without_the_binary(self) -> None:
         env = self.environment_without_binaries()
         with tempfile.TemporaryDirectory() as directory:

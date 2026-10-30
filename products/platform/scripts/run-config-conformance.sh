@@ -7,7 +7,8 @@
 #
 # The adapterctl binary comes from, most explicit first:
 #   1. the --bin-dir option,
-#   2. the ADAPTERCTL_BIN environment variable (the adapterctl binary),
+#   2. the ADAPTERCTL_BIN environment variable (the adapterctl binary; the
+#      file must be named adapterctl),
 #   3. a build under the exported CARGO_TARGET_DIR,
 # and the wrapper refuses otherwise. A repo-local target/ directory is
 # never used: a stale binary there once checked green against the wrong
@@ -35,6 +36,11 @@ if [[ -z "$bin_dir" ]]; then
 	if [[ -n "${ADAPTERCTL_BIN:-}" ]]; then
 		if [[ ! -x "${ADAPTERCTL_BIN}" ]]; then
 			printf 'run-config-conformance: ADAPTERCTL_BIN names no executable: %s\n' "${ADAPTERCTL_BIN}" >&2
+			printf 'Set ADAPTERCTL_BIN to the adapterctl binary, pass --bin-dir, or export CARGO_TARGET_DIR.\n' >&2
+			exit 2
+		fi
+		if [[ "${ADAPTERCTL_BIN##*/}" != "adapterctl" ]]; then
+			printf 'run-config-conformance: ADAPTERCTL_BIN must name a file called adapterctl: %s\n' "${ADAPTERCTL_BIN}" >&2
 			printf 'Set ADAPTERCTL_BIN to the adapterctl binary, pass --bin-dir, or export CARGO_TARGET_DIR.\n' >&2
 			exit 2
 		fi
