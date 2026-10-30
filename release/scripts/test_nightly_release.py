@@ -1118,7 +1118,7 @@ cp "$source" "$destination"
                 self.assertIn(f"/blob/{tag}/release/NIGHTLY.md", result.stdout)
                 self.assertNotIn(f"/blob/{tag}/release/VERIFY.md", result.stdout)
                 for binary in binaries:
-                    expected = f"{binary} {tag[1:]}"
+                    expected = f"{binary} {nightly.expected_binary_version(binary, tag[1:])}"
                     if binary == "registry-render":
                         source = (nightly.ROOT / "crates/registry-render/src/lib.rs").read_text()
                         pin = re.search(r'pub const TYPST_PIN: &str = "([^"]+)";', source)[1]
