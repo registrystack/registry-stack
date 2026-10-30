@@ -5645,7 +5645,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "axum",
  "axum-test",
@@ -5743,7 +5743,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discoveryctl"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "axum",
  "clap",

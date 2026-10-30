@@ -118,10 +118,10 @@ registry-casework-client = { path = "crates/registry-casework-client", version =
 registry-stack-client = { path = "crates/registry-stack-client", version = "0.45.0" }
 registry-casework-breg = { path = "crates/registry-casework-breg", version = "0.45.0" }
 registry-casework-core = { path = "crates/registry-casework-core", version = "0.45.0" }
-registry-discovery = { path = "crates/registry-discovery", version = "0.44.0", default-features = false }
+registry-discovery = { path = "crates/registry-discovery", version = "0.45.0", default-features = false }
 registry-discovery-client = { path = "crates/registry-discovery-client", version = "0.45.0" }
 registry-discovery-profile = { path = "crates/registry-discovery-profile", version = "0.45.0" }
-registry-discoveryctl = { path = "crates/registry-discoveryctl", version = "0.44.0" }
+registry-discoveryctl = { path = "crates/registry-discoveryctl", version = "0.45.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.45.0" }
 registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.45.0" }
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.45.0" }
