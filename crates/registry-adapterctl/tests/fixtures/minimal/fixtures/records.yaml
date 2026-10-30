@@ -10,7 +10,7 @@ intercepts:
   - type: endpoint
     endpoint: case-api
 entries:
-  - operation: cases.get
+  - operation: cases-get
     given:
       endpoint: case-api
       method: GET

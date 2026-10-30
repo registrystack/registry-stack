@@ -6,11 +6,11 @@ project:
 profile:
   id: case-api
   version: 1.0.0
-  digest: sha256:7bdcd5e4096f5637f81e96facc5e6bb1271485c5db4a571792d4b43e710271f2
+  digest: sha256:ce34549a67c6a0d1e20dc7096c30576b44d4bf1164217b2578da346ac87f11d5
 pack:
   id: case-api-pack
   version: 1.0.0
-  digest: sha256:ca5a4a2c6d3b2927554578c0064b502194f26e141f3db510aa033a6d19f4f331
+  digest: sha256:56fe22fdfb47001db72a2ad614753827e3ca2f253447de42d64cf540b2508b73
 recordTypes:
   - name: case
     fields:
@@ -18,13 +18,13 @@ recordTypes:
         type: string
         required: true
 templatedRoutes:
-  - routeTemplate: fetchPage
+  - routeTemplate: fetch-page
     routeId: fetchCases
     parameters:
       record-type: case
 bindings:
   - id: find-cases
-    operation: cases.get
+    operation: cases-get
     recordType: case
     route: fetchCases
     maximumUpstreamCalls: 5
@@ -33,6 +33,6 @@ accessProfiles:
     scopes:
       - records:read
     operations:
-      - cases.get
+      - cases-get
     recordTypes:
       - case

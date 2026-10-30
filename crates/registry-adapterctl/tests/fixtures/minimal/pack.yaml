@@ -10,10 +10,10 @@ endpoints:
     authentication:
       type: oauth2-client-credentials
     operations:
-      - id: cases.read
+      - id: cases-read
         idempotentUpstream: true
 routeTemplates:
-  - id: fetchPage
+  - id: fetch-page
     parameters:
       - name: record-type
         type: string
@@ -25,20 +25,20 @@ routeTemplates:
             file: scripts/map.rhai
             entrypoint: map
 routes:
-  - id: sharedLookup
+  - id: shared-lookup
     from:
-      uri: direct:sharedLookup
+      uri: direct:shared-lookup
     steps:
       - to:
           uri: http:case-api
           parameters:
             httpMethod: GET
-            path: /api/cases/{type}
+            path: /api/cases/{{type}}
             pathParameters:
               type:
                 constant: case
 codeMaps:
-  - id: genderCodes
+  - id: gender-codes
     entries:
       female: F
 scripts:

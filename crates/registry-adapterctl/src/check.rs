@@ -63,7 +63,7 @@ const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
 
 /// The authored project format, derived per CFG-ENV-2 and CFG-ENV-3 from the
 /// core naming constants.
-const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PROJECT_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PROJECT_API_VERSION)],
@@ -73,7 +73,7 @@ const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The authored profile format.
-const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PROFILE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PROFILE_API_VERSION)],
@@ -83,7 +83,7 @@ const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The authored pack format.
-const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PACK_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PACK_API_VERSION)],
@@ -114,7 +114,9 @@ const RUNTIME_FORMAT: FormatSpec<'static> = FormatSpec {
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
-    /// Authored adapter project file (a `project.yaml`).
+    /// Authored adapter project: its directory (holding `project.yaml`) or
+    /// the `project.yaml` file itself. The profile, pack, and fixtures are
+    /// read beside the project either way.
     #[arg(value_name = "PROJECT")]
     pub project: PathBuf,
 
@@ -162,17 +164,15 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     let mut report = Report::new(Vec::new());
     let mut files = 0usize;
 
-    let project_path = args.project.clone();
+    // The project may be given as its directory or as its `project.yaml`;
+    // every other artifact is read beside the project either way.
+    let (project_path, directory) = resolve_project(&args.project);
     let project = read::<registry_adapter_core::AdapterProject>(
         &project_path,
         &PROJECT_FORMAT,
         &mut report,
         &mut files,
     )?;
-    let directory = project_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
     let profile_path = args
         .profile
         .clone()
@@ -274,15 +274,28 @@ fn project_string(path: &Path) -> String {
     path.display().to_string()
 }
 
+/// Resolve the project argument: a directory means `project.yaml` inside
+/// it, anything else is the `project.yaml` path itself. The pair is
+/// (project file, directory beside which every other artifact lives).
+pub(crate) fn resolve_project(project: &Path) -> (PathBuf, PathBuf) {
+    if project.is_dir() {
+        let directory = project.to_path_buf();
+        (directory.join("project.yaml"), directory)
+    } else {
+        let directory = project.parent().map(Path::to_path_buf).unwrap_or_default();
+        (project.to_path_buf(), directory)
+    }
+}
+
 /// Read and decode one document, folding a reader refusal into `report` and
 /// counting the file as checked either way. `None` means the reader refused.
 /// The bytes come back with the decode so the pin checks hash the file as
 /// read, not a second read of it.
 /// One read's outcome: the decoded document with the bytes it was read
 /// from, or `None` when the reader refused the document.
-type DecodedFile<T> = Option<(Decoded<T>, Vec<u8>)>;
+pub(crate) type DecodedFile<T> = Option<(Decoded<T>, Vec<u8>)>;
 
-fn read<T: serde::de::DeserializeOwned>(
+pub(crate) fn read<T: serde::de::DeserializeOwned>(
     path: &Path,
     format: &FormatSpec<'static>,
     report: &mut Report,
@@ -558,7 +571,7 @@ fn verify_project_pins(
 }
 
 /// The sha256 digest of one artifact's bytes, in the pinned uri form.
-fn digest_of(bytes: &[u8]) -> Digest {
+pub(crate) fn digest_of(bytes: &[u8]) -> Digest {
     Digest::new(sha256_uri(bytes)).expect("a computed sha256 uri is a valid digest")
 }
 

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for `adapterctl check` and `adapterctl schemas`, run
-//! against the minimal fixture project under `tests/fixtures/minimal`.
+//! Integration tests for `adapterctl check`, `adapterctl project lock`,
+//! and `adapterctl schemas`, run against the minimal fixture project under
+//! `tests/fixtures/minimal`.
 
 use serde_json::{json, Value};
 use std::ffi::OsString;
@@ -418,7 +419,7 @@ fn an_entry_with_an_unknown_operation_refuses_with_the_operation_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("fixtures/records.yaml"),
-            "- operation: cases.get",
+            "- operation: cases-get",
             "- operation: cases.ghost",
         );
     });
@@ -433,7 +434,7 @@ fn an_entry_with_an_unbound_operation_refuses_with_the_operation_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("project.yaml"),
-            "bindings:\n  - id: find-cases\n    operation: cases.get\n    recordType: case\n    route: fetchCases\n    maximumUpstreamCalls: 5",
+            "bindings:\n  - id: find-cases\n    operation: cases-get\n    recordType: case\n    route: fetchCases\n    maximumUpstreamCalls: 5",
             "bindings: []",
         );
     });
@@ -449,7 +450,7 @@ fn an_unknown_template_refuses_with_the_core_code_and_stays_value_free() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("project.yaml"),
-            "routeTemplate: fetchPage",
+            "routeTemplate: fetch-page",
             &format!("routeTemplate: {ghost}"),
         );
     });
@@ -544,7 +545,7 @@ fn the_human_refusal_names_the_code_on_stderr() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("project.yaml"),
-            "routeTemplate: fetchPage",
+            "routeTemplate: fetch-page",
             "routeTemplate: ghost",
         );
     });
@@ -617,4 +618,261 @@ fn schemas_check_refuses_a_hand_edited_file() {
     let (exit, report, _) = run_json(&["schemas", "--check", "--output-dir", &output]);
     assert_eq!(exit, ExitCode::from(1), "{report}");
     assert_eq!(report["diagnostics"][0]["code"], "adapterctl.schemas.drift");
+}
+
+/// The minimal fixture project's directory.
+fn minimal_project_directory() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/minimal")
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// The sha256 uri of one file's bytes as read.
+fn pinned_digest(path: &Path) -> String {
+    registry_platform_config::sha256_uri(&std::fs::read(path).unwrap())
+}
+
+// --- the project argument accepts the directory form ---
+
+/// The project argument accepts the project's directory: `project.yaml`
+/// and the files beside it are read from there, exactly as for the file
+/// form.
+#[test]
+fn check_accepts_the_project_directory() {
+    let (exit, report, stderr) = run_json(&["check", &minimal_project_directory()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["filesChecked"], 5);
+    assert_eq!(report["diagnostics"], json!([]));
+}
+
+/// A directory that carries no `project.yaml` is the same operational
+/// failure as a missing project file: the file the run needs is absent.
+#[test]
+fn a_directory_without_a_project_yaml_is_an_operational_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let empty = root.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let (exit, report, _) = run_json(&["check", empty.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    assert_eq!(report["status"], "operational-failure", "{report}");
+    assert_eq!(report["diagnostics"][0]["code"], "adapterctl.io-failure");
+    assert!(
+        report["diagnostics"][0]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("empty/project.yaml")),
+        "{report}"
+    );
+}
+
+// --- `project lock` ---
+
+/// The directory of one copied project path.
+fn directory_of(project: &str) -> String {
+    Path::new(project)
+        .parent()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// The project text after one lock run over its directory.
+fn lock_directory(directory: &str) -> (ExitCode, Value, Vec<u8>) {
+    run_json(&["project", "lock", directory])
+}
+
+/// `project lock` rewrites a stale digest pin from the files beside the
+/// project, reports the pin it rewrote, and the repaired project then
+/// checks green under the same reader and checks as `check`.
+#[test]
+fn project_lock_repairs_a_stale_digest_pin_and_the_project_then_checks_green() {
+    let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal/pack.yaml");
+    let stale = format!("  digest: {}", pinned_digest(&pack));
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("project.yaml"),
+            &stale,
+            "  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+    });
+    let directory = directory_of(&project);
+    let (exit, report, stderr) = lock_directory(&directory);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["command"], "project lock");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["profile"], "unchanged");
+    assert_eq!(report["pack"], "updated");
+    let rewritten = std::fs::read_to_string(&project).unwrap();
+    assert!(
+        rewritten.contains(&stale),
+        "the lock must restore the pack digest pin: {rewritten}"
+    );
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["filesChecked"], 5);
+}
+
+/// A lock over an already pinned project reports both artifacts unchanged
+/// and writes nothing.
+#[test]
+fn project_lock_of_a_fresh_project_writes_nothing() {
+    let (_root, project) = mutated_project(|_| {});
+    let directory = directory_of(&project);
+    let before = std::fs::read(&project).unwrap();
+    let (exit, report, _) = lock_directory(&directory);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["profile"], "unchanged");
+    assert_eq!(report["pack"], "unchanged");
+    assert_eq!(
+        std::fs::read(&project).unwrap(),
+        before,
+        "a fresh project must not be rewritten"
+    );
+}
+
+/// The lock accepts the `project.yaml` file form as well as the directory
+/// form.
+#[test]
+fn project_lock_accepts_the_project_file_form() {
+    let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal/pack.yaml");
+    let stale = format!("  digest: {}", pinned_digest(&pack));
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("project.yaml"),
+            &stale,
+            "  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+    });
+    let (exit, report, _) = lock_directory(&project);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["pack"], "updated");
+}
+
+/// A lock whose pack file is missing is an operational failure naming the
+/// absent file, and nothing is written.
+#[test]
+fn project_lock_with_a_missing_pack_is_an_operational_failure() {
+    let (_root, project) = mutated_project(|root| {
+        std::fs::remove_file(root.join("pack.yaml")).unwrap();
+    });
+    let directory = directory_of(&project);
+    let before = std::fs::read(&project).unwrap();
+    let (exit, report, _) = lock_directory(&directory);
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    assert_eq!(report["status"], "operational-failure", "{report}");
+    assert_eq!(report["diagnostics"][0]["code"], "adapterctl.io-failure");
+    assert!(
+        report["diagnostics"][0]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("pack.yaml")),
+        "{report}"
+    );
+    assert_eq!(std::fs::read(&project).unwrap(), before);
+}
+
+/// A project the reader refuses is a domain refusal carrying the reader's
+/// findings, and nothing is written.
+#[test]
+fn project_lock_refuses_a_project_that_does_not_decode_and_writes_nothing() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("project.yaml"),
+            "kind: AdapterProject",
+            "kind: AdapterImagine",
+        );
+    });
+    let directory = directory_of(&project);
+    let before = std::fs::read(&project).unwrap();
+    let (exit, report, _) = lock_directory(&directory);
+    assert_refused(exit, &report, "config.wrong-kind");
+    assert_eq!(std::fs::read(&project).unwrap(), before);
+}
+
+/// A project whose pinned artifact blocks are not in the line form the
+/// lock rewrites refuses with the layout code at the pin, and nothing is
+/// written.
+#[test]
+fn project_lock_refuses_a_project_it_cannot_rewrite() {
+    let profile = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal/profile.yaml");
+    let pinned = pinned_digest(&profile);
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("project.yaml"),
+            &format!("profile:\n  id: case-api\n  version: 1.0.0\n  digest: {pinned}"),
+            &format!("profile: {{id: case-api, version: 1.0.0, digest: {pinned}}}"),
+        );
+    });
+    let directory = directory_of(&project);
+    let before = std::fs::read(&project).unwrap();
+    let (exit, report, _) = lock_directory(&directory);
+    assert_refused(exit, &report, "adapterctl.project-lock-layout");
+    assert_eq!(report["diagnostics"][0]["path"], "/profile/digest");
+    assert_eq!(std::fs::read(&project).unwrap(), before);
+}
+
+/// A lock pins the profile and pack given by `--profile` and `--pack` even
+/// when neither sits beside the project, and the project then checks green
+/// when check reads the same artifacts.
+#[test]
+fn project_lock_pins_the_artifacts_given_by_flag() {
+    let root = tempfile::tempdir().unwrap();
+    let project_dir = root.path().join("project");
+    copy_fs(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal"),
+        &project_dir,
+    );
+    let elsewhere = root.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::rename(
+        project_dir.join("profile.yaml"),
+        elsewhere.join("profile.yaml"),
+    )
+    .unwrap();
+    // The pack moves with its digest-pinned scripts: a pin resolves beside
+    // the pack document, wherever the flag names it.
+    std::fs::rename(project_dir.join("pack.yaml"), elsewhere.join("pack.yaml")).unwrap();
+    std::fs::rename(project_dir.join("scripts"), elsewhere.join("scripts")).unwrap();
+    let project = project_dir
+        .join("project.yaml")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let pack_file = elsewhere.join("pack.yaml");
+    let profile_file = elsewhere.join("profile.yaml");
+    let stale = format!("  digest: {}", pinned_digest(&pack_file));
+    edit(
+        Path::new(&project),
+        &stale,
+        "  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    let (exit, report, _) = run_json(&[
+        "project",
+        "lock",
+        &project,
+        "--profile",
+        profile_file.to_str().unwrap(),
+        "--pack",
+        pack_file.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["profile"], "unchanged");
+    assert_eq!(report["pack"], "updated");
+    let rewritten = std::fs::read_to_string(&project).unwrap();
+    assert!(
+        rewritten.contains(&stale),
+        "the lock must pin the flagged pack's digest: {rewritten}"
+    );
+    let (exit, report, _) = run_json(&[
+        "check",
+        &project,
+        "--profile",
+        profile_file.to_str().unwrap(),
+        "--pack",
+        pack_file.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
 }

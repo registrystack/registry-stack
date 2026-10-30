@@ -12,6 +12,7 @@
 //! `adapterctl check` accepts is one the runtime can interpret.
 
 mod check;
+mod project;
 mod report;
 mod schemas;
 
@@ -47,6 +48,8 @@ enum Command {
     /// Check an authored adapter project, its pinned profile and pack, and
     /// its fixtures, offline, and print the findings.
     Check(check::CheckArgs),
+    /// Operate one authored adapter project.
+    Project(project::ProjectArgs),
     /// Write the generated JSON Schemas of the five Adapter formats, or
     /// check the committed ones for drift.
     Schemas(schemas::SchemasArgs),
@@ -115,10 +118,14 @@ where
     let Cli { format, command } = cli;
     let command_name = match &command {
         Command::Check(_) => "check",
+        Command::Project(project) => match project.command {
+            project::ProjectCommand::Lock(_) => "project lock",
+        },
         Command::Schemas(_) => "schemas",
     };
     let outcome = match command {
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
+        Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
     };
     match outcome {
@@ -216,6 +223,71 @@ fn check_command(
     write_success(&envelope, &checked, format, stdout)
 }
 
+/// Run `project lock` and write its verdict: the rewritten pins, a refusal
+/// carrying the reader's findings, or a failure naming the broken
+/// environment.
+fn project_command(
+    args: project::ProjectArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    let project::ProjectCommand::Lock(args) = args.command;
+    let run = match project::run_lock(&args) {
+        Ok(run) => run,
+        Err(project::LockFailure::Io { path, source }) => {
+            let exit = OPERATIONAL_FAILURE_EXIT;
+            let report = failure(
+                command_name,
+                exit,
+                vec![json!({
+                    "severity": "error",
+                    "code": "adapterctl.io-failure",
+                    "artifact": "filesystem",
+                    "path": path,
+                    "message": format!("the file could not be read: {source}"),
+                    "suggestedAction": "Correct the path or permissions, then retry.",
+                })],
+            );
+            return write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit));
+        }
+    };
+    let errors = refused(&run.diagnostics, false);
+    let mut checked = Report::new(run.diagnostics);
+    checked.set_files_checked(run.files_checked);
+    if errors {
+        let exit = DOMAIN_REFUSAL_EXIT;
+        let envelope = json!({
+            "ok": false,
+            "command": command_name,
+            "status": failure_status(exit),
+            "diagnostics": checked.to_json_value(),
+            "filesChecked": run.files_checked,
+        });
+        return write_configuration_report(
+            &checked,
+            command_name,
+            format,
+            envelope,
+            stdout,
+            stderr,
+        )
+        .map(|()| ExitCode::from(exit));
+    }
+    let envelope = json!({
+        "ok": true,
+        "command": command_name,
+        "status": "complete",
+        "project": run.project,
+        "filesChecked": run.files_checked,
+        "diagnostics": checked.to_json_value(),
+        "profile": run.profile.as_str(),
+        "pack": run.pack.as_str(),
+    });
+    write_success(&envelope, &checked, format, stdout)
+}
+
 /// Run `schemas` and write its verdict.
 fn schemas_command(
     args: schemas::SchemasArgs,
@@ -264,9 +336,7 @@ fn write_configuration_report(
     if format == OutputFormat::Json {
         report::write(&envelope, stdout).map_err(|_| ())?;
     } else {
-        if command == "check" {
-            let _ = writeln!(stderr, "adapterctl check refused the input.");
-        }
+        let _ = writeln!(stderr, "adapterctl {command} refused the input.");
         let _ = write!(stderr, "{}", report.render_human());
     }
     Ok(())
@@ -331,8 +401,12 @@ fn write_failure(
     if format == OutputFormat::Json {
         return report::write(report, stdout).map_err(|_| ());
     }
-    if report["command"] == "check" {
-        let _ = writeln!(stderr, "adapterctl check refused the input.");
+    if matches!(
+        report["command"].as_str(),
+        Some("check") | Some("project lock")
+    ) {
+        let command = report["command"].as_str().unwrap_or_default();
+        let _ = writeln!(stderr, "adapterctl {command} refused the input.");
     }
     if let Some(diagnostics) = report["diagnostics"].as_array() {
         for finding in diagnostics {
