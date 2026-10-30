@@ -1168,6 +1168,10 @@ Rules:
   the lifetime is anchored when the request is sent, not when the reply
   arrives; the cache is clamped to `maximumCacheSeconds`; unknown members
   are ignored; refresh is single-flight.
+- Under the `basic-header` placement the client id and secret are base64
+  encoded as written, without the form-encoding step of RFC 6749 section
+  2.3.1, as Evidence does. A strict server mis-decodes a secret containing
+  `%`, `+`, or non-ASCII bytes; such a client uses the `form-body` placement.
 - For an OAuth2 kind, an upstream 401 invalidates the cached token and the
   send is repeated once with a fresh one (safe for writes too: a 401 means
   the request was not processed). A 401 after that, or any 401 under a
