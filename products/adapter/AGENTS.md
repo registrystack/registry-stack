@@ -20,7 +20,7 @@ changing the product or any `registry-adapter*` crate.
 
 | Area | Owns |
 |---|---|
-| `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks; no I/O |
+| `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks; no I/O (it depends on `registry-platform-httputil` only for its pure header predicates and bounds) |
 | `crates/registry-adapter` | Adapter runtime: the governed facade, the Camel-port engine (exchange, routes, EIP processors, components), the security surface, the audit journal, and the idempotency store |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
 | `products/adapter/` | `CONCEPT.md`, `DELIVERY-PLAN.md`, schemas, profiles, packs, examples, fixtures, and product scripts |

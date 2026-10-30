@@ -18,6 +18,10 @@ use crate::profile::{
 use crate::project::AdapterProject;
 use crate::route::{Step, TemplateParameterType};
 use crate::runtime::AdapterRuntimeConfig;
+use registry_platform_httputil::destination::{
+    is_script_visible_response_header_name, is_script_writable_request_header_name,
+    MAX_DESTINATION_REQUEST_HEADERS,
+};
 use registry_platform_yaml::{Diagnostic, Digest, ExternalId, UniqueList};
 use std::collections::{HashMap, HashSet};
 
@@ -45,33 +49,44 @@ const ENGINE_HEADERS: &[&str] = &[
     "camelsplitsize",
 ];
 
-/// The credential, cookie, and hop-by-hop header names a route never
-/// writes or removes (`products/adapter/CONCEPT.md` section 8.11.4,
-/// never-allowlistable list). Lowercase, sorted; names compare without
-/// case, and the `proxy-` prefix joins them.
-const RESERVED_ROUTE_HEADER_WRITES: &[&str] = &[
-    "authorization",
-    "connection",
-    "content-length",
-    "cookie",
-    "host",
-    "keep-alive",
-    "set-cookie",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-];
+/// Whether a route may write (set or remove) the named header, the one
+/// predicate over the reserved names (`RESERVED_HEADER_NAMES`, whose
+/// `proxy-` prefix rule includes `Proxy-Authorization`), the
+/// engine-owned header prefixes, and the facade inputs
+/// (`products/adapter/CONCEPT.md` section 8.11.4). The port table's
+/// `setHeader` row (section 8.10) is the write contract: a `Camel`- or
+/// `Adapter`-prefixed engine header and every credential header refuse,
+/// both prefixes compared without case, so a route cannot invent a name
+/// either prefix owns even when the engine never places it.
+#[must_use]
+pub fn is_route_unwritable_header_name(name: &str) -> bool {
+    crate::auth::is_reserved_header_name(name)
+        || is_facade_input_header_name(name)
+        || is_engine_header_name(name)
+        || name
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("adapter"))
+}
 
-/// Whether a route may write (set or remove) the named header. Reserved
-/// names, the `proxy-` prefix, engine-placed Camel headers, and the
-/// facade inputs all refuse.
-fn is_reserved_header_write(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    RESERVED_ROUTE_HEADER_WRITES.contains(&lower.as_str())
-        || FACADE_INPUT_HEADERS.contains(&lower.as_str())
-        || ENGINE_HEADERS.contains(&lower.as_str())
-        || lower.starts_with("proxy-")
+/// Whether a header name is one the engine places on the exchange, by
+/// Camel's `Camel`/`camel` prefix rule (`DefaultHeaderFilterStrategy`'s
+/// `CAMEL_FILTER_STARTS_WITH`, compared without case). The response
+/// allowlist refuses these (an upstream never writes one) and the
+/// route-write rule extends the refusal to the engine's own
+/// `Adapter` prefix.
+#[must_use]
+pub fn is_engine_header_name(name: &str) -> bool {
+    name.get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("camel"))
+}
+
+/// Whether a header name is a facade input the rest consumer places on
+/// the exchange under a closed name (section 8.11.1), compared without
+/// case. A route reads one; a route write and a `responseHeaders`
+/// entry refuse.
+#[must_use]
+pub fn is_facade_input_header_name(name: &str) -> bool {
+    FACADE_INPUT_HEADERS.contains(&name.to_ascii_lowercase().as_str())
 }
 
 /// Whether a route may read the named header: a facade input, an
@@ -549,20 +564,41 @@ fn record_parameter_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Di
     findings
 }
 
-/// The 8.11.4 allowlist checks over one endpoint header allowlist: every
-/// name is an RFC 9110 token, and the never-allowlistable set refuses,
-/// which is the reserved header names plus this endpoint's own api-key
-/// header name (`products/adapter/CONCEPT.md` section 8.11.4).
+/// The 8.11.4 allowlist checks over one endpoint header allowlist,
+/// mirroring the refusals the runtime repeats at filter construction so
+/// a pack that passes check never fails at load (`products/adapter/CONCEPT.md`
+/// section 8.11.4): every name is an RFC 9110 token; the
+/// never-allowlistable set refuses (the reserved header names, this
+/// endpoint's own api-key header name, and, in `responseHeaders` only,
+/// the facade inputs and every `Camel`-prefixed engine header); on
+/// both sides a name the platform transport never carries on that side
+/// refuses, decided by the same predicates the runtime calls; a repeat
+/// compared without case refuses; and a list holds at most the
+/// transport's `MAX_DESTINATION_REQUEST_HEADERS` names, refused at the
+/// first entry past the bound, where the runtime's build refuses too.
 fn header_allowlist_checks(
     prefix: &str,
     member: &str,
+    response: bool,
     headers: &UniqueList<ExternalId>,
     api_key_header: Option<&str>,
 ) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
+    let mut seen: HashSet<String> = HashSet::with_capacity(headers.len());
     for (index, header) in headers.iter().enumerate() {
         let name = header.as_str();
         let pointer = &format!("{prefix}/{member}/{index}");
+        if index == MAX_DESTINATION_REQUEST_HEADERS {
+            findings.push(finding(
+                CheckCode::PackTooManyHeaders,
+                pointer,
+                "the allowlist holds more headers than the transport's bound",
+                &format!(
+                    "List at most {MAX_DESTINATION_REQUEST_HEADERS} headers on this endpoint."
+                ),
+            ));
+            break;
+        }
         if !is_header_token(name) {
             findings.push(finding(
                 CheckCode::PackInvalidHeaderName,
@@ -574,12 +610,36 @@ fn header_allowlist_checks(
         }
         if is_reserved_header_name(name)
             || api_key_header.is_some_and(|key| key == name.to_ascii_lowercase())
+            || (response && (is_facade_input_header_name(name) || is_engine_header_name(name)))
         {
             findings.push(finding(
                 CheckCode::PackReservedHeaderName,
                 pointer,
-                "the header name is reserved by the engine",
-                "Declare a header the engine does not own.",
+                "the header name is reserved by the engine or the facade",
+                "Declare a header the engine and the facade do not own.",
+            ));
+            continue;
+        }
+        let carried = if response {
+            is_script_visible_response_header_name(name)
+        } else {
+            is_script_writable_request_header_name(name)
+        };
+        if !carried {
+            findings.push(finding(
+                CheckCode::PackTransportRefusedHeader,
+                pointer,
+                "the platform transport never carries this header on this side",
+                "Declare a header the transport carries on this side, or drop the entry.",
+            ));
+        }
+        let lower = name.to_ascii_lowercase();
+        if !seen.insert(lower) {
+            findings.push(finding(
+                CheckCode::PackDuplicateHeaderName,
+                pointer,
+                "the header name repeats an earlier entry of this list, compared without case",
+                "Declare the header once per list.",
             ));
         }
     }
@@ -693,12 +753,14 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
         findings.extend(header_allowlist_checks(
             &prefix,
             "responseHeaders",
+            true,
             &endpoint.response_headers,
             api_key_header.as_deref(),
         ));
         findings.extend(header_allowlist_checks(
             &prefix,
             "requestHeaders",
+            false,
             &endpoint.request_headers,
             api_key_header.as_deref(),
         ));
@@ -840,6 +902,20 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 .response_headers
                 .iter()
                 .map(|header| header.as_str().to_ascii_lowercase())
+        })
+        .collect();
+
+    // A route never writes an endpoint's credential name: the
+    // static-api-key header the injector owns after the filter
+    // (`products/adapter/CONCEPT.md` section 8.11.4).
+    let api_key_headers: HashSet<String> = pack
+        .endpoints
+        .iter()
+        .filter_map(|endpoint| match &endpoint.authentication {
+            EndpointAuthentication::StaticApiKey { header_name } => {
+                Some(header_name.to_ascii_lowercase())
+            }
+            _ => None,
         })
         .collect();
 
@@ -1316,7 +1392,13 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
 
         // Header writes and reads stay bounded
         // (`products/adapter/CONCEPT.md` section 8.11.4).
-        check_route_headers(&prefix, steps, &allowlist, &mut route_findings);
+        check_route_headers(
+            &prefix,
+            steps,
+            &allowlist,
+            &api_key_headers,
+            &mut route_findings,
+        );
 
         // A non-safe send naming an operation the endpoint does not
         // declare is a reference defect on its own (CFG-ID-4).
@@ -1393,6 +1475,7 @@ fn check_route_headers(
     prefix: &str,
     steps: &[Step],
     allowlist: &HashSet<String>,
+    api_key_headers: &HashSet<String>,
     findings: &mut Vec<Diagnostic>,
 ) {
     let mut placed: HashSet<String> = HashSet::new();
@@ -1421,12 +1504,15 @@ fn check_route_headers(
                     "Write the header name as an RFC 9110 token.",
                 ));
             }
-            Step::SetHeader(header) if is_reserved_header_write(&header.name) => {
+            Step::SetHeader(header)
+                if is_route_unwritable_header_name(&header.name)
+                    || api_key_headers.contains(&header.name.to_ascii_lowercase()) =>
+            {
                 findings.push(finding(
                     CheckCode::RouteReservedHeaderName,
                     &pointer,
-                    "the route sets a header reserved to the consumer, the engine, or the HTTP hop",
-                    "Set only headers the route owns; credential, cookie, host, hop-by-hop, engine, and facade-input headers are never written by a route.",
+                    "the route sets a header reserved to the consumer, the engine, the HTTP hop, or an endpoint credential",
+                    "Set only headers the route owns; credential, api-key, cookie, host, hop-by-hop, engine, and facade-input headers are never written by a route.",
                 ));
             }
             // A setHeader the route owns places its name for the reads
@@ -1434,12 +1520,15 @@ fn check_route_headers(
             Step::SetHeader(header) => {
                 placed.insert(header.name.to_ascii_lowercase());
             }
-            Step::RemoveHeader(name) if is_reserved_header_write(name) => {
+            Step::RemoveHeader(name)
+                if is_route_unwritable_header_name(name)
+                    || api_key_headers.contains(&name.to_ascii_lowercase()) =>
+            {
                 findings.push(finding(
                     CheckCode::RouteReservedHeaderName,
                     &pointer,
-                    "the route removes a header reserved to the consumer, the engine, or the HTTP hop",
-                    "Remove only headers the route owns; credential, cookie, host, hop-by-hop, engine, and facade-input headers are never written by a route.",
+                    "the route removes a header reserved to the consumer, the engine, the HTTP hop, or an endpoint credential",
+                    "Remove only headers the route owns; credential, api-key, cookie, host, hop-by-hop, engine, and facade-input headers are never written by a route.",
                 ));
             }
             _ => {}
@@ -7620,6 +7709,51 @@ mod tests {
 
     // ----- header hygiene (round 6 C3) -----
 
+    /// `is_route_unwritable_header_name` is the one predicate over the
+    /// reserved names, the engine-owned prefixes, and the facade inputs:
+    /// every name a route may neither set nor remove refuses, compared
+    /// without case, by the reserved `proxy-` prefix rule, and by the
+    /// port table's write rule over both engine prefixes (`Camel` and
+    /// `Adapter`, section 8.10); a route-owned header stays writable.
+    #[test]
+    fn route_unwritable_header_names() {
+        for name in [
+            "Authorization",
+            "Expect",
+            "Proxy-Authorization",
+            "Proxy-Session",
+            "Set-Cookie",
+            "CamelSplitIndex",
+            "CamelHttpResponseCode",
+            "camelcreatedexception",
+            "AdapterFoo",
+            "adapternextcontinuation",
+            "ADAPTER-SUMMARY",
+            "recordId",
+            "pageSize",
+            "Idempotency-Key",
+        ] {
+            assert!(
+                is_route_unwritable_header_name(name),
+                "{name} is route-unwritable"
+            );
+        }
+        for name in [
+            "X-Custom-Trace",
+            "scratch",
+            "ETag",
+            "Accept",
+            "adapt",
+            "adaptation",
+            "adaptable",
+        ] {
+            assert!(
+                !is_route_unwritable_header_name(name),
+                "{name} stays writable"
+            );
+        }
+    }
+
     /// A `setHeader` names no credential, cookie, host, hop-by-hop,
     /// engine, or facade-input header, and a `header` expression reads
     /// only a facade input, an engine-placed header, a response header an
@@ -7655,7 +7789,9 @@ mod tests {
         };
 
         // Credential, cookie, host, hop-by-hop, engine, and facade
-        // headers refuse as writes, under one code.
+        // headers refuse as writes, under one code. `Expect` joins them
+        // through the single RESERVED_HEADER_NAMES list; both engine
+        // prefixes refuse whole, not by the known names.
         for name in [
             "Authorization",
             "Proxy-Authorization",
@@ -7663,12 +7799,23 @@ mod tests {
             "Host",
             "Transfer-Encoding",
             "Connection",
+            "Expect",
             "CamelHttpResponseCode",
+            "AdapterFoo",
             "recordId",
         ] {
             let findings = check(vec![set(name, read("recordType"))], &[]);
             assert_has(&findings, CheckCode::RouteReservedHeaderName);
         }
+        // Removals answer to the same rule.
+        let findings = check(vec![Step::RemoveHeader("Expect".to_string())], &[]);
+        assert_has(&findings, CheckCode::RouteReservedHeaderName);
+        let findings = check(vec![Step::RemoveHeader("scratch".to_string())], &[]);
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteReservedHeaderName.code()),
+            "a route-owned header removes cleanly: {:?}",
+            codes(&findings)
+        );
         // A step may set a header the pack defines.
         let findings = check(
             vec![
@@ -7826,6 +7973,194 @@ mod tests {
         let mut endpoint = oauth_endpoint();
         endpoint.request_headers = UniqueList::new(vec![id("X-Api-Key")]).expect("unique");
         assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
+    }
+
+    /// The allowlists refuse what the runtime's filter build refuses, so
+    /// a pack that passes check never fails at load
+    /// (`products/adapter/CONCEPT.md` section 8.11.4): in
+    /// `responseHeaders` the facade inputs and every `Camel`-prefixed
+    /// engine header join the reserved names, and on both sides the
+    /// names the platform transport never carries on that side refuse
+    /// under their own code.
+    #[test]
+    fn allowlists_refuse_the_engine_and_transport_names() {
+        // responseHeaders: a facade input and the engine prefix refuse
+        // under the reserved code.
+        for name in [
+            "recordId",
+            "pageSize",
+            "CamelDuplicateMessage",
+            "camelIPAddress",
+        ] {
+            let mut endpoint = oauth_endpoint();
+            endpoint.response_headers = UniqueList::new(vec![id(name)]).expect("unique");
+            let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+            assert_eq!(
+                findings[0].code,
+                CheckCode::PackReservedHeaderName.code(),
+                "at {name}"
+            );
+            assert_eq!(findings[0].path, "/endpoints/0/responseHeaders/0");
+        }
+        // responseHeaders: names the transport never copies refuse.
+        for name in ["WWW-Authenticate", "Via", "Server", "X-Api-Key"] {
+            let mut endpoint = oauth_endpoint();
+            endpoint.response_headers = UniqueList::new(vec![id(name)]).expect("unique");
+            let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+            assert_eq!(
+                findings[0].code,
+                CheckCode::PackTransportRefusedHeader.code(),
+                "at {name}"
+            );
+            assert_eq!(findings[0].path, "/endpoints/0/responseHeaders/0");
+        }
+        // requestHeaders: names the transport never sends refuse.
+        for name in [
+            "Content-Type",
+            "Accept-Encoding",
+            "Forwarded",
+            "X-Forwarded-For",
+        ] {
+            let mut endpoint = oauth_endpoint();
+            endpoint.request_headers = UniqueList::new(vec![id(name)]).expect("unique");
+            let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+            assert_eq!(
+                findings[0].code,
+                CheckCode::PackTransportRefusedHeader.code(),
+                "at {name}"
+            );
+            assert_eq!(findings[0].path, "/endpoints/0/requestHeaders/0");
+        }
+        // The names each side carries stay clean: `Content-Type` on the
+        // response and the facade inputs on the request included.
+        let mut endpoint = oauth_endpoint();
+        endpoint.response_headers =
+            UniqueList::new(vec![id("ETag"), id("Content-Type")]).expect("unique");
+        endpoint.request_headers =
+            UniqueList::new(vec![id("Accept"), id("Idempotency-Key")]).expect("unique");
+        assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
+    }
+
+    /// A repeat the reader cannot see, compared without case, refuses
+    /// under its own code at the repeat's position, on either side: the
+    /// reader's `uniqueItems` compares exactly, the wire compares
+    /// without case (`products/adapter/CONCEPT.md` section 8.11.4).
+    #[test]
+    fn allowlists_refuse_a_case_only_repeat() {
+        let mut endpoint = oauth_endpoint();
+        endpoint.request_headers = UniqueList::new(vec![id("ETag"), id("etag")]).expect("unique");
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_eq!(
+            findings[0].code,
+            CheckCode::PackDuplicateHeaderName.code(),
+            "{:?}",
+            findings
+        );
+        assert_eq!(findings[0].path, "/endpoints/0/requestHeaders/1");
+
+        let mut endpoint = oauth_endpoint();
+        endpoint.response_headers =
+            UniqueList::new(vec![id("ETag"), id("If-None-Match"), id("etag")]).expect("unique");
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_eq!(
+            findings[0].code,
+            CheckCode::PackDuplicateHeaderName.code(),
+            "{:?}",
+            findings
+        );
+        assert_eq!(findings[0].path, "/endpoints/0/responseHeaders/2");
+        assert_eq!(findings.len(), 1, "one repeat, one finding: {:?}", findings);
+
+        // Distinct names, whatever their case, stay clean.
+        let mut endpoint = oauth_endpoint();
+        endpoint.request_headers =
+            UniqueList::new(vec![id("ETag"), id("If-None-Match")]).expect("unique");
+        assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
+    }
+
+    /// An allowlist over the transport's 32-name bound refuses at the
+    /// first entry past it, under its own code, where the runtime's
+    /// filter build refuses too (`products/adapter/CONCEPT.md` section
+    /// 8.11.4); the bound is the platform constant, not a copy.
+    #[test]
+    fn allowlists_refuse_the_transport_header_bound() {
+        let names = || {
+            (0..MAX_DESTINATION_REQUEST_HEADERS + 1)
+                .map(|number| id(&format!("x-case-header-{number}")))
+                .collect::<Vec<_>>()
+        };
+        let mut endpoint = oauth_endpoint();
+        endpoint.request_headers = UniqueList::new(names()).expect("unique");
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_eq!(findings.len(), 1, "{:?}", findings);
+        assert_eq!(findings[0].code, CheckCode::PackTooManyHeaders.code());
+        assert_eq!(
+            findings[0].path,
+            format!("/endpoints/0/requestHeaders/{MAX_DESTINATION_REQUEST_HEADERS}")
+        );
+
+        // The bound is per list: 32 entries on each side stay clean.
+        let mut endpoint = oauth_endpoint();
+        endpoint.request_headers = UniqueList::new(
+            (0..MAX_DESTINATION_REQUEST_HEADERS)
+                .map(|number| id(&format!("x-case-header-{number}")))
+                .collect::<Vec<_>>(),
+        )
+        .expect("unique");
+        endpoint.response_headers = UniqueList::new(
+            (0..MAX_DESTINATION_REQUEST_HEADERS)
+                .map(|number| id(&format!("x-case-echo-{number}")))
+                .collect::<Vec<_>>(),
+        )
+        .expect("unique");
+        assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
+    }
+
+    /// A route never writes an endpoint's `static-api-key` header name:
+    /// the credential injector owns it after the filter, so a
+    /// `setHeader` or `removeHeader` naming it refuses under
+    /// `RouteReservedHeaderName`, compared without case
+    /// (`products/adapter/CONCEPT.md` section 8.11.4).
+    #[test]
+    fn routes_refuse_writing_an_api_key_header_name() {
+        let route = |steps: Vec<Step>| RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps,
+        };
+        let api_key_pack = |steps: Vec<Step>| {
+            let mut endpoint = oauth_endpoint();
+            endpoint.authentication = EndpointAuthentication::StaticApiKey {
+                header_name: "X-Api-Key".to_string(),
+            };
+            pack_builder(vec![endpoint], vec![route(steps)])
+        };
+        let pack = api_key_pack(vec![Step::SetHeader(SetHeaderStep {
+            name: "x-api-key".to_string(),
+            value: Expression::Header("recordType".to_string()),
+        })]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteReservedHeaderName,
+        );
+        let pack = api_key_pack(vec![Step::RemoveHeader("X-Api-Key".to_string())]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteReservedHeaderName,
+        );
+        // Without a static-api-key endpoint the name stays route-owned.
+        let pack = pack_builder(
+            vec![oauth_endpoint()],
+            vec![route(vec![Step::RemoveHeader("X-Api-Key".to_string())])],
+        );
+        assert!(
+            !codes(&check_routes(&pack, &project_builder(&pack)))
+                .contains(&CheckCode::RouteReservedHeaderName.code()),
+            "a pack without an api-key endpoint leaves the name writable: {:?}",
+            codes(&check_routes(&pack, &project_builder(&pack)))
+        );
     }
 
     /// A query key is the upstream's wire name: `_format` and

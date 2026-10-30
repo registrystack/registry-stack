@@ -30,6 +30,7 @@ pub enum CheckCode {
     FixtureUnknownProblemCode,
     // adapter.pack.*
     PackDigestPinRequired,
+    PackDuplicateHeaderName,
     PackEndpointComponentInvalid,
     PackGraphQlOperationUnknown,
     PackGraphQlQueryInvalid,
@@ -37,6 +38,8 @@ pub enum CheckCode {
     PackInvalidHeaderName,
     PackReservedHeaderName,
     PackScriptUncompilable,
+    PackTooManyHeaders,
+    PackTransportRefusedHeader,
     PackUnknownScript,
     PackUnknownTemplateParameter,
     // adapter.profile.*
@@ -120,6 +123,7 @@ impl CheckCode {
         Self::FixtureUnknownOperation,
         Self::FixtureUnknownProblemCode,
         Self::PackDigestPinRequired,
+        Self::PackDuplicateHeaderName,
         Self::PackEndpointComponentInvalid,
         Self::PackGraphQlOperationUnknown,
         Self::PackGraphQlQueryInvalid,
@@ -127,6 +131,8 @@ impl CheckCode {
         Self::PackInvalidHeaderName,
         Self::PackReservedHeaderName,
         Self::PackScriptUncompilable,
+        Self::PackTooManyHeaders,
+        Self::PackTransportRefusedHeader,
         Self::PackUnknownScript,
         Self::PackUnknownTemplateParameter,
         Self::ProfileInvalidPath,
@@ -206,6 +212,7 @@ impl CheckCode {
             Self::FixtureUnknownOperation => "adapter.fixture.unknown-operation",
             Self::FixtureUnknownProblemCode => "adapter.fixture.unknown-problem-code",
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
+            Self::PackDuplicateHeaderName => "adapter.pack.duplicate-header-name",
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
             Self::PackGraphQlOperationUnknown => "adapter.pack.graphql-operation-unknown",
             Self::PackGraphQlQueryInvalid => "adapter.pack.graphql-query-invalid",
@@ -213,6 +220,8 @@ impl CheckCode {
             Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
+            Self::PackTooManyHeaders => "adapter.pack.too-many-headers",
+            Self::PackTransportRefusedHeader => "adapter.pack.transport-refused-header",
             Self::PackUnknownScript => "adapter.pack.unknown-script",
             Self::PackUnknownTemplateParameter => "adapter.pack.unknown-template-parameter",
             Self::ProfileInvalidPath => "adapter.profile.invalid-path",
@@ -327,6 +336,7 @@ impl CheckCode {
             | Self::FixtureUnknownOperation
             | Self::FixtureUnknownProblemCode => crate::naming::ADAPTER_FIXTURE_KIND,
             Self::PackDigestPinRequired
+            | Self::PackDuplicateHeaderName
             | Self::PackEndpointComponentInvalid
             | Self::PackGraphQlOperationUnknown
             | Self::PackGraphQlQueryInvalid
@@ -334,6 +344,8 @@ impl CheckCode {
             | Self::PackInvalidHeaderName
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable
+            | Self::PackTooManyHeaders
+            | Self::PackTransportRefusedHeader
             | Self::PackUnknownScript
             | Self::PackUnknownTemplateParameter
             | Self::RouteDirectCycle

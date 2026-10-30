@@ -5102,6 +5102,7 @@ dependencies = [
  "ipnet",
  "registry-platform-canonical-json",
  "registry-platform-config",
+ "registry-platform-httputil",
  "registry-platform-yaml",
  "schemars",
  "serde",

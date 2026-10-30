@@ -43,7 +43,8 @@ use std::fmt;
 
 use ::http::{HeaderName, HeaderValue};
 use registry_adapter_core::{
-    is_reserved_header_name, Endpoint, EndpointAuthentication, ErrorClass,
+    is_engine_header_name, is_facade_input_header_name, is_header_token, is_reserved_header_name,
+    Endpoint, EndpointAuthentication, ErrorClass,
 };
 use registry_platform_httputil::destination::{
     is_script_visible_response_header_name, is_script_writable_request_header_name,
@@ -110,6 +111,14 @@ pub enum AllowlistError {
         /// The position in `responseHeaders`.
         index: usize,
     },
+    /// A facade input name of section 8.11.1, refused in
+    /// `responseHeaders`: an upstream value never stands in for a
+    /// validated caller input. The request side may list a facade input,
+    /// which sends the caller's own value upstream.
+    FacadeInput {
+        /// The position in `responseHeaders`.
+        index: usize,
+    },
     /// The platform transport refuses the name on this side:
     /// `Content-Type` and the forwarding, encoding, and signing headers
     /// it owns on a request; authentication challenges, infrastructure,
@@ -149,6 +158,10 @@ impl fmt::Display for AllowlistError {
             Self::EngineHeader { index } => write!(
                 formatter,
                 "responseHeaders entry {index} is a Camel engine header"
+            ),
+            Self::FacadeInput { index } => write!(
+                formatter,
+                "responseHeaders entry {index} is a facade input name"
             ),
             Self::TransportRefused { side, index } => write!(
                 formatter,
@@ -315,9 +328,9 @@ impl HeaderFilter {
     /// name of section 8.11.4, the api-key header name, a repeat of an
     /// earlier entry compared without case, or more than
     /// `MAX_DESTINATION_REQUEST_HEADERS` entries; in `responseHeaders`,
-    /// also a `Camel*` engine header name; and a name the platform
-    /// transport refuses on that side, so a filter that builds is one
-    /// the transport carries.
+    /// also a `Camel*` engine header name and a facade input name; and
+    /// a name the platform transport refuses on that side, so a filter
+    /// that builds is one the transport carries.
     pub fn new<R, S>(
         request_headers: impl IntoIterator<Item = R>,
         response_headers: impl IntoIterator<Item = S>,
@@ -528,6 +541,9 @@ fn allowlist<T: AsRef<str>>(
         if side == HeaderSide::Response && is_engine_header_name(name) {
             return Err(AllowlistError::EngineHeader { index });
         }
+        if side == HeaderSide::Response && is_facade_input_header_name(name) {
+            return Err(AllowlistError::FacadeInput { index });
+        }
         let carried = match side {
             HeaderSide::Request => is_script_writable_request_header_name(name),
             HeaderSide::Response => is_script_visible_response_header_name(name),
@@ -565,29 +581,4 @@ fn is_strict_field_value(value: &[u8]) -> bool {
     value.iter().all(|byte| visible(byte) || blank(byte))
         && value.first().is_none_or(visible)
         && value.last().is_none_or(visible)
-}
-
-/// Whether a header name is an RFC 9110 token.
-// TODO(X1 export): replace with `registry_adapter_core::is_header_token`
-// once core exports it; it is private in `checks.rs` today.
-fn is_header_token(name: &str) -> bool {
-    !name.is_empty()
-        && name.bytes().all(|byte| {
-            matches!(
-                byte,
-                b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^'
-                    | b'_' | b'`' | b'|' | b'~' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z'
-            )
-        })
-}
-
-/// Whether a header name is one the engine places on the exchange, by
-/// Camel's `Camel`/`camel` prefix rule (`DefaultHeaderFilterStrategy`'s
-/// `CAMEL_FILTER_STARTS_WITH`, compared without case).
-// TODO(X1 export): replace with core's engine-header predicate once core
-// exports one beside `is_reserved_header_write`; core keeps the
-// engine-header and facade-input lists private in `checks.rs` today.
-fn is_engine_header_name(name: &str) -> bool {
-    name.get(..5)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("camel"))
 }

@@ -64,7 +64,7 @@ refuses: reader (the platform YAML reader, before any check runs), checks
 the script digest pins). Route findings report once at the authored
 position: `/routeTemplates/N` when the defect sits in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code.
+finding per code. The corpus holds 77 members.
 
 ### Profile members
 
@@ -88,6 +88,9 @@ finding per code.
 | `adapter.pack.graphql-query-required` | `graphql` endpoint names no `queryFile` | `adapter.pack.graphql-query-required` | checks |
 | `adapter.pack.reserved-header-name` | `static-api-key` declares the reserved header `Authorization` | `adapter.pack.reserved-header-name` | checks |
 | `adapter.pack.invalid-header-name` | `static-api-key` declares the header name `bad=header`, not an RFC 9110 token | `adapter.pack.invalid-header-name` | checks |
+| `adapter.pack.transport-refused-header` | The endpoint allowlists `Forwarded`, a header the platform transport owns on a request | `adapter.pack.transport-refused-header` | checks |
+| `adapter.pack.duplicate-header-name` | The endpoint allowlists `ETag` and `etag`, the same name twice compared without case, a repeat the reader's exact `uniqueItems` cannot see | `adapter.pack.duplicate-header-name` | checks |
+| `adapter.pack.too-many-headers` | The endpoint allowlists 33 request headers, one past the transport's 32-name bound | `adapter.pack.too-many-headers` | checks |
 | `adapter.pack.unknown-script` | A route's `rhai` file is not in the digest-pinned inventory | `adapter.pack.unknown-script` | checks |
 | `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |

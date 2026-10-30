@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.transport-refused-header: this artifact set must be refused with
+# exactly adapter.pack.transport-refused-header. The endpoint allowlists `Forwarded`, a header the
+# platform transport owns on a request and never lets a pack send.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.transport-refused-header/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:c41a21da2954ab5ff070202c38f52dade9855872000b4307e06559feab93184e
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:d71fbca96e1d7db656e4f78b47d74e3ba8512059cfd3d19626ab84d3147da8c2
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

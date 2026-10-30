@@ -24,6 +24,9 @@
 //! // An RFC 9110 token is allowed; a reserved engine name is not.
 //! assert!(registry_adapter_core::is_header_token("accept"));
 //! assert!(registry_adapter_core::is_reserved_header_name("authorization"));
+//! assert!(registry_adapter_core::is_engine_header_name("CamelSplitIndex"));
+//! assert!(registry_adapter_core::is_facade_input_header_name("recordId"));
+//! assert!(registry_adapter_core::is_route_unwritable_header_name("recordId"));
 //! ```
 
 mod auth;
