@@ -341,6 +341,11 @@ pub enum ReplayMismatch {
     NotIntercepted,
     /// Every recorded exchange of the entry is spent.
     Exhausted,
+    /// The next recorded exchange was made against another endpoint.
+    Endpoint,
+    /// The next recorded exchange is of the other kind: a token request
+    /// where the send is ordinary, or the reverse.
+    TokenRequest,
     /// The next recorded exchange carries another method.
     Method,
     /// The next recorded exchange carries another path.
@@ -382,9 +387,10 @@ fn canonical_body(body: Option<&serde_json::Value>) -> String {
 }
 
 /// Answer one send from the entry's recorded exchanges, in order: the
-/// exchange at the cursor must match the send's method, path, query, and
-/// body digest, and answering consumes it, so the next send matches the
-/// next recording (CONCEPT 13.3). The runtime engine calls this for every
+/// exchange at the cursor must name the send's endpoint and kind (token
+/// or ordinary) and match the send's method, path, query, and body
+/// digest, and answering consumes it, so the next send matches the next
+/// recording (CONCEPT 13.3). The runtime engine calls this for every
 /// `http` and `graphql` send it is about to make; nothing here does I/O.
 pub fn answer_send<'a>(
     intercepts: &[Intercept],
@@ -398,6 +404,12 @@ pub fn answer_send<'a>(
     let recorded = exchanges.get(*cursor).ok_or(ReplayMismatch::Exhausted)?;
     let request = &recorded.request;
     let request_query = request.query.as_deref();
+    if request.endpoint.as_str() != send.endpoint {
+        return Err(ReplayMismatch::Endpoint);
+    }
+    if request.token_request != send.token_request {
+        return Err(ReplayMismatch::TokenRequest);
+    }
     if request.method != send.method {
         return Err(ReplayMismatch::Method);
     }
@@ -770,6 +782,78 @@ mod tests {
             ),
             Err(ReplayMismatch::Exhausted)
         );
+    }
+
+    /// A send to another endpoint does not consume that endpoint's
+    /// recording, even though an intercept answers the send: the
+    /// recording at the cursor belongs to its own endpoint, and a send to
+    /// `case-api` must not be answered by a recording made against
+    /// `other-api` (CONCEPT 13.3).
+    #[test]
+    fn a_send_does_not_consume_another_endpoints_recording() {
+        let intercepts = [
+            Intercept::Endpoint {
+                endpoint: ExternalId::new("case-api").expect("id"),
+            },
+            Intercept::Endpoint {
+                endpoint: ExternalId::new("other-api").expect("id"),
+            },
+        ];
+        let mut recorded = exchange(crate::model::HttpMethod::Get, "/v2/cases");
+        recorded.request.endpoint = ExternalId::new("other-api").expect("id");
+        let mut cursor = 0usize;
+        assert_eq!(
+            answer_send(
+                &intercepts,
+                &[recorded],
+                &mut cursor,
+                &send(crate::model::HttpMethod::Get, "/v2/cases"),
+            ),
+            Err(ReplayMismatch::Endpoint)
+        );
+        assert_eq!(cursor, 0, "the recording is not consumed");
+    }
+
+    /// An ordinary send does not consume a token-request recording, and a
+    /// token send does not consume an ordinary recording, however well the
+    /// rest matches: the two kinds answer under different intercepts
+    /// (CONCEPT 10.2).
+    #[test]
+    fn sends_do_not_cross_the_token_boundary_of_a_recording() {
+        let intercepts = [
+            Intercept::Endpoint {
+                endpoint: ExternalId::new("case-api").expect("id"),
+            },
+            Intercept::TokenEndpoint {
+                endpoint: ExternalId::new("case-api").expect("id"),
+            },
+        ];
+        let mut token_recording = exchange(crate::model::HttpMethod::Post, "/oauth/token");
+        token_recording.request.token_request = true;
+        let mut cursor = 0usize;
+        assert_eq!(
+            answer_send(
+                &intercepts,
+                &[token_recording],
+                &mut cursor,
+                &send(crate::model::HttpMethod::Post, "/oauth/token"),
+            ),
+            Err(ReplayMismatch::TokenRequest)
+        );
+        assert_eq!(cursor, 0, "the recording is not consumed");
+        let mut token_send = send(crate::model::HttpMethod::Post, "/oauth/token");
+        token_send.token_request = true;
+        let mut cursor = 0usize;
+        assert_eq!(
+            answer_send(
+                &intercepts,
+                &[exchange(crate::model::HttpMethod::Post, "/oauth/token")],
+                &mut cursor,
+                &token_send,
+            ),
+            Err(ReplayMismatch::TokenRequest)
+        );
+        assert_eq!(cursor, 0, "the recording is not consumed");
     }
 
     /// A send the recording does not match is refused with the member that
