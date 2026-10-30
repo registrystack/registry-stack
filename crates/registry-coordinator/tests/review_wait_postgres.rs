@@ -719,6 +719,43 @@ async fn a_timeout_continues_at_its_timeout_route_and_withdraws_the_request() {
     assert!(h.wait_row(run).await.is_none());
 }
 
+/// Each wake spends a read from the budget. A wait woken until its budget
+/// is spent still reaches its timeout route when the timeout comes.
+#[tokio::test]
+async fn a_wait_woken_many_times_still_reaches_its_timeout_route() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    // Ninety seconds at the thirty-second floor allow four reads.
+    h.sql("UPDATE {schema}.completion_waits SET started_at=timeout_at-interval '90 seconds'")
+        .await;
+    for _ in 0..3 {
+        assert_eq!(
+            complete(&h, fake.as_ref(), REQUEST).await,
+            StatusCode::NO_CONTENT
+        );
+        h.make_due(run).await;
+        h.drain(&worker).await;
+    }
+    assert_eq!(fake.reads(), 4);
+    assert_eq!(
+        complete(&h, fake.as_ref(), REQUEST).await,
+        StatusCode::NO_CONTENT
+    );
+    h.sql("UPDATE {schema}.completion_waits SET timeout_at=clock_timestamp()-interval '1 second', started_at=clock_timestamp()-interval '91 seconds'")
+        .await;
+    h.make_due(run).await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 4, "no read past the budget");
+    assert_eq!(
+        status(&h, run).await,
+        ("finished".into(), Some("withdrawn".into()), None)
+    );
+    assert!(h.wait_row(run).await.is_none());
+}
+
 #[tokio::test]
 async fn a_result_found_by_the_last_read_wins_over_the_timeout() {
     let h = harness(true).await;
@@ -1317,4 +1354,229 @@ async fn a_malformed_mutation_acceptance_holds_an_unknown_command_before_any_wai
     );
     assert!(h.wait_row(run).await.is_none());
     assert_eq!(fake.reads(), 0);
+}
+
+fn stranger() -> Actor {
+    Actor {
+        operator: false,
+        subject: "synthetic-stranger".into(),
+        ..operator()
+    }
+}
+
+#[tokio::test]
+async fn check_now_reads_a_result_early_and_the_wait_still_reaches_its_timeout_route() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 1, "the wait read its result when it started");
+    let due = h.due_in(run).await.unwrap();
+    assert!((895.0..=900.5).contains(&due), "{due}");
+
+    let answer = h
+        .store
+        .check_now_owned(run, "await-review", &operator())
+        .await
+        .expect("an open wait takes Check now");
+    assert_eq!(answer.step, "await-review");
+    assert_eq!(answer.observations, 1);
+    assert!(answer.observation_limit > answer.observations);
+    let due = h.due_in(run).await.unwrap();
+    assert!(
+        (25.0..=30.5).contains(&due),
+        "Check now brings the read forward to the read floor after the last read: {due}"
+    );
+    let next = answer.next_observation_at.expect("the wait is pending");
+    assert!(
+        next > Utc::now() + chrono::Duration::seconds(20)
+            && next < Utc::now() + chrono::Duration::seconds(31),
+        "{next}"
+    );
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 1, "Check now never reads inside the floor");
+
+    // The floor passes: the early read happens and the wait keeps waiting.
+    h.sql("UPDATE {schema}.completion_waits SET not_before=clock_timestamp()-interval '1 second'")
+        .await;
+    h.sql("UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp() WHERE step='await-review'")
+        .await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 2, "the early read reached the product");
+    assert_eq!(status(&h, run).await.0, "running");
+    let due = h.due_in(run).await.unwrap();
+    assert!(
+        (895.0..=900.5).contains(&due),
+        "the next scheduled read waits the configured interval again: {due}"
+    );
+    let again = h
+        .store
+        .check_now_owned(run, "await-review", &operator())
+        .await
+        .unwrap();
+    assert_eq!(again.observations, 2);
+    assert_eq!(
+        again.observation_limit, answer.observation_limit,
+        "the budget is the same whenever it is asked"
+    );
+    assert!(again.observations <= again.observation_limit);
+
+    // Nothing settles: the timeout route is still reached and withdraws.
+    h.sql("UPDATE {schema}.completion_waits SET timeout_at=clock_timestamp()-interval '1 second', started_at=clock_timestamp()-interval '1209601 seconds'")
+        .await;
+    h.make_due(run).await;
+    h.drain(&worker).await;
+    assert_eq!(
+        status(&h, run).await,
+        ("finished".into(), Some("withdrawn".into()), None)
+    );
+    assert_eq!(
+        fake.operations(),
+        [
+            Operation::SubmitReviewRequest,
+            Operation::CancelReviewRequest
+        ]
+    );
+    assert!(h.wait_row(run).await.is_none());
+}
+
+#[tokio::test]
+async fn a_check_now_read_that_finds_the_result_settles_the_wait() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![
+        CompletionObservation::Pending { retry_after: None },
+        CompletionObservation::Settled(result("rejected")),
+    ]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    h.store
+        .check_now_owned(run, "await-review", &operator())
+        .await
+        .unwrap();
+    h.sql("UPDATE {schema}.completion_waits SET not_before=clock_timestamp()-interval '1 second'")
+        .await;
+    h.sql("UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp() WHERE step='await-review'")
+        .await;
+    h.drain(&worker).await;
+    assert_eq!(
+        status(&h, run).await,
+        ("finished".into(), Some("rejected".into()), None)
+    );
+}
+
+#[tokio::test]
+async fn check_now_refuses_a_step_that_is_not_waiting_and_a_run_the_caller_cannot_see() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    for step in ["submit-review", "withdraw", "no-such-step"] {
+        let error = h
+            .store
+            .check_now_owned(run, step, &operator())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "check-not-waiting", "{step}");
+    }
+    for (run, actor) in [(Uuid::new_v4(), operator()), (run, stranger())] {
+        let error = h
+            .store
+            .check_now_owned(run, "await-review", &actor)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "run-absent");
+    }
+    assert!(
+        h.due_in(run).await.unwrap() > 800.0,
+        "a refused Check now moved nothing"
+    );
+
+    // A run whose wait has ended no longer takes it.
+    h.sql("UPDATE {schema}.completion_waits SET timeout_at=clock_timestamp()-interval '1 second', started_at=clock_timestamp()-interval '1209601 seconds'")
+        .await;
+    h.make_due(run).await;
+    h.drain(&worker).await;
+    assert_eq!(status(&h, run).await.0, "finished");
+    let error = h
+        .store
+        .check_now_owned(run, "await-review", &operator())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "check-not-waiting");
+}
+
+#[tokio::test]
+async fn check_now_on_one_run_leaves_another_run_on_the_same_request_alone() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let first = h.admit().await;
+    let second = h.admit().await;
+    h.drain(&worker).await;
+    let shared: i64 = h
+        .client()
+        .await
+        .query_one(
+            &format!(
+                "SELECT count(DISTINCT wait_key) FROM {}.completion_waits",
+                h.namespace
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(shared, 1, "both waits share one key");
+    h.store
+        .check_now_owned(first, "await-review", &operator())
+        .await
+        .expect("an open wait takes Check now");
+    assert!(h.due_in(first).await.unwrap() < 31.0);
+    let due = h.due_in(second).await.unwrap();
+    assert!(
+        due > 800.0,
+        "the other run's wait was not brought forward: {due}"
+    );
+    assert!(!h.wait_row(second).await.unwrap().woken);
+}
+
+#[tokio::test]
+async fn check_now_refuses_a_held_wait_and_wakes_nothing() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![observation_failure(CallOutcome::Refused {
+        code: "product-forbidden".into(),
+    })]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(status(&h, run).await.0, "attention");
+    assert!(
+        h.wait_row(run).await.is_some(),
+        "the held wait keeps its row"
+    );
+    let error = h
+        .store
+        .check_now_owned(run, "await-review", &operator())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "check-not-waiting");
+    assert!(!h.wait_row(run).await.unwrap().woken);
+}
+
+#[tokio::test]
+async fn doctor_does_not_count_a_casework_wait_as_a_proposal_wait() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    assert!(h.wait_row(run).await.is_some());
+    let doctor = serde_json::to_value(h.store.doctor().await.unwrap()).unwrap();
+    assert_eq!(
+        doctor["proposalWaitsByTurn"],
+        json!({"party": 0, "official": 0, "nobody": 0, "unobserved": 0})
+    );
 }

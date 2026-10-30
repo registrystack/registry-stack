@@ -51,7 +51,7 @@ async fn a_second_migration_changes_no_schema_object_or_protected_row() {
     assert_eq!(catalog(&h).await, before, "the second migration ran DDL");
     assert_eq!(restored_current_job(&h, run).await, job);
     assert_eq!(restored_lease_identity(&h, run).await, identity);
-    assert_eq!(h.store.doctor().await.unwrap().schema_version, 4);
+    assert_eq!(h.store.doctor().await.unwrap().schema_version, 5);
 }
 
 #[tokio::test]
@@ -92,6 +92,28 @@ async fn a_prior_schema_without_shared_completion_waits_is_refused_unchanged() {
             .await
             .expect_err("prior completion format")
             .code,
+        "schema-version"
+    );
+    assert!(
+        h.store.doctor().await.is_err(),
+        "the runtime never adopts it"
+    );
+    assert_eq!(catalog(&h).await, before, "version refusal ran DDL");
+}
+
+#[tokio::test]
+async fn a_prior_schema_without_proposal_observations_is_refused_unchanged() {
+    let h = harness().await;
+    h.sql(
+        "ALTER TABLE {schema}.control DROP CONSTRAINT control_schema_version_check;
+         UPDATE {schema}.control SET schema_version=4;
+         ALTER TABLE {schema}.completion_waits DROP COLUMN follows_proposal,
+             DROP COLUMN last_observation, DROP COLUMN observed_at, DROP COLUMN state_since",
+    )
+    .await;
+    let before = catalog(&h).await;
+    assert_eq!(
+        h.store.migrate().await.expect_err("0.44.0 layout").code,
         "schema-version"
     );
     assert!(

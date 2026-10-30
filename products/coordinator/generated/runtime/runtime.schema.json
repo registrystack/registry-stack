@@ -221,6 +221,20 @@
             "profile": {
               "$ref": "#/$defs/ExternalId"
             },
+            "requestLink": {
+              "description": "An `https` URL template with exactly one `{proposalId}` placeholder,\nafter the host. Inspection offers it as \"Open the request\".",
+              "maxLength": 2048,
+              "pattern": "^https://[^{}]+/[^{}]*\\{proposalId\\}[^{}]*$",
+              "type": "string"
+            },
+            "resultCheckSeconds": {
+              "default": 900,
+              "description": "Spaces scheduled reads of a followed Proposal. It decides only how a\nwaiting run is read, so it stays outside the binding digest.",
+              "format": "uint32",
+              "maximum": 86400,
+              "minimum": 60,
+              "type": "integer"
+            },
             "type": {
               "const": "breg",
               "type": "string"

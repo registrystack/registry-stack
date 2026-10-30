@@ -40,7 +40,8 @@ fn source() -> Value {
             "id": "statistics-test",
             "version": "1",
             "defaultLanguage": "en",
-            "canonicalBaseIri": "https://statistics.example.test"
+            "canonicalBaseIri": "https://statistics.example.test",
+            "timezone": "UTC"
         },
         "recordTypes": [{
             "id": "record",
@@ -1988,4 +1989,27 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
                 .message
                 .contains(&format!("dependency entity `{long_entity}`"))
     }));
+}
+
+#[test]
+fn a_statistics_dataset_requires_the_registry_timezone_for_its_current_period() {
+    let mut value = source();
+    value["project"].as_object_mut().unwrap().remove("timezone");
+    value["recordTypes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("temporal");
+    let failure = compile(&value).expect_err("the current period needs today");
+    let refusals = errors(&failure)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.code.starts_with("breg.timezone."))
+        .collect::<Vec<_>>();
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert_eq!(refusals[0].code, "breg.timezone.required");
+    assert_eq!(refusals[0].path, "project.timezone");
+    assert!(
+        refusals[0].message.contains("records-by-category"),
+        "the refusal names the dataset: {}",
+        refusals[0].message
+    );
 }

@@ -5,7 +5,8 @@
     "id": "household-history",
     "canonicalBaseIri": "https://household-history.example.gov",
     "version": "0.1.0",
-    "defaultLanguage": "en"
+    "defaultLanguage": "en",
+    "timezone": "UTC"
   },
   "package": {
     "sourceRevision": "household-history-acceptance-0.1.0"

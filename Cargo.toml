@@ -245,7 +245,10 @@ regex = { version = "1", default-features = false, features = ["std", "unicode"]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 rmcp = { version = "3.4.1", default-features = false }
 # Keep Rhai strings off smartstring's reported unsound conversion path.
-rhai = { version = "=1.27.0", features = ["sync", "serde", "compact_str"] }
+# `internals` exposes the syntax tree and the registered-function table, which
+# the Coordinator reads to refuse calls to helpers its pure profile lacks; the
+# exact version pin above keeps that unstable surface fixed.
+rhai = { version = "=1.27.0", features = ["sync", "serde", "compact_str", "internals"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 # `bundled` vendors the SQLite amalgamation, so a statement source needs no
 # system library. `hooks` carries the authorizer and the progress handler, which

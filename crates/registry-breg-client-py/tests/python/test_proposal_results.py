@@ -300,6 +300,14 @@ class ProposalResultTests(unittest.TestCase):
         self.value = copy.deepcopy(submission)
         self.assertEqual(self.client.read_proposal_submission(proposal, 2)['value'], submission)
         self.assertTrue(self.requests[-1][0].startswith('/tenant/v1/proposals/' + ID + '/submissions/2?accessProfile=reader'))
+        refused = dict(submission, handoffRefusal={'code': 'review.policy-mismatch'})
+        self.value = copy.deepcopy(refused)
+        self.assertEqual(self.client.read_proposal_submission(proposal, 2)['value'], refused)
+        self.value['handoffRefusal'] = {'code': 'review.authority-said-no'}
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.read_proposal_submission(proposal, 2)
+        self.assertEqual(raised.exception.kind, 'invalid-request')
+        self.assertNotIn('authority-said-no', str(raised.exception))
         count = len(self.requests)
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.read_proposal_submission(proposal, 0)

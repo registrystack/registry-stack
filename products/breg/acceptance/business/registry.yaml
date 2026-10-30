@@ -5,7 +5,8 @@
     "id": "business",
     "canonicalBaseIri": "https://business-register.example.gov",
     "version": "0.1.0",
-    "defaultLanguage": "en"
+    "defaultLanguage": "en",
+    "timezone": "UTC"
   },
   "package": {
     "sourceRevision": "business-acceptance-0.1.0"

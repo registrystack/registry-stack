@@ -14,6 +14,10 @@ into concrete half-open UTC intervals, with exception layering where a blocking
 closure wins over an ordinary opening and an exceptional reopening requires
 explicit authority, names the closure it reopens, and stays inside it.
 
+`local_date(now, timezone)` returns the calendar date at an instant in a named
+IANA timezone. A product that answers "today" uses it so that one deployment
+has one today, which changes at local midnight.
+
 Daylight-saving transitions follow one rule per evaluator, with no knob. A
 working-day deadline is a single calculated instant: a due time inside a gap
 moves to the first instant after the gap, and a due time inside a fold takes

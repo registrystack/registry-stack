@@ -53,6 +53,7 @@ impl Availability {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // One request's observation inputs plus the instant it reads at.
 pub(super) async fn observe(
     service: &HttpService,
     action: &AuthorizedActionSurface<'_>,
@@ -61,6 +62,7 @@ pub(super) async fn observe(
     input: &Map<String, Value>,
     target_input: &str,
     correlation: &RequestCorrelation,
+    now: time::OffsetDateTime,
 ) -> Result<Availability, Response> {
     let reference = action
         .action
@@ -115,7 +117,6 @@ pub(super) async fn observe(
         return Ok(Availability::NotDisclosed);
     };
     let ObservedTarget { revision, current } = observed;
-    let today = time::OffsetDateTime::now_utc().date().to_string();
     let mut missing = BTreeSet::new();
     for guard in guards {
         if let Some(input_id) = guard.compared_input() {
@@ -135,7 +136,8 @@ pub(super) async fn observe(
             guard,
             input,
             &current,
-            &today,
+            &service.registry,
+            now,
             matches!(field.field_type, FieldTypeSource::Timestamp),
         ) {
             return Ok(Availability::NotSatisfied {

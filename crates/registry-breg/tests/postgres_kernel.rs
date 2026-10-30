@@ -776,7 +776,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"catalog-proof","version":"1","defaultLanguage":"en",
-            "canonicalBaseIri":"https://catalog-proof.example.test"},
+            "canonicalBaseIri":"https://catalog-proof.example.test","timezone":"UTC"},
         "datasets":[{"id":"entries"}],
         "recordTypes":[{"id":"entry","primaryDataset":"entries","route":"entries",
             "mutationMode":"mutable","classification":"internal",

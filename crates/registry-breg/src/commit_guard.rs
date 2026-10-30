@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Pure field predicates shared by immediate and Proposal commit controllers.
 
-use crate::model::{CompiledCommitGuard, CompiledCurrentDateRelation};
+use crate::model::{CompiledCommitGuard, CompiledCurrentDateRelation, CompiledRegistry};
 use serde_json::{Map, Value};
 use std::cmp::Ordering;
 
@@ -12,7 +12,8 @@ pub(crate) fn guard_matches(
     guard: &CompiledCommitGuard,
     inputs: &Map<String, Value>,
     current: &Map<String, Value>,
-    current_date: &str,
+    registry: &CompiledRegistry,
+    now: time::OffsetDateTime,
     is_timestamp: bool,
 ) -> bool {
     if guard.revision_unchanged {
@@ -43,9 +44,12 @@ pub(crate) fn guard_matches(
             actual.as_i64().is_some_and(|actual| actual <= maximum)
         }
         (None, None, None, None, Some(relation), None, None) => {
+            let Some(today) = registry_today(registry, now) else {
+                return false;
+            };
             actual.as_str().is_some_and(|date| match relation {
-                CompiledCurrentDateRelation::OnOrAfter => date >= current_date,
-                CompiledCurrentDateRelation::OnOrBefore => date <= current_date,
+                CompiledCurrentDateRelation::OnOrAfter => date >= today.as_str(),
+                CompiledCurrentDateRelation::OnOrBefore => date <= today.as_str(),
             })
         }
         (None, None, None, None, None, Some(input), None) => inputs
@@ -57,6 +61,21 @@ pub(crate) fn guard_matches(
             .and_then(|bound| compare_ordered(actual, bound, is_timestamp))
             .is_some_and(Ordering::is_le),
         _ => false,
+    }
+}
+
+/// The registry's calendar date at `now`, the "today" a `currentDate` guard
+/// compares against. A date that cannot be resolved fails the guard closed.
+fn registry_today(registry: &CompiledRegistry, now: time::OffsetDateTime) -> Option<String> {
+    match registry.local_date_at(now) {
+        Ok(date) => Some(date.format("%Y-%m-%d").to_string()),
+        Err(_error) => {
+            // Only the runtime feature links `tracing`; test builds without it
+            // still fail the guard closed.
+            #[cfg(feature = "runtime")]
+            tracing::error!(error = %_error, "a currentDate guard could not resolve the registry's date and fails closed");
+            None
+        }
     }
 }
 
@@ -120,7 +139,34 @@ pub(crate) fn predicate_values_equal(actual: &Value, expected: &Value, timestamp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
     use serde_json::json;
+    use time::macros::datetime;
+
+    fn registry(timezone: Option<&str>) -> CompiledRegistry {
+        let mut project = json!({"id": "guards", "version": "1", "defaultLanguage": "en",
+            "canonicalBaseIri": "https://guards.example.test"});
+        if let Some(timezone) = timezone {
+            project["timezone"] = json!(timezone);
+        }
+        let source = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": project,
+            "datasets": [{"id": "guards"}],
+            "recordTypes": [{"id": "site", "primaryDataset": "guards", "route": "sites",
+                "mutationMode": "mutable",
+                "fields": [{"id": "code", "type": "string", "required": true,
+                    "maximumLength": 32, "classification": "internal"}]}]
+        });
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+    }
+
+    fn noon() -> time::OffsetDateTime {
+        datetime!(2026-10-14 12:00 UTC)
+    }
 
     fn guard() -> CompiledCommitGuard {
         CompiledCommitGuard {
@@ -147,14 +193,16 @@ mod tests {
             &guard,
             &Map::new(),
             json!({"value":null}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         assert!(!guard_matches(
             &guard,
             &Map::new(),
             &Map::new(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         guard.equals_input = Some("submitted".into());
@@ -162,7 +210,8 @@ mod tests {
             &guard,
             &Map::new(),
             json!({"value":null}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         guard.equals = None;
@@ -170,14 +219,16 @@ mod tests {
             &guard,
             &Map::new(),
             json!({"value":null}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         assert!(guard_matches(
             &guard,
             json!({"submitted":null}).as_object().unwrap(),
             json!({"value":null}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
     }
@@ -191,21 +242,24 @@ mod tests {
             &guard,
             &inputs,
             json!({"value":10}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         assert!(!guard_matches(
             &guard,
             &inputs,
             json!({"value":9}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         assert!(!guard_matches(
             &guard,
             &inputs,
             json!({"value":"10"}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         guard.at_least = None;
@@ -214,14 +268,16 @@ mod tests {
             &guard,
             &inputs,
             json!({"value":10}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         assert!(!guard_matches(
             &guard,
             &inputs,
             json!({"value":11}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         guard.at_most = None;
@@ -230,14 +286,16 @@ mod tests {
             &guard,
             &inputs,
             json!({"value":"2026-10-14"}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         assert!(!guard_matches(
             &guard,
             &inputs,
             json!({"value":"2026-10-13"}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         guard.current_date = Some(CompiledCurrentDateRelation::OnOrBefore);
@@ -245,14 +303,16 @@ mod tests {
             &guard,
             &inputs,
             json!({"value":"2026-10-14"}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         assert!(!guard_matches(
             &guard,
             &inputs,
             json!({"value":"2026-10-15"}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
     }
@@ -273,7 +333,8 @@ mod tests {
             &guard,
             json!({"bound": submitted}).as_object().unwrap(),
             json!({"value": stored}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             timestamp,
         )
     }
@@ -451,7 +512,8 @@ mod tests {
             &guard,
             &Map::new(),
             json!({"value": 1}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
         // Two comparisons on one guard never match.
@@ -460,7 +522,8 @@ mod tests {
             &guard,
             json!({"bound": 1}).as_object().unwrap(),
             json!({"value": 1}).as_object().unwrap(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
     }
@@ -510,8 +573,51 @@ mod tests {
             &guard,
             &Map::new(),
             &Map::new(),
-            "2026-10-14",
+            &registry(Some("UTC")),
+            noon(),
             false
         ));
+    }
+
+    #[test]
+    fn a_current_date_guard_compares_against_the_registry_local_date() {
+        let colombo = registry(Some("Asia/Colombo"));
+        let mut guard = guard();
+        guard.current_date = Some(CompiledCurrentDateRelation::OnOrAfter);
+        let late_evening_utc = datetime!(2026-10-30 23:30 UTC);
+        assert!(guard_matches(
+            &guard,
+            &Map::new(),
+            json!({"value":"2026-10-31"}).as_object().unwrap(),
+            &colombo,
+            late_evening_utc,
+            false
+        ));
+        assert!(
+            !guard_matches(
+                &guard,
+                &Map::new(),
+                json!({"value":"2026-10-30"}).as_object().unwrap(),
+                &colombo,
+                late_evening_utc,
+                false
+            ),
+            "Colombo is already on 31 October at 23:30 UTC"
+        );
+        assert!(
+            !guard_matches(
+                &guard,
+                &Map::new(),
+                json!({"value":"2026-10-30"}).as_object().unwrap(),
+                &registry(None),
+                late_evening_utc,
+                false
+            ),
+            "a registry without a time zone has no today, so the guard fails closed"
+        );
+        assert!(
+            registry(None).local_date_at(late_evening_utc).is_err(),
+            "a registry without a time zone is never given a UTC date"
+        );
     }
 }

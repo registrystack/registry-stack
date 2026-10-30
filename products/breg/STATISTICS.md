@@ -151,12 +151,17 @@ period:
 ```
 
 Or it may name date fields with `validity: {from: valid-from, until: valid-to}`.
-The interval is `[from, until)`, with a null end meaning open-ended. An ended
-period's reference date is its final day. The current period uses today's UTC
-date. Publication requires an ended period at or after `firstPeriod`.
+The interval is `[from, until)`, with a null end meaning open-ended. When
+`until` names the unit's `lastDayField`, the interval runs through that last day
+inclusive, as it does under `validity: temporal`. An ended
+period's reference date is its final day. The current period uses today's date
+in the [registry's time zone](HISTORY.md#the-registrys-time-zone), which a
+project with a statistics dataset must declare. Publication requires an ended
+period at or after `firstPeriod`.
 
 A derived field that uses `registry_context.evaluation_date()` runs at today's
-UTC date for live reads and at the period's reference date for publication.
+date in the registry's time zone for live reads and at the period's reference
+date for publication.
 Live reads of a dataset that depends on this function accept only its current
 period. This keeps the live result count-equivalent to its ordinary list query.
 A release counts the registry's present rows evaluated at the reference date;

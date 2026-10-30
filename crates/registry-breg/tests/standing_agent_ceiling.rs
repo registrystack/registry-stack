@@ -276,6 +276,7 @@ fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
             json!({"id": "open", "type": "boolean", "required": true, "classification": "internal"}),
             json!({"id": "filed", "type": "date", "required": true, "classification": "internal"}),
         ]);
+    value["project"]["timezone"] = json!("UTC");
     value["statisticalDatasets"] = json!([{
         "id": "notes-by-status", "unit": "note", "population": "open eq true",
         "period": {"type": "flow", "field": "filed", "granularity": "month", "firstPeriod": "2025-01"},

@@ -164,7 +164,7 @@ methods.
 | Read | Node | Notes |
 | --- | --- | --- |
 | Current state | `listCurrentRecords` | A separate route from the direct list |
-| State at an instant | `listRecordsAsOf` | Requires `asOf` (`as_of` in Python) |
+| State on a date or at an instant | `listRecordsAsOf` | Requires `asOf` (`as_of` in Python): a calendar date for a date interval, a UTC RFC 3339 instant for a timestamp interval |
 | A committed snapshot | `listSnapshotRecords` | Takes `snapshot` or `validAt`; keep the returned snapshot reference to repeat the read |
 | Revision list | `recordRevisions` | The newest 100 retained revisions, with no continuation |
 | One revision | `getRecordRevision` | Returns the revision as bytes (`Buffer` or `bytes`) |

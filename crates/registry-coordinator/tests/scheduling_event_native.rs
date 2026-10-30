@@ -35,12 +35,13 @@ const CANCELLED_TARGET: &str = "/v1/events/scheduling-lifecycle/cancelled";
 const REMINDER_CONFIRMATION_TARGET: &str = "/v1/events/scheduling-lifecycle/reminder-confirmation";
 const REMINDER_TARGET: &str = "/v1/events/scheduling-lifecycle/reminder";
 type Delivery = (String, HeaderMap, Vec<u8>, u16, Option<String>);
+type RelayResponse = (u16, Option<String>);
 
 #[derive(Clone, Default)]
 struct Relay {
     destination: Arc<Mutex<Option<String>>>,
     deliveries: Arc<Mutex<Vec<Delivery>>>,
-    responses: Arc<Mutex<Vec<(u16, Option<String>)>>>,
+    responses: Arc<Mutex<Vec<RelayResponse>>>,
 }
 
 async fn forward(
@@ -475,11 +476,13 @@ async fn wait_for_messages_for(
         if Instant::now() >= deadline {
             let coordinator_runs = context.coordinator.run_summary().await;
             let scheduling_outbox = scheduling_outbox_summary(context.scheduling).await;
-            let relay_responses = context.relay.responses.lock().unwrap();
-            let relay_response_count = relay_responses.len();
-            let relay_recent_responses: Vec<_> =
-                relay_responses.iter().rev().take(16).cloned().collect();
-            drop(relay_responses);
+            // The guard lives only inside this block so it is not held across
+            // the awaits below.
+            let (relay_response_count, relay_recent_responses) = {
+                let relay_responses = context.relay.responses.lock().unwrap();
+                let recent: Vec<_> = relay_responses.iter().rev().take(16).cloned().collect();
+                (relay_responses.len(), recent)
+            };
             let (coordinator_status, scheduling_status, messaging_status) = tokio::join!(
                 endpoint_status(context.coordinator_origin, "/ready"),
                 endpoint_status(&context.scheduling.base_url, "/readyz"),

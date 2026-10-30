@@ -27,7 +27,9 @@ graph, declared outcomes, used Operation and Function revisions, and host execut
 Presentation titles and descriptions do not change it. Exact package bytes have a separate
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
 Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned
-revisions, deadlines, next observations, persistent floors, and count/limit. Original inputs,
+revisions, deadlines, next observations, persistent floors, and count/limit. A wait that
+follows a BReg Proposal also carries `lastObservation` once a read has answered, and
+`requestLink` when the deployment configures one. Original inputs,
 raw product responses, prepared requests, and protected correlation values remain absent.
 The reviewed Workflow declares any terminal output projection.
 
@@ -37,10 +39,13 @@ Their `start`, `get`, and `cancel` methods pin the compiled revision and check r
 identity and declared outcome names. They add no transport or authorization semantics; runtime
 schema checks remain with Coordinator. Regenerate the wrapper when the execution contract changes.
 
-`list(token, limit, cursor?, state?, attention?)` preserves a returned opaque
-cursor and its filters exactly. `attention: true` selects runs whose effective
-state is `attention` or `failed`; `state` accepts any one of the eight closed
-run states. Invalid cursors and filters fail before I/O.
+`list(token, limit, cursor?, state?, attention?, proposal?, turn?)` preserves
+a returned opaque cursor and its filters exactly. `attention: true` selects
+runs whose effective state is `attention` or `failed`; `state` accepts any one
+of the eight closed run states. `proposal` selects runs waiting on that BReg
+Proposal, and `turn` (`'party'`, `'official'` or `'nobody'`) selects runs whose
+Proposal wait last showed that turn. Invalid cursors and filters fail before
+I/O.
 
 Configuration, request documents, UUIDs, and JavaScript integer bounds are
 checked before I/O. Errors expose a fixed safe message and the closed failure

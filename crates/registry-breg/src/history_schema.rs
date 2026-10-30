@@ -548,7 +548,11 @@ impl HistoryTemporalDescriptor {
             start_field: temporal.start_field.clone(),
             end_field: temporal.end_field.clone(),
             value_kind,
-            semantics: HistoryTemporalSemantics::StartInclusiveEndExclusive,
+            semantics: if temporal.last_day {
+                HistoryTemporalSemantics::StartInclusiveLastDayInclusive
+            } else {
+                HistoryTemporalSemantics::StartInclusiveEndExclusive
+            },
         })
     }
 
@@ -566,8 +570,14 @@ impl HistoryTemporalDescriptor {
             }
             _ => return Err(HistorySchemaError::MalformedDescriptor),
         };
+        let semantics_fit = match self.semantics {
+            HistoryTemporalSemantics::StartInclusiveEndExclusive => true,
+            HistoryTemporalSemantics::StartInclusiveLastDayInclusive => {
+                expected_kind == HistoryTemporalValueKind::Date
+            }
+        };
         if self.value_kind != expected_kind
-            || self.semantics != HistoryTemporalSemantics::StartInclusiveEndExclusive
+            || !semantics_fit
             || start.valid_time_role != Some(ValidTimeRole::ValidFrom)
             || end.valid_time_role != Some(ValidTimeRole::ValidTo)
         {
@@ -588,6 +598,7 @@ pub enum HistoryTemporalValueKind {
 #[serde(rename_all = "snake_case")]
 pub enum HistoryTemporalSemantics {
     StartInclusiveEndExclusive,
+    StartInclusiveLastDayInclusive,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -840,6 +851,7 @@ mod tests {
             temporal: Some(CompiledTemporal {
                 start_field: "valid-from".to_owned(),
                 end_field: "valid-to".to_owned(),
+                last_day: false,
             }),
             canonical_id: logical("id", "id", FieldTypeSource::Uuid),
             stored_fields: fields,

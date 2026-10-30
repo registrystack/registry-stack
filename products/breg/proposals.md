@@ -346,6 +346,26 @@ non-withdrawn result. BReg filters its retained local Proposal and Review state
 before paging; listing makes no remote Review calls. Keep paging while
 `nextCursor` is present.
 
+### When the review authority refuses the hand-off
+
+When the review authority refuses to accept the current submission for good, Apply reads
+`review-ended` with recovery `revise`, as in the table above. Proposal Get, each Proposal in a
+list, and the per-version submission read then also carry the authority's reason, when it is
+one BReg recognizes:
+
+```json
+"handoffRefusal": {"code": "review.initiator-required"}
+```
+
+The allowlisted codes are `review.initiator-required`, `review.initiator-excluded` and
+`review.policy-mismatch`. Any other refusal reads `review.refused`, and BReg never copies the
+authority's text. The member is absent while the hand-off is pending, accepted or retrying,
+and for a later submission version. `review.initiator-required` and
+`review.initiator-excluded` usually mean a service submitted work that a person must submit:
+let the person start or submit the Proposal instead of removing the policy's exclusion. The
+Rust, Node.js and Python clients add the member in the same release, because each refuses
+unknown Proposal members.
+
 ### After a Review result
 
 A result settles only the submission version it was recorded for. A

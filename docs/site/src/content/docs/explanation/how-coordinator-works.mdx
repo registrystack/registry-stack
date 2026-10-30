@@ -25,8 +25,14 @@ logical connection name. There are five step types:
 
 - `call` runs one operation with a typed mapping of input, earlier step output, and literals.
 - `choose` routes on a pure [Function](../../reference/glossary/#function) written in bounded
-  [Rhai](../../reference/glossary/#rhai). A Function has no clock, file, network, database, or
-  credentials, and cannot add steps.
+  [Rhai](../../reference/glossary/#rhai), or on a `compare` of typed values that needs no
+  Function. A Function has no clock, file, network, database, or credentials, and cannot add
+  steps. A compare lists one to sixteen conditions under `all` or `any`, each testing one value
+  with `equals`, `oneOf`, `less`, `greater` or `present`, and routes to the cases `matched` and
+  `unmatched`. A value that is missing or of the wrong type fails the run instead of routing to
+  `unmatched`. A compare treats the numbers 4 and 4.0 as equal, as JSON Schema does; Casework
+  routing, which uses the same `equals` and `oneOf` names, compares JSON values exactly and
+  does not.
 - `wait-until` waits for an instant.
 - `wait-for` waits for a named completion that an earlier accepted call exposes, such as the
   `result` of a submitted review request.

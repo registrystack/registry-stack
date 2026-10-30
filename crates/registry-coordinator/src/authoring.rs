@@ -360,6 +360,44 @@ enum Reference {
 }
 registry_platform_yaml::tagged_union!(Reference);
 
+// Mirrors every `Reference` variant, docs included, plus `Fields`; change it with `Reference`.
+#[derive(Debug, Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+enum Member {
+    /// Reads the Workflow input.
+    Input {
+        /// An optional RFC 6901 pointer; omit it to read the entire value.
+        #[serde(default)]
+        path: Option<JsonPointer>,
+    },
+    /// Reads an earlier accepted call or completed wait on every incoming route.
+    Step {
+        /// The preceding accepted call or completed wait Step whose value is read.
+        step: LocalId,
+        /// An optional RFC 6901 pointer; omit it to read the entire value.
+        #[serde(default)]
+        path: Option<JsonPointer>,
+    },
+    /// Supplies one bounded literal JSON value.
+    Literal {
+        /// A literal JSON value; it remains subject to bounded value checks.
+        value: ForeignValue,
+    },
+    /// Builds a nested object member by member, never with a Function.
+    Fields {
+        /// Object members built from typed references, literals or nested fields.
+        fields: Fields,
+    },
+}
+registry_platform_yaml::tagged_union!(Member);
+
 #[derive(Debug, Deserialize)]
 #[serde(
     remote = "Self",
@@ -377,10 +415,21 @@ enum AuthoredMapping {
         /// Named input schemas or references; every declared input is required exactly once.
         inputs: BTreeMap<LocalId, Reference>,
     },
-    /// Builds an object from named references and literals.
+    /// Builds an object from named references, literals and nested fields.
     Fields {
-        /// Object members built from typed references or literals.
+        /// Object members built from typed references, literals or nested fields.
         fields: Fields,
+    },
+    /// Decides a choose step by comparing values: `matched` when the conditions hold, `unmatched` when they do not.
+    Compare {
+        /// One to sixteen conditions that must all hold; give exactly one of `all` or `any`. Conditions run in order and stop at the first that does not hold.
+        #[serde(default)]
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 16)))]
+        all: Option<Vec<AuthoredCondition>>,
+        /// One to sixteen conditions of which one must hold; give exactly one of `all` or `any`. Conditions run in order and stop at the first that holds.
+        #[serde(default)]
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 16)))]
+        any: Option<Vec<AuthoredCondition>>,
     },
     /// Reads the Workflow input.
     Input {
@@ -403,6 +452,30 @@ enum AuthoredMapping {
     },
 }
 registry_platform_yaml::tagged_union!(AuthoredMapping);
+
+/// One reference and exactly one test of it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct AuthoredCondition {
+    /// The value tested. Only `present` accepts a value that is missing or null; every other test fails the run on one.
+    value: Reference,
+    /// Holds when the value equals this string, number or boolean of the same kind.
+    #[serde(default)]
+    equals: Option<ForeignValue>,
+    /// Holds when the value equals one of these strings, numbers or booleans, all of one kind.
+    #[serde(default)]
+    one_of: Option<Vec<ForeignValue>>,
+    /// Holds when the value is below this number, or before this calendar date such as `2026-01-31` when the reference declares `format: date`.
+    #[serde(default)]
+    less: Option<ForeignValue>,
+    /// Holds when the value is above this number, or after this calendar date such as `2026-01-31` when the reference declares `format: date`.
+    #[serde(default)]
+    greater: Option<ForeignValue>,
+    /// `true` holds when the value exists and is not null; `false` holds when it is missing or null. Put `present: true` before a test on an optional value to guard it.
+    #[serde(default)]
+    present: Option<bool>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -529,24 +602,10 @@ impl AuthoredStep {
     }
 }
 
-/// At most 64 members of a declarative object mapping.
-#[derive(Debug)]
-struct Fields(BTreeMap<FieldName, Reference>);
-impl<'de> Deserialize<'de> for Fields {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        let fields = BTreeMap::deserialize(deserializer)?;
-        if fields.len() > definition::MAXIMUM_FIELDS {
-            return Err(Invalid::expected(
-                "at most 64 fields",
-                "Remove fields, or build a larger value in a function.",
-            )
-            .into_error());
-        }
-        Ok(Self(fields))
-    }
-}
+/// The members of a declarative object mapping. Check bounds the whole
+/// mapping to 64 members across 4 levels.
+#[derive(Debug, Deserialize)]
+struct Fields(BTreeMap<FieldName, Member>);
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for Fields {
     fn schema_name() -> std::borrow::Cow<'static, str> {
@@ -554,14 +613,14 @@ impl schemars::JsonSchema for Fields {
     }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         let mut schema =
-            <BTreeMap<FieldName, Reference> as schemars::JsonSchema>::json_schema(generator);
+            <BTreeMap<FieldName, Member> as schemars::JsonSchema>::json_schema(generator);
         let field = generator.subschema_for::<FieldName>();
         let external = generator.subschema_for::<registry_platform_yaml::ExternalId>();
         schema.insert("propertyNames".into(), json!({"allOf":[external,field]}));
         schema.insert("maxProperties".into(), json!(64));
         schema.insert(
             "description".into(),
-            json!("Object members built from one typed reference or literal each."),
+            json!("Object members built from one typed reference, literal or nested fields mapping each. A mapping nests at most 4 levels deep and holds at most 64 members across its levels."),
         );
         schema
     }
@@ -656,6 +715,45 @@ impl From<Reference> for definition::Reference {
         }
     }
 }
+impl From<Fields> for BTreeMap<String, definition::Member> {
+    fn from(fields: Fields) -> Self {
+        fields
+            .0
+            .into_iter()
+            .map(|(name, member)| (name.0, member.into()))
+            .collect()
+    }
+}
+impl From<Member> for definition::Member {
+    fn from(member: Member) -> Self {
+        let reference = match member {
+            Member::Fields { fields } => {
+                return Self::Fields(definition::Fields {
+                    kind: definition::FieldsTag::Fields,
+                    fields: fields.into(),
+                })
+            }
+            Member::Input { path } => Reference::Input { path },
+            Member::Step { step, path } => Reference::Step { step, path },
+            Member::Literal { value } => Reference::Literal { value },
+        };
+        Self::Reference(reference.into())
+    }
+}
+impl From<AuthoredCondition> for crate::compare::Condition {
+    fn from(condition: AuthoredCondition) -> Self {
+        Self {
+            value: condition.value.into(),
+            equals: condition.equals.map(ForeignValue::into_value),
+            one_of: condition
+                .one_of
+                .map(|list| list.into_iter().map(ForeignValue::into_value).collect()),
+            less: condition.less.map(ForeignValue::into_value),
+            greater: condition.greater.map(ForeignValue::into_value),
+            present: condition.present,
+        }
+    }
+}
 impl From<AuthoredMapping> for Mapping {
     fn from(mapping: AuthoredMapping) -> Self {
         let reference = match mapping {
@@ -670,12 +768,19 @@ impl From<AuthoredMapping> for Mapping {
             }
             AuthoredMapping::Fields { fields } => {
                 return Self::Fields {
-                    fields: fields
-                        .0
-                        .into_iter()
-                        .map(|(name, reference)| (name.0, reference.into()))
-                        .collect(),
+                    fields: fields.into(),
                 }
+            }
+            AuthoredMapping::Compare { all, any } => {
+                let conditions = |list: Option<Vec<AuthoredCondition>>| {
+                    list.map(|list| list.into_iter().map(Into::into).collect())
+                };
+                return Self::Compare {
+                    compare: crate::compare::Compare {
+                        all: conditions(all),
+                        any: conditions(any),
+                    },
+                };
             }
             AuthoredMapping::Input { path } => Reference::Input { path },
             AuthoredMapping::Step { step, path } => Reference::Step { step, path },
@@ -748,6 +853,20 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
         }
     };
     workflow.references = reference_sites(&document);
+    for name in crate::read_in_force::steps_that_may_be_ambiguous(&workflow) {
+        let pointer = format!(
+            "/workflow/steps/{}/input",
+            registry_platform_yaml::escape_pointer_segment(name)
+        );
+        let warning = document.diagnostic_at_value(
+            Severity::Warning,
+            "coordinator.read-in-force.may-be-ambiguous",
+            &pointer,
+            "The register allows two records in force for this subject on one date, so this read can hold the run.",
+            "Add a temporal-non-overlap constraint over these subject fields in BReg, or name every field the constraint is scoped by.",
+        );
+        document.push_warning(warning);
+    }
     Ok((workflow, document))
 }
 
@@ -981,10 +1100,10 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
             )
         })?;
         if let Some(action) = &operation.action {
-            if uses != Operation::InvokeBregAction {
+            if uses != Operation::InvokeBregAction && !uses.takes_proposal_action() {
                 return Err(schema_error(
                     format!("/operations/{id}/action"),
-                    "only BReg Action invocation accepts an Action contract selection",
+                    "only BReg Action and Proposal operations accept an Action contract selection",
                 ));
             }
             let export = imported.get(action.contract.as_str()).ok_or_else(|| {
@@ -1012,22 +1131,26 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         for (selected, expected, field) in [
             (
                 operation.record.as_ref().map(|value| &value.contract),
-                Operation::ReadRecord,
+                &[Operation::ReadRecord, Operation::ReadInForce][..],
                 "record",
             ),
             (
                 operation.template.as_ref().map(|value| &value.contract),
-                Operation::SubmitMessage,
+                &[Operation::SubmitMessage][..],
                 "template",
             ),
         ] {
             if let Some(selected) = selected {
-                if uses != expected {
+                if !expected.contains(&uses) {
                     return Err(schema_error(
                         format!("/operations/{id}/{field}"),
                         &format!(
                             "only {} accepts a {field} contract selection",
-                            expected.as_str()
+                            expected
+                                .iter()
+                                .map(|operation| operation.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" and ")
                         ),
                     ));
                 }
@@ -1043,7 +1166,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
             || format!("/operations/{id}/action"),
             |action| format!("/contracts/{}/source", action.contract),
         );
-        let contract_field = if operation.record.is_some() {
+        let contract_field = if operation.record.is_some() || uses == Operation::ReadInForce {
             format!("/operations/{id}/record")
         } else if operation.template.is_some() {
             format!("/operations/{id}/template")
@@ -1098,6 +1221,16 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 "result".into(),
                 CompletionDefinition {
                     kind: CompletionKind::CaseworkResult {},
+                    output,
+                    revision: String::new(),
+                },
+            );
+        }
+        if let Some(output) = contract.completion.clone() {
+            completions.insert(
+                "proposal".into(),
+                CompletionDefinition {
+                    kind: CompletionKind::BregProposal {},
                     output,
                     revision: String::new(),
                 },

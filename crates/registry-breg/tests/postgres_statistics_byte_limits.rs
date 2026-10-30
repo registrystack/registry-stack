@@ -47,7 +47,7 @@ async fn authored_multi_period_response_obeys_the_shared_document_byte_limit() {
     accessible.push("event-date".to_owned());
     let source = json!({"datasets":[{"id": "load"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
-        "project":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test"},
+        "project":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test","timezone":"UTC"},
         "recordTypes":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable","fields":fields}],
         "vocabularies":vocabularies,
         "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":accessible,"filterableFields":accessible}],"datasets":[{"dataset":"units-by-category","operations":["read-live"]}]}}],

@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 fn registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
-      "project":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
+      "project":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test","timezone":"UTC"},
       "recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","tombstone":true,"classification":"internal",
         "batch":{"maximumItems":4,"maximumBytes":16384},
@@ -194,10 +194,7 @@ async fn sdk_atomic_corrections_snapshots_revisions_tombstone_and_recovery_use_r
         current.value.data.record_identifier
     );
     let historical = client
-        .list_records_as_of(
-            "entries",
-            &BRegAsOfListRequest::new("2020-04-01T00:00:00Z").unwrap(),
-        )
+        .list_records_as_of("entries", &BRegAsOfListRequest::new("2020-04-01").unwrap())
         .await
         .unwrap();
     assert_eq!(

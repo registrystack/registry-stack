@@ -85,6 +85,31 @@ pub(crate) fn usage_message(error: &clap::Error) -> String {
     }
 }
 
+/// The suggestion for `check` given a directory as a bare argument, since the
+/// directory belongs to `--project` or `--package`. It applies only when the
+/// refused token is an existing directory and `check` was named before it, and
+/// it uses placeholders so the operator's path is not repeated.
+pub(crate) fn directory_hint(
+    error: &clap::Error,
+    args: &[std::ffi::OsString],
+) -> Option<&'static str> {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    if error.kind() != ErrorKind::UnknownArgument {
+        return None;
+    }
+    let Some(ContextValue::String(token)) = error.get(ContextKind::InvalidArg) else {
+        return None;
+    };
+    if token.starts_with('-') || !std::path::Path::new(token).is_dir() {
+        return None;
+    }
+    let token_at = args.iter().position(|arg| arg.to_str() == Some(token))?;
+    args[..token_at]
+        .iter()
+        .any(|arg| arg == std::ffi::OsStr::new("check"))
+        .then_some("did you mean `--project <dir>` or `--package <dir>`?")
+}
+
 /// The reason one of our own value parsers gave, kept only while it does not
 /// repeat the rejected value.
 fn validator_reason(error: &clap::Error) -> Option<String> {

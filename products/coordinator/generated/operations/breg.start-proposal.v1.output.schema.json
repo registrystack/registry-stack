@@ -1,0 +1,47 @@
+{
+  "$defs": {
+    "BRegProposalState": {
+      "enum": [
+        "draft",
+        "submitted",
+        "applied",
+        "cancelled",
+        "rejected"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The output of every Proposal call: which Proposal the run holds, of which\nAction revision, at which submission version and state.",
+  "properties": {
+    "actionId": {
+      "type": "string"
+    },
+    "actionRevision": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "proposalId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/BRegProposalState"
+    },
+    "submissionVersion": {
+      "maximum": 4294967295,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "proposalId",
+    "actionId",
+    "actionRevision",
+    "submissionVersion",
+    "state"
+  ],
+  "title": "breg.start-proposal/v1 output",
+  "type": "object"
+}

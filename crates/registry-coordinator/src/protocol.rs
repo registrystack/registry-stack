@@ -94,6 +94,23 @@ impl Operation {
     pub fn supports_read_receipt(self) -> bool {
         self.descriptor().read_receipt
     }
+
+    /// The Proposal operations, which pin one BReg Proposal Action.
+    pub fn takes_proposal_action(self) -> bool {
+        matches!(
+            self,
+            Self::ReadProposal | Self::StartProposal | Self::SubmitProposal | Self::CancelProposal
+        )
+    }
+
+    /// The Proposal operations that declare the host-owned `proposal`
+    /// completion.
+    pub fn follows_proposal(self) -> bool {
+        matches!(
+            self,
+            Self::ReadProposal | Self::StartProposal | Self::SubmitProposal
+        )
+    }
 }
 
 impl Serialize for Operation {
@@ -221,6 +238,20 @@ pub enum CallOutcome {
         code: String,
     },
     ReceiptExpired,
+    /// Two records were in force for one subject on one date. The run is held
+    /// for a person, and inspection names the records and the date.
+    InForceAmbiguous(HoldDetail),
+}
+
+/// Why a step is held, as inspection shows it. Record identifiers are opaque
+/// and grant nothing; the store keeps this sealed at rest.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HoldDetail {
+    /// The calendar date the read asked about.
+    pub date: String,
+    /// The records found in force on that date.
+    pub record_identifiers: Vec<String>,
 }
 
 #[cfg(test)]
@@ -260,6 +291,25 @@ pub enum CompletionObservation {
     Hold {
         code: String,
     },
+    /// A read of a followed BReg Proposal: what the Proposal showed, kept on
+    /// the wait, and what that read means for the wait.
+    Followed {
+        proposal: ProposalObservation,
+        read: Box<CompletionObservation>,
+    },
+}
+
+/// The bounded, value-free facts one read of a followed Proposal showed.
+/// It names no person and carries no Proposal input.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProposalObservation {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<String>,
+    pub submission_version: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_refusal: Option<String>,
 }
 
 impl CompletionObservation {
@@ -363,6 +413,7 @@ pub trait AdapterSet: Send + Sync {
         if matches!(
             completion.kind,
             crate::definition::CompletionKind::CaseworkResult {}
+                | crate::definition::CompletionKind::BregProposal {}
         ) {
             crate::store::WAIT_READ_SPACING_SECONDS
         } else {

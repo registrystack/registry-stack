@@ -206,7 +206,23 @@ pub struct BregConnectionConfig {
         schemars(with = "registry_platform_yaml::ExternalId")
     )]
     pub profile: String,
+    /// Spaces scheduled reads of a followed Proposal. It decides only how a
+    /// waiting run is read, so it stays outside the binding digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("default" = DEFAULT_RESULT_CHECK_SECONDS)))]
+    pub result_check_seconds: Option<registry_platform_yaml::BoundedU32<60, 86_400>>,
+    /// An `https` URL template with exactly one `{proposalId}` placeholder,
+    /// after the host. Inspection offers it as "Open the request".
+    #[serde(
+        default,
+        deserialize_with = "request_link",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>", extend("pattern" = "^https://[^{}]+/[^{}]*\\{proposalId\\}[^{}]*$", "maxLength" = 2048)))]
+    pub request_link: Option<String>,
 }
+
+const PROPOSAL_ID_PLACEHOLDER: &str = "{proposalId}";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -290,7 +306,7 @@ impl ConnectionConfig {
                 Some(&c.profile),
                 None,
                 None,
-                None,
+                c.result_check_seconds,
             ),
             Self::Messaging(c) => (
                 Product::Messaging,
@@ -371,6 +387,18 @@ impl ConnectionConfig {
                 DEFAULT_RESULT_CHECK_SECONDS,
                 registry_platform_yaml::BoundedU32::get,
             )
+    }
+
+    /// The operator's "Open the request" link for one Proposal, when the
+    /// BReg connection configures one. The id is opaque and grants nothing.
+    pub fn request_link(&self, proposal_id: &str) -> Option<String> {
+        match self {
+            Self::Breg(c) => c
+                .request_link
+                .as_deref()
+                .map(|template| template.replacen(PROPOSAL_ID_PLACEHOLDER, proposal_id, 1)),
+            _ => None,
+        }
     }
 
     fn interface(&self) -> &'static str {
@@ -854,7 +882,8 @@ impl RuntimeConfig {
         }
         for (name, step) in &workflow.steps {
             if let crate::definition::Step::Call { call, .. } = step {
-                if call.operation == crate::protocol::Operation::InvokeBregAction
+                if (call.operation == crate::protocol::Operation::InvokeBregAction
+                    || call.operation.takes_proposal_action())
                     && self
                         .connections
                         .get(&call.connection)
@@ -1214,6 +1243,36 @@ pub fn runtime_schema() -> Result<String> {
 fn endpoint<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Url, D::Error> {
     let value = registry_platform_yaml::Url::deserialize(d)?;
     Url::parse(value.as_str()).map_err(serde::de::Error::custom)
+}
+
+fn request_link<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    let template = String::deserialize(d)?;
+    let invalid = || {
+        serde::de::Error::custom(
+            "use an https URL with exactly one {proposalId} placeholder after the host",
+        )
+    };
+    if template.len() > 2_048
+        || template.matches(PROPOSAL_ID_PLACEHOLDER).count() != 1
+        || template.chars().any(char::is_control)
+    {
+        return Err(invalid());
+    }
+    let (_, rest) = template.split_once("://").ok_or_else(invalid)?;
+    let authority_end = rest.find('/').ok_or_else(invalid)?;
+    if rest[..authority_end].contains('{') {
+        return Err(invalid());
+    }
+    let sample = template.replacen(
+        PROPOSAL_ID_PLACEHOLDER,
+        "00000000-0000-4000-8000-000000000000",
+        1,
+    );
+    let url = Url::parse(&sample).map_err(|_| invalid())?;
+    if url.scheme() != "https" || url.host_str().is_none() || sample.contains(['{', '}']) {
+        return Err(invalid());
+    }
+    Ok(Some(template))
 }
 
 pub(crate) fn unique_strings<'de, D: Deserializer<'de>>(

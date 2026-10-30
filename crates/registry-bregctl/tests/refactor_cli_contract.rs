@@ -455,6 +455,7 @@ fn statistical_route_inspection_matches_generated_client_contract() {
             "datasets":[{"dataset":"contacts-by-active","operations":["read-live"]}]
         }
     }));
+    source["project"]["timezone"] = json!("UTC");
     source["statisticalDatasets"] = json!([{
         "id":"contacts-by-active","unit":"contact","population":"active eq true",
         "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},

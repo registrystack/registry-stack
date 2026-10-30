@@ -179,6 +179,7 @@ fn interpreted(response: Value) -> String {
         CallOutcome::UncertainRetryable { code, .. } => format!("uncertain-retryable {code}"),
         CallOutcome::Refused { code } => format!("refused {code}"),
         CallOutcome::ReceiptExpired => "receipt-expired".into(),
+        CallOutcome::InForceAmbiguous(_) => "in-force-ambiguous".into(),
     }
 }
 

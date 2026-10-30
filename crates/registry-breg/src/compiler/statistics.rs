@@ -619,12 +619,17 @@ fn compile_period(
                         .map(|temporal| CompiledStatisticalValidity::Temporal {
                             from: temporal.start_field.clone(),
                             until: temporal.end_field.clone(),
+                            last_day: temporal.last_day,
                         })
                 }
                 StatisticalValiditySource::Fields(validity) => {
                     Some(CompiledStatisticalValidity::Fields {
                         from: validity.from.clone(),
                         until: validity.until.clone(),
+                        last_day: unit.temporal.as_ref().is_some_and(|temporal| {
+                            temporal.last_day
+                                && validity.until.as_ref() == Some(&temporal.end_field)
+                        }),
                     })
                 }
             };

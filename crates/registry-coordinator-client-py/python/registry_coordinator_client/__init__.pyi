@@ -44,7 +44,18 @@ class RunStatus(TypedDict):
     cancelRequested: bool
     authoredCancelRequested: bool
 
-class StepStatus(TypedDict):
+class HoldDetail(TypedDict):
+    """The records and date behind a held step."""
+
+    date: str
+    recordIdentifiers: list[str]
+
+class _StepStatusOptional(TypedDict, total=False):
+    # What a person needs to clear a hold: for in-force-ambiguous, the two
+    # records in force and the date.
+    holdDetail: HoldDetail
+
+class StepStatus(_StepStatusOptional):
     step: str
     state: str
     generation: int
@@ -104,7 +115,24 @@ class EffectStatus(TypedDict):
     operationRevision: str
     state: EffectState
 
-class WaitStatus(TypedDict):
+class _LastObservationOptional(TypedDict, total=False):
+    turn: str
+    handoffRefusal: str
+
+class LastObservation(_LastObservationOptional):
+    """The latest answered read of a followed BReg Proposal. stateSince is when
+    Coordinator first saw the current state and turn, not when BReg entered it."""
+
+    state: str
+    submissionVersion: int
+    observedAt: Instant
+    stateSince: Instant
+
+class _WaitStatusOptional(TypedDict, total=False):
+    lastObservation: LastObservation
+    requestLink: str
+
+class WaitStatus(_WaitStatusOptional):
     step: str
     acceptedStep: str
     completion: str
@@ -133,6 +161,8 @@ RunListState: TypeAlias = Literal[
     "attention",
     "cancel-requested",
 ]
+
+ProposalTurn: TypeAlias = Literal["party", "official", "nobody"]
 
 class _RunListOptional(TypedDict, total=False):
     nextCursor: str
@@ -202,9 +232,11 @@ class CoordinatorClient:
     # so it is sent exactly once. `reason` is bounded as for `retry_same`.
     def cancel(self, token: str, run_id: RunId, reason: str) -> Complete[RunStatus]: ...
     # One stable page of caller-visible runs. Pass nextCursor unchanged with
-    # the same caller, state, and attention values. attention=True selects
-    # the effective states attention and failed. Declared last: mypy reads
+    # the same caller, state, attention, proposal, and turn values.
+    # attention=True selects the effective states attention and failed.
+    # proposal selects runs waiting on that BReg Proposal; turn selects runs
+    # whose Proposal wait last showed that turn. Declared last: mypy reads
     # `list` in any later annotation in this class as this method.
-    def list(self, token: str, limit: int, cursor: str | None = None, state: RunListState | None = None, attention: bool | None = None) -> Complete[RunList]: ...
+    def list(self, token: str, limit: int, cursor: str | None = None, state: RunListState | None = None, attention: bool | None = None, proposal: str | None = None, turn: ProposalTurn | None = None) -> Complete[RunList]: ...
 
 __version__: str

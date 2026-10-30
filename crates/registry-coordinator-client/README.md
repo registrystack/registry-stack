@@ -32,10 +32,14 @@ issuer/subject can create another run. `workflow`, `list`, `status`, `inspect`,
 error that leaves the outcome unknown, read the run before asking again.
 `list` takes a limit from 1 to 100 and returns the first page of runs the
 caller may read, newest admission first. `list_page` also accepts the opaque
-cursor returned as `next_cursor`, an exact state, and an attention filter.
-Pass a cursor unchanged with the same caller and filters. Attention means the
-effective states `attention` and `failed`; the state filter exposes all eight
-closed runtime states individually. A returned page must match the requested
+cursor returned as `next_cursor`, an exact state, an attention filter, a BReg
+Proposal id and a turn. Pass a cursor unchanged with the same caller and
+filters. Attention means the effective states `attention` and `failed`; the
+state filter exposes all eight closed runtime states individually. `proposal`
+selects runs waiting on that Proposal, and `turn` (`party`, `official` or
+`nobody`) selects runs whose Proposal wait last showed that turn. The client
+cannot check those two filters against a returned run, so it trusts the
+runtime for them. A returned page must match the requested
 filters and list distinct runs in strictly descending `(admittedAt, runId)`
 order, the order its cursor continues from.
 
@@ -57,7 +61,10 @@ exactly when its blocking `reason` is null. Each wait has a minimum interval fro
 Inconsistent documents are protocol failures;
 a malformed successful admission or control answer leaves the outcome unknown and is never
 automatically resent. Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned
-revisions, deadlines, next observations, persistent floors, and count/limit. Original inputs,
+revisions, deadlines, next observations, persistent floors, and count/limit. A wait that
+follows a BReg Proposal also carries `lastObservation` (state, turn, submission version,
+any hand-off refusal code, when it was read and since when Coordinator has seen that state)
+once a read has answered, and `requestLink` when the deployment configures one. Original inputs,
 raw product responses, prepared requests, and protected correlation values remain absent.
 The reviewed Workflow declares any terminal output projection.
 

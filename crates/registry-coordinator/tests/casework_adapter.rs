@@ -109,6 +109,7 @@ fn describe(outcome: &CallOutcome) -> String {
         CallOutcome::DeclaredRefusal(_) => "declared-refusal".into(),
         CallOutcome::Uncertain { code } => format!("uncertain {code}"),
         CallOutcome::ReceiptExpired => "receipt-expired".into(),
+        CallOutcome::InForceAmbiguous(_) => "in-force-ambiguous".into(),
     }
 }
 
@@ -431,6 +432,7 @@ fn describe_read(read: &CompletionObservation) -> String {
         CompletionObservation::Pending { .. } => "pending".into(),
         CompletionObservation::Retryable { code, .. } => format!("retryable {code}"),
         CompletionObservation::Hold { code } => format!("hold {code}"),
+        CompletionObservation::Followed { .. } => "followed".into(),
     }
 }
 

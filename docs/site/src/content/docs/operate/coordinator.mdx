@@ -220,6 +220,7 @@ ones an operator acts on are:
 | `deployment.refused` | 409 | The activation, runtime file, or state key custody check failed. Run `deployment-status`. |
 | `deployment.activation-changed` | 409 | An apply changed the active packages after the service started. Restart it with the runtime file apply used. |
 | `binding.conflict`, `binding.live-conflict` | 409 | The runtime file changed connection settings a run uses. Restore them and restart, or investigate with `--recovery-only`. |
+| `check.not-waiting` | 409 | Check now named a step that is not waiting for a result. Inspect the run and name a step it lists under `waits`. |
 | `execution.held`, `admission.held` | 409 | The restore hold or the admission hold is in place. |
 | `admission.recovery-only` | 409 | This instance runs with `--recovery-only` and admits no runs. Send starts to the ordinary service. |
 | `restore.hold-required`, `restore.unresolved`, `restore.review-required`, `restore.lease-incompatible` | 409 | A restore step is out of order, or held work still needs review. |
@@ -261,13 +262,26 @@ coordinatorctl inspect --run <run-id> \
   --url https://coordinator.example.org --token-file /run/operator-token
 ```
 
-`list` returns the 20 newest runs, or up to 100 with `--limit`, with a `nextCursor`. `inspect` shows
+`list` returns the 20 newest runs, or up to 100 with `--limit`, with a `nextCursor`. Add
+`--proposal <id>` for the runs waiting on one BReg request, or `--turn party`, `official` or
+`nobody` for runs whose request last read that turn. `inspect` shows
 each step, every effect as `accepted` or `unknown`, and a wait's timing, never inputs, product
 responses, or prepared commands.
 [How Registry Coordinator works](../../explanation/how-coordinator-works/#how-do-you-inspect-and-recover-a-run)
 explains what the states mean.
 
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Admit and inspect work. */}
+
+## Read a waiting step now
+
+A run that waits for a result can be read early with Check now. It needs only the `inspect` grant and
+takes no reason. The read still keeps the deployment's read floor after the last read and counts
+against the wait's read budget, and a wait that nothing settles still reaches its timeout route.
+
+```sh
+coordinatorctl check-now --run <run-id> --step <waiting-step> \
+  --url https://coordinator.example.org --token-file /run/operator-token
+```
 
 ## Recover a run
 

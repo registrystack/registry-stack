@@ -504,6 +504,34 @@ fn a_failure_without_its_own_report_is_named_by_its_exit_class() {
 }
 
 #[test]
+fn check_given_a_directory_as_a_bare_argument_suggests_the_options_that_take_one() {
+    let (_guard, root) = workspace();
+    let (exit, report) = invoke(path_arguments(&["check"], &root));
+    assert_eq!(exit, ExitCode::from(USAGE_EXIT));
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("did you mean `--project <dir>` or `--package <dir>`?"),
+        "{message}"
+    );
+    assert!(
+        !message.contains(root.to_str().unwrap()),
+        "the directory is not repeated: {message}"
+    );
+
+    // A bare word that is not a directory gets no suggestion.
+    let (exit, report) = invoke(path_arguments(&["check"], &root.join("absent")));
+    assert_eq!(exit, ExitCode::from(USAGE_EXIT));
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(!message.contains("did you mean"), "{message}");
+
+    // Other commands keep the plain message.
+    let (exit, report) = invoke(path_arguments(&["plan"], &root));
+    assert_eq!(exit, ExitCode::from(USAGE_EXIT));
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(!message.contains("did you mean"), "{message}");
+}
+
+#[test]
 fn a_usage_error_never_repeats_a_rejected_argument_value() {
     let sentinel = "sentinel-7f3a9c";
     let unknown = format!("--reason={sentinel}");

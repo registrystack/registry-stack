@@ -258,9 +258,16 @@ fn temporal_metadata(query: &CompiledQueryOperation) -> Value {
     match query.kind {
         CompiledQueryKind::List => Value::Null,
         CompiledQueryKind::Current => json!({"mode": "current"}),
-        CompiledQueryKind::AsOf => {
-            json!({"mode": "as-of", "parameter": "asOf", "required": true, "schema": {"type": "string", "format": "date-time"}})
-        }
+        CompiledQueryKind::AsOf => json!({
+            "mode": "as-of",
+            "parameter": "asOf",
+            "required": true,
+            "schema": query
+                .temporal
+                .as_ref()
+                .map(temporal_value_schema)
+                .unwrap_or_else(|| json!({"type": "string", "format": "date-time"})),
+        }),
         CompiledQueryKind::Snapshot => {
             let mut value = json!({
                 "mode": "snapshot",
@@ -271,21 +278,25 @@ fn temporal_metadata(query: &CompiledQueryOperation) -> Value {
                 },
             });
             if let Some(temporal) = &query.temporal {
-                let schema = match temporal.value_kind {
-                    crate::model::CompiledQueryTemporalValueKind::Date => {
-                        json!({"type": "string", "format": "date"})
-                    }
-                    crate::model::CompiledQueryTemporalValueKind::Timestamp => {
-                        json!({"type": "string", "format": "date-time"})
-                    }
-                };
                 value["validAt"] = json!({
                     "parameter": "validAt",
                     "required": false,
-                    "schema": schema,
+                    "schema": temporal_value_schema(temporal),
                 });
             }
             value
+        }
+    }
+}
+
+/// A calendar date on a date interval, an instant on a timestamp interval.
+fn temporal_value_schema(temporal: &crate::model::CompiledQueryTemporalBinding) -> Value {
+    match temporal.value_kind {
+        crate::model::CompiledQueryTemporalValueKind::Date => {
+            json!({"type": "string", "format": "date"})
+        }
+        crate::model::CompiledQueryTemporalValueKind::Timestamp => {
+            json!({"type": "string", "format": "date-time"})
         }
     }
 }
@@ -491,6 +502,7 @@ fn temporal_scope_title_field(surface: &AuthorizedSurface<'_>) -> Option<String>
                 scope_fields,
                 start_field,
                 end_field,
+                last_day_field,
                 ..
             } = constraint
             else {
@@ -501,6 +513,7 @@ fn temporal_scope_title_field(surface: &AuthorizedSurface<'_>) -> Option<String>
                 .is_some_and(|field| field != temporal.start_field)
                 || end_field
                     .as_deref()
+                    .or(last_day_field.as_deref())
                     .is_some_and(|field| field != temporal.end_field)
             {
                 return None;

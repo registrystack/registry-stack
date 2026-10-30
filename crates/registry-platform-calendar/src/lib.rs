@@ -226,6 +226,20 @@ pub fn local_interval(
     day_interval(date, start, end, zone)
 }
 
+/// The calendar date at `now` in a named IANA timezone.
+///
+/// This is "today" for a product that declares a timezone: a registry in
+/// `Asia/Colombo` changes date at its own local midnight, not at UTC midnight.
+pub fn local_date(
+    now: DateTime<Utc>,
+    timezone: &str,
+) -> Result<NaiveDate, CalendarEvaluationError> {
+    let zone: Tz = timezone
+        .parse()
+        .map_err(|_| CalendarEvaluationError::InvalidTimezone)?;
+    Ok(now.with_timezone(&zone).date_naive())
+}
+
 /// An interval may end at the following midnight, written `24:00` on its
 /// authored date. It is never a valid start or an ambiguous local-time fix.
 #[derive(Clone, Copy)]
@@ -364,6 +378,37 @@ mod tests {
         assert_eq!(
             CalendarEvaluationError::AmbiguousLocalTime.to_string(),
             "the calculated local time is ambiguous in the calendar timezone"
+        );
+    }
+
+    #[test]
+    fn local_date_is_the_calendar_date_at_the_instant_in_the_zone() {
+        let late_utc = instant("2026-10-30T23:30:00Z");
+        assert_eq!(
+            local_date(late_utc, "Asia/Colombo"),
+            Ok(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()),
+            "Colombo is five and a half hours ahead, so 23:30 UTC is already tomorrow"
+        );
+        assert_eq!(
+            local_date(late_utc, "UTC"),
+            Ok(NaiveDate::from_ymd_opt(2026, 10, 30).unwrap())
+        );
+        assert_eq!(
+            local_date(instant("2026-10-31T03:00:00Z"), "America/New_York"),
+            Ok(NaiveDate::from_ymd_opt(2026, 10, 30).unwrap())
+        );
+        // Colombo changes date at its own midnight, 18:30 UTC.
+        assert_eq!(
+            local_date(instant("2026-10-30T18:29:59Z"), "Asia/Colombo"),
+            Ok(NaiveDate::from_ymd_opt(2026, 10, 30).unwrap())
+        );
+        assert_eq!(
+            local_date(instant("2026-10-30T18:30:00Z"), "Asia/Colombo"),
+            Ok(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+        );
+        assert_eq!(
+            local_date(late_utc, "Not/A_Zone"),
+            Err(CalendarEvaluationError::InvalidTimezone)
         );
     }
 

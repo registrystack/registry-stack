@@ -69,6 +69,14 @@ export interface StepStatus {
   failureCode?: string | null
   /** Where a refused call input left its operation contract, as an RFC 6901 pointer that names no value. */
   failurePath?: string | null
+  /** What a person needs to clear a hold: for `in-force-ambiguous`, the two records in force and the date. */
+  holdDetail?: HoldDetail
+}
+
+/** The records and date behind a held step. */
+export interface HoldDetail {
+  date: string
+  recordIdentifiers: string[]
 }
 
 export type RetryBlockReason =
@@ -115,6 +123,19 @@ export interface EffectStatus {
   operationRevision: string
   state: EffectState
 }
+/**
+ * The latest answered read of a followed BReg Proposal. It carries no
+ * Proposal input and names no person. `stateSince` is when Coordinator first
+ * saw the current state and turn, not when BReg entered it.
+ */
+export interface LastObservation {
+  state: string
+  turn?: string
+  submissionVersion: SafeInteger
+  handoffRefusal?: string
+  observedAt: Instant
+  stateSince: Instant
+}
 export interface WaitStatus {
   step: string
   acceptedStep: string
@@ -126,6 +147,10 @@ export interface WaitStatus {
   minimumIntervalSeconds: SafeInteger
   observations: SafeInteger
   observationLimit: SafeInteger
+  /** What the latest answered read of a followed BReg Proposal showed. */
+  lastObservation?: LastObservation
+  /** The operator's "Open the request" link, when the deployment configures one. */
+  requestLink?: string
 }
 
 export interface RunInspection {
@@ -145,6 +170,9 @@ export type RunListState =
   | 'expired'
   | 'attention'
   | 'cancel-requested'
+
+/** Whose turn a followed BReg Proposal showed at its last answered read. */
+export type ProposalTurn = 'party' | 'official' | 'nobody'
 
 /** One stable page of runs the caller may read, newest admission first. */
 export interface RunList { runs: ReadonlyArray<RunStatus>; nextCursor?: string }
@@ -199,10 +227,12 @@ export class CoordinatorClient {
   reconcile(token: string, runId: RunId, reason: string): Promise<CoordinatorOutcome<RunInspection>>
   /**
    * Read one stable page of caller-visible runs. Pass `nextCursor` unchanged
-   * with the same caller, `state`, and `attention` values. `attention: true`
-   * selects the effective states `attention` and `failed`.
+   * with the same caller, `state`, `attention`, `proposal`, and `turn`
+   * values. `attention: true` selects the effective states `attention` and
+   * `failed`. `proposal` selects runs waiting on that BReg Proposal; `turn`
+   * selects runs whose Proposal wait last showed that turn.
    */
-  list(token: string, limit: SafeInteger, cursor?: string | null, state?: RunListState | null, attention?: boolean | null): Promise<CoordinatorOutcome<RunList>>
+  list(token: string, limit: SafeInteger, cursor?: string | null, state?: RunListState | null, attention?: boolean | null, proposal?: string | null, turn?: ProposalTurn | null): Promise<CoordinatorOutcome<RunList>>
   /**
    * Schedule the run's saved command again, unchanged, when its inspection
    * allows a retry. Takes no idempotency key, so it is sent exactly once. `reason` is

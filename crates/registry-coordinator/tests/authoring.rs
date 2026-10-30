@@ -382,14 +382,16 @@ fn branch_timestamp_schema_and_missing_values_refuse_without_values() {
 #[test]
 fn pure_profile_has_no_clock_sleep_or_io_and_limits_computation() {
     let (workflow, source) = (computed_workflow(), computed_source());
+    // The profile has no clock, sleep or file access: a call to one is
+    // refused when the project loads, before any Function runs.
     for expression in ["sleep(0)", "timestamp()", "read_file(\"anything\")"] {
-        let definition = load(&workflow, &source.replace("input.sendAfter", expression)).unwrap();
+        let error = refused(load(
+            &workflow,
+            &source.replace("input.sendAfter", expression),
+        ));
         assert_eq!(
-            definition
-                .evaluate("due", &input(), &BTreeMap::new())
-                .unwrap_err()
-                .code,
-            "function.execution"
+            error.code, "coordinator.function.unknown-call",
+            "{expression}"
         );
     }
     for expression in [
@@ -462,6 +464,23 @@ fn snapshot_restore_refuses_retired_rhai_1_26_1_interpreter() {
     let mut value: Value = serde_json::from_str(&snapshot).unwrap();
     value["interpreterAbi"] = json!(
         "coordinator/pure-rhai-1.26.1/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32"
+    );
+    assert_eq!(
+        refused(Definition::from_snapshot(&value.to_string())).code,
+        "definition.abi"
+    );
+}
+
+#[test]
+fn snapshot_restore_refuses_the_v1_interpreter_that_lacked_the_string_and_number_helpers() {
+    let snapshot = fixture().snapshot().unwrap();
+    let mut value: Value = serde_json::from_str(&snapshot).unwrap();
+    assert!(value["interpreterAbi"]
+        .as_str()
+        .unwrap()
+        .starts_with("coordinator/pure-rhai-1.27.0/v2;"));
+    value["interpreterAbi"] = json!(
+        "coordinator/pure-rhai-1.27.0/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32"
     );
     assert_eq!(
         refused(Definition::from_snapshot(&value.to_string())).code,

@@ -5,7 +5,8 @@
     "id": "business-establishments",
     "canonicalBaseIri": "https://business-establishments.example.gov",
     "version": "0.1.0",
-    "defaultLanguage": "en"
+    "defaultLanguage": "en",
+    "timezone": "UTC"
   },
   "package": {
     "sourceRevision": "business-establishments-acceptance-0.1.0"

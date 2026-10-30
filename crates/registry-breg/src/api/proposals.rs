@@ -1100,12 +1100,12 @@ async fn guard_failure_response(
             crate::contract::FieldTypeSource::Timestamp
         )
     });
-    let today = time::OffsetDateTime::now_utc().date().to_string();
     if crate::commit_guard::guard_matches(
         guard,
         &failure.input,
         &observed.current,
-        &today,
+        &service.registry,
+        time::OffsetDateTime::now_utc(),
         is_timestamp,
     ) {
         return mutation_problem(MutationError::PreconditionFailed);

@@ -346,6 +346,33 @@ an ordinary service `authorization` and an explicitly permitted `profile`. Do no
 Casework grant and has no task-authority fallback. Keep a task-bound record-read
 connection separate when the workflow needs both authority types.
 
+The BReg Proposal operations use the same connection type. In the BReg project, grant the
+connection's profile `get` on every Action a workflow follows, under `permissions.proposals`.
+Where the workflow starts or submits requests itself, also grant `start` on the Action under
+`permissions.actions`, and `cancel`, plus `submit` when the workflow submits, under
+`permissions.proposals` with `ownership: caller`. Leave `writableInputs` off that Proposal grant,
+or list every input the workflow sends: with the list, Start refuses a value for any other input.
+Never grant `apply`: no Coordinator operation applies a Proposal. Two optional members serve
+those waits:
+
+```yaml
+connections:
+  licences:
+    type: breg
+    baseUrl: https://licences.example.org
+    profile: coordinator-follow
+    authorization: {...}
+    resultCheckSeconds: 300
+    requestLink: https://staff.example.org/proposals/{proposalId}
+```
+
+`resultCheckSeconds`, from 60 to 86,400 and 900 by default, spaces the Proposal reads of a
+waiting run; each read is one request to BReg per waiting run. `requestLink` is an `https`
+template with exactly one `{proposalId}`; inspection shows it as "Open the request". Neither is
+part of a live run's binding, so you can change both while runs wait. A missing `get` grant
+shows on the waiting run as the hold `proposal-unreadable`; a missing `start` or `submit` grant
+shows as BReg's refusal of that step.
+
 Use one `connections` map for all logical connections. Each entry selects its complete
 contract with `type`: `breg`, `casework-review-producer`, `messaging`, `scheduling`,
 `external-http`, or `evaluation`. Declare at most sixteen names.
@@ -646,7 +673,7 @@ admissions while old runs keep their encrypted snapshots and command identities.
 Adding an unrelated logical connection does not change a workflow binding digest.
 Reusing an idempotency key returns the original run rather than creating new work.
 
-This source version creates protected state schema version 4. Earlier protected
+This source version creates protected state schema version 5. Earlier protected
 state layouts are refused: apply reports `coordinator.command.schema-version`, and runtime state
 access, including `deployment-status`, fails closed as `coordinator.command.store-unavailable`.
 Apply does not adopt or rewrite them. Settle retained work with its matching
@@ -687,6 +714,8 @@ state, `state.uncertain` counts steps whose effect waits for an operator, and
 `state.oldestDueAt` is the earliest next attempt of a pending step.
 `state.terminalPayloads` counts the terminal payloads retention can erase, and
 `state.oldestTerminalPayloadAt` is when the oldest of those runs ended.
+`state.proposalWaitsByTurn` counts BReg Proposal waits by their last observed turn, with
+`unobserved` for waits not yet read, from stored observations; doctor makes no BReg call.
 
 ### Add, upgrade, roll back and remove a workflow
 
@@ -804,7 +833,26 @@ command payloads.
 
 Inspection also reports accepted or unknown `effects` with pinned operation revisions, and
 `waits` with completion revisions, deadlines, next observations, persistent floors, and count/limit.
+A Proposal wait also shows `lastObservation` (state, turn, submission version, any hand-off
+refusal code, when it was read and since when that state held, as first seen by Coordinator)
+and its "Open the request" link. A hand-off refusal on a request a person submitted shows there
+while the run keeps waiting; that person resubmits in BReg.
+A run held with `in-force-ambiguous` names the two record identifiers and the date in the held
+step's `holdDetail` until the step is retried. Proposal and record identifiers are opaque and
+grant nothing without the owning product's grant.
 Protected command and correlation values remain absent.
+
+To read a waiting request now instead of at its next scheduled read, run:
+
+```sh
+coordinatorctl check-now --run RUN_UUID --step decided \
+  --url https://coordinator.example.org --token-file /run/operator-token
+```
+
+It brings the next read forward, never closer than the read floor to the last one, and needs
+only the `inspect` grant. Each read counts against the wait's budget, which is sized at the read
+floor, so an early read never stops the wait reaching its timeout route. A step that is not
+waiting answers 409 `check.not-waiting`.
 
 Inspection includes `recovery.operation` for a compatible current call, with its
 pinned ID, version, product, effect, key/preparation requirements, recovery and
@@ -828,7 +876,9 @@ deployment does not serve is refused with HTTP 404 `workflow.not-served`. `GET /
 most 100 of the caller's most recently admitted runs, newest first, from the
 workflows its policy lists; an operator policy lists every owner's runs in those
 workflows. `limit` takes 1 to 100 and defaults to 20. Use `state` to filter by effective state, or `attention=true` for effective states
-`attention` and `failed` (`attention=false` excludes both). Pass `nextCursor` as
+`attention` and `failed` (`attention=false` excludes both). Use `proposal=<id>` to find the runs
+waiting on one BReg request, and `turn=party`, `official` or `nobody` for runs whose request
+last read that turn. Pass `nextCursor` as
 `cursor` with the same filters to continue; each page rechecks current caller and workflow
 permissions. The order is admission time and run ID, newest first. Keep the run ID a
 start returns for direct lookup with `GET /v1/runs/{run}`. Use the
@@ -956,12 +1006,14 @@ After an uncertain attempt, including a retried 503, a declared refusal or 429 k
 check the provider's record and cancel the run if no further step should follow.
 
 A `wait-for` observes a named completion, correlated to an earlier accepted call.
-Casework exposes `result`; external GET can
+Casework exposes `result`; the BReg Proposal operations expose `proposal`; external GET can
 expose an authored bounded-poll completion. These observations are read-only and spend no
-mutation attempt. Pending Casework reads default to 900 seconds. Casework allows
+mutation attempt. Pending Casework and BReg reads default to 900 seconds. Both allow
 `resultCheckSeconds` from 60 to 86,400 seconds; an external completion declares `intervalSeconds`.
 
-The durable read floor is at least 30 seconds. Top-level `minimumObservationIntervalSeconds`
+The durable read floor is 30 seconds by default for Casework, BReg and external poll reads.
+Each Casework or BReg wait's read budget is sized at that floor, so wake-ups and Check now never
+exhaust it before the timeout. Top-level `minimumObservationIntervalSeconds`
 can raise it up to 86,400 seconds across the deployment. Restart, event wake-up, retry, and
 timeout never bypass it. Retry hints postpone reads within the host ceiling of 86,400 seconds;
 unusable hints hold the wait. Inspection exposes the floor, next read, count, and budget without

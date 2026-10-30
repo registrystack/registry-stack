@@ -738,18 +738,27 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         Some(Arc::clone(&query_plan)),
     );
 
-    assert_ids(
-        body_json(
-            send(
-                &app,
-                "/v1/records/assignments:as-of?$select=label&asOf=2020-05-31T23:59:59Z",
-                Some(read_claims(["zone-a"])),
-            )
-            .await,
+    let as_of = body_json(
+        send(
+            &app,
+            "/v1/records/assignments:as-of?$select=label&asOf=2020-05-31T23:59:59Z",
+            Some(read_claims(["zone-a"])),
         )
         .await,
-        &[TEMPORAL_OLD_RECORD],
-    );
+    )
+    .await;
+    assert_eq!(as_of["meta"]["asOf"], "2020-05-31T23:59:59Z");
+    assert_ids(as_of, &[TEMPORAL_OLD_RECORD]);
+    let date_on_timestamps = send(
+        &app,
+        "/v1/records/assignments:as-of?$select=label&asOf=2020-05-31",
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(date_on_timestamps.status(), StatusCode::BAD_REQUEST);
+    let date_on_timestamps = body_json(date_on_timestamps).await;
+    assert_eq!(date_on_timestamps["code"], "query.invalid");
+    assert_eq!(date_on_timestamps["fieldPath"], "asOf");
     assert_ids(
         body_json(
             send(
@@ -771,6 +780,13 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     assert_eq!(current.status(), StatusCode::OK);
     let current = body_json(current).await;
     assert_ids(current.clone(), &[TEMPORAL_OPEN_RECORD]);
+    assert!(
+        current["meta"]["asOf"]
+            .as_str()
+            .is_some_and(|value| value.ends_with('Z') && value.contains('T')),
+        "a timestamp :current echoes the UTC instant it read at: {}",
+        current["meta"]
+    );
     assert_eq!(current["items"][0]["domainData"]["label"], "lease-a");
     assert!(current["items"][0]["domainData"]["validFrom"].is_string());
     assert_eq!(current["items"][0]["domainData"]["validTo"], Value::Null);

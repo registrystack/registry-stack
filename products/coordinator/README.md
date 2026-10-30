@@ -8,8 +8,8 @@ retain authority and ownership of every effect.
 The [product contract](PRODUCT-CONTRACT.md) defines the boundary; the
 [deployment runbook](DEPLOYMENT.md) covers installation, custody, activation, and recovery.
 Coordinator is pre-1.0. Use one source version's binaries, packages, configuration, and state
-layout together. The current protected state schema is version 4, with no in-place migration
-from earlier pilot layouts.
+layout together. The current protected state schema is version 5, with no in-place migration
+from earlier layouts.
 
 Build the Coordinator service, operator CLI, client, and client bindings from source using
 the deployment runbook and the client crate instructions. The release binaries and container
@@ -92,7 +92,15 @@ with an `inputs` object whose keys exactly match its declared inputs. Each Rhai 
 one object of those named inputs and returns one typed value. The host validates inputs and
 outputs and enforces the bounded pure profile. Functions have no clock, network, database,
 credential, or filesystem capability. `add_seconds` and `seconds_between` compute over supplied
-RFC 3339 instants. Optional function limits can narrow the host ceilings.
+RFC 3339 instants. The profile carries Rhai's string helpers (`trim`, `split`, `starts_with`,
+`index_of`, `sub_string`, `pad`, `replace` and the rest of its string package) and number helpers
+(`parse_int`, `parse_float`, `to_int`, `to_float`, `sqrt`, `abs`, `floor` and the other rounding
+helpers; there is no `sin`, `exp` or `ln`, whose results differ by host). `trim`,
+`replace` and `pad` change the string they are called on and return nothing, so copy the string
+first. A top-level `const` is not visible inside a function: read it as `global::NAME` or pass it
+as an input. `coordinatorctl check` refuses a call to a name the profile lacks, with its position,
+before any Function runs; `coordinatorctl explain functions` lists every helper, the interpreter
+ABI and the limits. Optional function limits can narrow the host ceilings.
 
 Schema positions accept a JSON Schema or `typeRef`, `operationInput`, `operationOutput`,
 `operationRefusal`, or `completionOutput`. A completion output names its operation and completion.
@@ -159,7 +167,8 @@ await-review:
   onCancel: withdraw
 ```
 
-Casework submission exposes `result`.
+Casework submission exposes `result`. The BReg Proposal operations expose `proposal`; see
+[Follow a BReg Proposal](#follow-a-breg-proposal).
 An external GET operation can declare a named `bounded-poll` completion with a typed pure
 `interpret` Function and `intervalSeconds`. The Function interprets the saved command and latest
 validated response as pending, complete, or a declared business refusal. The host owns transport,
@@ -167,7 +176,8 @@ credentials, scheduling, correlation, and the observation budget. The workflow g
 
 Completion observation is read-only. Every read has a persistent minimum spacing of at least 30
 seconds. `minimumObservationIntervalSeconds` can raise that deployment-wide minimum. Casework
-pending reads default to 900 seconds; Casework's `resultCheckSeconds` is configurable.
+and BReg pending reads default to 900 seconds; each connection's `resultCheckSeconds` is
+configurable.
 The operation interval and deployment minimum constrain external polls. Retry hints are honored
 within the host ceiling of 86,400 seconds; an unusable hint holds the wait. Restart, a completion
 wake-up, timeout, or recovery cannot bypass the durable read floor. Inspection reports the next
@@ -190,9 +200,8 @@ reinterpreting work. A standing BReg profile and identity authorize each call in
 
 The operation invokes immediate Actions and returns their exact application result. The
 compiler refuses a Proposal Action with `coordinator.operation.proposal-action`, and the runtime
-refuses one at preparation with `action-unavailable`. The applicant drives a Proposal in BReg;
-a Workflow follows it through a committed BReg product event or a later `breg.read-record/v1`
-read.
+refuses one at preparation with `action-unavailable`. Proposal Actions use the operations in
+[Follow a BReg Proposal](#follow-a-breg-proposal).
 
 `onDeclaredRefusal` routes only a validated owner-declared no-effect
 refusal. Its output is `{refusalCode}`. Operational failures stay failures, and a later refusal cannot resolve an earlier
@@ -204,6 +213,84 @@ Standalone Casework review is independent of BReg. Its submission includes an ex
 `PolicyBinding`; the accepted request and eventual result must agree with that exact policy,
 subject, and submission digest. Casework owns reviewer authority and outcomes. Review completion
 creates no registry effect. A later BReg or Messaging call requires its own authority.
+
+## Follow a BReg Proposal
+
+When a person submits a request in the BReg staff app and the run starts with its id, read it
+and wait for its outcome:
+
+```yaml
+steps:
+  proposal:
+    type: call
+    operation: read-proposal        # an alias of breg.read-proposal/v1
+    input:
+      type: fields
+      fields: {proposalId: {type: input, path: /proposalId}}
+    next: decided
+  decided:
+    type: wait-for
+    completion: {step: proposal, name: proposal}
+    timeoutSeconds: 2592000
+    next: route
+    onTimeout: no-decision
+  route:
+    type: choose
+    choose: {type: step, step: decided, path: /outcome}
+    cases: {applied: issue, rejected: refused, cancelled: withdrawn}
+```
+
+A read or start follow has the outcomes `applied`, `rejected` and `cancelled`, so the `choose`
+names those three. Route on `applied`: in manual application an approved request is not yet in
+the register. A request a person submitted that comes back to them keeps the run waiting while
+they correct it in BReg. Use `breg.start-proposal/v1` when the workflow must check facts in
+other registries first; it starts a draft and a person submits it. Use
+`breg.submit-proposal/v1` only when no person started the run. Its follow adds the outcome
+`returned`, for a request sent back to the party or revised by someone else, so its `choose`
+names four cases. `breg.cancel-proposal/v1` withdraws only a request this run started or
+submitted. None of these operations approves, decides or applies a request.
+
+A start or submit step builds the Action's input with a nested `fields` mapping, up to four
+levels deep and 64 members in all, so structured inputs need no Function:
+
+```yaml
+  start:
+    type: call
+    operation: start-licence      # an alias of breg.start-proposal/v1
+    input:
+      type: fields
+      fields:
+        holder: {type: input, path: /holderId}
+        premises:
+          type: fields
+          fields:
+            district: {type: step, step: read-site, path: /domainData/district}
+            area: {type: step, step: read-site, path: /domainData/areaSquareMetres}
+    next: decided
+```
+
+`breg.read-in-force/v1` reads the one record in force for a structured subject on a date. A
+successful read with no record is the declared refusal `none-in-force`, which must have an
+`onDeclaredRefusal` route; two records hold the run with `in-force-ambiguous`; a 401, 403 or 404
+from BReg is a failure of the read, never "none in force". The record comes with `asOf`, the
+date BReg read at, and `observedAt`, when Coordinator read it, for any Action that must record
+where a fact came from.
+
+A `choose` can also compare values without a Function:
+
+```yaml
+  size:
+    type: choose
+    choose:
+      type: compare
+      all:
+        - {value: {type: step, step: read-farm, path: /areaHectares}, present: true}
+        - {value: {type: step, step: read-farm, path: /areaHectares}, greater: 2}
+    cases: {matched: large-farm, unmatched: smallholding}
+```
+
+The [product contract](PRODUCT-CONTRACT.md#breg-proposals-and-in-force-reads) states the
+outcome mapping, the codes, and the run list's `proposal` and `turn` filters.
 
 ## Record and template contracts
 

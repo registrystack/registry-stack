@@ -239,6 +239,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
+  timezone: UTC
 recordTypes:
   - id: public-record
     primaryDataset: test-dataset
@@ -354,6 +355,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
+  timezone: UTC
 manifestProjection:
   accessProfile: operator
   classificationCeiling: public
@@ -578,7 +580,7 @@ impl SnapshotReadService for RecordingSnapshotReadService {
 const SNAPSHOT_PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
-project: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+project: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test, timezone: UTC}
 recordTypes:
   - id: assignment
     primaryDataset: test-dataset
@@ -3894,6 +3896,18 @@ fn public_claims() -> VerifiedRequestClaims {
     .expect("public reader claims are valid")
 }
 
+/// A caller that passes scope and purpose but carries no direct claims.
+fn claims_without_jurisdictions() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "principal-value-never-rendered",
+        BTreeSet::from(["registry.read".to_owned()]),
+        Some("case-management".to_owned()),
+        BTreeMap::new(),
+    )
+    .expect("verified context")
+}
+
 fn registry_principal_claims(purpose: &str) -> VerifiedRequestClaims {
     VerifiedRequestClaims::authenticated(
         "registry_principal",
@@ -4348,6 +4362,11 @@ async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal(
         .unwrap();
     assert_eq!(as_of["query"]["temporal"]["parameter"], "asOf");
     assert_eq!(as_of["query"]["temporal"]["required"], true);
+    assert_eq!(
+        as_of["query"]["temporal"]["schema"],
+        json!({"type": "string", "format": "date"}),
+        "a date interval takes a calendar date asOf"
+    );
     assert!(as_of["request"]["queryParameters"]
         .as_array()
         .unwrap()
@@ -4366,6 +4385,89 @@ async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal(
         let response = harness.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.headers()["cache-control"], "no-store", "{uri}");
         assert!(response.headers().contains_key("traceparent"));
+    }
+}
+
+const TEMPORAL_ROW_BOUNDARY_PROJECT: &str = r#"
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: temporal-row-boundary
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
+  timezone: UTC
+recordTypes:
+  - id: licence
+    primaryDataset: test-dataset
+    route: licences
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: status, type: string, required: true, maximumLength: 32, classification: restricted}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: restricted}
+      - {id: valid-from, type: date, required: true, classification: restricted}
+      - {id: valid-to, type: date, classification: restricted}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+    constraints:
+      - {type: temporal-non-overlap, scopeFields: [jurisdiction], startField: valid-from, endField: valid-to}
+datasets:
+  - {id: test-dataset}
+
+accessProfiles:
+  - id: caseworker
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    permissions:
+      records:
+        - recordType: licence
+          operations: [get, list]
+          readableFields: [status, jurisdiction, valid-from, valid-to]
+          filterableFields: [status]
+          sortableFields: [valid-from]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdictions, operator: in}
+"#;
+
+/// A caller whose token lacks the claim a row boundary depends on is refused
+/// on every record list read. An empty page would let a workflow read "no
+/// record in force" for a caller that was never allowed to see any.
+#[tokio::test]
+async fn missing_row_boundary_claim_refuses_list_current_and_as_of_reads() {
+    let harness = Harness::from_project(TEMPORAL_ROW_BOUNDARY_PROJECT, true);
+    let uris = [
+        "/v1/records/licences",
+        "/v1/records/licences:current",
+        "/v1/records/licences:as-of?asOf=2026-06-05",
+    ];
+
+    for uri in uris {
+        let before = harness.records.calls();
+        let response = harness
+            .send(
+                Method::GET,
+                uri,
+                Some(caseworker_claims_with_direct("case-management", [])),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK, "control {uri}");
+        assert_eq!(harness.records.calls(), before + 1, "control {uri}");
+    }
+
+    for uri in uris {
+        let before = harness.records.calls();
+        let response = harness
+            .send(Method::GET, uri, Some(claims_without_jurisdictions()))
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "resource.not_found", "{uri}");
+        assert!(problem.get("items").is_none(), "{uri}");
+        assert_eq!(harness.records.calls(), before, "{uri} reached the store");
     }
 }
 

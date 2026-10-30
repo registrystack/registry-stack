@@ -106,14 +106,14 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/placements:as-of?accessProfile=asset-operator&asOf=2020-12-31T23:59:59Z",
+        "/v1/records/placements:as-of?accessProfile=asset-operator&asOf=2020-12-31",
         Some(&token),
         &[&old_placement.id],
     )
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/placements:as-of?accessProfile=asset-operator&asOf=2021-01-01T00:00:00Z",
+        "/v1/records/placements:as-of?accessProfile=asset-operator&asOf=2021-01-01",
         Some(&token),
         &[&current_placement.id],
     )
@@ -125,6 +125,52 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         &[&current_placement.id],
     )
     .await;
+    // A date interval reads at a calendar date and echoes the date it used;
+    // an instant is refused at `asOf`.
+    let as_of = harness
+        .send(
+            Method::GET,
+            "/v1/records/placements:as-of?accessProfile=asset-operator&asOf=2021-01-01",
+            Some(&token),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(as_of.status(), StatusCode::OK);
+    assert_eq!(raw_response_json(as_of).await["meta"]["asOf"], "2021-01-01");
+    let current = harness
+        .send(
+            Method::GET,
+            "/v1/records/placements:current?accessProfile=asset-operator",
+            Some(&token),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let current_as_of = raw_response_json(current).await["meta"]["asOf"].clone();
+    assert!(
+        current_as_of.as_str().is_some_and(|value| value.len() == 10
+            && time::Date::parse(
+                value,
+                time::macros::format_description!("[year]-[month]-[day]")
+            )
+            .is_ok()),
+        "a date-interval :current echoes the registry's local date: {current_as_of}"
+    );
+    let instant = harness
+        .send(
+            Method::GET,
+            "/v1/records/placements:as-of?accessProfile=asset-operator&asOf=2021-01-01T00:00:00Z",
+            Some(&token),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(instant.status(), StatusCode::BAD_REQUEST);
+    let instant = raw_response_json(instant).await;
+    assert_eq!(instant["code"], "query.invalid", "{instant}");
+    assert_eq!(instant["fieldPath"], "asOf", "{instant}");
     assert_list_ids(
         harness,
         "/v1/records/placements:current?accessProfile=site-planner",
@@ -293,7 +339,7 @@ async fn establishments_journey(harness: &PilotHarness) {
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/operator-assignments:as-of?accessProfile=business-operator&asOf=2021-12-31T23:59:59Z",
+        "/v1/records/operator-assignments:as-of?accessProfile=business-operator&asOf=2021-12-31",
         Some(&token),
         &[&old_assignment.id],
     )
@@ -654,7 +700,7 @@ async fn facility_journey(harness: &PilotHarness) {
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/permits:as-of?accessProfile=facility-operator&asOf=2023-12-31T23:59:59Z",
+        "/v1/records/permits:as-of?accessProfile=facility-operator&asOf=2023-12-31",
         Some(&north_token),
         &[&old_permit.id],
     )
@@ -743,7 +789,7 @@ async fn facility_journey(harness: &PilotHarness) {
     assert_eq!(current_activity.body["data"]["quantityValue"], "8.250");
     assert_list_ids(
         harness,
-        "/v1/records/discharge-reports:as-of?accessProfile=facility-operator&asOf=2024-06-30T23:59:59Z",
+        "/v1/records/discharge-reports:as-of?accessProfile=facility-operator&asOf=2024-06-30",
         Some(&north_token),
         &[&old_activity.id],
     )
@@ -915,14 +961,14 @@ async fn business_journey(harness: &PilotHarness) {
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/officer-appointments:as-of?asOf=2021-12-31T23:59:59Z",
+        "/v1/records/officer-appointments:as-of?asOf=2021-12-31",
         Some(&public_token),
         &[&historical.id],
     )
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/officer-appointments:as-of?asOf=2022-01-01T00:00:00Z",
+        "/v1/records/officer-appointments:as-of?asOf=2022-01-01",
         Some(&public_token),
         &[&current.id],
     )
@@ -1098,7 +1144,15 @@ fn normalize_record_response(mut value: Value) -> Value {
         return normalize_record_member(object.remove("data").expect("record response has data"));
     }
     if object.contains_key("meta") && object.contains_key("items") {
-        assert_record_meta(object.remove("meta").expect("record collection has meta"));
+        let mut meta = object.remove("meta").expect("record collection has meta");
+        // `:current` and `:as-of` collections also echo the `asOf` they read at.
+        if let Some(as_of) = meta.as_object_mut().and_then(|meta| meta.remove("asOf")) {
+            assert!(
+                as_of.as_str().is_some_and(|value| !value.is_empty()),
+                "collection meta asOf is a non-empty string: {as_of}"
+            );
+        }
+        assert_record_meta(meta);
         let items = object
             .get_mut("items")
             .and_then(Value::as_array_mut)

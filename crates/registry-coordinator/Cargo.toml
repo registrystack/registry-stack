@@ -69,6 +69,11 @@ path = "tests/read_lease_recovery.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "read_in_force_postgres"
+path = "tests/read_in_force_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "process_restart"
 path = "tests/process_restart.rs"
 required-features = ["postgres-test"]
@@ -86,6 +91,11 @@ required-features = ["postgres-test"]
 [[test]]
 name = "review_wait_postgres"
 path = "tests/review_wait_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "breg_proposal_wait_postgres"
+path = "tests/breg_proposal_wait_postgres.rs"
 required-features = ["postgres-test"]
 
 [[test]]
@@ -111,6 +121,11 @@ required-features = ["postgres-test"]
 [[test]]
 name = "standalone_review_postgres"
 path = "tests/standalone_review_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "compare_worker_postgres"
+path = "tests/compare_worker_postgres.rs"
 required-features = ["postgres-test"]
 
 [dependencies]

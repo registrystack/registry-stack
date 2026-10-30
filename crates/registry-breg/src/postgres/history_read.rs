@@ -48,7 +48,9 @@ use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
 use super::cancellation::QueryCancellationGuard;
-use super::read::{load_retained_plaintext_fields, open_history_row_members};
+use super::read::{
+    load_retained_plaintext_fields, open_history_row_members, temporal_instant_expression,
+};
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
@@ -1172,11 +1174,13 @@ fn snapshot_where_sql(
         let start = fields.field(&temporal.start_field)?;
         let end = fields.field(&temporal.end_field)?;
         let parameter = builder.push_string(instant.clone());
-        let instant_sql = temporal_parameter_sql(&start.field_type, &end.field_type, parameter)?;
+        let instant_sql =
+            temporal_instant_expression(&start.field_type, &end.field_type, parameter)?;
         predicates.push(format!(
-            "{} <= {instant_sql} AND ({} IS NULL OR {instant_sql} < {})",
+            "{} <= {instant_sql} AND ({} IS NULL OR {instant_sql} {} {})",
             field_typed_sql(start)?,
             field_typed_sql(end)?,
+            temporal.closing_operator(),
             field_typed_sql(end)?,
         ));
     }
@@ -1958,20 +1962,6 @@ fn compiled_stored_field_type<'a>(
         .iter()
         .find(|field| field.logical.id == field_id)
         .map(|field| &field.logical.field_type)
-}
-
-fn temporal_parameter_sql(
-    start_type: &FieldTypeSource,
-    end_type: &FieldTypeSource,
-    parameter: usize,
-) -> Result<String, ReadServiceError> {
-    match (start_type, end_type) {
-        (FieldTypeSource::Date, FieldTypeSource::Date) => Ok(format!("${parameter}::text::date")),
-        (FieldTypeSource::Timestamp, FieldTypeSource::Timestamp) => {
-            Ok(format!("${parameter}::text::timestamptz"))
-        }
-        _ => Err(ReadServiceError::Unavailable),
-    }
 }
 
 fn postgres_cast(field_type: &FieldTypeSource) -> &'static str {

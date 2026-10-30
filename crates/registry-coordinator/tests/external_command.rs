@@ -93,6 +93,11 @@ fn describe(outcome: &CallOutcome) -> String {
         CallOutcome::DeclaredRefusal(refusal) => format!("declared:{}", refusal.refusal_code()),
         CallOutcome::Uncertain { code } => format!("uncertain:{code}"),
         CallOutcome::ReceiptExpired => "receipt-expired".into(),
+        CallOutcome::InForceAmbiguous(detail) => format!(
+            "in-force-ambiguous:{}:{}",
+            detail.date,
+            detail.record_identifiers.join(",")
+        ),
     }
 }
 

@@ -950,6 +950,13 @@ pub struct RegistryIdentitySource {
     pub canonical_base_iri: String,
     #[serde(default)]
     pub display: DisplaySource,
+    /// The IANA time zone the registry answers "today" in, such as
+    /// `Asia/Colombo`. Required when the project reads a date-interval
+    /// `:current`, compares a `currentDate` requirement, calls
+    /// `registry_context.evaluation_date()` on a live read, or declares a
+    /// statistics dataset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -4124,6 +4131,10 @@ pub enum ConstraintSource {
         start_field: Option<String>,
         #[serde(default)]
         end_field: Option<String>,
+        /// The inclusive last day, named in place of `endField` when the
+        /// Record type's interval declares `lastDayField`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_day_field: Option<String>,
     },
 }
 registry_platform_yaml::tagged_union!(ConstraintSource);
@@ -4164,7 +4175,24 @@ impl ConstraintSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TemporalSource {
     pub start_field: String,
-    pub end_field: String,
+    /// The exclusive end: the interval stops just before this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_field: Option<String>,
+    /// The inclusive last day of a date interval, named in place of
+    /// `endField` when the source records the last day in force.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_day_field: Option<String>,
+}
+
+impl TemporalSource {
+    /// The field that closes the interval, when exactly one of `endField`
+    /// and `lastDayField` is named.
+    pub fn closing_field(&self) -> Option<&str> {
+        match (&self.end_field, &self.last_day_field) {
+            (Some(field), None) | (None, Some(field)) => Some(field),
+            _ => None,
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -10134,15 +10134,15 @@
         {
           "name": "explain",
           "invocation": "coordinatorctl explain",
-          "about": "Explain a checked graph, mappings and execution bounds offline",
+          "about": "Explain a checked graph, mappings and execution bounds offline, or the helpers Functions may call",
           "long_about": null,
-          "usage": "coordinatorctl explain [OPTIONS] --project <PROJECT>",
+          "usage": "coordinatorctl explain [OPTIONS] --project <PROJECT>\n       coordinatorctl explain <COMMAND>",
           "arguments": [],
           "options": [
             {
               "display": "--project <PROJECT>",
               "description": "Directory containing workflow.yaml and its declared code and contract assets",
-              "always_required": true,
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -10182,7 +10182,52 @@
             }
           ],
           "constraints": [],
-          "subcommands": []
+          "subcommands": [
+            {
+              "name": "functions",
+              "invocation": "coordinatorctl explain functions",
+              "about": "List the helpers a pure Function may call, with the interpreter ABI and limits",
+              "long_about": null,
+              "usage": "coordinatorctl explain functions [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         },
         {
           "name": "types",
@@ -10875,6 +10920,28 @@
               "environment": null
             },
             {
+              "display": "--proposal <PROPOSAL>",
+              "description": "Return only runs waiting on this Base Registry Engine (BReg) Proposal",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--turn <TURN>",
+              "description": "Return only runs whose Proposal wait last read this turn",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "party",
+                "official",
+                "nobody"
+              ],
+              "environment": null
+            },
+            {
               "display": "--url <URL>",
               "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
               "always_required": false,
@@ -11179,6 +11246,86 @@
             {
               "display": "--reason <REASON>",
               "description": "Bounded investigation identifier without personal data",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "check-now",
+          "invocation": "coordinatorctl check-now",
+          "about": "Read a waiting step's product now instead of at its next scheduled time",
+          "long_about": null,
+          "usage": "coordinatorctl check-now [OPTIONS] --run <RUN> --step <STEP>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--run <RUN>",
+              "description": "Durable run UUID returned by admission",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--step <STEP>",
+              "description": "Name of the waiting step, as inspect lists it",
               "always_required": true,
               "repeatable": false,
               "default_values": [],

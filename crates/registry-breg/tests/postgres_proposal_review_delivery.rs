@@ -366,6 +366,12 @@ async fn fixture(authority: &Authority) -> client_http::ClientFixture {
     .await
 }
 async fn submitted(fixture: &client_http::ClientFixture, key_name: &str) -> Uuid {
+    Uuid::parse_str(submitted_proposal(fixture, key_name).await.id()).unwrap()
+}
+async fn submitted_proposal(
+    fixture: &client_http::ClientFixture,
+    key_name: &str,
+) -> registry_breg_client::BRegProposal {
     let client = &fixture.http.client;
     let metadata = client.registry_contract(Some("clerk")).await.unwrap();
     let BRegDirectWrite::Create(create) = metadata
@@ -420,8 +426,7 @@ async fn submitted(fixture: &client_http::ClientFixture, key_name: &str) -> Uuid
             &BRegIdempotencyKey::parse(format!("{key_name}-submit")).unwrap(),
         )
         .unwrap();
-    let value = client.execute_proposal(&submit).await.unwrap().value;
-    Uuid::parse_str(value.id()).unwrap()
+    client.execute_proposal(&submit).await.unwrap().value
 }
 async fn retained_binding(fixture: &client_http::ClientFixture, id: Uuid) -> ReviewRequestAccepted {
     let row = fixture.database.admin.query_one("SELECT create_request,expected_policy,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]).await.unwrap();
@@ -2257,3 +2262,333 @@ mod proposal_activation;
 #[cfg(feature = "tooling")]
 #[path = "support/review_go_live.rs"]
 mod review_go_live;
+
+/// Read one Proposal resource as raw JSON, so the test sees every member the
+/// server sends whether or not a client knows it.
+async fn read_raw(fixture: &client_http::ClientFixture, path: &str) -> Value {
+    use tower::ServiceExt;
+    let response = registry_breg::api::router(fixture.service())
+        .layer(axum::Extension(claims()))
+        .oneshot(
+            axum::http::Request::get(path)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "{path}");
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn native_submission_remote_refusal_names_only_an_allowlisted_reason_on_the_proposal() {
+    async fn refuse(State(code): State<&'static str>) -> Response {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            [
+                ("content-type", "application/problem+json"),
+                ("traceparent", TRACE),
+            ],
+            json!({"type":"https://review-provider.example.test/problems/refused",
+                "title":"Refused","status":422,"detail":"authority-detail-canary",
+                "code":code,"traceId":"0123456789abcdef0123456789abcdef"})
+            .to_string(),
+        )
+            .into_response()
+    }
+    let authority = Authority::start(false, true).await;
+    let fixture = fixture(&authority).await;
+    for (index, (authority_code, expected)) in [
+        ("review.initiator-required", "review.initiator-required"),
+        ("review.initiator-excluded", "review.initiator-excluded"),
+        ("review.policy-mismatch", "review.policy-mismatch"),
+        ("producer.refused", "review.refused"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = submitted(&fixture, &format!("handoff-refusal-{index}")).await;
+        let pending = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+        assert!(
+            pending.get("handoffRefusal").is_none(),
+            "a pending hand-off names no refusal: {pending}"
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/v1/review-requests", post(refuse))
+                    .with_state(authority_code),
+            )
+            .await
+            .unwrap();
+        });
+        let refusing =
+            ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+        let client = fixture.pool.get_for_test().await.unwrap();
+        assert!(run_one_submission(
+            &**client,
+            AUTHORITY,
+            &refusing,
+            "producer",
+            &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+            30
+        )
+        .await
+        .unwrap());
+        drop(client);
+        server.abort();
+        assert_eq!(job(&fixture, id).await["error"], "remote-refused");
+
+        let expected = json!({"code": expected});
+        let proposal = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+        assert_eq!(proposal["handoffRefusal"], expected, "{authority_code}");
+        let list = read_raw(&fixture, "/v1/proposals?limit=100").await;
+        let item = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .expect("the refused Proposal is listed");
+        assert_eq!(item["handoffRefusal"], expected, "{authority_code}");
+        let submission = read_raw(&fixture, &format!("/v1/proposals/{id}/submissions/1")).await;
+        assert_eq!(submission["handoffRefusal"], expected, "{authority_code}");
+        for read in [&proposal, &list, &submission] {
+            assert!(
+                !read.to_string().contains("authority-detail-canary"),
+                "BReg never copies the authority's text"
+            );
+        }
+    }
+    fixture.finish().await;
+}
+
+/// Read one Proposal resource as raw JSON with its status, for a read that
+/// may answer not found.
+async fn read_raw_status(fixture: &client_http::ClientFixture, path: &str) -> (StatusCode, Value) {
+    use tower::ServiceExt;
+    let response = registry_breg::api::router(fixture.service())
+        .layer(axum::Extension(claims()))
+        .oneshot(
+            axum::http::Request::get(path)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// The `handoffRefusal` member each Proposal read serves for one
+/// submission: Get, the List item and the submission read, in that order.
+/// A submission read that answers not found serves none.
+async fn handoff_refusals(
+    fixture: &client_http::ClientFixture,
+    id: Uuid,
+    version: i64,
+) -> [Option<Value>; 3] {
+    let proposal = read_raw(fixture, &format!("/v1/proposals/{id}")).await;
+    let list = read_raw(fixture, "/v1/proposals?limit=100").await;
+    let item = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == json!(id))
+        .expect("the Proposal is listed")
+        .clone();
+    let (status, submission) = read_raw_status(
+        fixture,
+        &format!("/v1/proposals/{id}/submissions/{version}"),
+    )
+    .await;
+    assert!(
+        status == StatusCode::OK || status == StatusCode::NOT_FOUND,
+        "{status} {submission}"
+    );
+    [
+        proposal.get("handoffRefusal").cloned(),
+        item.get("handoffRefusal").cloned(),
+        submission.get("handoffRefusal").cloned(),
+    ]
+}
+
+async fn deliver(
+    fixture: &client_http::ClientFixture,
+    review_client: &ReviewClient,
+    profile: &str,
+) {
+    let client = fixture.pool.get_for_test().await.unwrap();
+    assert!(run_one_submission(
+        &**client,
+        AUTHORITY,
+        review_client,
+        profile,
+        &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+        30
+    )
+    .await
+    .unwrap());
+}
+
+#[tokio::test]
+async fn a_handoff_refusal_is_named_only_while_the_refused_submission_is_current() {
+    async fn refuse() -> Response {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            [
+                ("content-type", "application/problem+json"),
+                ("traceparent", TRACE),
+            ],
+            json!({"type":"https://review-provider.example.test/problems/refused",
+                "title":"Refused","status":422,"detail":"Refused.",
+                "code":"review.policy-mismatch","traceId":"0123456789abcdef0123456789abcdef"})
+            .to_string(),
+        )
+            .into_response()
+    }
+    let authority = Authority::start(false, true).await;
+    let mut source = registry_source(json!(policy()));
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
+        json!(["get", "list", "submit", "revise", "cancel"]);
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let bindings = authority.registry.clone();
+    let fixture =
+        client_http::ClientFixture::start_with_mutations(registry, claims(), move |service| {
+            service.with_review_result_source(bindings)
+        })
+        .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/v1/review-requests", post(refuse)),
+        )
+        .await
+        .unwrap();
+    });
+    let refusing = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+    let refused = Some(json!({"code": "review.policy-mismatch"}));
+    let set_aside = |id: Uuid, assignment: &'static str| {
+        let admin = &fixture.database.admin;
+        async move {
+            assert_eq!(
+                admin
+                    .execute(
+                        &format!(
+                            "UPDATE registry_internal.registry_proposal_review_submissions
+                                SET {assignment} WHERE proposal_id=$1"
+                        ),
+                        &[&id],
+                    )
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
+    };
+
+    // A hand-off the review authority refused names its reason on every read.
+    let retrying = submitted(&fixture, "handoff-retrying").await;
+    deliver(&fixture, &refusing, "producer").await;
+    assert_eq!(
+        handoff_refusals(&fixture, retrying, 1).await,
+        [refused.clone(), refused.clone(), refused.clone()]
+    );
+    // A hand-off waiting for another attempt is not refused, even with a
+    // refusal still recorded beside it.
+    set_aside(
+        retrying,
+        "state='uncertain',next_attempt_at=transaction_timestamp()+interval '1 day'",
+    )
+    .await;
+    assert_eq!(
+        handoff_refusals(&fixture, retrying, 1).await,
+        [None, None, None]
+    );
+
+    // A withdrawn hand-off names no refusal.
+    let withdrawn = submitted(&fixture, "handoff-withdrawn").await;
+    deliver(&fixture, &refusing, "producer").await;
+    set_aside(withdrawn, "withdrawn=true").await;
+    assert_eq!(
+        handoff_refusals(&fixture, withdrawn, 1).await,
+        [None, None, None]
+    );
+
+    // A Proposal no longer submitted names no refusal on Get or List; the
+    // submission read still records why that submission ended.
+    let ended = submitted(&fixture, "handoff-ended").await;
+    deliver(&fixture, &refusing, "producer").await;
+    assert_eq!(
+        fixture
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_proposal_state SET state='rejected'
+                  WHERE proposal_id=$1",
+                &[&ended],
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    let [get, item, _] = handoff_refusals(&fixture, ended, 1).await;
+    assert_eq!([get, item], [None, None]);
+
+    // A failure on this side, such as an unusable review profile, is not the
+    // authority's refusal: the operator sees it, the author is told nothing.
+    let local = submitted(&fixture, "handoff-local-failure").await;
+    deliver(&fixture, &refusing, "").await;
+    assert_eq!(job(&fixture, local).await["error"], "remote-refused");
+    assert_eq!(
+        handoff_refusals(&fixture, local, 1).await,
+        [None, None, None]
+    );
+
+    // A later submission version names no refusal for an earlier one.
+    let revised = submitted_proposal(&fixture, "handoff-revised").await;
+    let id = Uuid::parse_str(revised.id()).unwrap();
+    deliver(&fixture, &refusing, "producer").await;
+    // The Proposal read before the refusal: this lane's Rust client does not
+    // yet accept the `handoffRefusal` member on a re-read.
+    let client = &fixture.http.client;
+    let revise = client
+        .prepare_proposal(
+            &revised,
+            "revise",
+            json!({}),
+            &BRegIdempotencyKey::parse("handoff-revised-second-revise").unwrap(),
+        )
+        .unwrap();
+    let draft = client.execute_proposal(&revise).await.unwrap().value;
+    let submit = client
+        .prepare_proposal(
+            &draft,
+            "submit",
+            json!({}),
+            &BRegIdempotencyKey::parse("handoff-revised-second-submit").unwrap(),
+        )
+        .unwrap();
+    client.execute_proposal(&submit).await.unwrap();
+    let [get, item, second] = handoff_refusals(&fixture, id, 2).await;
+    assert_eq!([get, item, second], [None, None, None]);
+    let [_, _, first] = handoff_refusals(&fixture, id, 1).await;
+    assert_eq!(first, None, "the revised submission was withdrawn");
+
+    server.abort();
+    fixture.finish().await;
+}

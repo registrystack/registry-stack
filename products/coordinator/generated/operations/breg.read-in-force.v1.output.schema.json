@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The record in force on the date, with the Coordinator's own observation\ntime. `asOf` is the requested date, not a BReg echo.",
+  "properties": {
+    "asOf": {
+      "format": "date",
+      "type": "string"
+    },
+    "domainData": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "observedAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "recordIdentifier": {
+      "type": "string"
+    },
+    "revisionIdentifier": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "recordIdentifier",
+    "revisionIdentifier",
+    "domainData",
+    "asOf",
+    "observedAt"
+  ],
+  "title": "breg.read-in-force/v1 output",
+  "type": "object"
+}

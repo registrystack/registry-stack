@@ -119,6 +119,63 @@ async fn list_forwards_the_opaque_cursor_and_state_and_attention_filters() {
 }
 
 #[tokio::test]
+async fn list_forwards_the_proposal_and_turn_filters() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("token");
+    fs::write(&token, TOKEN).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/v1/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"runs":[]})))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let proposal = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+    for turn in ["party", "official", "nobody"] {
+        let origin = server.uri();
+        let token = token.clone();
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+                .args([
+                    "--format",
+                    "json",
+                    "list",
+                    "--proposal",
+                    proposal,
+                    "--turn",
+                    turn,
+                    "--url",
+                    &origin,
+                    "--token-file",
+                ])
+                .arg(token)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let requests = server.received_requests().await.unwrap();
+    for (request, turn) in requests.iter().zip(["party", "official", "nobody"]) {
+        let expected = format!("limit=20&proposal={proposal}&turn={turn}");
+        assert_eq!(request.url.query(), Some(expected.as_str()));
+    }
+    for (flag, value) in [("--turn", "anyone"), ("--proposal", "not-a-uuid")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .args(["list", flag, value, "--url", &server.uri(), "--token-file"])
+            .arg(&token)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{flag} {value}");
+    }
+}
+
+#[tokio::test]
 async fn remote_admission_reports_outages_separately_without_repeating_the_request() {
     let server = MockServer::start().await;
     let root = tempfile::tempdir().unwrap();
@@ -600,4 +657,126 @@ async fn an_accepted_admission_prints_readable_fields_by_default() {
     assert!(text.lines().any(|line| line == "status: waiting"), "{text}");
     assert!(!text.contains(TOKEN));
     server.verify().await;
+}
+
+const RUN: &str = "6f1d4c1e-2b7a-4c55-9a3e-1d2c3b4a5f60";
+
+async fn check_now(server: &MockServer, root: &Path, arguments: &[&str]) -> std::process::Output {
+    let token = root.join("token");
+    fs::write(&token, TOKEN).unwrap();
+    let origin = server.uri();
+    let arguments = arguments
+        .iter()
+        .map(|argument| argument.to_string())
+        .collect::<Vec<_>>();
+    tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .args(["--format", "json", "check-now"])
+            .args(arguments)
+            .args(["--url", &origin, "--token-file"])
+            .arg(token)
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn check_now_posts_the_step_to_the_run_and_reports_the_answer() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let answer = json!({
+        "runId": RUN,
+        "step": "decided",
+        "nextObservationAt": "2026-10-30T10:00:30Z",
+        "observations": 3,
+        "observationLimit": 121
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/runs/{RUN}/check")))
+        .and(header("authorization", format!("Bearer {TOKEN}")))
+        .and(body_json(json!({"step": "decided"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&answer))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = check_now(&server, root.path(), &["--run", RUN, "--step", "decided"]).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "check-now");
+    assert_eq!(report["ok"], true);
+    let text = report.to_string();
+    for shown in ["decided", "2026-10-30T10:00:30Z", "121"] {
+        assert!(text.contains(shown), "{shown} is missing from {report}");
+    }
+    assert!(!text.contains(TOKEN));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn check_now_names_the_fix_for_a_step_that_is_not_waiting_and_a_run_not_visible() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    for (status, code, wanted) in [
+        (409, "check.not-waiting", "coordinatorctl inspect"),
+        (404, "run.not-visible", "--run"),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/runs/{RUN}/check")))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                "detail": "the requested operation could not complete",
+                "code": code,
+                "suggestedAction": "service-supplied-advice-marker"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = check_now(&server, root.path(), &["--run", RUN, "--step", "decided"]).await;
+        assert_eq!(output.status.code(), Some(1), "{code}");
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let finding = &report["diagnostics"][0];
+        assert_eq!(finding["code"], "coordinator.command.service-refused");
+        assert!(finding["message"].as_str().unwrap().contains(code));
+        let action = finding["suggestedAction"].as_str().unwrap();
+        assert!(action.contains(wanted), "{code}: {action}");
+        assert!(!report
+            .to_string()
+            .contains("service-supplied-advice-marker"));
+        server.verify().await;
+        server.reset().await;
+    }
+}
+
+#[tokio::test]
+async fn check_now_needs_a_run_and_a_step_and_calls_no_service_without_them() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    for (arguments, missing) in [
+        (vec!["--run", RUN], "--step"),
+        (vec!["--step", "decided"], "--run"),
+    ] {
+        let output = check_now(&server, root.path(), &arguments).await;
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let finding = &report["diagnostics"][0];
+        assert_eq!(finding["code"], "coordinator.cli.usage");
+        assert!(
+            finding["message"].as_str().unwrap().contains(missing),
+            "{finding}"
+        );
+    }
+    let output = check_now(
+        &server,
+        root.path(),
+        &["--run", "not-a-uuid", "--step", "x"],
+    )
+    .await;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(server.received_requests().await.unwrap().is_empty());
 }

@@ -1567,6 +1567,7 @@ fn availability_accepts_partial_inputs_but_requires_one_declared_reference() {
 
 struct AvailabilityReadProbe {
     calls: std::sync::atomic::AtomicUsize,
+    selected_fields: BTreeSet<String>,
     response: Result<Option<HeldReadResponse>, ReadServiceError>,
 }
 impl RecordReadService for AvailabilityReadProbe {
@@ -1578,10 +1579,7 @@ impl RecordReadService for AvailabilityReadProbe {
         assert_eq!(request.context.selected_profile(), "registrar");
         assert_eq!(request.operation_id, "records.case.get");
         assert_eq!(request.representation, CursorRepresentation::Json);
-        assert_eq!(
-            request.selected_fields,
-            BTreeSet::from(["label".into(), "region".into()])
-        );
+        assert_eq!(request.selected_fields, self.selected_fields);
         let response = self.response.clone();
         Box::pin(async move { response })
     }
@@ -1596,6 +1594,65 @@ impl RecordReadService for AvailabilityReadProbe {
         _: RecordReadRequest,
     ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
         panic!("availability must use the authorized direct GET")
+    }
+}
+
+#[tokio::test]
+async fn availability_compares_a_current_date_guard_against_the_registry_local_date() {
+    let id = "00000000-0000-4000-8000-000000000102";
+    let source = PROJECT
+        .replace("canonicalBaseIri: https://action-admission.example.test}", "canonicalBaseIri: https://action-admission.example.test, timezone: Asia/Colombo}")
+        .replace("      - {id: region, type: string, maximumLength: 20, required: true, classification: internal}\n",
+            "      - {id: region, type: string, maximumLength: 20, required: true, classification: internal}\n      - {id: opens-on, apiName: opensOn, type: date, required: true, classification: internal}\n")
+        .replace("    plan:\n", "    commitGuards:\n      targets: [{input: case-ref, field: opens-on, currentDate: on-or-after}]\n    plan:\n");
+    let mut project = parse_project_yaml(source.as_bytes()).unwrap();
+    let permission = json!({"recordType":"case","operations":["get"],"readableFields":["label","region","opens-on"],"rowBoundaries":"unrestricted"});
+    let mut profile = serde_json::to_value(&project.access_profiles[0]).unwrap();
+    profile["permissions"]["records"] = json!([permission]);
+    project.access_profiles[0] = serde_json::from_value(profile).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let late_evening_utc = time::macros::datetime!(2026-10-30 23:30 UTC);
+    // Colombo is already on 31 October at 23:30 UTC.
+    for (opens_on, expected) in [("2026-10-31", true), ("2026-10-30", false)] {
+        let mut service = service_for(registry.clone(), true);
+        service.records = Arc::new(AvailabilityReadProbe {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            selected_fields: BTreeSet::from(["opens-on".into(), "region".into()]),
+            response: Ok(Some(
+                HeldReadResponse::from_json(&json!({"data":{
+                    "recordIdentifier":id,"revisionIdentifier":"7",
+                    "domainData":{"label":"Ready","region":"north","opensOn":opens_on}
+                }}))
+                .unwrap(),
+            )),
+        });
+        let claims = claims(
+            "registry_principal",
+            ["case.rename", "case.supervise"],
+            Some("case-management"),
+            true,
+        );
+        let route = registry
+            .actions()
+            .routes
+            .iter()
+            .find(|route| route.kind == ActionRouteKind::Availability)
+            .unwrap();
+        let options = QueryOptions::default();
+        let surface = authorize_action(&service, route, &claims, &options).unwrap();
+        let result = availability::observe(
+            &service,
+            &surface,
+            &claims,
+            &HeaderMap::new(),
+            json!({"case-ref":id}).as_object().unwrap(),
+            "case-ref",
+            &RequestCorrelation::breg_created(),
+            late_evening_utc,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.value()["available"], json!(expected), "{opens_on}");
     }
 }
 
@@ -1621,6 +1678,7 @@ async fn availability_never_probes_hidden_fields_or_borrows_another_profiles_rea
         let mut service = service_for(registry.clone(), true);
         let probe = Arc::new(AvailabilityReadProbe {
             calls: std::sync::atomic::AtomicUsize::new(0),
+            selected_fields: BTreeSet::from(["label".into(), "region".into()]),
             response: Ok(Some(
                 HeldReadResponse::from_json(&json!({"data":{
                     "recordIdentifier":id,"revisionIdentifier":"7",
@@ -1652,6 +1710,7 @@ async fn availability_never_probes_hidden_fields_or_borrows_another_profiles_rea
             json!({"case-ref":id}).as_object().unwrap(),
             "case-ref",
             &RequestCorrelation::breg_created(),
+            time::OffsetDateTime::now_utc(),
         )
         .await
         .unwrap();

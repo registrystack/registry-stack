@@ -101,6 +101,8 @@ pub fn config(
                         "applications:read",
                     ),
                     profile: "follow-up-reader".to_owned(),
+                    result_check_seconds: None,
+                    request_link: None,
                 }),
             ),
             (

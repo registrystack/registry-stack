@@ -5,7 +5,8 @@
     "id": "asset-site-placement",
     "canonicalBaseIri": "https://asset-site-placement.example.gov",
     "version": "0.1.0",
-    "defaultLanguage": "en"
+    "defaultLanguage": "en",
+    "timezone": "UTC"
   },
   "package": {
     "sourceRevision": "asset-site-placement-acceptance-0.1.0"

@@ -338,6 +338,7 @@ pub(super) async fn dispatch(
                     .as_deref()
                     .expect("availability target was validated"),
                 &correlation,
+                time::OffsetDateTime::now_utc(),
             )
             .await
             {
@@ -388,6 +389,7 @@ pub(super) async fn dispatch(
                         &observed_input,
                         &input,
                         &correlation,
+                        time::OffsetDateTime::now_utc(),
                     )
                     .await
                     {

@@ -21,6 +21,9 @@ pub struct OperationContract {
     /// Output made available only on an authored `onDeclaredRefusal` route.
     pub declared_refusal: Option<Value>,
     pub action: Option<crate::breg_action::ActionContract>,
+    /// The host-owned completion a `wait-for` on this operation observes,
+    /// when the operation's resolution fixes one.
+    pub completion: Option<Value>,
     input_validator: JSONSchema,
     output_validator: JSONSchema,
     refusal_validator: Option<JSONSchema>,
@@ -153,6 +156,7 @@ impl OperationContract {
             output,
             declared_refusal,
             action,
+            completion: None,
             input_validator,
             output_validator,
             refusal_validator,
@@ -318,6 +322,12 @@ pub fn resolve_operation(
     template: Option<&Value>,
     imported: &BTreeMap<String, Value>,
 ) -> crate::Result<OperationContract> {
+    if operation == Operation::ReadInForce {
+        if action.is_some() || template.is_some() {
+            return Err(in_force_contract_invalid());
+        }
+        return resolve_in_force(record.ok_or_else(in_force_contract_invalid)?, imported);
+    }
     if let Some(record) = record {
         if operation != Operation::ReadRecord || action.is_some() || template.is_some() {
             return Err(record_contract_invalid());
@@ -337,7 +347,7 @@ pub fn resolve_operation(
         )
     };
     let Some(reference) = action else {
-        if operation == Operation::InvokeBregAction {
+        if operation == Operation::InvokeBregAction || operation.takes_proposal_action() {
             return Err(invalid());
         }
         let base = contract(operation);
@@ -348,7 +358,7 @@ pub fn resolve_operation(
             None,
         );
     };
-    if operation != Operation::InvokeBregAction {
+    if operation != Operation::InvokeBregAction && !operation.takes_proposal_action() {
         return Err(invalid());
     }
     let object = reference
@@ -408,6 +418,14 @@ pub fn resolve_operation(
     }
     bound_numbers(&mut input);
     bound_numbers(&mut output);
+    let pinned = crate::breg_action::ActionContract {
+        action_id: id.to_owned(),
+        action_revision: revision.to_owned(),
+        mode,
+    };
+    if operation.takes_proposal_action() {
+        return resolve_proposal(operation, pinned, input);
+    }
     if mode == registry_breg_client::BRegActionMode::Proposal {
         return Err(crate::CoordinatorError::new(
             "coordinator.operation.proposal-action",
@@ -424,12 +442,55 @@ pub fn resolve_operation(
         input,
         output,
         entry.get("declaredRefusal").cloned(),
-        Some(crate::breg_action::ActionContract {
-            action_id: id.to_owned(),
-            action_revision: revision.to_owned(),
-            mode,
-        }),
+        Some(pinned),
     )
+}
+
+/// A Proposal operation of one pinned Proposal Action. Start and submit send
+/// the Action's own input; read and cancel name a Proposal by id. Every
+/// call returns the same receipt, and a follow settles to the completion
+/// fixed by the Action's input members.
+fn resolve_proposal(
+    operation: Operation,
+    pinned: crate::breg_action::ActionContract,
+    mut action_input: Value,
+) -> crate::Result<OperationContract> {
+    if pinned.mode != registry_breg_client::BRegActionMode::Proposal {
+        return Err(crate::CoordinatorError::new(
+            "coordinator.operation.contract-invalid",
+            format!(
+                "Action {} is an immediate Action; {} takes only Proposal Actions",
+                pinned.action_id,
+                operation.as_str()
+            ),
+        )
+        .suggest("Select a Proposal Action, or invoke this Action with breg.invoke-action/v1."));
+    }
+    let base = contract(operation);
+    let input = if matches!(
+        operation,
+        Operation::StartProposal | Operation::SubmitProposal
+    ) {
+        // Start reads current target conditions like an immediate invocation.
+        if let Some(required) = action_input
+            .get_mut("required")
+            .and_then(Value::as_array_mut)
+        {
+            required.retain(|field| field != "preconditions");
+        }
+        action_input.clone()
+    } else {
+        base.input.clone()
+    };
+    let completion = operation.follows_proposal().then(|| {
+        crate::breg_proposal::completion_schema(
+            operation,
+            crate::breg_proposal::settled_input(&action_input),
+        )
+    });
+    let mut resolved = OperationContract::new(input, base.output.clone(), None, Some(pinned))?;
+    resolved.completion = completion;
+    Ok(resolved)
 }
 
 pub(crate) fn is_breg_record_schema(value: &Value) -> bool {
@@ -472,16 +533,88 @@ fn resolve_record(
     let mut output = base.output.clone();
     // Reads retain current disclosure: required fields may be hidden, and
     // this specialization promises API names rather than value validation.
-    output["$defs"]["RegistryRecord"]["properties"]["domainData"] = json!({
-        "type": "object", "additionalProperties": false,
-        "properties": properties.keys().map(|name| (name.clone(), Value::Bool(true))).collect::<serde_json::Map<_, _>>()
-    });
+    output["$defs"]["RegistryRecord"]["properties"]["domainData"] = record_domain_data(properties);
     OperationContract::new(
         base.input.clone(),
         output,
         base.declared_refusal.clone(),
         None,
     )
+}
+
+/// The `domainData` schema of a record read: only the record type's API names.
+fn record_domain_data(properties: &serde_json::Map<String, Value>) -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "properties": properties.keys().map(|name| (name.clone(), Value::Bool(true))).collect::<serde_json::Map<_, _>>()
+    })
+}
+
+fn in_force_contract_invalid() -> crate::CoordinatorError {
+    crate::CoordinatorError::new(
+        "coordinator.operation.contract-invalid",
+        "select a generated BReg record schema for breg.read-in-force/v1 with record: {contract: <import>}",
+    )
+}
+
+/// The `x-registry-temporal` marker of a generated record schema, when its
+/// validity interval is a calendar-date range.
+pub(crate) fn date_validity_interval(schema: &Value) -> Option<&Value> {
+    schema
+        .get("x-registry-temporal")
+        .filter(|marker| marker.get("valueKind").and_then(Value::as_str) == Some("date"))
+}
+
+/// Narrow `breg.read-in-force/v1` to one record type: `entity` must be that
+/// type's route, the subject may name only that type's fields, and the output
+/// carries only those fields.
+fn resolve_in_force(
+    reference: &Value,
+    imported: &BTreeMap<String, Value>,
+) -> crate::Result<OperationContract> {
+    let source = reference
+        .get("contract")
+        .and_then(Value::as_str)
+        .ok_or_else(in_force_contract_invalid)?;
+    let schema = imported
+        .get(source)
+        .filter(|value| is_breg_record_schema(value))
+        .ok_or_else(in_force_contract_invalid)?;
+    if date_validity_interval(schema).is_none() {
+        return Err(crate::CoordinatorError::new(
+            "definition.read-in-force-entity",
+            "This record type has no date validity interval, so no record can be in force on a date.",
+        )
+        .suggest("Select a record type whose validity interval is a date range, or read it with breg.read-record/v1."));
+    }
+    let properties = schema["properties"]
+        .as_object()
+        .ok_or_else(in_force_contract_invalid)?;
+    // The route names the record type the subject is read from; binding
+    // `entity` to it keeps the check and the read on the same record type.
+    let route = schema["x-registry-temporal"]["route"]
+        .as_str()
+        .ok_or_else(in_force_contract_invalid)?;
+    let base = contract(Operation::ReadInForce);
+    let mut input = base.input.clone();
+    input["properties"]["entity"] = json!({"const": route});
+    input["properties"]["subject"] = json!({
+        "type": "object", "additionalProperties": false,
+        "minProperties": 1, "maxProperties": crate::read_in_force::MAX_SUBJECT_FIELDS,
+        "description": base.input["properties"]["subject"]["description"].clone(),
+        "x-registry-in-force-scopes": schema["x-registry-temporal"]["nonOverlapScopeProperties"].clone(),
+        "properties": properties.keys().map(|name| (name.clone(), json!({"$ref": "#/$defs/SubjectValue"}))).collect::<serde_json::Map<_, _>>()
+    });
+    let mut output = base.output.clone();
+    // Reads retain current disclosure: required fields may be hidden, so the
+    // output promises API names rather than value validation.
+    output["properties"]["domainData"] = record_domain_data(properties);
+    let mut refusal = base.declared_refusal.clone();
+    if let Some(refusal) = refusal.as_mut() {
+        refusal["properties"]["refusalCode"] =
+            json!({"const": crate::read_in_force::NONE_IN_FORCE});
+    }
+    OperationContract::new(input, output, refusal, None)
 }
 
 fn template_contract_invalid() -> crate::CoordinatorError {
@@ -866,8 +999,10 @@ mod derived {
             RescheduleRequest, SchedulingReadRequest,
         },
         breg_action::ActionInput,
+        breg_proposal::{ProposalReceipt, ProposalReference},
         decision::DecisionResult,
         external_http::{ExternalResponse, GetRequest},
+        read_in_force::{InForceRecord, InForceRequest, MAX_SUBJECT_FIELDS},
         review::CancelReviewInput,
     };
     use registry_breg_client::{BRegActionReceipt, RegistryRecordSingleResponse};
@@ -965,6 +1100,34 @@ mod derived {
 
     pub(super) fn invoke_breg_action() -> (Value, Value) {
         (input::<ActionInput>(), output::<BRegActionReceipt>())
+    }
+
+    pub(super) fn read_in_force() -> (Value, Value) {
+        let mut request = input::<InForceRequest>();
+        request["properties"]["subject"]["minProperties"] = json!(1);
+        request["properties"]["subject"]["maxProperties"] = json!(MAX_SUBJECT_FIELDS);
+        request["properties"]["date"]["pattern"] = json!(r"^\d{4}-\d{2}-\d{2}$");
+        request["properties"]["date"]["format"] = json!("date");
+        let mut record = output::<InForceRecord>();
+        record["properties"]["asOf"]["format"] = json!("date");
+        record["properties"]["observedAt"]["format"] = json!("date-time");
+        (request, record)
+    }
+
+    pub(super) fn read_proposal() -> (Value, Value) {
+        (input::<ProposalReference>(), output::<ProposalReceipt>())
+    }
+
+    pub(super) fn start_proposal() -> (Value, Value) {
+        (input::<ActionInput>(), output::<ProposalReceipt>())
+    }
+
+    pub(super) fn submit_proposal() -> (Value, Value) {
+        (input::<ActionInput>(), output::<ProposalReceipt>())
+    }
+
+    pub(super) fn cancel_proposal() -> (Value, Value) {
+        (input::<ProposalReference>(), output::<ProposalReceipt>())
     }
 
     pub(super) fn external_get() -> (Value, Value) {

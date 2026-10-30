@@ -164,14 +164,8 @@ fn schema_cycles_mixtures_and_undeclared_references_point_to_authored_fields() {
 
 #[test]
 fn the_default_profile_has_no_clock_and_narrowing_cannot_widen_it() {
-    let definition = load(&project(), "fn render(inputs) { timestamp().to_string() }").unwrap();
-    assert_eq!(
-        definition
-            .evaluate("done", &json!({"text":"x"}), &BTreeMap::new())
-            .unwrap_err()
-            .code,
-        "function.execution"
-    );
+    let error = refused(&project(), "fn render(inputs) { timestamp().to_string() }");
+    assert_eq!(error.code, "coordinator.function.unknown-call");
     let mut edited = project();
     edited["functions"]["render"]["limits"] = json!({"operations":100001});
     let error = refused(&edited, SOURCE);

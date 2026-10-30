@@ -13,8 +13,8 @@ use axum::{
     Router,
 };
 use registry_coordinator_client::{
-    BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError, RunListQuery,
-    RunListState, StartRunRequest, Uuid,
+    BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError, ProposalTurn,
+    RunListQuery, RunListState, StartRunRequest, Uuid,
 };
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
@@ -792,6 +792,96 @@ async fn inspection_and_reconciliation_correlate_effects_and_waits_with_their_st
 }
 
 #[tokio::test]
+async fn an_inspection_carries_what_the_last_proposal_read_showed_and_the_request_link() {
+    let server = Server::new(inspection()).await;
+    let client = server.client();
+    let id = Uuid::parse_str(RUN).unwrap();
+    let observation = json!({"state":"submitted","turn":"official","submissionVersion":2,"observedAt":"2026-10-10T12:02:00Z","stateSince":"2026-10-10T12:01:00Z"});
+    let mut refused = observation.clone();
+    refused["state"] = json!("draft");
+    refused["turn"] = json!("party");
+    refused["handoffRefusal"] = json!("verification-failed");
+    let mut unknown = observation.clone();
+    unknown["applicant"] = json!("protected-canary");
+    let followed = |observation: Option<&Value>, link: Option<&str>| {
+        let mut waiting = wait("notify");
+        if let Some(observation) = observation {
+            waiting["lastObservation"] = observation.clone();
+        }
+        if let Some(link) = link {
+            waiting["requestLink"] = json!(link);
+        }
+        let mut document = inspection();
+        document["steps"] = json!([
+            step("send", "delivered", false),
+            step("notify", "pending", false)
+        ]);
+        document["effects"] = json!([effect("send", "accepted")]);
+        document["waits"] = json!([waiting]);
+        document
+    };
+    let link = "https://breg.example.invalid/requests/one";
+    for (case, document, valid) in [
+        (
+            "an answered read and the request link",
+            followed(Some(&observation), Some(link)),
+            true,
+        ),
+        (
+            "a hand-off refusal without a link",
+            followed(Some(&refused), None),
+            true,
+        ),
+        (
+            "a link before any answered read",
+            followed(None, Some(link)),
+            true,
+        ),
+        (
+            "an observation member the client does not know",
+            followed(Some(&unknown), None),
+            false,
+        ),
+    ] {
+        server.answer(200, "application/json", &document.to_string());
+        let answer = client.inspect(&token(), id).await;
+        if valid {
+            let inspection = answer.unwrap_or_else(|error| panic!("{case}: {error:?}"));
+            assert_eq!(
+                serde_json::to_value(&inspection.value).unwrap(),
+                document,
+                "{case}"
+            );
+            let wait = &inspection.value.waits[0];
+            assert_eq!(
+                wait.request_link.as_deref(),
+                document["waits"][0]["requestLink"].as_str(),
+                "{case}"
+            );
+            if let Some(observed) = &wait.last_observation {
+                assert_eq!(
+                    observed.turn.as_deref(),
+                    document["waits"][0]["lastObservation"]["turn"].as_str()
+                );
+            }
+        } else {
+            let error = answer.err().unwrap_or_else(|| panic!("{case} accepted"));
+            assert!(
+                matches!(
+                    error,
+                    CoordinatorClientError::Protocol {
+                        status: 200,
+                        failure: registry_coordinator_client::CoordinatorProtocolFailure::Body,
+                    }
+                ),
+                "{case}: {error:?}"
+            );
+            assert!(!format!("{error:?}").contains("protected-canary"));
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_cancellation_receipt_must_record_the_cancellation_or_a_settled_run() {
     let server = Server::new(status()).await;
     let client = server.client();
@@ -966,6 +1056,8 @@ async fn a_list_page_carries_the_cursor_and_filters_without_interpreting_the_cur
     query.cursor = Some("cursor-before".into());
     query.state = Some(RunListState::Attention);
     query.attention = Some(true);
+    query.proposal = Some(Uuid::parse_str("0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d").unwrap());
+    query.turn = Some(ProposalTurn::Official);
 
     let page = client.list_page(&token(), &query).await.unwrap().value;
 
@@ -973,7 +1065,7 @@ async fn a_list_page_carries_the_cursor_and_filters_without_interpreting_the_cur
     let seen = server.fixture.seen.lock().unwrap();
     assert_eq!(
         seen[0].1,
-        "/deployment/v1/runs?limit=1&cursor=cursor-before&state=attention&attention=true"
+        "/deployment/v1/runs?limit=1&cursor=cursor-before&state=attention&attention=true&proposal=0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d&turn=official"
     );
 }
 
@@ -1724,7 +1816,7 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
     for (schema, value) in [
         (&schemas["RunStatus"], status()),
         (&schemas["RunInspection"], inspection()),
-        (&schemas["StepStatus"], inspection()["steps"][0].clone()),
+        (&schemas["StepStatus"], held_step()),
         (
             &schemas["RunInspection"]["properties"]["recovery"],
             inspection()["recovery"].clone(),
@@ -1782,6 +1874,34 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
         serde_json::from_value(json!({"runs":[status()]})).unwrap();
     let _: registry_coordinator_client::RetryScheduled =
         serde_json::from_value(retry_scheduled()).unwrap();
+}
+
+fn held_step() -> Value {
+    let mut step = inspection()["steps"][0].clone();
+    step["failureCode"] = json!("in-force-ambiguous");
+    step["holdDetail"] =
+        json!({"date":"2026-06-05","recordIdentifiers":["licence-a1","licence-a2"]});
+    step
+}
+
+#[test]
+fn a_held_step_names_the_records_in_force_and_the_date() {
+    let step: registry_coordinator_client::StepStatus =
+        serde_json::from_value(held_step()).unwrap();
+    let detail = step.hold_detail.as_ref().unwrap();
+    assert_eq!(detail.date, "2026-06-05");
+    assert_eq!(detail.record_identifiers, ["licence-a1", "licence-a2"]);
+    assert_eq!(serde_json::to_value(&step).unwrap(), held_step());
+    let plain: registry_coordinator_client::StepStatus =
+        serde_json::from_value(inspection()["steps"][0].clone()).unwrap();
+    assert!(plain.hold_detail.is_none());
+    assert!(serde_json::to_value(&plain)
+        .unwrap()
+        .get("holdDetail")
+        .is_none());
+    let mut extra = held_step();
+    extra["holdDetail"]["value"] = json!("x");
+    assert!(serde_json::from_value::<registry_coordinator_client::StepStatus>(extra).is_err());
 }
 
 #[test]

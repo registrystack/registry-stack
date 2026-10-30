@@ -5,7 +5,8 @@
     "id": "facility",
     "canonicalBaseIri": "https://facility-registry.example.gov",
     "version": "0.1.0",
-    "defaultLanguage": "en"
+    "defaultLanguage": "en",
+    "timezone": "UTC"
   },
   "package": {
     "sourceRevision": "facility-acceptance-0.1.0"

@@ -63,8 +63,8 @@ use crate::cursor::{
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::model::{
     CompiledEntity, CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind,
-    CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind,
-    CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
+    CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
+    CompiledRevisionKind, CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use crate::problem::ProblemCode;
@@ -3139,7 +3139,8 @@ async fn read_query(
         order.as_ref(),
         page_size,
     )?;
-    let temporal_instant = temporal_instant_for(kind, options, surface.response_entity)?;
+    let temporal_instant =
+        temporal_instant_for(&service.registry, kind, options, surface.response_entity)?;
     let binding = cursor_binding(
         service,
         route,
@@ -3843,6 +3844,7 @@ fn validate_filter_shape(
 }
 
 fn temporal_instant_for(
+    registry: &CompiledRegistry,
     kind: CompiledQueryKind,
     options: &QueryOptions,
     entity: &CompiledEntity,
@@ -3858,10 +3860,7 @@ fn temporal_instant_for(
             if options.parsed.as_of.is_some() {
                 return Err(ReadQueryError::InvalidAt("asOf"));
             }
-            OffsetDateTime::now_utc()
-                .format(&Rfc3339)
-                .map(Some)
-                .map_err(|_| ReadQueryError::Invalid)
+            current_temporal_instant(registry, entity, OffsetDateTime::now_utc()).map(Some)
         }
         CompiledQueryKind::AsOf => {
             let value = options
@@ -3869,8 +3868,9 @@ fn temporal_instant_for(
                 .as_of
                 .as_deref()
                 .ok_or(ReadQueryError::InvalidAt("asOf"))?;
-            parse_strict_rfc3339_utc(value).map_err(|_| ReadQueryError::InvalidAt("asOf"))?;
-            Ok(Some(value.to_owned()))
+            normalize_history_valid_at(entity, value)
+                .map(Some)
+                .map_err(|_| ReadQueryError::InvalidAt("asOf"))
         }
         CompiledQueryKind::Snapshot => options
             .historical
@@ -3883,6 +3883,27 @@ fn temporal_instant_for(
                     .map_err(|_| ReadQueryError::InvalidAt("validAt"))
             })
             .transpose(),
+    }
+}
+
+/// The `:current` read's `asOf` at `now`: the registry's local date on a
+/// date interval, and the instant itself on a timestamp interval.
+fn current_temporal_instant(
+    registry: &CompiledRegistry,
+    entity: &CompiledEntity,
+    now: OffsetDateTime,
+) -> Result<String, ReadQueryError> {
+    let temporal = entity.temporal.as_ref().ok_or(ReadQueryError::Invalid)?;
+    let start = entity
+        .fields
+        .get(&temporal.start_field)
+        .ok_or(ReadQueryError::Invalid)?;
+    match start.field_type {
+        FieldTypeSource::Date => registry
+            .local_date_at(now)
+            .map(|date| date.format("%Y-%m-%d").to_string())
+            .map_err(|_| ReadQueryError::Invalid),
+        _ => now.format(&Rfc3339).map_err(|_| ReadQueryError::Invalid),
     }
 }
 
@@ -3917,15 +3938,6 @@ pub(crate) fn normalize_history_valid_at(
         }
         _ => Err(()),
     }
-}
-
-fn parse_strict_rfc3339_utc(value: &str) -> Result<OffsetDateTime, ()> {
-    let parsed = OffsetDateTime::parse(value, &Rfc3339).map_err(|_| ())?;
-    if parsed.offset() != time::UtcOffset::UTC || parsed.format(&Rfc3339).map_err(|_| ())? != value
-    {
-        return Err(());
-    }
-    Ok(parsed)
 }
 
 fn cursor_binding(
@@ -5822,5 +5834,87 @@ mod native_handler_problem_tests {
                 status
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod temporal_instant_tests {
+    use super::{current_temporal_instant, normalize_history_valid_at};
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+    use serde_json::json;
+    use time::macros::datetime;
+
+    fn registry(boundary_type: &str) -> crate::CompiledRegistry {
+        let source = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id": "licences", "version": "1", "defaultLanguage": "en",
+                "canonicalBaseIri": "https://licences.example.test", "timezone": "Asia/Colombo"},
+            "datasets": [{"id": "licences"}],
+            "recordTypes": [{
+                "id": "licence", "primaryDataset": "licences", "route": "licences", "mutationMode": "mutable",
+                "fields": [
+                    {"id": "holder", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},
+                    {"id": "valid-from", "type": boundary_type, "required": true, "classification": "internal"},
+                    {"id": "valid-to", "type": boundary_type, "classification": "internal"}
+                ],
+                "temporal": {"startField": "valid-from", "endField": "valid-to"}
+            }],
+            "accessProfiles": [{
+                "id": "reader", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
+                "permissions": {"records": [{
+                    "recordType": "licence", "operations": ["list"],
+                    "readableFields": ["holder", "valid-from", "valid-to"],
+                    "rowBoundaries": "unrestricted"
+                }]}
+            }]
+        });
+        let project = parse_project_json(&serde_json::to_vec(&source).expect("JSON"))
+            .expect("project parses");
+        compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles")
+    }
+
+    #[test]
+    fn a_colombo_registry_at_23_30_utc_reads_tomorrow_as_current() {
+        let registry = registry("date");
+        let entity = &registry.entities()["licence"];
+        assert_eq!(
+            current_temporal_instant(&registry, entity, datetime!(2026-10-30 23:30 UTC))
+                .expect("a date interval answers a local date"),
+            "2026-10-31"
+        );
+        assert_eq!(
+            current_temporal_instant(&registry, entity, datetime!(2026-10-30 18:29:59 UTC))
+                .expect("a date interval answers a local date"),
+            "2026-10-30",
+            "Colombo changes date at local midnight, 18:30 UTC"
+        );
+    }
+
+    #[test]
+    fn a_timestamp_interval_reads_the_current_instant() {
+        let registry = registry("timestamp");
+        let entity = &registry.entities()["licence"];
+        assert_eq!(
+            current_temporal_instant(&registry, entity, datetime!(2026-10-30 23:30 UTC))
+                .expect("a timestamp interval answers the instant"),
+            "2026-10-30T23:30:00Z"
+        );
+    }
+
+    #[test]
+    fn as_of_follows_the_valid_at_rule_by_interval_type() {
+        let dates = registry("date");
+        let entity = &dates.entities()["licence"];
+        assert_eq!(
+            normalize_history_valid_at(entity, "2026-06-05"),
+            Ok("2026-06-05".to_owned())
+        );
+        assert!(normalize_history_valid_at(entity, "2026-06-05T00:00:00Z").is_err());
+        let instants = registry("timestamp");
+        let entity = &instants.entities()["licence"];
+        assert!(normalize_history_valid_at(entity, "2026-06-05").is_err());
+        assert!(normalize_history_valid_at(entity, "2026-06-05T00:00:00+05:30").is_err());
     }
 }

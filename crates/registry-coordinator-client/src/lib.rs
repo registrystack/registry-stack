@@ -37,9 +37,10 @@ pub use client::{CoordinatorClient, CoordinatorComplete};
 pub use config::CoordinatorClientConfig;
 pub use error::{CoordinatorClientError, CoordinatorProtocolFailure};
 pub use model::{
-    EffectKind, EffectState, EffectStatus, KeyRequirement, OperationIdentity, RecoverySemantics,
-    RecoveryStatus, RetryBlockReason, RetryScheduled, RunInspection, RunList, RunListQuery,
-    RunListState, RunStatus, StartRunRequest, StepStatus, WaitStatus, WorkflowContract,
+    EffectKind, EffectState, EffectStatus, HoldDetail, KeyRequirement, LastObservation,
+    OperationIdentity, ProposalTurn, RecoverySemantics, RecoveryStatus, RetryBlockReason,
+    RetryScheduled, RunInspection, RunList, RunListQuery, RunListState, RunStatus, StartRunRequest,
+    StepStatus, WaitStatus, WorkflowContract,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
 pub use uuid::Uuid;

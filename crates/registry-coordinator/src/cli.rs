@@ -79,6 +79,27 @@ impl ListState {
         }
     }
 }
+#[derive(Clone, Copy, ValueEnum)]
+enum ListTurn {
+    Party,
+    Official,
+    Nobody,
+}
+impl ListTurn {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Party => "party",
+            Self::Official => "official",
+            Self::Nobody => "nobody",
+        }
+    }
+}
+/// What `explain` describes without a project.
+#[derive(Subcommand)]
+enum ExplainTopic {
+    /// List the helpers a pure Function may call, with the interpreter ABI and limits.
+    Functions,
+}
 #[derive(Subcommand)]
 enum Command {
     /// Send one raw HTTP request using a saved Coordinator connection.
@@ -118,11 +139,14 @@ enum Command {
         /// Substitute runtime environment expressions; secret values are never resolved.
         environment: bool,
     },
-    /// Explain a checked graph, mappings and execution bounds offline.
+    /// Explain a checked graph, mappings and execution bounds offline, or the helpers Functions may call.
+    #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
     Explain {
-        #[arg(long)]
+        #[arg(long, required = true)]
         /// Directory containing workflow.yaml and its declared code and contract assets.
-        project: PathBuf,
+        project: Option<PathBuf>,
+        #[command(subcommand)]
+        topic: Option<ExplainTopic>,
     },
     /// Export revision-pinned typed clients from the compiled workflow contract.
     Types {
@@ -217,6 +241,12 @@ enum Command {
         #[arg(long)]
         /// True returns attention or failed runs; false excludes both.
         attention: Option<bool>,
+        #[arg(long)]
+        /// Return only runs waiting on this Base Registry Engine (BReg) Proposal.
+        proposal: Option<Uuid>,
+        #[arg(long, value_enum)]
+        /// Return only runs whose Proposal wait last read this turn.
+        turn: Option<ListTurn>,
         #[command(flatten)]
         service: Service,
     },
@@ -258,6 +288,17 @@ enum Command {
         #[arg(long)]
         /// Bounded investigation identifier without personal data.
         reason: String,
+        #[command(flatten)]
+        service: Service,
+    },
+    /// Read a waiting step's product now instead of at its next scheduled time.
+    CheckNow {
+        #[arg(long)]
+        /// Durable run UUID returned by admission.
+        run: Uuid,
+        #[arg(long)]
+        /// Name of the waiting step, as inspect lists it.
+        step: String,
         #[command(flatten)]
         service: Service,
     },
@@ -346,6 +387,7 @@ impl Command {
             Self::RetrySame { .. } => "retry-same",
             Self::Cancel { .. } => "cancel",
             Self::Reconcile { .. } => "reconcile",
+            Self::CheckNow { .. } => "check-now",
             Self::Doctor { .. } => "doctor",
             Self::RestoreHold { .. } => "restore-hold",
             Self::ReleaseRestoreHold { .. } => "release-restore-hold",
@@ -746,6 +788,7 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         ProblemCode::BindingLiveConflict => "Restore the original connection settings live runs use, or start the service with --recovery-only to investigate.",
         ProblemCode::ReconcileRefused => "Inspect the run: reconcile applies to a held mutation with a prepared command, its original binding and no active lease; use retry-same for a read.",
         ProblemCode::ReconcileUnsupported => "This operation has no original-result lookup; consult the receiving product's records and cancel the held run when no further execution is appropriate.",
+        ProblemCode::CheckNotWaiting => "Run coordinatorctl inspect for the run; Check now applies only to a step that is waiting for a result.",
         ProblemCode::ReconcileRaced => "Inspect the run again; its progress changed during reconciliation.",
         ProblemCode::DeploymentActivationChanged => "An apply changed the active packages; restart the service with the runtime file that apply used.",
         ProblemCode::DeploymentRefused => "Run coordinatorctl deployment-status with the service's runtime file; it names the failing check and its fix.",
@@ -777,7 +820,8 @@ async fn execute(cli: &Cli) -> Result<Value> {
             Ok(json!({"status":"initialized","project":directory,"created":created}))
         }
         Command::Check { project, explain, deny_warnings, environment } => check(project.as_deref(), runtime_config(cli)?.as_deref(), *explain, *deny_warnings, *environment),
-        Command::Explain { project } => check(Some(project), runtime_config(cli)?.as_deref(), true, false, false),
+        Command::Explain { topic: Some(ExplainTopic::Functions), .. } => Ok(crate::functions::explain()),
+        Command::Explain { project, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), true, false, false),
         Command::Test { project, scenarios } => test(project, scenarios.as_deref()),
         Command::Package { project, output } => {
             Ok(json!({"packageDigest":deployment::package(project,output)?,"root":output}))
@@ -849,6 +893,8 @@ async fn execute(cli: &Cli) -> Result<Value> {
             cursor,
             state,
             attention,
+            proposal,
+            turn,
             service,
         } => {
             let mut query = format!("/v1/runs?limit={limit}");
@@ -863,6 +909,13 @@ async fn execute(cli: &Cli) -> Result<Value> {
             if let Some(attention) = attention {
                 query.push_str("&attention=");
                 query.push_str(if *attention { "true" } else { "false" });
+            }
+            if let Some(proposal) = proposal {
+                query.push_str(&format!("&proposal={proposal}"));
+            }
+            if let Some(turn) = turn {
+                query.push_str("&turn=");
+                query.push_str(turn.as_str());
             }
             remote(
                 service,
@@ -896,6 +949,16 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 reqwest::Method::POST,
                 &format!("/v1/runs/{run}/{action}"),
                 Some(json!({"reason":reason})),
+                None,
+            )
+            .await
+        }
+        Command::CheckNow { run, step, service } => {
+            remote(
+                service,
+                reqwest::Method::POST,
+                &format!("/v1/runs/{run}/check"),
+                Some(json!({"step":step})),
                 None,
             )
             .await
@@ -1264,6 +1327,10 @@ fn render_human(cli: &Cli, value: &Value) -> String {
         Command::Check { .. } | Command::Explain { .. } if value["steps"].is_array() => {
             render_explain(value)
         }
+        Command::Explain {
+            topic: Some(ExplainTopic::Functions),
+            ..
+        } => render_functions(value),
         Command::Check { .. } => {
             let mut out = String::new();
             if let Some(workflow) = value["workflow"].as_str() {
@@ -1390,6 +1457,40 @@ fn render_explain(value: &Value) -> String {
         .join(", ");
     out.push_str(&format!("Function limits: {limits}\n"));
     out.push_str(&format!("Recovery: {}\n", text(&value["recovery"])));
+    out
+}
+
+/// The profile, then its helper names in lines a terminal can show.
+fn render_functions(value: &Value) -> String {
+    let mut out = format!(
+        "Pure function helpers, profile {}\nInterpreter ABI: {}\nFunction limits: {}\nHelpers:\n",
+        text(&value["profile"]),
+        text(&value["interpreterAbi"]),
+        value["limits"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(limit, bound)| format!("{limit} {bound}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let mut line = String::from(" ");
+    for helper in value["helpers"].as_array().into_iter().flatten() {
+        let helper = text(helper);
+        if line.len() + helper.len() + 1 > 78 {
+            out.push_str(&line);
+            out.push('\n');
+            line = String::from(" ");
+        }
+        line.push(' ');
+        line.push_str(&helper);
+    }
+    out.push_str(&line);
+    out.push('\n');
+    out.push_str("Notes:\n");
+    for note in value["notes"].as_array().into_iter().flatten() {
+        out.push_str(&format!("  {}\n", text(note)));
+    }
     out
 }
 

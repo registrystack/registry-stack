@@ -444,8 +444,32 @@ to the caller.
 
 A temporal Record type, one with `temporal.startField` and `temporal.endField`, gains `:current`,
 the records whose interval contains now, and `:as-of`, the records whose interval contains `asOf`.
-Intervals include the start and exclude the end; a null end is open. `asOf` is a UTC RFC 3339
-timestamp such as `2026-06-05T00:00:00Z`.
+Intervals include the start and exclude the end; a null end is open. A `date` interval whose
+source records the last day in force names it with `temporal.lastDayField` in place of `endField`:
+the interval then includes that day, a last day equal to the start is one day long, and two
+intervals sharing a day overlap under `temporal-non-overlap`, which names the same `lastDayField`.
+Responses return the stored last day unchanged. `asOf` follows the same rule
+as `validAt`: a calendar date such as `2026-06-05` for a `date` start field, and a UTC RFC 3339
+timestamp such as `2026-06-05T00:00:00Z` for a `timestamp` one. Both routes echo the value they
+used as `meta.asOf` in JSON and JSON-LD responses.
+
+On a `date` interval, now is today's date in the registry's time zone, `project.timezone`, an
+IANA name such as `Asia/Colombo` or `UTC`. A project that answers today, through a `:current` read
+of a `date` interval, a `currentDate` requirement, a live derived field that reads the
+evaluation date, or a statistics dataset, must declare it; compilation otherwise fails with `breg.timezone.required`, and
+an unknown name fails with `breg.timezone.unknown`. A `timestamp` interval uses the current
+instant and needs no time zone.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, temporal_instant_for() and normalize_history_valid_at();
+    crates/registry-breg/src/model.rs, local_date();
+    crates/registry-breg/src/compiler/timezone.rs;
+    crates/registry-breg/src/postgres/read.rs, echo_as_of();
+    crates/registry-breg/tests/temporal_reads.rs;
+    crates/registry-breg/tests/registry_timezone.rs;
+    crates/registry-breg/src/contract.rs, TemporalSource;
+    crates/registry-breg/src/generated_ddl.rs, interval_has_last_day();
+    crates/registry-breg/tests/temporal_last_day.rs;
+    crates/registry-breg/tests/postgres_temporal_corrections.rs, real_postgres_last_day_interval_is_in_force_through_its_last_day. */}
 
 `GET /v1/records/{route}:snapshot` without `snapshot` captures the latest committed state and
 returns its token with the page, so paging stays consistent while writes continue. With

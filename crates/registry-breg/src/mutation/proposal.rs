@@ -2217,7 +2217,17 @@ impl MutationTransaction {
                         crate::contract::FieldTypeSource::Timestamp
                     )
                 });
-            verify_guard(guard, id, input, &row, timestamp, revision, Some(revision))?;
+            verify_guard(
+                guard,
+                id,
+                input,
+                &row,
+                timestamp,
+                revision,
+                Some(revision),
+                registry,
+                time::OffsetDateTime::now_utc(),
+            )?;
             guards.insert(guard.input.clone(), (id, revision, row));
         }
         for input_id in crate::commit_evidence::target_fields(&action.commit_evidence).keys() {
@@ -2383,6 +2393,8 @@ impl MutationTransaction {
                     timestamp,
                     row.record_revision,
                     Some(target.expected_revision),
+                    registry,
+                    time::OffsetDateTime::now_utc(),
                 )?;
             }
             if let Some(fields) =
@@ -2969,6 +2981,11 @@ impl MutationTransaction {
         {
             value["decision"] = decision;
         }
+        if let Some(refusal) =
+            handoff_refusal(tx, &document.action_id, document.proposal_id, version).await?
+        {
+            value["handoffRefusal"] = refusal;
+        }
         Ok(Some(value))
     }
 
@@ -3203,6 +3220,18 @@ impl MutationTransaction {
             .await?
             {
                 value["decision"] = decision;
+            }
+            if document.header.state == "submitted" {
+                if let Some(refusal) = handoff_refusal(
+                    tx,
+                    &document.action_id,
+                    document.proposal_id,
+                    document.header.submission_version,
+                )
+                .await?
+                {
+                    value["handoffRefusal"] = refusal;
+                }
             }
         }
         let review_refusal = match workflow
@@ -3924,6 +3953,30 @@ pub(crate) fn proposal_turn(
 /// The audit marker of a read that served a decision's public reason.
 pub(crate) const PUBLIC_REASON_REFERENCE: &str = "proposal-review-public-reason";
 
+/// Why the review authority refused one submission's hand-off for good, as
+/// the allowlisted code recorded when it refused. A hand-off still pending,
+/// accepted, retrying or withdrawn names no refusal, and neither does a
+/// terminal failure on this side, which records no code.
+async fn handoff_refusal(
+    tx: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+    version: i64,
+) -> Result<Option<Value>, MutationError> {
+    let row = tx
+        .query_opt(
+            "SELECT refusal_code
+             FROM registry_internal.registry_proposal_review_submissions
+             WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
+               AND state='failed' AND last_error_code='remote-refused' AND NOT withdrawn
+               AND refusal_code IS NOT NULL",
+            &[&action_id, &proposal_id, &version],
+        )
+        .await
+        .map_err(map_database_error)?;
+    Ok(row.map(|row| json!({"code": row.get::<_, String>(0)})))
+}
+
 /// The reviewer's decision on one submission, read through the protocol's
 /// own result type. Only the status, its time and the public reason are
 /// served: the public reason is the one reviewer text the protocol releases
@@ -4085,6 +4138,7 @@ fn verify_apply_binding(
     }
     Ok(())
 }
+#[allow(clippy::too_many_arguments)]
 fn verify_guard(
     guard: &crate::model::CompiledCommitGuard,
     record_id: Uuid,
@@ -4093,6 +4147,8 @@ fn verify_guard(
     timestamp: bool,
     actual_revision: i64,
     expected_revision: Option<i64>,
+    registry: &CompiledRegistry,
+    now: time::OffsetDateTime,
 ) -> Result<(), MutationError> {
     if guard.revision_unchanged {
         return if expected_revision == Some(actual_revision) && actual_revision > 0 {
@@ -4101,13 +4157,7 @@ fn verify_guard(
             Err(MutationError::PreconditionFailed)
         };
     }
-    if crate::commit_guard::guard_matches(
-        guard,
-        input,
-        row,
-        &chrono::Utc::now().format("%Y-%m-%d").to_string(),
-        timestamp,
-    ) {
+    if crate::commit_guard::guard_matches(guard, input, row, registry, now, timestamp) {
         Ok(())
     } else {
         Err(MutationError::ProposalGuardFailed(Box::new(
@@ -4445,5 +4495,61 @@ mod input_write_tests {
             fixed_input_changed(&action, &BTreeSet::new(), &base, None),
             Some("target")
         );
+    }
+}
+#[cfg(test)]
+mod commit_guard_date_tests {
+    use super::*;
+
+    #[test]
+    fn a_proposal_current_date_guard_compares_against_the_registry_local_date() {
+        let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+            "project":{"id":"guard-date-test","version":"1","defaultLanguage":"en",
+                "canonicalBaseIri":"https://proposal.example.test","timezone":"Asia/Colombo"},
+            "datasets":[{"id":"directory"}],
+            "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+                "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}]});
+        let project =
+            crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let guard = crate::model::CompiledCommitGuard {
+            input: "target".into(),
+            reason: None,
+            entity_id: "target".into(),
+            field: "opens-on".into(),
+            equals: None,
+            equals_input: None,
+            revision_unchanged: false,
+            at_least: None,
+            at_most: None,
+            current_date: Some(crate::model::CompiledCurrentDateRelation::OnOrAfter),
+            at_least_input: None,
+            at_most_input: None,
+        };
+        let late_evening_utc = time::macros::datetime!(2026-10-30 23:30 UTC);
+        let check = |opens_on: &str| {
+            verify_guard(
+                &guard,
+                Uuid::nil(),
+                &Map::new(),
+                json!({"opens-on": opens_on}).as_object().unwrap(),
+                false,
+                1,
+                None,
+                &registry,
+                late_evening_utc,
+            )
+        };
+        assert!(check("2026-10-31").is_ok());
+        // Colombo is already on 31 October at 23:30 UTC.
+        assert!(matches!(
+            check("2026-10-30"),
+            Err(MutationError::ProposalGuardFailed(_))
+        ));
     }
 }

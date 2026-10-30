@@ -67,6 +67,7 @@ use crate::physical_names::{
 pub(crate) mod attachments;
 pub mod review_context;
 mod statistics;
+mod timezone;
 
 pub const AUTHORING_API_VERSION: &str = "id.registrystack.org/formats/breg/project/v1alpha1";
 pub const AUTHORING_KIND: &str = "BRegProject";
@@ -467,6 +468,13 @@ pub fn compile_project_with_assets(
         &event_delivery_inventory,
         &mut diagnostics,
     );
+    diagnostics.extend(timezone::validate(
+        project.project.timezone.as_deref(),
+        &entities,
+        &route_inventory,
+        &action_inventory,
+        &statistical_datasets,
+    ));
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
         findings.push(stopped_stage_finding(
@@ -495,6 +503,7 @@ pub fn compile_project_with_assets(
         &project.project.version,
         &project.project.default_language,
         &project.project.display,
+        project.project.timezone.as_deref(),
         &project.review_authorities,
         &project.datasets,
         &access_profile_displays,
@@ -529,6 +538,7 @@ pub fn compile_project_with_assets(
         project.project.version.clone(),
         project.project.default_language.clone(),
         project.project.display.clone(),
+        project.project.timezone.clone(),
         project.review_authorities.clone(),
         project.datasets.clone(),
         access_profile_displays,
@@ -3432,13 +3442,37 @@ fn apply_temporal_roles(
     entities: &mut BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
 ) {
-    for entity in entities.values_mut() {
+    for (entity_id, entity) in entities.iter_mut() {
         let Some(temporal) = &entity.temporal else {
             continue;
         };
+        let path = format!("recordTypes[id={entity_id}].temporal");
+        let Some(end) = temporal.closing_field().map(str::to_owned) else {
+            errors.push(Diagnostic::error(
+                "breg.temporal.end-conflict",
+                path,
+                "a temporal interval names exactly one of endField and lastDayField",
+            ));
+            continue;
+        };
+        let start = temporal.start_field.clone();
+        if temporal.last_day_field.is_some() {
+            let is_date = |id: &str| {
+                entity.fields.iter().any(|field| {
+                    field.id == id && matches!(field.field_type, FieldTypeSource::Date)
+                })
+            };
+            if !is_date(&start) || !is_date(&end) {
+                errors.push(Diagnostic::error(
+                    "breg.temporal.last-day-type",
+                    format!("{path}.lastDayField"),
+                    "a last day closes a date interval: the start and the last day must both be date fields",
+                ));
+            }
+        }
         for (id, role) in [
-            (&temporal.start_field, ValidTimeRole::ValidFrom),
-            (&temporal.end_field, ValidTimeRole::ValidTo),
+            (&start, ValidTimeRole::ValidFrom),
+            (&end, ValidTimeRole::ValidTo),
         ] {
             let Some(field) = entity.fields.iter_mut().find(|field| &field.id == id) else {
                 errors.push(Diagnostic::error(
@@ -5016,6 +5050,7 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 scope_fields,
                 start_field,
                 end_field,
+                last_day_field,
                 ..
             } => scope_fields
                 .iter()
@@ -5026,6 +5061,11 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                         .map(|field| ("startField", field.as_str())),
                 )
                 .chain(end_field.iter().map(|field| ("endField", field.as_str())))
+                .chain(
+                    last_day_field
+                        .iter()
+                        .map(|field| ("lastDayField", field.as_str())),
+                )
                 .collect(),
         };
         if referenced.is_empty() {
@@ -5120,9 +5160,14 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ConstraintSource::TemporalNonOverlap {
                 start_field,
                 end_field,
+                last_day_field,
                 scope_fields,
                 ..
             } => {
+                let interval_has_last_day = entity
+                    .temporal
+                    .as_ref()
+                    .is_some_and(|temporal| temporal.last_day_field.is_some());
                 let from = entity
                     .fields
                     .iter()
@@ -5139,6 +5184,11 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                     || end_field
                         .as_ref()
                         .is_some_and(|id| to.is_none_or(|field| &field.id != id))
+                    || last_day_field
+                        .as_ref()
+                        .is_some_and(|id| to.is_none_or(|field| &field.id != id))
+                    || (end_field.is_some() && interval_has_last_day)
+                    || (last_day_field.is_some() && !interval_has_last_day)
                 {
                     errors.push(Diagnostic::error(
                         "breg.constraint.temporal-roles-invalid",
@@ -7770,7 +7820,10 @@ fn compile_entities(
                         geometry_field: geojson.geometry_field.clone(),
                     }),
                 physical_table: table,
-                temporal: source.temporal.clone().map(CompiledTemporal::from),
+                temporal: source
+                    .temporal
+                    .as_ref()
+                    .and_then(CompiledTemporal::from_source),
                 canonical_id,
                 stored_fields,
                 derived_fields,
@@ -8672,7 +8725,7 @@ fn query_sort_field(
     })
 }
 
-fn temporal_binding(
+pub(crate) fn temporal_binding(
     entity: &CompiledEntity,
     temporal: &CompiledTemporal,
 ) -> Option<CompiledQueryTemporalBinding> {
@@ -8686,7 +8739,11 @@ fn temporal_binding(
         start_field: temporal.start_field.clone(),
         end_field: temporal.end_field.clone(),
         value_kind,
-        semantics: CompiledQueryTemporalSemantics::StartInclusiveEndExclusive,
+        semantics: if temporal.last_day {
+            CompiledQueryTemporalSemantics::StartInclusiveLastDayInclusive
+        } else {
+            CompiledQueryTemporalSemantics::StartInclusiveEndExclusive
+        },
     })
 }
 

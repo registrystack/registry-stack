@@ -218,6 +218,34 @@ class NativeRequestTests(unittest.TestCase):
                     self.assertNotIn("token-canary", rendered(error))
                 self.assertEqual(len(self.observed()), 1)
 
+    def test_inspect_returns_what_the_last_proposal_read_showed_and_the_request_link(self) -> None:
+        observation = {
+            "state": "draft", "turn": "party", "submissionVersion": 1,
+            "handoffRefusal": "verification-failed",
+            "observedAt": STATUS["admittedAt"], "stateSince": STATUS["admittedAt"],
+        }
+        observing = {**INSPECTION["steps"][0], "step": "observe", "state": "pending", "uncertain": False, "failureCode": None}
+        wait = {
+            "step": "observe", "acceptedStep": "submit", "completion": "proposal",
+            "completionRevision": STATUS["workflowRevision"],
+            "timeoutAt": STATUS["deadlineAt"], "nextObservationAt": None,
+            "notBefore": STATUS["admittedAt"], "minimumIntervalSeconds": 30,
+            "observations": 1, "observationLimit": 4,
+            "lastObservation": observation,
+            "requestLink": "https://breg.example.invalid/requests/one",
+        }
+        document = {**INSPECTION, "steps": [*INSPECTION["steps"], observing], "waits": [wait]}
+        self.service.script(ok(document))
+        self.assertEqual(self.client.inspect("token-canary", RUN), {"kind": "complete", "value": document})
+
+        unknown = {**wait, "lastObservation": {**observation, "applicant": "protected-canary"}}
+        self.service.script(ok({**document, "waits": [unknown]}))
+        with self.assertRaises(CoordinatorClientError) as refused:
+            self.client.inspect("token-canary", RUN)
+        self.assertEqual(refused.exception.kind, "protocol")
+        self.assertEqual(refused.exception.protocol_failure, "body")
+        self.assertNotIn("protected-canary", rendered(refused.exception))
+
     def test_run_status_requires_coherent_terminal_evidence_and_preserves_restore_review(self) -> None:
         cases = [
             ("finished", "completed", None, False, True),
@@ -311,6 +339,26 @@ class NativeRequestTests(unittest.TestCase):
                 self.assertEqual(inspection["value"]["run"]["failurePath"], expected)
                 self.assertEqual(inspection["value"]["steps"][0]["failurePath"], expected)
 
+    def test_inspect_carries_the_records_and_date_behind_a_held_step(self) -> None:
+        held = {
+            **INSPECTION["steps"][0],
+            "failureCode": "in-force-ambiguous",
+            "holdDetail": {"date": "2026-06-05", "recordIdentifiers": ["licence-a1", "licence-a2"]},
+        }
+        document = {**INSPECTION, "steps": [held]}
+        unknown = {
+            **INSPECTION,
+            "steps": [{**held, "holdDetail": {**held["holdDetail"], "value": "protected-detail-canary"}}],
+        }
+        self.service.script(ok(document), ok(unknown))
+
+        self.assertEqual(self.client.inspect("inspect-token", RUN), {"kind": "complete", "value": document})
+        with self.assertRaises(CoordinatorClientError) as refused:
+            self.client.inspect("inspect-token", RUN)
+        self.assertEqual(refused.exception.kind, "protocol")
+        self.assertEqual(refused.exception.protocol_failure, "body")
+        self.assertNotIn("protected-detail-canary", rendered(refused.exception))
+
     def test_inspect_reads_the_inspection(self) -> None:
         self.service.script(ok(INSPECTION))
 
@@ -382,6 +430,24 @@ class NativeRequestTests(unittest.TestCase):
                 self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(len(self.observed()), 1)
 
+
+    def test_list_forwards_the_proposal_and_turn_filters(self) -> None:
+        self.service.script(ok({"runs": [STATUS]}))
+
+        outcome = self.client.list("list-token", 1, None, None, None, OTHER_RUN, "official")
+
+        self.assertEqual(outcome, {"kind": "complete", "value": {"runs": [STATUS]}})
+        (observed,) = self.observed()
+        self.assertEqual(
+            observed["path"],
+            f"/deployment/v1/runs?limit=1&proposal={OTHER_RUN}&turn=official",
+        )
+        for proposal, turn in (("not-a-proposal", None), (None, "someone"), (None, "Official")):
+            with self.subTest(proposal=proposal, turn=turn):
+                with self.assertRaises(CoordinatorClientError) as raised:
+                    self.client.list("token", 20, proposal=proposal, turn=turn)
+                self.assertEqual(raised.exception.kind, "invalid-request")
+        self.assertEqual(len(self.observed()), 1)
 
     def test_list_refuses_received_runs_outside_intersected_state_and_attention_filters(self) -> None:
         for state_filter, attention, returned in (

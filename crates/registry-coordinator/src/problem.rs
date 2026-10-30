@@ -46,6 +46,7 @@ pub const AUDIT_RESPONSE_UNAVAILABLE_PROBLEM: &str = "audit.response-unavailable
 pub const AUTHENTICATION_REFUSED_PROBLEM: &str = "authentication.refused";
 pub const BINDING_CONFLICT_PROBLEM: &str = "binding.conflict";
 pub const BINDING_LIVE_CONFLICT_PROBLEM: &str = "binding.live-conflict";
+pub const CHECK_NOT_WAITING_PROBLEM: &str = "check.not-waiting";
 pub const DEFINITION_REFUSED_PROBLEM: &str = "definition.refused";
 pub const DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM: &str = "deployment.activation-changed";
 pub const DEPLOYMENT_REFUSED_PROBLEM: &str = "deployment.refused";
@@ -95,6 +96,7 @@ pub enum ProblemCode {
     AuthenticationRefused,
     BindingConflict,
     BindingLiveConflict,
+    CheckNotWaiting,
     DefinitionRefused,
     DeploymentActivationChanged,
     DeploymentRefused,
@@ -145,6 +147,7 @@ impl ProblemCode {
         Self::AuthenticationRefused,
         Self::BindingConflict,
         Self::BindingLiveConflict,
+        Self::CheckNotWaiting,
         Self::DefinitionRefused,
         Self::DeploymentActivationChanged,
         Self::DeploymentRefused,
@@ -195,6 +198,7 @@ impl ProblemCode {
             Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
             Self::BindingConflict => BINDING_CONFLICT_PROBLEM,
             Self::BindingLiveConflict => BINDING_LIVE_CONFLICT_PROBLEM,
+            Self::CheckNotWaiting => CHECK_NOT_WAITING_PROBLEM,
             Self::DefinitionRefused => DEFINITION_REFUSED_PROBLEM,
             Self::DeploymentActivationChanged => DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM,
             Self::DeploymentRefused => DEPLOYMENT_REFUSED_PROBLEM,
@@ -267,6 +271,7 @@ impl ProblemCode {
             | Self::AdmissionRecoveryOnly
             | Self::BindingConflict
             | Self::BindingLiveConflict
+            | Self::CheckNotWaiting
             | Self::DefinitionRefused
             | Self::DeploymentActivationChanged
             | Self::DeploymentRefused
@@ -307,6 +312,7 @@ impl ProblemCode {
             Self::AuthenticationRefused => "Authentication refused",
             Self::BindingConflict => "Connection settings changed",
             Self::BindingLiveConflict => "Live connection settings changed",
+            Self::CheckNotWaiting => "Step is not waiting",
             Self::DefinitionRefused => "Workflow definition refused",
             Self::DeploymentActivationChanged => "Active packages changed",
             Self::DeploymentRefused => "Deployment not serving",
@@ -371,6 +377,7 @@ impl ProblemCode {
             Self::BindingLiveConflict => {
                 "Connection settings that runs in progress use differ from this service's runtime configuration."
             }
+            Self::CheckNotWaiting => "That step is not waiting.",
             Self::DefinitionRefused => {
                 "The workflow's workflow definition, one of its mappings or one of its functions refused the request."
             }
@@ -520,6 +527,7 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "reconcile-refused" | "definition-invalid" => ProblemCode::ReconcileRefused,
         "reconciliation-unavailable" => ProblemCode::ReconcileUnsupported,
         "reconcile-raced" => ProblemCode::ReconcileRaced,
+        "check-not-waiting" => ProblemCode::CheckNotWaiting,
         "activation-changed" => ProblemCode::DeploymentActivationChanged,
         "deployment.refused"
         | "state-key-custody"
@@ -720,7 +728,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 45);
+        assert_eq!(ProblemCode::ALL.len(), 46);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }

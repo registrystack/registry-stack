@@ -473,23 +473,31 @@ async fn read_record(
             Ok(value) => CallOutcome::Success(value),
             Err(_) => refused("invalid-response"),
         },
-        Err(BaseRegistryClientError::Token(error)) => token_failure(&error),
-        Err(BaseRegistryClientError::Transport { .. }) => retryable("transport-unavailable"),
-        Err(error) if error.status() == Some(429) => retryable("rate-limited"),
-        Err(BaseRegistryClientError::Problem {
+        Err(error) => read_failure(error),
+    }
+}
+
+/// How a failed BReg read reaches a step. A refused or missing read is a
+/// failure; it is never mistaken for an empty answer.
+pub(crate) fn read_failure(error: BaseRegistryClientError) -> CallOutcome {
+    match error {
+        BaseRegistryClientError::Token(error) => token_failure(&error),
+        BaseRegistryClientError::Transport { .. } => retryable("transport-unavailable"),
+        error if error.status() == Some(429) => retryable("rate-limited"),
+        BaseRegistryClientError::Problem {
             status: 401 | 403, ..
-        }) => refused("product-forbidden"),
-        Err(BaseRegistryClientError::Problem { status: 404, .. }) => refused("product-not-found"),
-        Err(error)
+        } => refused("product-forbidden"),
+        BaseRegistryClientError::Problem { status: 404, .. } => refused("product-not-found"),
+        error
             if error
                 .status()
                 .is_some_and(|status| status == 408 || status >= 500) =>
         {
             retryable("transport-unavailable")
         }
-        Err(BaseRegistryClientError::InvalidRequest { .. }) => refused("invalid-command"),
-        Err(BaseRegistryClientError::Protocol { .. }) => refused("invalid-response"),
-        Err(_) => refused("product-refused"),
+        BaseRegistryClientError::InvalidRequest { .. } => refused("invalid-command"),
+        BaseRegistryClientError::Protocol { .. } => refused("invalid-response"),
+        _ => refused("product-refused"),
     }
 }
 
@@ -517,8 +525,21 @@ impl AdapterSet for HttpAdapters {
                 _ => Err(refused("operation-unbound")),
             };
         }
-        if request.operation == Operation::InvokeBregAction {
+        if matches!(
+            request.operation,
+            Operation::InvokeBregAction
+                | Operation::StartProposal
+                | Operation::SubmitProposal
+                | Operation::CancelProposal
+        ) {
             return match self.connections.get(&request.connection) {
+                Some(Connection::Breg {
+                    client, profile, ..
+                }) if request.operation == Operation::CancelProposal => {
+                    crate::breg_proposal::prepare_cancel(client, profile, request)
+                        .await
+                        .map(Some)
+                }
                 Some(Connection::Breg {
                     client, profile, ..
                 }) => crate::breg_action::prepare(client, profile, request)
@@ -541,8 +562,22 @@ impl AdapterSet for HttpAdapters {
                 _ => refused("operation-unbound"),
             };
         }
-        if request.operation == Operation::InvokeBregAction {
+        if matches!(
+            request.operation,
+            Operation::InvokeBregAction
+                | Operation::StartProposal
+                | Operation::SubmitProposal
+                | Operation::CancelProposal
+        ) {
             return match (self.connections.get(&request.connection), prepared) {
+                (
+                    Some(Connection::Breg {
+                        client, profile, ..
+                    }),
+                    Some(bytes),
+                ) if request.operation == Operation::CancelProposal => {
+                    crate::breg_proposal::cancel(client, profile, request, bytes).await
+                }
                 (
                     Some(Connection::Breg {
                         client, profile, ..
@@ -608,6 +643,18 @@ impl AdapterSet for HttpAdapters {
                 }
                 read_record(client, options, &input).await
             }
+            (
+                Some(Connection::Breg {
+                    client, options, ..
+                }),
+                Operation::ReadInForce,
+            ) => crate::read_in_force::read_in_force(client, options, &request.input).await,
+            (
+                Some(Connection::Breg {
+                    client, profile, ..
+                }),
+                Operation::ReadProposal,
+            ) => crate::breg_proposal::read(client, profile, request).await,
             (Some(Connection::BregTask(connection)), Operation::ReadRecord) => {
                 let input: ReadRequest = match serde_json::from_value(request.input.clone()) {
                     Ok(input) => input,
@@ -712,6 +759,14 @@ impl AdapterSet for HttpAdapters {
             {
                 connection.read_result(accepted).await
             }
+            (
+                CompletionKind::BregProposal {},
+                Some(Connection::Breg {
+                    client, profile, ..
+                }),
+            ) if request.operation.follows_proposal() => {
+                crate::breg_proposal::observe(client, profile, request, accepted).await
+            }
             _ => CompletionObservation::Hold {
                 code: "operation-unbound".into(),
             },
@@ -729,6 +784,10 @@ impl AdapterSet for HttpAdapters {
             } => *interval_seconds,
             _ => match self.connections.get(connection) {
                 Some(Connection::Casework(connection)) => connection.result_check_seconds(),
+                Some(Connection::Breg { .. }) => self.config.connections.get(connection).map_or(
+                    crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
+                    crate::runtime::ConnectionConfig::result_check_seconds,
+                ),
                 _ => crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
             },
         };
@@ -743,6 +802,7 @@ impl AdapterSet for HttpAdapters {
         if matches!(
             completion.kind,
             crate::definition::CompletionKind::CaseworkResult {}
+                | crate::definition::CompletionKind::BregProposal {}
         ) {
             self.config.minimum_observation_interval_seconds.get()
         } else {

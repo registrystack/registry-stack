@@ -408,3 +408,144 @@ backend selection. `pure_profile_has_no_clock_sleep_or_io_and_limits_computation
 the `authoring_findings` suite retain the Coordinator resource and value-free
 diagnostic boundaries. Existing package and protected CI gates cover the
 change; no new blocking gate is introduced.
+
+## BReg Proposal calls and follows
+
+### Threat
+
+A workflow uses Coordinator's workload identity to decide a request that a
+person or review authority must decide; cancels a request the run did not
+open; sends a second start or submit on retry and opens a duplicate request;
+or settles a follow from a stale or forged signal and routes a run as if a
+request were applied.
+
+### Enforcement and defaults
+
+- The catalog has `breg.read-proposal/v1`, `breg.start-proposal/v1`,
+  `breg.submit-proposal/v1` and `breg.cancel-proposal/v1` and no operation
+  that approves, rejects, decides or applies a Proposal. The unit test
+  `no_operation_decides_a_proposal` in `src/operations.rs` holds that rule
+  for every catalog operation. `breg.invoke-action/v1` keeps refusing a
+  Proposal Action, and the Proposal operations refuse an immediate Action, at
+  check time and again at preparation against the live contract.
+- Start and submit are frozen commands. Submit sends the start command and
+  then the empty submit transition under a second idempotency key derived
+  from the first (`<key>:submit`); a retry replays both, so BReg returns the
+  original receipts instead of opening a second request.
+- Cancel freezes the current Proposal's cancel transition, rebinds it to a
+  fresh read before sending, and sends nothing when the Proposal is already
+  cancelled. Check refuses a cancel whose `proposalId` is not mapped from the
+  output of a start or submit step in the same workflow
+  (`definition.proposal-not-run-owned`); BReg's own cancel grant still
+  decides.
+- A follow settles only from the current Proposal Get under the connection
+  profile's get grant, never from an event. 401, 403, 404 or a missing get
+  grant holds the run with `proposal-unreadable`; a Proposal of another
+  Action holds with `completion-invalid-response`. A submit follow holds with
+  `proposal-handoff-refused` when the review authority refused the hand-off;
+  only the allowlisted refusal code is read.
+- The settled output carries only what BReg discloses to the profile: the
+  outcome, ids, submission version, Action revision, the decision's status,
+  time and public reason, and the input members the profile may read.
+- A follow's wait keeps only the latest read's Proposal state, turn,
+  submission version and allowlisted hand-off refusal code, with when it was
+  read and when that state and turn were first seen. These columns are not
+  encrypted: they hold no person's value and no Proposal id, and the row is
+  deleted with the wait. Inspection adds the connection's `requestLink` with
+  the Proposal id filled in, only for a caller already authorized to inspect
+  the run; the id grants nothing without BReg's own grant.
+- The run list finds waits on one Proposal through the keyed wait commitment
+  over the database identity and the Proposal id, so the database and the
+  list cursor never hold the id in clear. The commitment leaves out the BReg
+  connection so the list can compute it from the id alone; two connections
+  whose Proposals share an id would share a key, which at most widens a list
+  result the caller is already authorized to see. Each page still reapplies
+  the caller's owner and workflow scope, and a cursor is refused unless its
+  version, owner, workflow scope and every filter match.
+- Doctor counts Proposal waits by turn from stored rows and calls no product.
+
+Builder cost: a workflow that cancels must map `proposalId` from its own start
+or submit step. Operator cost: the BReg connection profile needs the Proposal
+get grant in addition to the Action's start grant.
+
+### Tests
+
+- `crates/registry-coordinator/tests/breg_proposal_follow.rs` (check-time
+  rules, including `a_run_cancels_only_a_proposal_it_started_or_submitted`).
+- `crates/registry-coordinator/tests/breg_proposal_adapter.rs` (frozen start
+  and submit keys, cancel rebind, read of another Action's Proposal, and the
+  observation table per operation).
+- `crates/registry-coordinator/tests/breg_proposal_wait_postgres.rs` (the
+  kept observation, its end with the wait, the request link, the `proposal`
+  and `turn` list filters and their cursor binding, and the doctor count).
+
+These are maintained references, not claims that the tests ran in this note.
+
+## Pure profile helper set
+
+The pure profile adds Rhai's `MoreStringPackage` and a hand-picked set of
+number helpers (see below). The
+interpreter ABI moved to `v2` because the callable set is part of what a frozen
+definition means; a definition frozen under `v1` is refused with
+`definition.abi` and no `v1` acceptance exists. Neither package registers a
+clock, file, network or callback-invoking function.
+
+Every string-producing helper was checked against the 16,384-byte string limit
+and for loops that an argument can stop from ending. Two package functions were
+unsafe and are replaced by host overloads (the engine looks up host-registered
+functions before package functions):
+
+- `pad(string, length, padding)` with an empty padding string never returns in
+  the package: it is a native loop, so neither the operation limit nor the
+  string limit can stop it, and it would hold a worker thread for good. The
+  host overload refuses empty padding with an execution error and works out the
+  result length in bytes before it builds anything.
+  `pad_with_an_empty_padding_string_is_refused_instead_of_looping` runs both an
+  authored `""` and one read from an input under a timeout.
+  `pad_refuses_before_it_builds_a_string_over_the_budget` and
+  `padded_len_is_the_length_pad_would_build` hold the size check. `pad` with a
+  character is left as the package has it: it loops once per missing
+  character, and the engine checks that character count against the byte limit
+  first, so the most it builds before the final check is four times the limit.
+- `replace` built its whole result and the engine refused it afterwards, so a
+  16,000-byte string with a 16,000-byte substitute would first allocate about
+  256 MB. The host `replace` overloads work out the result length from the match
+  count and refuse before building it. The unit tests
+  `replace_refuses_before_it_builds_a_string_over_the_budget` and
+  `replaced_len_is_the_length_replace_would_build` hold that.
+
+The other string helpers either shrink their input, are bounded by their input
+length, or grow it by a constant factor. The package source has no other loop
+that an argument controls (`split`, `index_of`, `sub_string`, `crop`,
+`truncate`, `to_chars`, `trim`, `remove`, `pop`, `set` and `get`);
+`package_string_helpers_end_on_empty_zero_and_extreme_arguments` calls each with
+empty, zero, negative and extreme arguments under a timeout. Repeat-like growth
+through `+=` stays under the limit
+(`helpers_that_make_longer_strings_stay_inside_the_string_budget`).
+
+Rhai's `BasicMathPackage` is not registered whole. It brings floating-point
+transcendental functions (`sin`, `exp`, `ln`, `hypot` and the like) whose
+results come from the platform's math library and may differ in the last
+digits between operating systems, CPU architectures or library versions.
+Function results are recomputed, not only read back: a held wait is recomputed
+when waits replay, the next WaitUntil is evaluated again, and each job attempt
+runs the Function again. A deadline computed with such a function could land a
+second apart on two hosts. The host registers only functions that are
+deterministic: `sqrt` (correctly rounded by IEEE 754), `floor`, `ceiling`,
+`round`, `int`, `fraction`, `is_nan`, `is_finite`, `is_infinite`, `to_degrees`,
+`to_radians`, `PI`, `E`, `parse_int`, `parse_float`, `to_int` and `to_float`,
+next to the arithmetic package's `abs`, `sign`, `min` and `max`.
+`only_math_whose_result_is_the_same_on_every_host_is_available` holds the
+list. Float `**` (`powf`, in the arithmetic package) was already in the `v1`
+profile and is unchanged; it is tracked separately.
+
+A Function result holding NaN or an infinite float (`0.0 / 0.0`, `sqrt(-1.0)`)
+is refused with `function.execution` where results turn into JSON, instead of
+becoming `null` (`a_result_holding_nan_or_infinity_is_refused_not_turned_into_null`).
+
+The unknown-call check walks the syntax tree and function table, which Rhai
+exposes only under its `internals` feature. The workspace enables that
+feature; the Rhai version is pinned exactly (`=1.27.0`), so the unstable
+surface cannot change under a routine update. The check is an authoring aid,
+not a security boundary: the engine still refuses any name it lacks when the
+Function runs.

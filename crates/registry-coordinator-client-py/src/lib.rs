@@ -8,7 +8,7 @@ use std::time::Duration;
 use coordinator_client_sdk::{
     BearerToken, CoordinatorClient as RustClient, CoordinatorClientConfig,
     CoordinatorClientError as RustClientError, CoordinatorComplete, CoordinatorProtocolFailure,
-    RunListQuery, RunListState, StartRunRequest, Uuid,
+    ProposalTurn, RunListQuery, RunListState, StartRunRequest, Uuid,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -198,6 +198,15 @@ fn list_state(py: Python<'_>, value: &str) -> PyResult<RunListState> {
     }
 }
 
+fn list_turn(py: Python<'_>, value: &str) -> PyResult<ProposalTurn> {
+    match value {
+        "party" => Ok(ProposalTurn::Party),
+        "official" => Ok(ProposalTurn::Official),
+        "nobody" => Ok(ProposalTurn::Nobody),
+        _ => Err(invalid_arguments(py)),
+    }
+}
+
 /// A timeout as a Python number of seconds. Only a finite non-negative `int`
 /// or `float` reaches the client, which refuses zero; a `bool` is not a
 /// duration.
@@ -382,7 +391,8 @@ impl CoordinatorClient {
         )
     }
 
-    #[pyo3(signature = (token, limit, cursor=None, state=None, attention=None))]
+    #[pyo3(signature = (token, limit, cursor=None, state=None, attention=None, proposal=None, turn=None))]
+    #[allow(clippy::too_many_arguments)]
     fn list<'py>(
         &self,
         py: Python<'py>,
@@ -391,6 +401,8 @@ impl CoordinatorClient {
         cursor: Option<&str>,
         state: Option<&str>,
         attention: Option<&Bound<'_, PyAny>>,
+        proposal: Option<&str>,
+        turn: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let limit = list_limit(py, limit)?;
@@ -406,6 +418,10 @@ impl CoordinatorClient {
                 }
             })
             .transpose()?;
+        query.proposal = proposal
+            .map(|value| Uuid::parse_str(value).map_err(|_| invalid_arguments(py)))
+            .transpose()?;
+        query.turn = turn.map(|value| list_turn(py, value)).transpose()?;
         complete(
             py,
             py.detach(|| self.runtime.block_on(self.inner.list_page(&token, &query))),

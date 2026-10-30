@@ -290,6 +290,7 @@ fn unindexed_read_path_filters_and_sorts_point_at_the_read_path_grant() {
 #[test]
 fn a_temporal_exclusion_scope_serves_equality_filters_but_not_sorts() {
     let mut value = source();
+    value["project"]["timezone"] = json!("UTC");
     let asset = asset_mut(&mut value);
     asset["fields"][1]["required"] = json!(true);
     asset["fields"][2]["required"] = json!(true);

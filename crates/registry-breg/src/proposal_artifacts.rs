@@ -299,7 +299,8 @@ fn proposal_submission_schema() -> Value {
             "effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
             "review":{"anyOf":[review,{"type":"null"}]},
             "application":{"anyOf":[applied_receipt,application_status,{"type":"null"}]},
-            "decision":crate::artifacts::proposal_decision_schema()}})
+            "decision":crate::artifacts::proposal_decision_schema(),
+            "handoffRefusal":crate::artifacts::proposal_handoff_refusal_schema()}})
 }
 
 fn proposal_get_schema() -> Value {
