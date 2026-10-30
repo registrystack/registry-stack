@@ -86,6 +86,7 @@ pub struct EndpointOperation {
 /// 8.8).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum GraphQlOperationKind {
     /// A read; the only kind that keeps a graphql send safe.
     Query,
@@ -294,6 +295,33 @@ mod tests {
         let json = serde_json::to_string(&pack).expect("serialize");
         assert!(json.contains("idempotentUpstream"));
         assert_eq!(serde_json::from_str::<AdapterPack>(&json).ok(), Some(pack));
+    }
+
+    /// GraphQL operation kinds spell lowercase on the wire: the
+    /// CONFIG-CONVENTIONS enum-value rule, and the GraphQL keywords
+    /// themselves.
+    #[test]
+    fn graphql_operation_kinds_spell_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&GraphQlOperationKind::Query).expect("serialize"),
+            r#""query""#
+        );
+        assert_eq!(
+            serde_json::to_string(&GraphQlOperationKind::Mutation).expect("serialize"),
+            r#""mutation""#
+        );
+        assert_eq!(
+            serde_json::from_str::<GraphQlOperationKind>(r#""query""#).ok(),
+            Some(GraphQlOperationKind::Query)
+        );
+        assert_eq!(
+            serde_json::from_str::<GraphQlOperationKind>(r#""mutation""#).ok(),
+            Some(GraphQlOperationKind::Mutation)
+        );
+        assert!(
+            serde_json::from_str::<GraphQlOperationKind>(r#""Query""#).is_err(),
+            "PascalCase spellings refuse at the reader"
+        );
     }
 
     /// An endpoint's response-header allowlist is unique at the reader
