@@ -229,10 +229,10 @@ neither can the workflow. For that reason `check` refuses an `onDeclaredRefusal`
 `breg.invoke-action/v1`, `breg.start-proposal/v1`, `breg.submit-proposal/v1` and
 `external.command/v1`, whose effect Coordinator cannot see. "Not found, so create" makes a
 duplicate when two records match or one is hidden. The builder cost is one extra step: route to
-a finish or another read, and change data from a later step once a person or that read has
-decided. Only the direct route is refused; a step that cannot write a record (a Casework review
-request, a message, a scheduling call, a proposal cancellation) is allowed, and so is a mutation
-later on the path.
+a finish, another read or a Casework review request, and change data from a later step once a
+person or that read has decided. Only the direct route is refused; a step that cannot write a
+record (a Casework review request, a message, a scheduling call, a proposal cancellation) is
+allowed, and so is a mutation later on the path.
 
 `breg.read-record/v2` takes the same input as `breg.read-record/v1` and returns the same record
 envelope plus a `provenance` member. `breg.read-record/v1` is unchanged, so existing bindings
