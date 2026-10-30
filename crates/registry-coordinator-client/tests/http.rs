@@ -1619,8 +1619,6 @@ async fn malformed_ambiguous_redirected_or_wrong_run_answers_are_refused() {
         document[member] = value;
         document.to_string()
     };
-    let mut extra = problem_document(404, "run.not-visible");
-    extra["suggestedAction"] = json!("secret-recovery-canary");
     // Casework answers the same code under its own type.
     let mut foreign = problem_document(404, "request.not-found");
     foreign["type"] =
@@ -1634,7 +1632,6 @@ async fn malformed_ambiguous_redirected_or_wrong_run_answers_are_refused() {
         (200, "application/json", other.to_string()),
         // A problem is only ever the exact problem media type.
         (404, "application/json", problem(404, "run.not-visible")),
-        (404, PROBLEM_MEDIA, extra.to_string()),
         (404, PROBLEM_MEDIA, duplicate_problem),
         (
             404,
@@ -1676,6 +1673,24 @@ async fn malformed_ambiguous_redirected_or_wrong_run_answers_are_refused() {
             .await,
         Err(CoordinatorClientError::Transport { .. })
     ));
+}
+
+#[tokio::test]
+async fn a_problem_member_a_later_deployment_added_is_ignored_and_not_retained() {
+    let server = Server::new(status()).await;
+    let mut document = problem_document(404, "run.not-visible");
+    document["suggestedAction"] = json!("secret-recovery-canary");
+    server.answer(404, PROBLEM_MEDIA, &document.to_string());
+    let error = server
+        .client()
+        .status(&token(), Uuid::parse_str(RUN).unwrap())
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(&error, CoordinatorClientError::Problem { status: 404, code } if code == "run.not-visible")
+    );
+    assert!(!format!("{error:?}").contains("secret-recovery-canary"));
 }
 
 #[tokio::test]
