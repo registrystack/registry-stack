@@ -13,3 +13,11 @@
 //! query (RFC 9535 section 2.3.5) yields its one value, or absent when
 //! nothing matches; any other query yields the node list as a JSON
 //! array, empty when nothing matches (section 8.11.8).
+//!
+//! # Security note
+//!
+//! A `jsonpath` selector is digest-pinned authored pack content, not
+//! runtime attacker input. The language module bounds selector length and
+//! nesting depth when it parses one, because pest 2.8.x, held below 2.9
+//! by the workspace's steering pin, lacks pest 2.9's stack-overflow
+//! guard. Flagged for the Increment 1 security review.

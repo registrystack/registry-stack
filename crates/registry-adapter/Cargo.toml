@@ -11,5 +11,24 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Gates the suites that need a disposable database; test-postgres.sh runs
+# them and a plain cargo test run never silently skips them.
+postgres-test = []
+
 [dependencies]
+deadpool-postgres.workspace = true
+jsonpath-rust.workspace = true
+# Steering pin, unused in code: holds jsonpath-rust's pest at 2.8.5; see
+# the comment on `pest` in the root [workspace.dependencies].
+pest.workspace = true
+tokio-postgres.workspace = true
 registry-adapter-core.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-config.workspace = true
+registry-platform-httpsec.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-ratelimit.workspace = true
+registry-platform-script.workspace = true
+registry-platform-yaml.workspace = true
