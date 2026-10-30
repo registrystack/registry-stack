@@ -623,3 +623,38 @@ async fn a_page_at_the_declared_maximum_is_shaped_within_the_script_budget() {
     contract::assert_page(&body);
     assert_eq!(body["items"].as_array().map(Vec::len), Some(100));
 }
+
+#[tokio::test]
+async fn every_failed_exchange_leaves_one_value_free_warning() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![Response::json(
+        500,
+        r#"{"message":"UPSTREAM-DETAIL-CANARY"}"#,
+    )]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    let (status, _, _) = served.get(GET_PATH, Some(&token));
+    assert_eq!(status, 502);
+    let (status, _, _) = served.get(&format!("{LIST_PATH}?pageSize=0"), Some(&token));
+    assert_eq!(status, 400);
+
+    let stderr = served.stop_and_read_stderr();
+    let warnings: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("an exchange failed"))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        2,
+        "one warning per failed exchange: {stderr}"
+    );
+    assert!(warnings[0].contains("WARN"), "{stderr}");
+    assert!(warnings[0].contains("\"status\":502"), "{}", warnings[0]);
+    assert!(warnings[1].contains("\"status\":400"), "{}", warnings[1]);
+    for warning in warnings {
+        assert!(warning.contains("\"class\":\""), "{warning}");
+        assert!(!warning.contains("UPSTREAM-DETAIL-CANARY"), "{warning}");
+        assert!(!warning.contains("EeBJ3Sn9uLg"), "no identifier: {warning}");
+    }
+}

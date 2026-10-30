@@ -508,15 +508,32 @@ async fn answer(
     }
     match rendered {
         Finished::Body(body) => json_response(StatusCode::OK, &body),
-        Finished::Internal => facade_problem(
-            profile,
-            ErrorClass::Facade,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &record_type,
-            &request_id,
-        ),
-        Finished::Route(failure) => route_problem(profile, &failure, &record_type, &request_id),
+        Finished::Internal => {
+            warn_exchange_failed(ErrorClass::Facade, StatusCode::INTERNAL_SERVER_ERROR);
+            facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &record_type,
+                &request_id,
+            )
+        }
+        Finished::Route(failure) => {
+            let response = route_problem(profile, &failure, &record_type, &request_id);
+            warn_exchange_failed(failure.class, response.status());
+            response
+        }
     }
+}
+
+/// Log a failed exchange: the class and the status the caller got, nothing
+/// else. The journal holds the exchange; the log tells an operator one failed.
+fn warn_exchange_failed(class: ErrorClass, status: StatusCode) {
+    tracing::warn!(
+        class = class.class(),
+        status = status.as_u16(),
+        "an exchange failed"
+    );
 }
 
 /// How an exchange ended once the response was built, before the journal
@@ -1083,6 +1100,7 @@ async fn refuse_request(
             request_id,
         );
     }
+    warn_exchange_failed(refusal.class, refusal.status);
     facade_problem(
         profile,
         refusal.class,
