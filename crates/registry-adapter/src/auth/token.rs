@@ -756,10 +756,12 @@ pub(crate) async fn acquire_token(
             return Ok((cached.token.clone(), cached.generation));
         }
     }
+    // The allowance is spent only once the request actually renders: a
+    // secret that cannot resolve never spends a send that never went out.
+    let request = plan.render(resolver, signer)?;
     budget
         .consume(&plan.endpoint)
         .inspect_err(|_| events.push(AuthEvent::TokenBudgetExhausted))?;
-    let request = plan.render(resolver, signer)?;
     let anchored = Instant::now();
     events.push(AuthEvent::TokenRequested);
     let wire = match send.send(&request).await {
@@ -1347,6 +1349,54 @@ mod tests {
         .await
         .expect("the second acquisition sends again");
         assert_eq!(send.token_request_count(), 2);
+    }
+
+    /// A render failure never spends the send's allowance: the budget
+    /// is consumed only after the request renders, so a secret that
+    /// cannot resolve is charged nothing for a send that never went out.
+    #[tokio::test]
+    async fn a_render_failure_spends_no_allowance() {
+        let send = ScriptedSend::always(
+            200,
+            Some("application/json"),
+            r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
+        );
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        // No test sets these environment names, so resolution fails.
+        let plan = TokenEndpointPlan::client_secret(
+            endpoint_id("case-api"),
+            "https://token.example.invalid/token".to_owned(),
+            secret("ADAPTER_TEST_RENDER_MISSING_ID"),
+            secret("ADAPTER_TEST_RENDER_MISSING_SECRET"),
+            CredentialPlacement::FormBody,
+            TokenRequestParameters::default(),
+            CacheBounds {
+                maximum: Duration::from_secs(3600),
+                assumed: None,
+            },
+        );
+        let error = acquire_token(
+            &plan,
+            &mut budget,
+            &resolver(),
+            &send,
+            &FixedSigner,
+            &mut events,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, AuthError::Credential);
+        assert_eq!(
+            budget.remaining(&endpoint_id("case-api")),
+            TOKEN_SENDS_PER_EXCHANGE,
+            "the failed render spent nothing"
+        );
+        assert_eq!(send.token_request_count(), 0, "nothing was sent");
+        assert!(
+            !events.contains(&AuthEvent::TokenBudgetExhausted),
+            "the budget was never consulted with a failure"
+        );
     }
 
     /// A refused token endpoint surfaces the registered code name and
