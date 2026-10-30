@@ -247,6 +247,19 @@ impl Harness {
         assert_eq!(changed, 1, "the waiting step is pending");
     }
 
+    /// Seconds until the waiting step's next read is due.
+    async fn due_in(&self, run: Uuid) -> Option<f64> {
+        self.client()
+            .await
+            .query_opt(
+                &format!("SELECT EXTRACT(EPOCH FROM next_attempt_at-clock_timestamp())::float8 FROM {}.jobs WHERE run_id=$1 AND step='await' AND state='pending'", self.namespace),
+                &[&run],
+            )
+            .await
+            .unwrap()
+            .map(|row| row.get(0))
+    }
+
     async fn sql(&self, sql: &str, run: Uuid) {
         self.client()
             .await
@@ -511,6 +524,73 @@ async fn a_wait_read_early_many_times_still_reaches_its_timeout_route() {
         ("finished".into(), Some("late".into()), None)
     );
     assert!(h.kept(run).await.is_none());
+}
+
+/// Check now on a wait that follows a Proposal brings the next read forward
+/// through the same read floor and budget as any other read, and the read it
+/// brings forward still keeps what the Proposal showed.
+#[tokio::test]
+async fn check_now_on_a_followed_proposal_keeps_the_read_floor_and_counts_against_the_budget() {
+    let h = harness().await;
+    let fake = Fake::new(vec![waiting("official"), waiting("nobody")]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 1, "read at wait start");
+    let scheduled = h.due_in(run).await.expect("the wait is scheduled");
+    assert!(
+        scheduled > 60.0,
+        "the next scheduled read is not close: {scheduled}"
+    );
+
+    let answer = h
+        .store
+        .check_now_owned(run, "await", &operator())
+        .await
+        .expect("a followed wait takes Check now");
+    assert_eq!(answer.step, "await");
+    assert_eq!(answer.observations, 1);
+    assert!(answer.observation_limit > answer.observations);
+    let due = h.due_in(run).await.expect("the wait is still scheduled");
+    assert!(
+        (25.0..=30.5).contains(&due),
+        "Check now brings the read forward to the read floor after the last read: {due}"
+    );
+    assert!(answer.next_observation_at.is_some());
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 1, "Check now never reads inside the floor");
+
+    // The floor passes: the early read happens, counts, and keeps its view.
+    h.sql(
+        "UPDATE {schema}.completion_waits SET not_before=clock_timestamp()-interval '1 second' WHERE run_id=$1",
+        run,
+    )
+    .await;
+    h.sql(
+        "UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp() WHERE run_id=$1 AND step='await'",
+        run,
+    )
+    .await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 2, "the early read reached the product");
+    assert_eq!(h.status(run).await.0, "running");
+    assert_eq!(h.wait_view(run).await["observations"], 2);
+    assert_eq!(
+        h.kept(run).await.unwrap().observation.unwrap()["turn"],
+        "nobody"
+    );
+    let due = h.due_in(run).await.expect("the wait is still scheduled");
+    assert!(
+        due > 60.0,
+        "the next scheduled read waits the configured interval again: {due}"
+    );
+    let again = h
+        .store
+        .check_now_owned(run, "await", &operator())
+        .await
+        .unwrap();
+    assert_eq!(again.observations, 2);
+    assert_eq!(again.observation_limit, answer.observation_limit);
 }
 
 const OTHER_PROPOSAL: &str = "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9";
