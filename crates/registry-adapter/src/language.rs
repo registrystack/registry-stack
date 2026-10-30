@@ -33,15 +33,26 @@
 //! table (`CONCEPT.md` section 8.6); [`CodeMapIndex`] resolves a map's
 //! literal id against a pack's inventory, the resolving half of the
 //! `code_map(id, key)` helper Rhai scripts and `convertBodyTo` share.
-//! The value lookup itself is core's single `CodeMap::lookup`: a miss or
-//! a non-string input raises `conversion.unmapped`; there is no second
-//! key lookup in v1. The helper registration and the evaluation rules
-//! land with the interpreter wiring, and their contract is fixed here:
-//! evaluation reads bodies upstream serde_json parsing already bounded,
-//! so the default recursion limit stays on (never `unbounded_depth`);
-//! a descendant `..` selector therefore walks a depth-bounded tree, and
-//! the matched-node count per expression is capped, with the cap
-//! exceeded reported as a typed problem, not truncated.
+//! The value lookup is core's single `CodeMap::lookup`: a miss or a
+//! non-string input raises `conversion.unmapped`, and there is no second
+//! key lookup in v1. The helper stays unregistered until that lookup
+//! lands in core.
+//!
+//! # Evaluation
+//!
+//! [`JsonPathSelector::evaluate`] applies the section 8.11.8 result
+//! rules: a singular query yields its one value or absent; any other
+//! query yields the matched nodes as a list, empty when nothing matches.
+//! [`JsonPathSelector::evaluate_predicate`] is the boolean rule: only a
+//! singular query may be a predicate (`check` refuses a non-singular
+//! one, and the runtime repeats the refusal), it must yield a boolean,
+//! and absent counts as false, the one place absence has a meaning.
+//! Evaluation reads bodies that upstream serde_json parsing already
+//! bounded, so the default recursion limit stays on (never
+//! `unbounded_depth`): a descendant `..` selector therefore walks a
+//! depth-bounded tree, and the matched-node count per expression is
+//! capped at [`MATCHED_NODE_MAXIMUM`], exceeded reported as a typed
+//! problem, never truncated.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -49,7 +60,9 @@ use std::fmt;
 use jsonpath_rust::parser::errors::JsonPathError;
 use jsonpath_rust::parser::model::{Segment, Selector};
 use jsonpath_rust::parser::parse_json_path;
+use jsonpath_rust::query::js_path_process;
 use registry_adapter_core::CodeMap;
+use serde_json::Value;
 
 /// The longest selector the engine compiles, in bytes.
 ///
@@ -67,6 +80,16 @@ pub const SELECTOR_MAXIMUM_BYTES: usize = 4_096;
 /// the engine's refusal, with its declared maximum, is the one a route
 /// author sees.
 pub const SELECTOR_MAXIMUM_DEPTH: usize = 64;
+
+/// The most nodes one expression may match per evaluation.
+///
+/// A descendant `..` or wildcard selector over a large upstream body can
+/// match a node for much of the body; the cap bounds what one expression
+/// materializes. Bodies are already depth-bounded at parse time by
+/// serde_json's default recursion limit, which stays on, so the budget
+/// guards width, not parser recursion. The cap is inclusive: exactly
+/// [`MATCHED_NODE_MAXIMUM`] nodes evaluate, one more is refused.
+pub const MATCHED_NODE_MAXIMUM: usize = 4_096;
 
 /// Why a selector or a code map reference failed.
 #[derive(Clone, Debug, PartialEq)]
@@ -99,6 +122,28 @@ pub enum LanguageError {
         /// The map the lookup went through.
         map_id: String,
     },
+    /// The selector failed while evaluating, not while parsing. The
+    /// parser accepts queries this body shape cannot resolve through.
+    EvaluationFailed(JsonPathError),
+    /// The expression matched more nodes than [`MATCHED_NODE_MAXIMUM`].
+    /// Nothing is truncated: the evaluation fails as a whole.
+    MatchedNodeBudgetExceeded {
+        /// The node count the expression matched.
+        count: usize,
+        /// The declared bound.
+        maximum: usize,
+    },
+    /// A non-singular query was used as a predicate. `check` refuses
+    /// such a route, and the runtime repeats the refusal rather than
+    /// treating a node list as a truthiness answer (CONCEPT 8.11.8).
+    PredicateNotSingular,
+    /// A singular predicate yielded a value that is not a boolean. The
+    /// value itself is upstream data and is not carried; only its JSON
+    /// kind is named.
+    PredicateNotBoolean {
+        /// The JSON kind of the yielded value.
+        kind: &'static str,
+    },
 }
 
 impl fmt::Display for LanguageError {
@@ -120,6 +165,19 @@ impl fmt::Display for LanguageError {
             Self::CodeMapDuplicateId(id) => write!(f, "two code maps carry the id {id}"),
             Self::ConversionUnmapped { map_id } => {
                 write!(f, "code map {map_id} has no entry for the key")
+            }
+            Self::EvaluationFailed(error) => write!(f, "selector does not evaluate: {error}"),
+            Self::MatchedNodeBudgetExceeded { count, maximum } => {
+                write!(
+                    f,
+                    "selector matched {count} nodes, over the {maximum}-node budget"
+                )
+            }
+            Self::PredicateNotSingular => {
+                write!(f, "only a singular query can be a predicate")
+            }
+            Self::PredicateNotBoolean { kind } => {
+                write!(f, "predicate yielded a {kind}, not a boolean")
             }
         }
     }
@@ -167,6 +225,18 @@ pub fn compile_selector(selector: &str) -> Result<JsonPathSelector, LanguageErro
     Ok(JsonPathSelector { query })
 }
 
+/// The result of one evaluation, in the shape section 8.11.8 fixes: a
+/// singular query yields its one value or absent, any other query yields
+/// the matched nodes as a list, empty when nothing matches. The borrowed
+/// nodes live inside the evaluated body.
+#[derive(Debug, PartialEq)]
+pub enum JsonPathResult<'v> {
+    /// The singular query's one value, or absent.
+    Singular(Option<&'v Value>),
+    /// The matched node list, possibly empty.
+    List(Vec<&'v Value>),
+}
+
 impl JsonPathSelector {
     /// Whether the query is singular (RFC 9535 section 2.3.5): every
     /// segment is a name or an index selector, so it yields at most one
@@ -181,6 +251,81 @@ impl JsonPathSelector {
                 Segment::Selector(Selector::Name(_)) | Segment::Selector(Selector::Index(_))
             )
         })
+    }
+
+    /// Evaluates the selector against a body under the declared budget.
+    ///
+    /// # Errors
+    ///
+    /// [`LanguageError::MatchedNodeBudgetExceeded`] when the expression
+    /// matches more than [`MATCHED_NODE_MAXIMUM`] nodes,
+    /// [`LanguageError::EvaluationFailed`] when the query engine refuses
+    /// the evaluation.
+    pub fn evaluate<'v>(&self, body: &'v Value) -> Result<JsonPathResult<'v>, LanguageError> {
+        let matched = self.matched_nodes(body)?;
+        if self.is_singular() {
+            Ok(JsonPathResult::Singular(matched.first().copied()))
+        } else {
+            Ok(JsonPathResult::List(matched))
+        }
+    }
+
+    /// Evaluates the selector as a predicate under the boolean rule.
+    ///
+    /// Absent counts as false, the one place absence has a meaning
+    /// (`CONCEPT.md` section 8.11.8).
+    ///
+    /// # Errors
+    ///
+    /// [`LanguageError::PredicateNotSingular`] when the query is not
+    /// singular, [`LanguageError::PredicateNotBoolean`] when it yields a
+    /// value that is not a boolean, plus the [`Self::evaluate`] errors.
+    pub fn evaluate_predicate(&self, body: &Value) -> Result<bool, LanguageError> {
+        if !self.is_singular() {
+            return Err(LanguageError::PredicateNotSingular);
+        }
+        let matched = self.matched_nodes(body)?;
+        match matched.first() {
+            None => Ok(false),
+            Some(&value) => value
+                .as_bool()
+                .ok_or_else(|| LanguageError::PredicateNotBoolean {
+                    kind: json_kind(value),
+                }),
+        }
+    }
+
+    /// The matched nodes, under the matched-node budget.
+    fn matched_nodes<'v>(&self, body: &'v Value) -> Result<Vec<&'v Value>, LanguageError> {
+        let matched =
+            js_path_process(&self.query, body).map_err(LanguageError::EvaluationFailed)?;
+        let count = matched.len();
+        if count > MATCHED_NODE_MAXIMUM {
+            return Err(LanguageError::MatchedNodeBudgetExceeded {
+                count,
+                maximum: MATCHED_NODE_MAXIMUM,
+            });
+        }
+        Ok(matched.into_iter().map(|reference| reference.val).collect())
+    }
+}
+
+/// The JSON kind of a value, for the typed non-boolean predicate
+/// problem. Kind names carry no content, so an upstream value never
+/// travels inside the error.
+fn json_kind(value: &Value) -> &'static str {
+    if value.is_null() {
+        "null"
+    } else if value.is_boolean() {
+        "boolean"
+    } else if value.is_number() {
+        "number"
+    } else if value.is_string() {
+        "string"
+    } else if value.is_array() {
+        "array"
+    } else {
+        "object"
     }
 }
 

@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `jsonpath` language's compile-time bounds and singular-query
-//! classification, and the code-map id resolution half of the Rhai
-//! `code_map(id, key)` seam (`products/adapter/CONCEPT.md` sections 8.5,
-//! 8.6, and 8.11.8).
+//! The `jsonpath` language's compile-time bounds, singular-query
+//! classification, evaluation result rules, and matched-node budget, and
+//! the code-map id resolution half of the Rhai `code_map(id, key)` seam
+//! (`products/adapter/CONCEPT.md` sections 8.5, 8.6, and 8.11.8).
 
 use std::collections::BTreeMap;
 
 use registry_adapter::language::{
-    compile_selector, CodeMapIndex, LanguageError, SELECTOR_MAXIMUM_BYTES, SELECTOR_MAXIMUM_DEPTH,
+    compile_selector, CodeMapIndex, JsonPathResult, LanguageError, MATCHED_NODE_MAXIMUM,
+    SELECTOR_MAXIMUM_BYTES, SELECTOR_MAXIMUM_DEPTH,
 };
 use registry_adapter_core::CodeMap;
 use registry_platform_yaml::LocalId;
+use serde_json::{json, Value};
 
 /// A filter selector whose grouping nests `groups` paren_expr levels deep
 /// inside one filter. The raw-text scan counts `[` plus every `(`, so the
@@ -161,5 +163,138 @@ fn the_code_map_index_refuses_a_duplicate_id() {
         Err(LanguageError::CodeMapDuplicateId(
             "tracker-status".to_owned()
         ))
+    );
+}
+
+#[test]
+fn a_singular_query_yields_its_one_value() {
+    let body = json!({"a": {"b": 7}});
+    let selector = compile_selector("$.a.b").expect("compiles");
+    match selector.evaluate(&body).expect("evaluates") {
+        JsonPathResult::Singular(Some(value)) => assert_eq!(value, &json!(7)),
+        other => panic!("a singular query yields its one value, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_singular_query_yields_absent_when_nothing_matches() {
+    let body = json!({"a": 1});
+    let selector = compile_selector("$.a.z").expect("compiles");
+    match selector.evaluate(&body).expect("evaluates") {
+        JsonPathResult::Singular(None) => {}
+        other => panic!("a singular query with no match is absent, got {other:?}"),
+    }
+}
+
+#[test]
+fn any_other_query_yields_the_node_list() {
+    let body = json!({"a": [1, 2]});
+    let selector = compile_selector("$.a[*]").expect("compiles");
+    match selector.evaluate(&body).expect("evaluates") {
+        JsonPathResult::List(nodes) => assert_eq!(nodes, vec![&json!(1), &json!(2)]),
+        other => panic!("a non-singular query yields the node list, got {other:?}"),
+    }
+
+    // Empty when nothing matches, never absent (CONCEPT 8.11.8).
+    let selector = compile_selector("$.z[*]").expect("compiles");
+    match selector.evaluate(&body).expect("evaluates") {
+        JsonPathResult::List(nodes) => assert!(nodes.is_empty()),
+        other => panic!("an empty node list is a list, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_predicate_accepts_only_a_boolean() {
+    for (body, selector, expected) in [
+        (json!({"active": true}), "$.active", Ok(true)),
+        (json!({"active": false}), "$.active", Ok(false)),
+        // Absent counts as false, the one place absence has a meaning.
+        (json!({}), "$.active", Ok(false)),
+    ] {
+        let compiled = compile_selector(selector).expect("compiles");
+        assert_eq!(
+            compiled.evaluate_predicate(&body),
+            expected,
+            "{selector} over {body}"
+        );
+    }
+
+    for (body, selector, kind) in [
+        (json!({"value": "x"}), "$.value", "string"),
+        (json!({"value": 1}), "$.value", "number"),
+        (json!({"value": []}), "$.value", "array"),
+        (json!({"value": {}}), "$.value", "object"),
+        (json!({"value": null}), "$.value", "null"),
+    ] {
+        let compiled = compile_selector(selector).expect("compiles");
+        assert_eq!(
+            compiled.evaluate_predicate(&body),
+            Err(LanguageError::PredicateNotBoolean { kind }),
+            "{selector} over {body}"
+        );
+    }
+}
+
+#[test]
+fn a_non_singular_predicate_is_refused() {
+    let body = json!({"a": 1});
+    let selector = compile_selector("$..a").expect("compiles");
+    assert_eq!(
+        selector.evaluate_predicate(&body),
+        Err(LanguageError::PredicateNotSingular)
+    );
+}
+
+#[test]
+fn the_matched_node_budget_is_enforced() {
+    // Past the budget: 4097 id nodes under one descendant selector.
+    let past: Vec<Value> = (0..(MATCHED_NODE_MAXIMUM + 1))
+        .map(|i| json!({ "id": i }))
+        .collect();
+    let body = Value::Array(past);
+    let selector = compile_selector("$..id").expect("compiles");
+    assert_eq!(
+        selector.evaluate(&body),
+        Err(LanguageError::MatchedNodeBudgetExceeded {
+            count: MATCHED_NODE_MAXIMUM + 1,
+            maximum: MATCHED_NODE_MAXIMUM,
+        })
+    );
+
+    // At the budget: the cap is inclusive, so this is a full node list.
+    let at_cap: Vec<Value> = (0..MATCHED_NODE_MAXIMUM)
+        .map(|i| json!({ "id": i }))
+        .collect();
+    let body = Value::Array(at_cap);
+    match selector.evaluate(&body).expect("at the cap evaluates") {
+        JsonPathResult::List(nodes) => assert_eq!(nodes.len(), MATCHED_NODE_MAXIMUM),
+        other => panic!("a wide body at the cap yields the full list, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_descendant_over_a_parse_limit_body_stays_within_the_budget() {
+    // A body nested exactly to serde_json's default recursion limit
+    // (128 container levels including the document, so 127 nested
+    // objects parse) still does, and `..` over it walks a depth-bounded
+    // tree inside the matched-node budget: the module never enables
+    // unbounded_depth.
+    let mut text = String::new();
+    text.push_str(&"{\"a\":".repeat(127));
+    text.push('0');
+    text.push_str(&"}".repeat(127));
+    let body: Value = serde_json::from_str(&text).expect("127 levels is the parse limit");
+    let selector = compile_selector("$..a").expect("compiles");
+    match selector.evaluate(&body).expect("within the budget") {
+        JsonPathResult::List(nodes) => assert_eq!(nodes.len(), 127),
+        other => panic!("a parse-limit body yields its nodes, got {other:?}"),
+    }
+
+    // One level past it the default recursion limit refuses the body
+    // itself, so no deeper tree ever reaches a descendant selector here.
+    let deeper = format!("{}0{}", "{\"a\":".repeat(128), "}".repeat(128));
+    assert!(
+        serde_json::from_str::<Value>(&deeper).is_err(),
+        "128 nested objects exceeds the default parse recursion limit"
     );
 }
