@@ -720,10 +720,13 @@ is in the profile's shape.
   non-safe `http` send, or a GraphQL mutation, anywhere in its route
   closure.
   Each `http` and `graphql` endpoint declares `attemptTimeoutMilliseconds`
-  (1 to 30000, the whole outbound attempt) and `maximumResponseBytes` (1 to
-  1048576), required and without default, spelled as CFG-NAME-5 and
-  Evidence spell them; the runtime binding may lower either, never raise
-  it. Divergence: Camel's `connectTimeout`, `responseTimeout`, `soTimeout`,
+  (1 to 10000, the whole outbound attempt, the platform destination's
+  frozen ceiling on one operation, as in Messaging; a value above it is
+  refused, never shortened) and `maximumResponseBytes` (1 to 1048576),
+  required and without default, spelled as CFG-NAME-5 and Evidence spell
+  them; the runtime binding may lower either, never raise it. A `POST`,
+  `PUT`, or `PATCH` send carries a body; one without a body is refused.
+  Divergence: Camel's `connectTimeout`, `responseTimeout`, `soTimeout`,
   and `connectionRequestTimeout` collapse into the one attempt timeout, and
   the facade deadline still bounds the total. A body over the bound raises
   `upstream.too-large`. A 3xx raises `upstream.redirect` whatever
@@ -1155,7 +1158,11 @@ Rules:
   engine sends outside `maximumUpstreamCalls`, bounded separately: at most
   two per endpoint per exchange.
 - The token request goes through the endpoint's own outbound client: the
-  same trust profile and the same mTLS identity, as in Evidence.
+  same trust profile, as in Evidence, and the same mTLS identity (Evidence
+  has no client identity; this half is the adapter's own rule).
+- Key material loads when the deployment loads: a client identity, a CA
+  bundle, or a signing key that cannot be read refuses startup, never the
+  first caller's request.
 - Token responses are read as Evidence reads them: `token_type` must be
   `Bearer` (any case); a missing `expires_in` takes the operator's
   `assumedLifetimeSeconds` and, without one, fails as a credential error;
