@@ -11,10 +11,10 @@ id: adapter-fixture-unknown-intercept
 pack: case-api-pack
 upstreamVersion: "1.0"
 provenance:
-  kind: documented
+  type: documented
   reference: https://case-api.example.invalid/docs
 intercepts:
-  - kind: endpoint
+  - type: endpoint
     endpoint: nope
 entries:
   - operation: cases.get

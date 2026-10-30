@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.unknown-problem-code: this artifact set must be refused with
+# exactly adapter.fixture.unknown-problem-code. The entry's expected facade status is 404 and its problem body names the code cases.spectre, which the profile does not declare. The member's profile spells the problem slot as a literal `code` member, the member the check reads.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.unknown-problem-code/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:e2356f083ca8827aa1e9a73535763d790f6b3fd56c4326a6bba69cc05ba018bf
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:ee255d319314682c5f5f063a708069714308e217755eb19d8dac877772b8c9a9
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

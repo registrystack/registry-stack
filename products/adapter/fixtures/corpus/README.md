@@ -65,8 +65,8 @@ so the code appears twice; the refused code set is still exactly one.
 
 | Member | Defect | Expected code | Layer |
 |---|---|---|---|
-| `adapter.envelope.invalid-placeholder` | A `{{bogus` placeholder never closes | `adapter.envelope.invalid-placeholder` | checks |
-| `adapter.profile.unknown-slot` | Response envelope names `bogusSlot`, outside the closed ten-slot vocabulary | `adapter.profile.unknown-slot` | checks |
+| `adapter.envelope.invalid-placeholder` | A `{{bogus` placeholder never closes (co-fires `adapter.profile.response-envelope-uncompilable`, see the note above) | `adapter.envelope.invalid-placeholder` | checks |
+| `adapter.profile.unknown-slot` | Response envelope names `bogusSlot`, outside the closed ten-slot vocabulary (co-fires `adapter.profile.response-envelope-uncompilable`) | `adapter.profile.unknown-slot` | checks |
 | `adapter.profile.response-envelope-missing-result-slot` | Response envelope names neither `record` nor `records` | `adapter.profile.response-envelope-missing-result-slot` | checks |
 | `adapter.profile.request-envelope-missing-record-slot` | A write operation's request envelope names no `record` slot | `adapter.profile.request-envelope-missing-record-slot` | checks |
 | `adapter.profile.problem-envelope-missing-code-slot` | Problem envelope names no `problemCode` slot | `adapter.profile.problem-envelope-missing-code-slot` | checks |
@@ -98,6 +98,17 @@ that never materializes as a pack route or instantiated route), so the
 unknown-route member is refused with both codes at once and its sweep
 expectation lists both.
 
+Three more co-fires come from the workspace-level envelope derivation,
+which walks every operation's response envelope with the project's
+bindings. A profile whose response envelope cannot compile is refused by
+its own code and by `adapter.profile.response-envelope-uncompilable`
+(`adapter.envelope.invalid-placeholder`, `adapter.profile.unknown-slot`):
+the same malformed text trips both. And a binding naming an undeclared
+record type (`adapter.project.unknown-record-type`) fails the record-slot
+expansion of its operation's envelope, so the derivation code rides along.
+All three are inherent: the fault the member tests is the fault the
+derivation sees, and their sweep expectations list both codes.
+
 ### Project members
 
 | Member | Defect | Expected code | Layer |
@@ -110,7 +121,7 @@ expectation lists both.
 | `adapter.project.pin-version-mismatch` | Pack pinned at version `0.0.1`, pack declares `1` (digest matches the bytes) | `adapter.project.pin-version-mismatch` | checks |
 | `adapter.project.duplicate-route-id` | Instantiated route id collides with the pack template name | `adapter.project.duplicate-route-id` | checks |
 | `adapter.project.unknown-operation` | Binding references no declared profile operation | `adapter.project.unknown-operation` | checks |
-| `adapter.project.unknown-record-type` | Binding references no declared record type | `adapter.project.unknown-record-type` | checks |
+| `adapter.project.unknown-record-type` | Binding references no declared record type (co-fires `adapter.profile.response-envelope-uncompilable`, see the note above) | `adapter.project.unknown-record-type` | checks |
 | `adapter.project.unknown-route` | Binding references no declared route (co-fires `adapter.project.template-not-instantiated`, see the note above) | `adapter.project.unknown-route` | checks |
 | `adapter.project.template-not-instantiated` | Binding names the raw template `findCases`; `templatedRoutes` is empty | `adapter.project.template-not-instantiated` | checks |
 | `adapter.project.upstream-budget-exceeded` | Worst case 2 sends (loop bound 2) against a budget of 1 | `adapter.project.upstream-budget-exceeded` | checks |
@@ -163,16 +174,18 @@ Fixture files sit in the member's `fixtures/` directory, which
 | `adapter.fixture.unknown-endpoint` | Recorded request names endpoint `nope` | `adapter.fixture.unknown-endpoint` | checks |
 | `adapter.fixture.unknown-intercept` | Intercept names endpoint `nope` | `adapter.fixture.unknown-intercept` | checks |
 | `adapter.fixture.response-schema` | Expected facade response's record violates the derived result schema (`case_type` integer, declared string) | `adapter.fixture.response-schema` | checks |
+| `adapter.fixture.unknown-problem-code` | Expected 404 problem body names code `cases.spectre`, which the profile does not declare; the member's profile spells the problem slot as a literal `code` member, the member the check reads | `adapter.fixture.unknown-problem-code` | checks |
 
 ### Reader-level members
 
-Both expect the platform YAML reader's `config.unknown-key`, refused with
+Three members expect the platform YAML reader's own codes, refused with
 path, line, and column before any check runs.
 
 | Member | Defect | Expected code | Layer |
 |---|---|---|---|
 | `config.unknown-key-predicate` | `bogusKey` beside a valid `jsonpath` predicate | `config.unknown-key` | reader |
 | `config.unknown-key-redelivery` | `bogusOption` inside the nested `redeliveryPolicy` | `config.unknown-key` | reader |
+| `config.missing-key-project` | The project document omits the required `project` block | `config.missing-key` | reader |
 
 ## Conventions
 

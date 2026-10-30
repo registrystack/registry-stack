@@ -7,7 +7,9 @@
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.redelivery-over-non-safe-send/project.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
-id: case-api-example
+project:
+  id: case-api-example
+  version: "1"
 profile:
   id: case-api
   version: "1"
