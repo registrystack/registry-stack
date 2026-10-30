@@ -27,5 +27,10 @@ database:
 oidc:
   issuer: https://issuer.example.invalid
   audience: registry-adapter-example
+allowedPrivateCidrs:
+  # The private ranges this deployment may call upstream. The example
+  # range stands in for the deployment's own; private endpoints stay
+  # refused unless their range is listed here.
+  - 10.0.0.0/8
 audit:
   retentionDays: 90

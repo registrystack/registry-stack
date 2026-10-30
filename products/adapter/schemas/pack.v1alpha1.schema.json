@@ -1,28 +1,56 @@
 {
   "$defs": {
     "AggregationStrategy": {
-      "description": "An aggregation strategy, compiled in and named after Camel's built-ins,\nplus two JSON additions marked as such in\n`products/adapter/CONCEPT.md` section 8.6. Externally tagged by name.",
+      "description": "An aggregation strategy, compiled in and named after Camel's built-ins,\nplus two JSON additions marked as such in\n`products/adapter/CONCEPT.md` section 8.6. Tagged by `type` on the\nwire; every variant is a struct variant, the shape\n`registry-platform-yaml`'s `tagged_union!` reads.",
       "oneOf": [
         {
-          "const": "useLatest",
+          "additionalProperties": false,
           "description": "Keep the newest exchange: the default for `enrich`, which replaces\nthe body with the resource reply.",
-          "type": "string"
+          "properties": {
+            "use-latest": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "use-latest"
+          ],
+          "type": "object"
         },
         {
-          "const": "useOriginal",
+          "additionalProperties": false,
           "description": "Keep the original exchange: the default for `split`.",
-          "type": "string"
+          "properties": {
+            "use-original": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "use-original"
+          ],
+          "type": "object"
         },
         {
-          "const": "groupedBody",
+          "additionalProperties": false,
           "description": "Concatenate the split results into one list, Camel's `groupedBody`.",
-          "type": "string"
+          "properties": {
+            "grouped-body": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "grouped-body"
+          ],
+          "type": "object"
         },
         {
           "additionalProperties": false,
           "description": "Append one array's elements into another, refusing a duplicate\n`uniqueBy` value with the `aggregation.duplicate` class.",
           "properties": {
-            "jsonArrayAppend": {
+            "json-array-append": {
+              "additionalProperties": false,
               "properties": {
                 "from": {
                   "description": "The array property the elements are appended into.",
@@ -45,7 +73,7 @@
             }
           },
           "required": [
-            "jsonArrayAppend"
+            "json-array-append"
           ],
           "type": "object"
         },
@@ -53,7 +81,8 @@
           "additionalProperties": false,
           "description": "Merge one JSON object into another. No duplicate refusal.",
           "properties": {
-            "jsonMerge": {
+            "json-merge": {
+              "additionalProperties": false,
               "properties": {
                 "from": {
                   "description": "The object property merged into the body.",
@@ -72,7 +101,7 @@
             }
           },
           "required": [
-            "jsonMerge"
+            "json-merge"
           ],
           "type": "object"
         },
@@ -81,7 +110,17 @@
           "description": "A custom strategy: a Rhai entrypoint over the old and new bodies.",
           "properties": {
             "rhai": {
-              "$ref": "#/$defs/RhaiExpression"
+              "additionalProperties": false,
+              "properties": {
+                "expression": {
+                  "$ref": "#/$defs/RhaiExpression",
+                  "description": "The script file and entrypoint, resolved against the pack's\nscript inventory."
+                }
+              },
+              "required": [
+                "expression"
+              ],
+              "type": "object"
             }
           },
           "required": [
@@ -147,6 +186,7 @@
       "type": "object"
     },
     "CircuitBreakerStep": {
+      "additionalProperties": false,
       "description": "A `circuitBreaker` step: resilience4j semantics and defaults\n(`products/adapter/CONCEPT.md` section 8.7), per EIP node,\nprocess-local. Divergence: a rejected call always raises\n`breaker.open`, and `onFallback` runs on failure and on rejection.",
       "properties": {
         "automaticTransitionFromOpenToHalfOpenEnabled": {
@@ -155,21 +195,23 @@
         },
         "failureRateThreshold": {
           "description": "Failure-rate percentage that opens the breaker (resilience4j\ndefault 50).",
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 100,
+          "minimum": 1,
           "type": "integer"
         },
         "maximumHalfOpenCalls": {
           "description": "Permitted half-open calls (default 10).",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         },
         "minimumNumberOfCalls": {
           "description": "Calls recorded before the breaker judges (default 100).",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         },
         "onFallback": {
@@ -179,26 +221,29 @@
         "openStateWaitSeconds": {
           "description": "Seconds the breaker stays open (resilience4j\n`waitDurationInOpenState`, default 60).",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         },
-        "slidingWindowSize": {
-          "description": "The count-based window size (default 100); the window type is fixed\ncount-based and not configurable.",
+        "slidingWindowCalls": {
+          "description": "The count-based window size in calls (default 100); the window type\nis fixed count-based and not configurable.",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         },
         "slowCallDurationThresholdSeconds": {
           "description": "Seconds over which a call counts as slow (default 60).",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         },
         "slowCallRateThreshold": {
           "description": "Slow-call-rate percentage that opens the breaker (default 100).",
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 100,
+          "minimum": 1,
           "type": "integer"
         },
         "steps": {
@@ -221,7 +266,7 @@
           "type": "object"
         },
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The map identifier."
         }
       },
@@ -258,14 +303,16 @@
       "type": "string"
     },
     "DoCatch": {
+      "additionalProperties": false,
       "description": "A `doCatch` clause of a `doTry`.",
       "properties": {
         "exception": {
-          "description": "The matched classes.",
+          "description": "The matched classes, unique (CFG-ID-6).",
           "items": {
             "$ref": "#/$defs/ErrorClass"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "onWhen": {
           "$ref": "#/$defs/Expression",
@@ -363,7 +410,7 @@
           "description": "The producer component: `http` or `graphql`."
         },
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The endpoint identifier `http:` and `graphql:` URIs name."
         },
         "operationName": {
@@ -381,12 +428,21 @@
           "description": "The GraphQL query file, from the pack's query-file inventory.\nRequired for a `graphql` endpoint.",
           "type": "string"
         },
-        "responseHeaders": {
-          "description": "The response headers the engine copies onto the exchange, Camel's\n`HeaderFilterStrategy` as an allowlist.",
+        "requestHeaders": {
+          "description": "The request headers the engine sends upstream on every send to\nthis endpoint, Camel's `HeaderFilterStrategy` as an allowlist,\nunique (CFG-ID-6). Never allowlistable: the reserved header names\nof `products/adapter/CONCEPT.md` section 8.11.4 and this\nendpoint's own api-key header name.",
           "items": {
             "$ref": "#/$defs/ExternalId"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
+        },
+        "responseHeaders": {
+          "description": "The response headers the engine copies onto the exchange, Camel's\n`HeaderFilterStrategy` as an allowlist, unique (CFG-ID-6).",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "testedVersions": {
           "description": "The upstream versions this pack was tested against.",
@@ -509,8 +565,12 @@
       "additionalProperties": false,
       "description": "One operation of an endpoint, with the reviewed write claim\n(`products/adapter/CONCEPT.md` sections 8.7 and 9): redelivery over a\nnon-safe send is admitted only when the endpoint operation declares\n`idempotentUpstream: true`.",
       "properties": {
+        "graphql": {
+          "$ref": "#/$defs/GraphQlOperationKind",
+          "description": "The GraphQL operation kind the pinned query file declares, on a\n`graphql` endpoint; a send naming this operation is safe only for\na query (`products/adapter/CONCEPT.md` section 8.8)."
+        },
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The operation identifier a `to` step's `operation` member names."
         },
         "idempotentUpstream": {
@@ -535,6 +595,10 @@
           "$ref": "#/$defs/AggregationStrategy",
           "description": "The aggregation strategy."
         },
+        "parameters": {
+          "$ref": "#/$defs/ToParameters",
+          "description": "The request method, query, and operation, as a `to` send carries\nthem; the method's safety carries the write-safety rules of\n`crate::checks`."
+        },
         "uri": {
           "$ref": "#/$defs/SendUri",
           "description": "The static destination."
@@ -555,8 +619,9 @@
         "credential.rejected",
         "disclosure.violation",
         "egress.refused",
+        "loop.maximum-iterations-reached",
         "script",
-        "script.budgetExceeded",
+        "script.budget-exceeded",
         "throttle.rejected",
         "upstream",
         "upstream.connection",
@@ -564,7 +629,7 @@
         "upstream.malformed",
         "upstream.redirect",
         "upstream.timeout",
-        "upstream.tooLarge",
+        "upstream.too-large",
         "validation"
       ],
       "type": "string"
@@ -692,6 +757,21 @@
       },
       "type": "object"
     },
+    "GraphQlOperationKind": {
+      "description": "The GraphQL operation kind an endpoint operation declares, as the\npinned query file writes it (`products/adapter/CONCEPT.md` section\n8.8).",
+      "oneOf": [
+        {
+          "const": "query",
+          "description": "A read; the only kind that keeps a graphql send safe.",
+          "type": "string"
+        },
+        {
+          "const": "mutation",
+          "description": "A write; non-safe under every write-safety rule.",
+          "type": "string"
+        }
+      ]
+    },
     "HttpMethod": {
       "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
       "enum": [
@@ -703,6 +783,7 @@
       "type": "string"
     },
     "IdempotentConsumerStep": {
+      "additionalProperties": false,
       "description": "An `idempotentConsumer` step (`products/adapter/CONCEPT.md` section 9).\nThe key is namespaced by caller identity and concrete operation and\nbound to the request digest; a duplicate replays the recorded facade\nresponse; `skipDuplicate` is not ported.",
       "properties": {
         "completionEager": {
@@ -751,15 +832,31 @@
       "type": "string"
     },
     "LoopStep": {
-      "description": "A `loop` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).\nPagination is `loop` with `doWhile` over the upstream cursor.",
+      "additionalProperties": false,
+      "description": "A `loop` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).\nCamel's shape with our bound: the count or predicate is the same flat\nsingle-language-key form as `filter` and `when`, and `doWhile: true`\nmakes the expression a predicate loop (Camel's boolean flag, default\nfalse). `maximumIterations` stays mandatory, a declared divergence:\nthe check refuses its absence and the runtime enforces it again.\nReaching the bound with a dynamic count above it, or a predicate\nstill holding, raises the catchable `loop.maximum-iterations-reached`\nclass, never a silent stop. Pagination is `loop` with `doWhile` over\nthe upstream cursor.",
       "properties": {
+        "constant": {
+          "description": "The `constant` language member: the iteration count, or with\n`doWhile`, the predicate's constant form."
+        },
         "copy": {
           "description": "Whether each iteration works on a copy of the message (Camel\ndefault false).",
           "type": "boolean"
         },
         "doWhile": {
-          "$ref": "#/$defs/Expression",
-          "description": "The do-while predicate: continue while it holds, bounded by\n`maximumIterations`."
+          "description": "Camel's `doWhile` flag: true makes the expression a predicate\nevaluated after each iteration; false makes it a count.",
+          "type": "boolean"
+        },
+        "exchangeProperty": {
+          "description": "The `exchangeProperty` language member.",
+          "type": "string"
+        },
+        "header": {
+          "description": "The `header` language member.",
+          "type": "string"
+        },
+        "jsonpath": {
+          "description": "The `jsonpath` language member.",
+          "type": "string"
         },
         "maximumIterations": {
           "description": "The mandatory iteration bound; the check refuses its absence and\nthe runtime enforces it again.",
@@ -767,6 +864,10 @@
           "maximum": 100000,
           "minimum": 1,
           "type": "integer"
+        },
+        "rhai": {
+          "$ref": "#/$defs/RhaiExpression",
+          "description": "The `rhai` language member."
         },
         "steps": {
           "description": "The repeated steps.",
@@ -792,11 +893,12 @@
           "type": "boolean"
         },
         "exception": {
-          "description": "The matched classes.",
+          "description": "The matched classes, unique (CFG-ID-6).",
           "items": {
             "$ref": "#/$defs/ErrorClass"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "handled": {
           "description": "Whether the clause consumes the error (Camel `handled`). True ends\nthe exchange with the clause's result.",
@@ -856,7 +958,7 @@
       "description": "The redelivery option set, shared by the error handler and an\n`onException` clause (`products/adapter/CONCEPT.md` section 8.7; the\nnesting under `redeliveryPolicy` follows Camel's own YAML DSL,\n`manual/exception-clause.html` and `manual/exception-redelivery.html`).\nOption spellings stay ours (CFG-NAME); only the nesting is Camel's.\nOnly the non-default members serialize.",
       "properties": {
         "backOffMultiplier": {
-          "description": "The exponential multiplier (default 2).",
+          "description": "The exponential multiplier (default 2); it grows delays, so the\nreader refuses a value below 1 (CFG-QTY-4).",
           "format": "double",
           "type": "number"
         },
@@ -866,21 +968,24 @@
           "type": "number"
         },
         "maximumRedeliveries": {
-          "description": "Redeliveries after the first attempt (default 0).",
+          "description": "Redeliveries after the first attempt (default 0; at most 100,\nCFG-QTY-4).",
           "format": "uint32",
+          "maximum": 100,
           "minimum": 0,
           "type": "integer"
         },
         "maximumRetryDelaySeconds": {
-          "description": "The delay ceiling (default 60 s).",
+          "description": "The delay ceiling in seconds (default 60); zero cannot bound a\ndelay.",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         },
         "retryDelaySeconds": {
-          "description": "Delay between redeliveries (default 1 s).",
+          "description": "Delay between redeliveries in seconds (default 1); zero cannot\nbound a delay.",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         },
         "retryWhile": {
@@ -945,7 +1050,7 @@
           "description": "The route consumer; `direct:` only."
         },
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The route identifier `direct:` targets and bindings name."
         },
         "steps": {
@@ -981,7 +1086,7 @@
       "description": "A route template, Camel's `routeTemplate` without its `from`\n(`products/adapter/CONCEPT.md` section 8.4): the instantiated route's\n`from` is `direct:<routeId>`, bound by the contract.",
       "properties": {
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The template identifier `templatedRoutes` reference."
         },
         "parameters": {
@@ -1029,6 +1134,7 @@
       "type": "string"
     },
     "SetHeaderStep": {
+      "additionalProperties": false,
       "description": "A `setHeader` step.",
       "properties": {
         "name": {
@@ -1047,6 +1153,7 @@
       "type": "object"
     },
     "SetPropertyStep": {
+      "additionalProperties": false,
       "description": "A `setProperty` step.",
       "properties": {
         "name": {
@@ -1065,6 +1172,7 @@
       "type": "object"
     },
     "SplitStep": {
+      "additionalProperties": false,
       "description": "A `split` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).\n`parallelProcessing`, `streaming`, and `timeout` are not ported.",
       "properties": {
         "aggregationStrategy": {
@@ -1072,17 +1180,15 @@
           "description": "The aggregation strategy; absent, the original message is returned,\nCamel's default."
         },
         "errorThreshold": {
-          "description": "Camel's failure accounting: failed pieces that stop the split.",
-          "format": "uint64",
-          "maximum": 100000,
-          "minimum": 1,
-          "type": "integer"
+          "description": "Camel's failure accounting: the share of failed pieces (a ratio\nfrom 0 to 1) that stops the split.",
+          "format": "double",
+          "type": "number"
         },
         "expression": {
           "$ref": "#/$defs/Expression",
           "description": "The expression that produces the pieces."
         },
-        "maxFailedRecords": {
+        "maximumFailedRecords": {
           "description": "Camel's failure accounting: the maximum failed pieces.",
           "format": "uint64",
           "maximum": 100000,
@@ -1104,7 +1210,7 @@
           "type": "array"
         },
         "stopOnException": {
-          "description": "Whether a failing piece stops the split (Camel default false). A\nnon-safe send inside a split requires true.",
+          "description": "Whether a failing piece stops the split (Camel default false). A\nnon-safe send inside a split requires true. Exclusive with the\nfailure accounting below; the checks refuse both.",
           "type": "boolean"
         }
       },
@@ -1408,8 +1514,8 @@
           "type": "string"
         },
         "name": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "The parameter name, referenced as `{{name}}` or `{{?name}}`."
+          "$ref": "#/$defs/LocalId",
+          "description": "The parameter name, referenced as `{{name}}` or `{{?name}}`; a\nlocal identifier, the same taxonomy an instantiation's binding\nkeys carry (CFG-ID-1)."
         },
         "required": {
           "description": "Whether instantiation without the parameter is refused.",
@@ -1440,18 +1546,19 @@
       "description": "Throttle mode, Camel 4's `mode` option.",
       "oneOf": [
         {
-          "const": "totalRequests",
+          "const": "total-requests",
           "description": "Total requests per period (Camel default).",
           "type": "string"
         },
         {
-          "const": "concurrentRequests",
+          "const": "concurrent-requests",
           "description": "Concurrent requests.",
           "type": "string"
         }
       ]
     },
     "ThrottleStep": {
+      "additionalProperties": false,
       "description": "A `throttle` step (`products/adapter/CONCEPT.md` section 8.6).\nDivergence: a waiting exchange waits at most until its deadline, then\nraises `throttle.rejected`.",
       "properties": {
         "limit": {
@@ -1474,9 +1581,10 @@
           "type": "array"
         },
         "timePeriodMilliseconds": {
-          "description": "The period in milliseconds (Camel default 1000).",
+          "description": "The period in milliseconds (Camel default 1000); zero cannot bound\na period.",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -1495,7 +1603,7 @@
         },
         "httpMethod": {
           "$ref": "#/$defs/HttpMethod",
-          "description": "The request method. Its safety carries the write-safety rules of\n`crate::checks`."
+          "description": "The request method; an `http:` send declares it, a `graphql:` send\nomits it. Its safety carries the write-safety rules of\n`crate::checks`."
         },
         "okStatusCodeRange": {
           "description": "The inclusive status range treated as success (Camel default\n`200-299`).",
@@ -1513,14 +1621,20 @@
           "additionalProperties": {
             "$ref": "#/$defs/Expression"
           },
-          "description": "Path-template segment name to expression.",
+          "description": "Path-template segment name to expression; each key is a local\nidentifier (CFG-ID-1).",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
           "type": "object"
         },
         "query": {
           "additionalProperties": {
             "$ref": "#/$defs/Expression"
           },
-          "description": "Query parameter name to expression.",
+          "description": "Query parameter name to expression; each key is the upstream's\nwire parameter name, an external identifier, because the key is\nwhat the source system documents, not a name the pack defines\n(CFG-ID-1).",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         },
         "resumeBindings": {
@@ -1535,9 +1649,6 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "httpMethod"
-      ],
       "type": "object"
     },
     "ToStep": {
@@ -1559,6 +1670,7 @@
       "type": "object"
     },
     "ValidateStep": {
+      "additionalProperties": false,
       "description": "A `validate` step.",
       "properties": {
         "expression": {
@@ -1640,7 +1752,7 @@
       "type": "array"
     },
     "id": {
-      "$ref": "#/$defs/ExternalId",
+      "$ref": "#/$defs/LocalId",
       "description": "The pack identifier a project pins."
     },
     "kind": {

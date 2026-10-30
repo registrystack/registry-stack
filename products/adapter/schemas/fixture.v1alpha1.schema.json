@@ -43,18 +43,18 @@
           "additionalProperties": false,
           "description": "Recorded from the named live system.",
           "properties": {
-            "kind": {
-              "const": "captured",
-              "type": "string"
-            },
             "reference": {
               "description": "Where the recording came from, for review.",
+              "type": "string"
+            },
+            "type": {
+              "const": "captured",
               "type": "string"
             }
           },
           "required": [
-            "kind",
-            "reference"
+            "reference",
+            "type"
           ],
           "type": "object"
         },
@@ -62,18 +62,18 @@
           "additionalProperties": false,
           "description": "Authored from the source system's documented behavior.",
           "properties": {
-            "kind": {
-              "const": "documented",
-              "type": "string"
-            },
             "reference": {
               "description": "The documentation the reconstruction follows, for review.",
+              "type": "string"
+            },
+            "type": {
+              "const": "documented",
               "type": "string"
             }
           },
           "required": [
-            "kind",
-            "reference"
+            "reference",
+            "type"
           ],
           "type": "object"
         }
@@ -100,14 +100,14 @@
               "$ref": "#/$defs/ExternalId",
               "description": "The pack endpoint id whose sends replay from the fixtures."
             },
-            "kind": {
+            "type": {
               "const": "endpoint",
               "type": "string"
             }
           },
           "required": [
-            "kind",
-            "endpoint"
+            "endpoint",
+            "type"
           ],
           "type": "object"
         },
@@ -119,18 +119,23 @@
               "$ref": "#/$defs/ExternalId",
               "description": "The pack endpoint whose token requests replay from the\nfixtures."
             },
-            "kind": {
+            "type": {
               "const": "token-endpoint",
               "type": "string"
             }
           },
           "required": [
-            "kind",
-            "endpoint"
+            "endpoint",
+            "type"
           ],
           "type": "object"
         }
       ]
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
     },
     "RecordedRequest": {
       "additionalProperties": false,
@@ -172,9 +177,9 @@
         },
         "status": {
           "description": "The status the upstream answered with.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 100,
           "type": "integer"
         }
       },
@@ -202,7 +207,7 @@
       "type": "array"
     },
     "id": {
-      "$ref": "#/$defs/ExternalId",
+      "$ref": "#/$defs/LocalId",
       "description": "The suite identifier."
     },
     "intercepts": {

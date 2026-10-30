@@ -3918,6 +3918,7 @@ formats:
     syntax: yaml
     audience: authored
     stability: experimental
+    topLevel: project
     current:
       apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
       kind: AdapterProject
@@ -3938,10 +3939,10 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterProject
-    check: adapterctl check {project}
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
     example: products/adapter/examples/dhis2-tracker/project.yaml
     conformance:
-      requiredText: /id
+      requiredText: /project/id
       optionalText: none
       integer: /bindings/0/maximumUpstreamCalls
       boolean: /recordTypes/0/fields/0/required
@@ -3975,8 +3976,8 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterProfile
-    check: adapterctl check {project}
-    example: products/adapter/profiles/case-api/profile.yaml
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
+    example: products/adapter/profiles/breg-records/profile.yaml
     conformance:
       requiredText: /version
       optionalText: none
@@ -4012,7 +4013,7 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterPack
-    check: adapterctl check {project}
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
     example: products/adapter/packs/dhis2-tracker/pack.yaml
     conformance:
       requiredText: /version
@@ -4049,7 +4050,7 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterFixture
-    check: adapterctl check {project}
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
     example: products/adapter/fixtures/dhis2-tracker/get-found.yaml
     conformance:
       requiredText: /id
@@ -4086,11 +4087,11 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterRuntimeConfig
-    check: adapterctl check {project} --runtime {file}
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml --runtime {file}
     example: products/adapter/examples/dhis2-tracker/runtime.example.yaml
     conformance:
       requiredText: /listener/bind
-      optionalText: /endpoints/0/caBundleRef
+      optionalText: none
       integer: /audit/retentionDays
       boolean: none
     securityMembers:

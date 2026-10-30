@@ -5,29 +5,32 @@
       "description": "One access profile: a named binding of scopes to concrete facade\noperations and record types, reviewed deployment policy\n(`products/adapter/CONCEPT.md` section 10.1).",
       "properties": {
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The access profile name a caller identity is granted."
         },
         "operations": {
-          "description": "The profile operation ids the profile may call.",
+          "description": "The profile operation ids the profile may call, unique (CFG-ID-6).",
           "items": {
             "$ref": "#/$defs/ExternalId"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "recordTypes": {
-          "description": "The record types the profile may touch.",
+          "description": "The record types the profile may touch, unique (CFG-ID-6).",
           "items": {
             "$ref": "#/$defs/LocalId"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "scopes": {
-          "description": "The OIDC scopes the profile admits.",
+          "description": "The OIDC scopes the profile admits, unique (CFG-ID-6).",
           "items": {
             "$ref": "#/$defs/ExternalId"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [
@@ -43,7 +46,7 @@
       "description": "One binding of a concrete contract operation to a route\n(`products/adapter/CONCEPT.md` section 7): one concrete operation per\n(profile operation, record type) pair, with the static worst-case\nupstream-call budget the checks hold the route to.",
       "properties": {
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The binding identifier."
         },
         "maximumUpstreamCalls": {
@@ -101,7 +104,7 @@
           "description": "The digest the artifact's bytes must hash to."
         },
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The referenced artifact's identifier."
         },
         "version": {
@@ -113,6 +116,25 @@
         "id",
         "version",
         "digest"
+      ],
+      "type": "object"
+    },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The project identity block: the deployment's own name and version\n(`products/adapter/CONCEPT.md` section 10.1). The id is a local\nidentifier (CFG-ID-1); the version is text, the same version-as-text\nrule as profiles and packs.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The project identifier."
+        },
+        "version": {
+          "description": "The project version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
       ],
       "type": "object"
     },
@@ -180,20 +202,23 @@
       "properties": {
         "parameters": {
           "additionalProperties": true,
-          "description": "Parameter value by parameter name.",
+          "description": "Parameter value by parameter name; each key is a local identifier,\nthe template parameter it instantiates (CFG-ID-1).",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
           "type": "object"
         },
         "routeId": {
           "$ref": "#/$defs/ExternalId",
           "description": "The instantiated route id; its `from` becomes `direct:<routeId>`."
         },
-        "routeTemplateRef": {
+        "routeTemplate": {
           "$ref": "#/$defs/ExternalId",
           "description": "The pack template this instantiation references."
         }
       },
       "required": [
-        "routeTemplateRef",
+        "routeTemplate",
         "routeId"
       ],
       "type": "object"
@@ -224,10 +249,6 @@
       },
       "type": "array"
     },
-    "id": {
-      "$ref": "#/$defs/ExternalId",
-      "description": "The project identifier."
-    },
     "kind": {
       "const": "AdapterProject",
       "type": "string"
@@ -239,6 +260,10 @@
     "profile": {
       "$ref": "#/$defs/PinnedRef",
       "description": "The pinned facade profile."
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity",
+      "description": "The deployment's identity."
     },
     "recordTypes": {
       "description": "The declared record types and fields.",
@@ -258,10 +283,10 @@
   },
   "required": [
     "apiVersion",
-    "id",
     "kind",
     "pack",
     "profile",
+    "project",
     "recordTypes"
   ],
   "title": "Registry Adapter project",

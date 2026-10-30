@@ -21,6 +21,11 @@
       ],
       "type": "string"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "PaginationParameters": {
       "additionalProperties": false,
       "description": "The pagination parameters of a search operation: the cursor and\npage-size query parameter names and their bounds\n(`products/adapter/CONCEPT.md` section 7). The engine owns encoding the\ncursor; the profile owns the names.",
@@ -80,7 +85,7 @@
       "description": "One facade operation, declared by id\n(`products/adapter/CONCEPT.md` sections 6 and 7). The id is a\nprofile-declared bounded string (CFG-ID-5), never an engine enum.",
       "properties": {
         "id": {
-          "$ref": "#/$defs/ExternalId",
+          "$ref": "#/$defs/LocalId",
           "description": "The profile-declared operation id a binding names."
         },
         "method": {
@@ -92,8 +97,16 @@
           "description": "The pagination parameters of a search operation."
         },
         "path": {
-          "description": "The facade path template, e.g. `/v2/cases/{type}`.",
+          "description": "The facade path template, e.g. `/v2/cases/{type}`. Placeholders\nare single-brace `{name}` templates, Camel REST DSL / OpenAPI path\ntemplating; `{{name}}` is the pack layer's substitution syntax and\nrefuses here.",
           "type": "string"
+        },
+        "pathParameters": {
+          "description": "The path parameters the template names: every `{name}` in `path`\nmust resolve here, every entry must appear in the path, and the\nlist is unique (CFG-ID-6).",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "requestEnvelope": {
           "$ref": "#/$defs/EnvelopeTemplate",
@@ -123,7 +136,7 @@
       "type": "string"
     },
     "id": {
-      "$ref": "#/$defs/ExternalId",
+      "$ref": "#/$defs/LocalId",
       "description": "The profile identifier a project pins."
     },
     "kind": {

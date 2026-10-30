@@ -649,3 +649,51 @@ exceptions:
   class: protocol-constant
   reason: The language name is written as Apache Camel names the exchange-property language; the pack grammar preserves Camel's language vocabulary
   resolution: Permanent.
+- rule: CFG-NAME-1
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/0/properties/use-latest
+  class: protocol-constant
+  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-1
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/1/properties/use-original
+  class: protocol-constant
+  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-1
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/2/properties/grouped-body
+  class: protocol-constant
+  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-1
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/3/properties/json-array-append
+  class: protocol-constant
+  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-1
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/4/properties/json-merge
+  class: protocol-constant
+  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-4
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/CircuitBreakerStep/properties/slidingWindowCalls
+  class: protocol-constant
+  reason: The member counts calls, written as Apache Camel names the circuit-breaker window option; appending a time unit would misstate the quantity
+  resolution: Permanent.
+- rule: CFG-SCHEMA-4
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/CodeMap/properties/entries
+  class: exchange-model
+  reason: The entries keys are the source system's own code values, converted entry by entry into the pack's vocabulary; the shipped DHIS2 tracker pack maps OK, WARNING, and ERROR, and keys like M or 01 are equally plausible, so identifier grammar would refuse real sources
+  resolution: Permanent for the adapter pack code-map exchange model; the pack reader accepts any string key and raises conversion.unmapped for a code with no entry.
+- rule: CFG-SCHEMA-4
+  format: adapter/project
+  location: products/adapter/schemas/project.v1alpha1.schema.json#/$defs/TemplatedRoute/properties/parameters
+  class: protocol-constant
+  reason: The map carries Camel templatedRoute parameter values, which Camel accepts as arbitrary objects and converts per the target parameter; the keys are typed local identifiers and the value freedom is the ported protocol shape
+  resolution: Permanent.

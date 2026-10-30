@@ -177,6 +177,11 @@
       ],
       "type": "object"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "MtlsIdentity": {
       "additionalProperties": false,
       "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind (`products/adapter/CONCEPT.md` section 10.2). It is\nthe only way a `none` endpoint reaches a non-loopback source.",
@@ -351,8 +356,8 @@
               "type": "string"
             },
             "tokenEndpoint": {
-              "description": "The token endpoint, a fixed destination never derived from a\nresponse.",
-              "type": "string"
+              "$ref": "#/$defs/Url",
+              "description": "The token endpoint, a fixed destination never derived from a\nresponse; an absolute `http`/`https` URL the origin check\nconfines like any other destination."
             },
             "type": {
               "const": "oauth2-client-credentials",
@@ -407,8 +412,8 @@
               "type": "string"
             },
             "tokenEndpoint": {
-              "description": "The token endpoint, a fixed destination never derived from a\nresponse.",
-              "type": "string"
+              "$ref": "#/$defs/Url",
+              "description": "The token endpoint, a fixed destination never derived from a\nresponse; an absolute `http`/`https` URL the origin check\nconfines like any other destination."
             },
             "type": {
               "const": "oauth2-private-key-jwt",
@@ -445,11 +450,11 @@
   "description": "The operator runtime configuration artifact (`AdapterRuntimeConfig`).",
   "properties": {
     "allowedPrivateCidrs": {
-      "default": [],
-      "description": "The private ranges egress may reach, at most the platform bound.",
+      "description": "The private ranges egress may reach, at least one and at most the\nplatform bound (CFG-EMPTY-2).",
       "items": {
         "$ref": "#/$defs/Cidr"
       },
+      "minItems": 1,
       "type": "array",
       "uniqueItems": true
     },
@@ -473,7 +478,7 @@
       "type": "array"
     },
     "id": {
-      "$ref": "#/$defs/ExternalId",
+      "$ref": "#/$defs/LocalId",
       "description": "The deployment this config binds."
     },
     "kind": {
@@ -490,6 +495,7 @@
     }
   },
   "required": [
+    "allowedPrivateCidrs",
     "apiVersion",
     "audit",
     "database",
