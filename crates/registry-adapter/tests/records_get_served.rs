@@ -30,25 +30,27 @@ use upstream::{Response, UpstreamDouble};
 
 const ISSUER: &str = "http://127.0.0.1:9";
 const AUDIENCE: &str = "registry-adapter-test";
-const CAPTURES: &str =
-    "/Volumes/CodexWorktrees/agent-scratch/live-adapter-research/dhis2-capture/scrubbed";
 const USERNAME: &str = "synthetic-reader";
 const PASSWORD: &str = "synthetic-password";
 
 static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
 
-/// The body of one scrubbed capture as the upstream would send it.
+/// The committed fixture directory for the DHIS2 Tracker pack.
+fn fixture(name: &str) -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/fixtures/dhis2-tracker")
+        .join(format!("{name}.yaml"));
+    let text = std::fs::read_to_string(&path).expect("the committed fixture is readable");
+    serde_norway::from_str(&text).expect("the fixture is YAML")
+}
+
+/// The status and body of the first scripted upstream reply of one
+/// committed fixture.
 fn capture(name: &str) -> (u16, String) {
-    let text = std::fs::read_to_string(Path::new(CAPTURES).join(format!("{name}.json")))
-        .expect("the scrubbed capture is readable");
-    let document: Value = serde_json::from_str(&text).expect("the capture is JSON");
-    let response = &document["response"];
+    let document = fixture(name);
+    let response = &document["entries"][0]["upstream"][0]["response"];
     let status = u16::try_from(response["status"].as_u64().expect("status")).expect("status");
-    let body = match response["bodyEncoding"].as_str() {
-        Some("json") => response["body"].to_string(),
-        _ => response["body"].as_str().expect("a text body").to_owned(),
-    };
-    (status, body)
+    (status, response["body"].to_string())
 }
 
 fn free_port() -> u16 {
