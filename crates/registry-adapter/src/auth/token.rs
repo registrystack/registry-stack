@@ -699,14 +699,16 @@ impl TokenCache {
     /// the cache actually cleared, so the journal records an
     /// invalidation only when one happened.
     ///
-    /// The lock wait is one handoff, never a queue: the lock is held
-    /// only across one in-flight token send, whose own request timeout
-    /// bounds it, and one 401 cannot accumulate waiters behind it. That
-    /// is why this call takes no admission bound; a bounded give-up
-    /// would skip the invalidation and strand the credential that just
-    /// drew the 401.
+    /// The lock wait is bounded by the same admission bound an
+    /// acquisition waits under, so a wedged refresh cannot park a 401
+    /// handler behind it indefinitely. A give-up at the bound clears
+    /// nothing and reports that; the 401 rule still answers that the
+    /// send must retry, which is the deliberate shed of an endpoint
+    /// whose refresh holds the lock past the bound.
     pub async fn invalidate_if(&self, sent: u64) -> bool {
-        let mut guard = self.state.lock().await;
+        let Ok(mut guard) = timeout(self.admission_timeout, self.state.lock()).await else {
+            return false;
+        };
         let matches = guard
             .cached
             .as_ref()
@@ -720,14 +722,14 @@ impl TokenCache {
     }
 
     /// How much cached freshness remains, for operators and tests;
-    /// `None` when nothing is cached. The lock wait is one handoff, for
-    /// the same reason as [`TokenCache::invalidate_if`]: a single
-    /// operator query cannot form the queue the acquisition's admission
-    /// bound exists to break.
+    /// `None` when nothing is cached or when the query could not take
+    /// the cache lock within the admission bound, the same shed the
+    /// acquisition and the 401 rule wait under.
     pub async fn remaining_lifetime(&self) -> Option<Duration> {
-        self.state
-            .lock()
+        let guard = timeout(self.admission_timeout, self.state.lock())
             .await
+            .ok()?;
+        guard
             .cached
             .as_ref()
             .map(|cached| cached.expires_at.saturating_duration_since(Instant::now()))
@@ -1849,6 +1851,46 @@ mod tests {
         );
         let gen3 = store(&cache, "token-three").await;
         assert_eq!(gen3, 3, "the counter survives invalidation");
+    }
+
+    /// The 401 rule's handoff is bounded like an acquisition: a cache
+    /// whose lock is held past the admission bound sheds the
+    /// invalidation (clearing nothing) and the operator query (answering
+    /// `None`) instead of parking them behind a wedged refresh, and
+    /// answers normally once the lock frees.
+    #[tokio::test]
+    async fn a_shed_invalidation_clears_nothing_and_answers_again() {
+        let cache = TokenCache {
+            state: Mutex::new(CacheState::default()),
+            admission_timeout: Duration::from_millis(30),
+        };
+        let generation = {
+            let mut guard = cache.state.lock().await;
+            guard.store_next(
+                ProtectedText::from_str_value("token-one"),
+                Instant::now() + Duration::from_secs(600),
+            )
+        };
+        // Hold the cache lock the way a stalled refresh would.
+        let held = cache.state.lock().await;
+        assert!(
+            !cache.invalidate_if(generation).await,
+            "the shed clears nothing"
+        );
+        assert!(
+            cache.remaining_lifetime().await.is_none(),
+            "the shed query answers None rather than parking"
+        );
+        assert!(
+            !cache.invalidate_if(99).await,
+            "the shed is the answer at the bound, whatever the generation"
+        );
+        drop(held);
+        assert!(
+            cache.invalidate_if(generation).await,
+            "once the lock frees, the invalidation lands"
+        );
+        assert!(cache.remaining_lifetime().await.is_none());
     }
 
     /// A waiter queued behind a stalled refresh gives up at the

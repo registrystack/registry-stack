@@ -467,9 +467,11 @@ impl AuthPlan {
     /// request. A send whose credential named no generation invalidates
     /// nothing: nothing was cached for it to clear. The invalidation is
     /// journaled only when it cleared the cache, so a stale 401 about an
-    /// issuance a refresh already replaced records no invalidation. A
-    /// 401 after the one refresh, or any 401 under a static kind, raises
-    /// the uncatchable `credential.rejected`. A 403 stays the caller's
+    /// issuance a refresh already replaced records no invalidation, and
+    /// an invalidation shed at the cache's admission bound records
+    /// nothing while the rule still reports the retry. A 401 after the
+    /// one refresh, or any 401 under a static kind, raises the
+    /// uncatchable `credential.rejected`. A 403 stays the caller's
     /// `upstream.http`: it answers about the request, not the credential.
     pub async fn on_upstream_status(
         &self,
