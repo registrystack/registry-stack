@@ -68,7 +68,7 @@ existing pack to it without touching the pack:
 6. **Problem vocabulary lives in the pack.** The pack's handled clauses
    build breg-records problem bodies (`type`, `title`, `status`, `code`
    with `source.*` codes). Under `fhir-facade` the codes are not in
-   `problemCodes` and the body is not an OperationOutcome, yet `check`
+   `problems` and the body is not an OperationOutcome, yet `check`
    passes, both for the copied pack and for the maintained `dhis2-tracker`
    pack (probe `e5-dhis2-pack`). Either the runtime refuses every mapped
    error, or a FHIR caller receives a breg-records problem. CONCEPT section

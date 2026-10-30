@@ -20,7 +20,7 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:50a55a916dea132b6abee6ce23603a1d8ec782a1ba28d913b3dbcebfd650a3e6
+  digest: sha256:51c949cae55ba424d66ef7d4a3a82ab7a9c58e5097c6667f2ef04a14a57b8078
 pack:
   id: jsonapi-households
   version: "1"

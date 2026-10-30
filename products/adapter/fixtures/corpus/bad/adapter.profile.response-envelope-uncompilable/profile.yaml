@@ -16,7 +16,24 @@ operations:
     pathParameters:
       - type
       - case_id
+    recordTypeParameter: type
+    recordIdParameter: case_id
     responseEnvelope: '[{{record}}, {"other": "shape"}]'
-problemCodes:
-  - cases.missing
+problems:
+  - code: cases.upstream
+    status: 502
+    title: the source could not be reached
+    classes: [upstream, breaker.open, throttle.rejected, loop.maximum-iterations-reached]
+  - code: cases.mapping
+    status: 422
+    title: the request or its mapping was refused
+    classes: [validation, conversion.unmapped, aggregation.duplicate]
+  - code: cases.exhausted
+    status: 502
+    title: the run exhausted a budget
+    classes: [script, budget.exhausted]
+  - code: cases.boundary
+    status: 500
+    title: the facade refused the call
+    classes: [disclosure.violation, egress.refused, credential.rejected, outcome, facade]
 problemEnvelope: '{"family": "{{problemCode}}"}'

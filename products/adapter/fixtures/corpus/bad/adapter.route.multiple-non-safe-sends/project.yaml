@@ -13,7 +13,7 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:efb3a9793b5f44abb498d84f29487ca695a30d4412f990d15afd4952bb08feaf
+  digest: sha256:03dd390cdf2c1fa4e6927c115335be768bec498b4e97db8ae6d2780eb588e0f1
 pack:
   id: case-api-pack
   version: "1"

@@ -4,6 +4,46 @@
       "description": "An envelope template: a JSON template whose string members carry\n`{{slot}}` placeholders from the closed vocabulary\n(`products/adapter/CONCEPT.md` section 7). The template is data; the\nengine fills it.",
       "type": "string"
     },
+    "ErrorClass": {
+      "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+      "enum": [
+        "aggregation.duplicate",
+        "breaker.open",
+        "budget.exhausted",
+        "conversion.unmapped",
+        "credential.rejected",
+        "disclosure.violation",
+        "egress.refused",
+        "loop.maximum-iterations-reached",
+        "script",
+        "script.budget-exceeded",
+        "throttle.rejected",
+        "upstream",
+        "upstream.connection",
+        "upstream.http",
+        "upstream.malformed",
+        "upstream.redirect",
+        "upstream.timeout",
+        "upstream.too-large",
+        "validation",
+        "outcome",
+        "outcome.conflict",
+        "outcome.invalid-request",
+        "outcome.not-found",
+        "outcome.rejected",
+        "facade",
+        "facade.conflict",
+        "facade.forbidden",
+        "facade.idempotency-mismatch",
+        "facade.invalid-request",
+        "facade.method-not-allowed",
+        "facade.not-acceptable",
+        "facade.not-found",
+        "facade.unauthenticated",
+        "facade.unsupported-media-type"
+      ],
+      "type": "string"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -80,6 +120,42 @@
       ],
       "type": "object"
     },
+    "Problem": {
+      "additionalProperties": false,
+      "description": "One problem a caller can receive: the profile's own answer shape for\nthe error classes it maps (`products/adapter/CONCEPT.md` sections 7\nand 8.11.6). A pack raises error classes and never names a problem\ncode or builds a problem body; the profile decides what the caller\nsees.",
+      "properties": {
+        "classes": {
+          "description": "The error classes this problem answers: a class resolves to the\nentry whose declared class is closest to it, by the rule of\n`products/adapter/CONCEPT.md` section 8.7.",
+          "items": {
+            "$ref": "#/$defs/ErrorClass"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "code": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The profile's own problem code a caller receives."
+        },
+        "status": {
+          "description": "The HTTP status the facade answers with.",
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 400,
+          "type": "integer"
+        },
+        "title": {
+          "description": "The problem title the envelope's `problemTitle` slot fills from.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "status",
+        "title",
+        "classes"
+      ],
+      "type": "object"
+    },
     "ProfileOperation": {
       "additionalProperties": false,
       "description": "One facade operation, declared by id\n(`products/adapter/CONCEPT.md` sections 6 and 7). The id is a\nprofile-declared bounded string (CFG-ID-5), never an engine enum.",
@@ -108,6 +184,14 @@
           "type": "array",
           "uniqueItems": true
         },
+        "recordIdParameter": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The path parameter the caller's `recordId` header fills on get,\nupdate, and patch; one of `pathParameters` when declared. A search\nor create operation fills none; the profile checks require the\nparameter exactly where the facade reads it."
+        },
+        "recordTypeParameter": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The path parameter the bound record type substitutes into\n(`products/adapter/CONCEPT.md` section 7): one of `pathParameters`,\nchecked at the profile checks. No rule reads meaning from the\nparameter's position."
+        },
         "requestEnvelope": {
           "$ref": "#/$defs/EnvelopeTemplate",
           "description": "Where a writable record sits in an incoming body. A write\noperation's request envelope must name the `record` slot."
@@ -115,12 +199,21 @@
         "responseEnvelope": {
           "$ref": "#/$defs/EnvelopeTemplate",
           "description": "The response envelope; must name its result slot."
+        },
+        "successStatus": {
+          "default": 200,
+          "description": "The status the facade answers a success with; two hundreds only\n(CFG-QTY-4). Every non-2xx answer is a problem body.",
+          "format": "uint32",
+          "maximum": 299,
+          "minimum": 200,
+          "type": "integer"
         }
       },
       "required": [
         "id",
         "method",
         "path",
+        "recordTypeParameter",
         "responseEnvelope"
       ],
       "type": "object"
@@ -129,7 +222,7 @@
   "$id": "https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The facade profile artifact (`AdapterProfile`): the operation set, the\nenvelope templates, the pagination parameters, and the problem codes\nand problem envelope.",
+  "description": "The facade profile artifact (`AdapterProfile`): the operation set, the\nenvelope templates, the pagination parameters, and the problems and\nproblem envelope.",
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/adapter/profile/v1alpha1",
@@ -159,17 +252,16 @@
       "type": "array",
       "uniqueItems": true
     },
-    "problemCodes": {
-      "description": "The facade problem codes, in the profile's own closed list. Route\nclause bodies must carry one of these codes\n(`products/adapter/CONCEPT.md` section 8.7).",
-      "items": {
-        "$ref": "#/$defs/ExternalId"
-      },
-      "type": "array",
-      "uniqueItems": true
-    },
     "problemEnvelope": {
       "$ref": "#/$defs/EnvelopeTemplate",
       "description": "The problem envelope template; must carry the `problemCode` slot."
+    },
+    "problems": {
+      "description": "The problems a caller can receive, each mapping error classes to a\ncode, status, and title. The totality check requires every class of\nthe closed hierarchy, uncatchable and facade classes included, to\nresolve to exactly one entry\n(`products/adapter/CONCEPT.md` sections 7 and 8.11.6).",
+      "items": {
+        "$ref": "#/$defs/Problem"
+      },
+      "type": "array"
     },
     "version": {
       "description": "The profile's own version; a project pin names it next to the\ndigest (CFG-ID-4).",
@@ -181,8 +273,8 @@
     "id",
     "kind",
     "operations",
-    "problemCodes",
     "problemEnvelope",
+    "problems",
     "version"
   ],
   "title": "Registry Adapter facade profile",

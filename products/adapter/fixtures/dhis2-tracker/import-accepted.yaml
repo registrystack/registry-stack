@@ -42,7 +42,7 @@ entries:
             TRACKED_ENTITY:
               created: 1
     expectedFacadeResponse:
-      status: 200
+      status: 201
       body:
         data:
           tracked_entity_type: person

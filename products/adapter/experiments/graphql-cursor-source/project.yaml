@@ -18,7 +18,7 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:532d24d29a26838696e40f5df81fc461586c07be4be84cd1112e90a178f465e5
+  digest: sha256:41c15317b8b944cd94907dde0a0a18d8e9cf0df32d65a1a857359a1b0e34ea6c
 pack:
   id: graphql-cases
   version: "1"
@@ -47,6 +47,8 @@ bindings:
     operation: cases-find
     recordType: benefit_case
     route: benefit-case-find
+    filters:
+      - status
     maximumUpstreamCalls: 2
   - id: benefit-case-get
     operation: cases-get

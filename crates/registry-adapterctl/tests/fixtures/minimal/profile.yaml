@@ -8,6 +8,7 @@ operations:
     path: /v2/cases/{type}
     pathParameters:
       - type
+    recordTypeParameter: type
     responseEnvelope: '{"record": {{record}}}'
 problems:
   - code: cases.upstream

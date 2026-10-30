@@ -22,6 +22,7 @@ operations:
     path: /fhir/{type}
     pathParameters:
       - type
+    recordTypeParameter: type
     responseEnvelope: '{"resourceType": "Bundle", "type": "searchset", "entry": {{records}}, "link": [{"relation": "next", "url": "{{?nextCursor}}"}]}'
     pagination:
       cursorParameter: _page_token
@@ -34,10 +35,72 @@ operations:
     pathParameters:
       - type
       - record_id
+    recordTypeParameter: type
+    recordIdParameter: record_id
     responseEnvelope: '{"resourceType": "{{recordType}}", "id": "{{recordId}}", "extension": [{"url": "https://id.example.invalid/fhir/StructureDefinition/registry-record", "valueRecord": {{record}}}]}'
-problemCodes:
-  - not-found
-  - transient
-  - processing
-  - exception
+problems:
+  - code: transient
+    status: 503
+    title: the source is temporarily unavailable
+    classes: [upstream]
+  - code: unavailable
+    status: 503
+    title: the circuit protecting the source is open
+    classes: [breaker.open]
+  - code: throttled
+    status: 429
+    title: the source is throttling requests
+    classes: [throttle.rejected]
+  - code: loop-bound
+    status: 500
+    title: the route exceeded its loop bound
+    classes: [loop.maximum-iterations-reached]
+  - code: invalid
+    status: 422
+    title: the request failed validation
+    classes: [validation]
+  - code: unmapped
+    status: 500
+    title: a value could not be converted
+    classes: [conversion.unmapped]
+  - code: duplicate
+    status: 500
+    title: the aggregation produced duplicates
+    classes: [aggregation.duplicate]
+  - code: script
+    status: 500
+    title: a route script failed
+    classes: [script]
+  - code: budget
+    status: 500
+    title: the upstream call budget was exhausted
+    classes: [budget.exhausted]
+  - code: credential
+    status: 500
+    title: the credential for the source was rejected
+    classes: [credential.rejected]
+  - code: disclosure
+    status: 500
+    title: the response would exceed its disclosure limits
+    classes: [disclosure.violation]
+  - code: egress
+    status: 500
+    title: the request was refused by egress policy
+    classes: [egress.refused]
+  - code: not-found
+    status: 404
+    title: the resource could not be found
+    classes: [outcome.not-found]
+  - code: processing
+    status: 422
+    title: the request could not be processed
+    classes: [outcome.invalid-request]
+  - code: exception
+    status: 500
+    title: the request could not be served
+    classes: [outcome]
+  - code: facade
+    status: 400
+    title: the facade request was not valid
+    classes: [facade]
 problemEnvelope: '{"resourceType": "OperationOutcome", "issue": [{"severity": "error", "code": "{{problemCode}}", "diagnostics": "{{problemTitle}}", "details": {"text": "{{?problemDetail}}"}}]}'

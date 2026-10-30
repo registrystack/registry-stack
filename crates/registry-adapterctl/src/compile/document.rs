@@ -456,6 +456,8 @@ mod tests {
                     "method": "GET",
                     "path": "/v2/cases/{type}/{case_id}",
                     "pathParameters": ["type", "case_id"],
+                    "recordTypeParameter": "type",
+                    "recordIdParameter": "case_id",
                     "responseEnvelope": GET_ENVELOPE,
                 },
                 {
@@ -463,6 +465,7 @@ mod tests {
                     "method": "POST",
                     "path": "/v2/cases/{type}",
                     "pathParameters": ["type"],
+                    "recordTypeParameter": "type",
                     "requestEnvelope": FIND_REQUEST,
                     "responseEnvelope": FIND_ENVELOPE,
                     "pagination": {
@@ -649,6 +652,7 @@ mod tests {
                 "method": "GET",
                 "path": "/v2/cases/{type}",
                 "pathParameters": ["type"],
+                "recordTypeParameter": "type",
                 "responseEnvelope": r#"{"kind": "case", "meta": {"registryIdentifier": "registryIdentifier"}}"#,
             }],
             "problems": [

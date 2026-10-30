@@ -29,6 +29,7 @@ operations:
     path: /v1/records/{type}
     pathParameters:
       - type
+    recordTypeParameter: type
     responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": "{{?nextCursor}}"}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
     pagination:
       cursorParameter: cursor
@@ -41,12 +42,16 @@ operations:
     pathParameters:
       - type
       - record_id
+    recordTypeParameter: type
+    recordIdParameter: record_id
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
   - id: records-create
     method: POST
     path: /v1/records/{type}
     pathParameters:
       - type
+    recordTypeParameter: type
+    successStatus: 201
     requestEnvelope: '{"data": {{record}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
   - id: records-update
@@ -55,6 +60,8 @@ operations:
     pathParameters:
       - type
       - record_id
+    recordTypeParameter: type
+    recordIdParameter: record_id
     requestEnvelope: '{"data": {{record}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
   - id: records-patch
@@ -63,14 +70,83 @@ operations:
     pathParameters:
       - type
       - record_id
+    recordTypeParameter: type
+    recordIdParameter: record_id
     requestEnvelope: '{"data": {{record}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
-problemCodes:
-  - source.not-found
-  - source.unavailable
-  - source.upstream-error
-  - source.write-rejected
-  - source.write-partial
+problems:
+  - code: source.upstream-error
+    status: 502
+    title: the source answered with an error
+    classes: [upstream]
+  - code: source.unavailable
+    status: 504
+    title: the source did not answer in time
+    classes: [upstream.timeout]
+  - code: source.breaker
+    status: 503
+    title: the circuit protecting the source is open
+    classes: [breaker.open]
+  - code: source.throttle
+    status: 429
+    title: the source is throttling requests
+    classes: [throttle.rejected]
+  - code: source.loop-bound
+    status: 500
+    title: the route exceeded its loop bound
+    classes: [loop.maximum-iterations-reached]
+  - code: source.validation
+    status: 422
+    title: the request failed validation
+    classes: [validation]
+  - code: source.conversion
+    status: 500
+    title: a value could not be converted
+    classes: [conversion.unmapped]
+  - code: source.aggregation
+    status: 500
+    title: the aggregation produced duplicates
+    classes: [aggregation.duplicate]
+  - code: source.script
+    status: 500
+    title: a route script failed
+    classes: [script]
+  - code: source.budget
+    status: 500
+    title: the upstream call budget was exhausted
+    classes: [budget.exhausted]
+  - code: source.credential
+    status: 500
+    title: the credential for the source was rejected
+    classes: [credential.rejected]
+  - code: source.disclosure
+    status: 500
+    title: the response would exceed its disclosure limits
+    classes: [disclosure.violation]
+  - code: source.egress
+    status: 500
+    title: the request was refused by egress policy
+    classes: [egress.refused]
+  - code: source.not-found
+    status: 404
+    title: the record could not be found
+    classes: [outcome.not-found]
+  - code: source.write-partial
+    status: 409
+    title: the write was only partially accepted
+    classes: [outcome.conflict]
+  - code: source.write-rejected
+    status: 409
+    title: the source refused the write
+    classes: [outcome.rejected]
+  - code: source.outcome
+    status: 422
+    title: the request could not be served
+    classes: [outcome]
+  - code: source.facade
+    status: 400
+    title: the facade request was not valid
+    classes: [facade]
 problemEnvelope: '{"title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}"}'
 parameterizedParts:
   - name: registryIdentifier

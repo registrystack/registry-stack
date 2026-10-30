@@ -394,6 +394,7 @@
         "split",
         "stop",
         "throttle",
+        "throwException",
         "to",
         "transform",
         "validate"
@@ -613,7 +614,7 @@
       "type": "object"
     },
     "ErrorClass": {
-      "description": "A closed error class, the port of Camel's Java exception hierarchy\n(`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest\nclass across the error and its cause; the five uncatchable classes name\nthe boundary no `onException` or `doCatch` may handle.",
+      "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
       "enum": [
         "aggregation.duplicate",
         "breaker.open",
@@ -633,7 +634,22 @@
         "upstream.redirect",
         "upstream.timeout",
         "upstream.too-large",
-        "validation"
+        "validation",
+        "outcome",
+        "outcome.conflict",
+        "outcome.invalid-request",
+        "outcome.not-found",
+        "outcome.rejected",
+        "facade",
+        "facade.conflict",
+        "facade.forbidden",
+        "facade.idempotency-mismatch",
+        "facade.invalid-request",
+        "facade.method-not-allowed",
+        "facade.not-acceptable",
+        "facade.not-found",
+        "facade.unauthenticated",
+        "facade.unsupported-media-type"
       ],
       "type": "string"
     },
@@ -1383,6 +1399,19 @@
         },
         {
           "additionalProperties": false,
+          "description": "Raise a closed error class now; the route's clauses handle it like\nany error (`products/adapter/CONCEPT.md` section 8.11.6).",
+          "properties": {
+            "throwException": {
+              "$ref": "#/$defs/ThrowExceptionStep"
+            }
+          },
+          "required": [
+            "throwException"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Split a message into pieces and aggregate them.",
           "properties": {
             "split": {
@@ -1596,6 +1625,24 @@
       ],
       "type": "object"
     },
+    "ThrowExceptionStep": {
+      "additionalProperties": false,
+      "description": "A `throwException` step: raise one closed error class, with an\noptional bounded constant message\n(`products/adapter/CONCEPT.md` section 8.11.6). The checks refuse a\nboundary or facade class, which never enters a route.",
+      "properties": {
+        "exceptionType": {
+          "$ref": "#/$defs/ErrorClass",
+          "description": "The closed class to raise; a catchable class, typically an\n`outcome.*` class."
+        },
+        "message": {
+          "description": "The optional constant message; no expression is ported.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exceptionType"
+      ],
+      "type": "object"
+    },
     "ToParameters": {
       "additionalProperties": false,
       "description": "The parameters of an upstream send, Camel's `http` component options\n(`products/adapter/CONCEPT.md` section 8.8). The path template's\n`{name}` segments are filled from `pathParameters` expressions and\npercent-encoded by the engine as single segments; query members are\nengine-encoded.",
@@ -1607,6 +1654,10 @@
         "httpMethod": {
           "$ref": "#/$defs/HttpMethod",
           "description": "The request method; an `http:` send declares it, a `graphql:` send\nomits it. Its safety carries the write-safety rules of\n`crate::checks`."
+        },
+        "httpUri": {
+          "$ref": "#/$defs/Expression",
+          "description": "An origin-pinned link carried as an expression instead of `path`\n(`products/adapter/CONCEPT.md` section 8.11.5): at send time the\nengine parses the value as an absolute URL and refuses it with\n`egress.refused` unless it stays inside the endpoint's origin and\nbase path, carries no userinfo or fragment, and fits the URL\nlength bound. The checks refuse a send carrying both members, a\nquery beside this one, and this member on a non-http send."
         },
         "okStatusCodeRange": {
           "description": "The inclusive status range treated as success (Camel default\n`200-299`).",
