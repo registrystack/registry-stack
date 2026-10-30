@@ -309,6 +309,53 @@ EVIDENCE: dict[str, list[str]] = {
         "checks.rs:pack_refuses_a_code_map_entry_that_is_not_a_scalar",
         "checks.rs:pack_refuses_a_code_map_no_conversion_references",
     ],
+    "Exchange, MEP": [
+        "engine:src/exchange.rs:new",
+        "engine:src/exchange.rs:as_script_value",
+        "engine:src/exchange.rs:headers_are_case_insensitive",
+        "engine:tests/records_get_served.rs:a_found_record_comes_back_shaped_through_the_served_binary",
+    ],
+    "Message": [
+        "engine:src/exchange.rs:set_header",
+        "engine:src/exchange.rs:header",
+        "engine:src/exchange.rs:headers_are_case_insensitive",
+        "engine:src/exchange.rs:script_value_lowercases_headers_and_keeps_a_null_body",
+    ],
+    "REST DSL contract-first": [
+        "engine:src/component/rest/continuation.rs:filter_digest",
+        "engine:tests/records_get_served.rs:a_found_record_comes_back_shaped_through_the_served_binary",
+        "engine:tests/person_search_served.rs:an_undeclared_or_out_of_bounds_input_is_refused_before_any_upstream_call",
+        "engine:tests/person_search_served.rs:the_first_page_comes_back_shaped_with_a_sealed_cursor",
+        "engine:tests/govstack_consultation_served.rs:one_record_comes_back_as_a_record",
+        "engine:tests/govstack_consultation_served.rs:a_cursor_refuses_a_different_page_size_and_a_forged_text",
+    ],
+    "http": [
+        "engine:tests/camel_http_uri.rs:the_query_is_sent_as_written",
+        "engine:tests/camel_http_uri.rs:a_query_the_parser_would_rewrite_is_refused",
+        "engine:tests/camel_origin_link.rs:an_http_uri_send_follows_the_source_link_as_written",
+        "engine:tests/camel_origin_link.rs:a_link_off_the_endpoint_origin_is_refused_without_a_send",
+        "engine:tests/camel_http_authentication.rs:static_authorization_presents_the_declared_scheme",
+        "engine:tests/records_get_served.rs:an_identifier_with_a_space_or_a_non_ascii_character_is_sent_as_one_encoded_segment",
+    ],
+    "Simple, bean, process": [
+        "engine:src/scripts.rs:add",
+        "engine:src/scripts.rs:call",
+        "engine:tests/opencrvs_scripts.rs:only_the_mapped_declaration_keys_reach_the_record_under_the_mapped_field",
+        "engine:tests/script_budget.rs:a_reply_at_the_cap_is_processed",
+    ],
+    "Throw Exception": [
+        "route.rs:throw_exception_step_round_trips",
+        "engine:tests/camel_error_cluster.rs:a_clause_error_replaces_the_failure_and_keeps_the_original",
+        "engine:tests/camel_error_cluster.rs:an_uncatchable_class_matches_no_clause",
+        "engine:tests/camel_direct.rs:the_targets_own_clauses_handle_the_target_first",
+    ],
+    "Event Notifier": [
+        "engine:src/journal.rs:append",
+        "engine:tests/postgres_journal.rs:the_journal_refuses_unknown_kinds_and_oversized_details",
+        "engine:tests/postgres_journal.rs:append_stamps_occurred_at_from_the_runtime_clock",
+        "engine:tests/records_get_served.rs:a_verified_caller_refused_by_scope_or_record_type_is_journaled_without_values",
+        "engine:tests/records_get_served.rs:every_401_path_leaves_a_value_free_log_line",
+    ],
 }
 
 SECTION = "### 8.10 The Camel port table"
