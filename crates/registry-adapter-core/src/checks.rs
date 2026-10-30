@@ -8022,6 +8022,9 @@ mod tests {
             audit: AuditRetention {
                 retention_days: BoundedU32::<1, 3_650>::new(90).expect("retention"),
             },
+            cursor_key_ref: None,
+            previous_cursor_key_ref: None,
+            cursor_ttl_seconds: None,
         }
     }
 

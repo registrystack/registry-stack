@@ -9,7 +9,9 @@
 
 use crate::auth::{MtlsIdentity, RuntimeCredential};
 use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey};
-use registry_platform_yaml::{ExternalId, LocalId, UniqueIdList, UniqueList, Url};
+use registry_platform_yaml::{
+    BoundedU64, ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -170,6 +172,19 @@ pub struct AdapterRuntimeConfig {
     pub oidc: OidcIssuerConfig,
     /// The journal retention.
     pub audit: AuditRetention,
+    /// The secret that seals pagination cursors: exactly 32 bytes. A
+    /// deployment that binds a paginated operation declares it; one
+    /// that serves only reads by identifier may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_key_ref: Option<SecretReference>,
+    /// The retiring cursor key, still accepted when opening a cursor so
+    /// a key rotation does not strand cursors in flight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_cursor_key_ref: Option<SecretReference>,
+    /// How long a cursor stays valid, in seconds (60 to 86400); absent,
+    /// 900.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_ttl_seconds: Option<BoundedU64<60, 86_400>>,
 }
 
 /// The allowlist cannot be empty: an egress policy admitting no private
@@ -263,6 +278,9 @@ mod tests {
                 retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
                     .expect("retention"),
             },
+            cursor_key_ref: None,
+            previous_cursor_key_ref: None,
+            cursor_ttl_seconds: None,
         };
         // The runtime config is read, never written: the round trip goes
         // through the reader only, matching the house pattern (Casework's

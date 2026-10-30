@@ -498,6 +498,17 @@
       "$ref": "#/$defs/AuditRetention",
       "description": "The journal retention."
     },
+    "cursorKeyRef": {
+      "$ref": "#/$defs/SecretReference",
+      "description": "The secret that seals pagination cursors: exactly 32 bytes. A\ndeployment that binds a paginated operation declares it; one\nthat serves only reads by identifier may omit it."
+    },
+    "cursorTtlSeconds": {
+      "description": "How long a cursor stays valid, in seconds (60 to 86400); absent,\n900.",
+      "format": "uint64",
+      "maximum": 86400,
+      "minimum": 60,
+      "type": "integer"
+    },
     "database": {
       "$ref": "#/$defs/DatabaseConfig",
       "description": "The PostgreSQL connections, from the platform shared block."
@@ -528,6 +539,10 @@
     "outboundTls": {
       "$ref": "#/$defs/OutboundTls",
       "description": "The private CAs endpoints may trust beside the system roots;\nabsent, every endpoint trusts the system roots alone."
+    },
+    "previousCursorKeyRef": {
+      "$ref": "#/$defs/SecretReference",
+      "description": "The retiring cursor key, still accepted when opening a cursor so\na key rotation does not strand cursors in flight."
     }
   },
   "required": [
