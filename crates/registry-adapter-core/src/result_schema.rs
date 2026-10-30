@@ -333,11 +333,42 @@ fn slot_schema(
             .map(|schema| json!({"type": "array", "items": schema})),
         "nextCursor" | "problemCode" | "problemDetail" | "problemTitle" | "recordId"
         | "recordType" | "requestId" => Ok(json!({"type": "string"})),
-        "status" => Ok(json!({"type": "integer"})),
+        "status" | "pageSize" => Ok(json!({"type": "integer"})),
+        "cursor" => Ok(json!({"type": "string"})),
+        "filters" => filters_schema(binding, project),
         other => Err(format!(
             "the response envelope names slot {other}, which the closed slot vocabulary does not declare"
         )),
     }
+}
+
+/// The closed schema of a read request's `filters` object: one optional,
+/// typed member per filter the binding declares, and no other member.
+fn filters_schema(
+    binding: Option<&Binding>,
+    project: Option<&AdapterProject>,
+) -> Result<Value, String> {
+    let (Some(binding), Some(project)) = (binding, project) else {
+        return Err(UNBOUND_RECORD_SLOT.to_string());
+    };
+    let record_type = project
+        .record_types
+        .get(binding.record_type.as_str())
+        .ok_or_else(|| "the binding names no declared record type".to_string())?;
+    let mut properties = Map::new();
+    for filter in binding.filters.iter() {
+        let field = record_type
+            .fields
+            .iter()
+            .find(|field| field.name.as_str() == filter.as_str())
+            .ok_or_else(|| "the binding declares a filter no record field carries".to_string())?;
+        properties.insert(filter.as_str().to_string(), field_schema(field.r#type));
+    }
+    Ok(json!({
+        "type": "object",
+        "properties": Value::Object(properties),
+        "additionalProperties": false,
+    }))
 }
 
 /// The closed schema of one record the bound record type declares: every
@@ -711,6 +742,8 @@ mod tests {
             request_envelope: None,
             response_envelope: EnvelopeTemplate(envelope.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }
     }

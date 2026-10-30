@@ -35,10 +35,13 @@
         "facade.conflict",
         "facade.forbidden",
         "facade.idempotency-mismatch",
+        "facade.invalid-cursor",
+        "facade.invalid-field",
         "facade.invalid-request",
         "facade.method-not-allowed",
         "facade.not-acceptable",
         "facade.not-found",
+        "facade.payload-too-large",
         "facade.unauthenticated",
         "facade.unsupported-media-type"
       ],
@@ -73,6 +76,13 @@
         "cursorParameter": {
           "$ref": "#/$defs/ExternalId",
           "description": "The cursor query parameter name."
+        },
+        "pageSizeDefault": {
+          "description": "The page size a call that names none gets; within the bounds. A\ncursor carries the page size of the call that minted it: a later\ncall may omit the size, and one that names a different size is\nrefused.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
         },
         "pageSizeMaximum": {
           "description": "The largest page size a caller may ask for.",
@@ -188,6 +198,10 @@
           "type": "array",
           "uniqueItems": true
         },
+        "readOnly": {
+          "description": "Whether a POST operation only reads: it is served like a read\n(never the write path), its request envelope is a closed template\nover the caller's JSON body, and its route reaches only safe sends.\nA GET operation is a read without declaring it.",
+          "type": "boolean"
+        },
         "recordIdParameter": {
           "$ref": "#/$defs/LocalId",
           "description": "The path parameter the caller's `recordId` header fills on get,\nupdate, and patch; one of `pathParameters` when declared. A search\nor create operation fills none; the profile checks require the\nparameter exactly where the facade reads it."
@@ -199,6 +213,13 @@
         "requestEnvelope": {
           "$ref": "#/$defs/EnvelopeTemplate",
           "description": "Where a writable record sits in an incoming body. A write\noperation's request envelope must name the `record` slot."
+        },
+        "requestMaximumBytes": {
+          "description": "The largest request body, in bytes, a read operation with a body\naccepts; a larger one answers `facade.payload-too-large`. Sixteen\nkibibytes when absent.",
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
         },
         "responseEnvelope": {
           "$ref": "#/$defs/EnvelopeTemplate",

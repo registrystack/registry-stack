@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.profile.unknown-slot: this artifact set must be refused with
-# exactly adapter.profile.unknown-slot. The response envelope names slot bogusSlot, outside the closed ten-slot vocabulary.
+# exactly adapter.profile.unknown-slot. The response envelope names slot bogusSlot, outside the closed slot vocabulary.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.unknown-slot/project.yaml

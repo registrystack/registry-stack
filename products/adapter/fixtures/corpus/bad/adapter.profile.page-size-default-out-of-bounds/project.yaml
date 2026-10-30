@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://id.registrystack.org/formats/adapter/project/v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.page-size-default-out-of-bounds: this artifact set must be refused with
+# exactly adapter.profile.page-size-default-out-of-bounds. The default page size 500 lies outside the declared 1 to 100 bounds.
+# not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.page-size-default-out-of-bounds/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:6269e369b294483ee5c1713110a1791057b8b61ed6192eaac7866462bcbe2a4c
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:d22326ce1e7806277bc50b0d637588ab0735a74a69e4069294d2e49fba1939a2
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+      - name: limit
+        type: integer
+        required: false
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-find
+    operation: cases-find
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-find
+    recordTypes:
+      - case

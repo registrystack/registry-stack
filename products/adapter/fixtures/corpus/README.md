@@ -68,14 +68,16 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 102 members.
+finding per code. The corpus holds 104 members.
 
 ### Profile members
 
 | Member | Defect | Expected code | Layer |
 |---|---|---|---|
 | `adapter.envelope.invalid-placeholder` | A `{{bogus` placeholder never closes (co-fires `adapter.profile.response-envelope-uncompilable`, see the note above) | `adapter.envelope.invalid-placeholder` | checks |
-| `adapter.profile.unknown-slot` | Response envelope names `bogusSlot`, outside the closed ten-slot vocabulary (co-fires `adapter.profile.response-envelope-uncompilable`) | `adapter.profile.unknown-slot` | checks |
+| `adapter.profile.unknown-slot` | Response envelope names `bogusSlot`, outside the closed slot vocabulary (co-fires `adapter.profile.response-envelope-uncompilable`) | `adapter.profile.unknown-slot` | checks |
+| `adapter.profile.page-size-default-out-of-bounds` | `pageSizeDefault: 500` lies outside the declared 1 to 100 page-size bounds | `adapter.profile.page-size-default-out-of-bounds` | checks |
+| `adapter.profile.read-only-method` | `readOnly: true` on a PUT operation | `adapter.profile.read-only-method` | checks |
 | `adapter.profile.response-envelope-missing-result-slot` | Response envelope names neither `record` nor `records` | `adapter.profile.response-envelope-missing-result-slot` | checks |
 | `adapter.profile.request-envelope-missing-record-slot` | A write operation's request envelope names no `record` slot | `adapter.profile.request-envelope-missing-record-slot` | checks |
 | `adapter.profile.problem-envelope-missing-code-slot` | Problem envelope names no `problemCode` slot | `adapter.profile.problem-envelope-missing-code-slot` | checks |

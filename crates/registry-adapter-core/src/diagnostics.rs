@@ -49,10 +49,12 @@ pub enum CheckCode {
     PackUnknownTemplateParameter,
     // adapter.profile.*
     ProfileInvalidPath,
+    ProfilePageSizeDefaultOutOfBounds,
     ProfileProblemClassDuplicate,
     ProfileProblemClassUnresolved,
     ProfileProblemEnvelopeMissingCodeSlot,
     ProfileProblemEnvelopeUncompilable,
+    ProfileReadOnlyMethod,
     ProfileRecordIdParameterMissing,
     ProfileRequestEnvelopeMissingRecordSlot,
     ProfileResponseEnvelopeMissingResultSlot,
@@ -154,10 +156,12 @@ impl CheckCode {
         Self::PackUnknownScript,
         Self::PackUnknownTemplateParameter,
         Self::ProfileInvalidPath,
+        Self::ProfilePageSizeDefaultOutOfBounds,
         Self::ProfileProblemClassDuplicate,
         Self::ProfileProblemClassUnresolved,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileProblemEnvelopeUncompilable,
+        Self::ProfileReadOnlyMethod,
         Self::ProfileRecordIdParameterMissing,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
         Self::ProfileResponseEnvelopeMissingResultSlot,
@@ -256,6 +260,9 @@ impl CheckCode {
             Self::PackUnknownScript => "adapter.pack.unknown-script",
             Self::PackUnknownTemplateParameter => "adapter.pack.unknown-template-parameter",
             Self::ProfileInvalidPath => "adapter.profile.invalid-path",
+            Self::ProfilePageSizeDefaultOutOfBounds => {
+                "adapter.profile.page-size-default-out-of-bounds"
+            }
             Self::ProfileProblemClassDuplicate => "adapter.profile.problem-class-duplicate",
             Self::ProfileProblemClassUnresolved => "adapter.profile.problem-class-unresolved",
             Self::ProfileProblemEnvelopeMissingCodeSlot => {
@@ -264,6 +271,7 @@ impl CheckCode {
             Self::ProfileProblemEnvelopeUncompilable => {
                 "adapter.profile.problem-envelope-uncompilable"
             }
+            Self::ProfileReadOnlyMethod => "adapter.profile.read-only-method",
             Self::ProfileRecordIdParameterMissing => "adapter.profile.record-id-parameter-missing",
             Self::ProfileRequestEnvelopeMissingRecordSlot => {
                 "adapter.profile.request-envelope-missing-record-slot"
@@ -360,10 +368,12 @@ impl CheckCode {
             | Self::RuntimeUnknownTrustProfile => crate::naming::ADAPTER_RUNTIME_KIND,
             Self::EnvelopeInvalidPlaceholder
             | Self::ProfileInvalidPath
+            | Self::ProfilePageSizeDefaultOutOfBounds
             | Self::ProfileProblemClassDuplicate
             | Self::ProfileProblemClassUnresolved
             | Self::ProfileProblemEnvelopeMissingCodeSlot
             | Self::ProfileProblemEnvelopeUncompilable
+            | Self::ProfileReadOnlyMethod
             | Self::ProfileRecordIdParameterMissing
             | Self::ProfileRequestEnvelopeMissingRecordSlot
             | Self::ProfileResponseEnvelopeMissingResultSlot

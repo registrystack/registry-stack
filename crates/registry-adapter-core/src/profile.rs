@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 /// (`products/adapter/CONCEPT.md` section 7). A slot outside this set is
 /// refused by the authoring checks.
 pub const ENVELOPE_SLOTS: &[&str] = &[
+    "cursor",
+    "filters",
     "nextCursor",
     "problemCode",
     "problemDetail",
@@ -24,10 +26,16 @@ pub const ENVELOPE_SLOTS: &[&str] = &[
     "record",
     "recordId",
     "recordType",
+    "pageSize",
     "records",
     "requestId",
     "status",
 ];
+
+/// The slots only a read operation's request envelope fills, from the
+/// caller's JSON body; every response, item, and problem envelope refuses
+/// them.
+pub const READ_REQUEST_SLOTS: &[&str] = &["cursor", "filters", "pageSize", "recordId"];
 
 /// The slot holding one validated route result.
 pub const SLOT_RECORD: &str = "record";
@@ -102,6 +110,17 @@ pub struct ProfileOperation {
     /// operation's request envelope must name the `record` slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_envelope: Option<EnvelopeTemplate>,
+    /// Whether a POST operation only reads: it is served like a read
+    /// (never the write path), its request envelope is a closed template
+    /// over the caller's JSON body, and its route reaches only safe sends.
+    /// A GET operation is a read without declaring it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_only: bool,
+    /// The largest request body, in bytes, a read operation with a body
+    /// accepts; a larger one answers `facade.payload-too-large`. Sixteen
+    /// kibibytes when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_maximum_bytes: Option<BoundedU64<1, 1_048_576>>,
     /// The response envelope; must name its result slot.
     pub response_envelope: EnvelopeTemplate,
     /// The per-record template: when declared, every record the response
@@ -115,6 +134,15 @@ pub struct ProfileOperation {
     /// The pagination parameters of a search operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pagination: Option<PaginationParameters>,
+}
+
+impl ProfileOperation {
+    /// Whether the operation only reads: a GET, or a POST declaring
+    /// `readOnly`.
+    #[must_use]
+    pub fn is_read(&self) -> bool {
+        self.method.is_safe() || self.read_only
+    }
 }
 
 impl registry_platform_yaml::Identified for ProfileOperation {
@@ -139,6 +167,12 @@ pub struct PaginationParameters {
     pub page_size_minimum: BoundedU64<1, 10_000>,
     /// The largest page size a caller may ask for.
     pub page_size_maximum: BoundedU64<1, 100_000>,
+    /// The page size a call that names none gets; within the bounds. A
+    /// cursor carries the page size of the call that minted it: a later
+    /// call may omit the size, and one that names a different size is
+    /// refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_size_default: Option<BoundedU64<1, 100_000>>,
 }
 
 /// One parameterized part: a part of the profile a deployment declares at
@@ -214,6 +248,10 @@ fn path_parameters_empty(parameters: &UniqueList<LocalId>) -> bool {
 }
 
 /// The success status an operation that declares none answers with.
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn default_success_status() -> registry_platform_yaml::BoundedU32<200, 299> {
     registry_platform_yaml::BoundedU32::new(200).expect("the default status is in range")
 }
@@ -235,6 +273,8 @@ mod tests {
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }
     }
@@ -474,13 +514,16 @@ mod tests {
             "problemTitle",
             "problemDetail",
             "status",
+            "filters",
+            "pageSize",
+            "cursor",
         ] {
             assert!(
                 ENVELOPE_SLOTS.contains(&slot),
                 "{slot} must stay in the closed vocabulary"
             );
         }
-        assert_eq!(ENVELOPE_SLOTS.len(), 10);
+        assert_eq!(ENVELOPE_SLOTS.len(), 13);
     }
 
     /// Envelope templates answer slot-mention queries in both placeholder
@@ -506,6 +549,7 @@ mod tests {
             page_size_parameter: ExternalId::new("limit").expect("name"),
             page_size_minimum: BoundedU64::<1, 10_000>::new(1).expect("min"),
             page_size_maximum: BoundedU64::<1, 100_000>::new(500).expect("max"),
+            page_size_default: None,
         };
         let json = serde_json::to_string(&pagination).expect("serialize");
         assert!(json.contains("cursorParameter"));

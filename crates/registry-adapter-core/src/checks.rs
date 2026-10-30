@@ -13,8 +13,8 @@ use crate::fixture::{AdapterFixture, Intercept};
 use crate::model::{Expression, HttpMethod, SendComponent};
 use crate::pack::{AdapterPack, GraphQlOperationKind};
 use crate::profile::{
-    AdapterProfile, EnvelopeTemplate, ProfileOperation, SLOT_PROBLEM_CODE, SLOT_RECORD,
-    SLOT_RECORDS,
+    AdapterProfile, EnvelopeTemplate, ProfileOperation, READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE,
+    SLOT_RECORD, SLOT_RECORDS,
 };
 use crate::project::AdapterProject;
 use crate::route::{Step, TemplateParameterType};
@@ -365,8 +365,32 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
                 "Place the record or records slot where the route result lands.",
             ));
         }
-        if !operation.method.is_safe() {
+        if operation.read_only && !matches!(operation.method, HttpMethod::Get | HttpMethod::Post) {
+            findings.push(finding(
+                CheckCode::ProfileReadOnlyMethod,
+                &format!("{prefix}/readOnly"),
+                "readOnly names a method other than GET or POST",
+                "Declare readOnly only on a GET or POST operation; a read over POST carries its request in a body.",
+            ));
+        }
+        if operation.is_read() {
+            findings.extend(read_request_checks(&prefix, operation));
+        } else {
             findings.extend(request_envelope_checks(&prefix, operation));
+        }
+        if let Some(pagination) = &operation.pagination {
+            if let Some(default) = pagination.page_size_default {
+                if !(pagination.page_size_minimum.get()..=pagination.page_size_maximum.get())
+                    .contains(&default.get())
+                {
+                    findings.push(finding(
+                        CheckCode::ProfilePageSizeDefaultOutOfBounds,
+                        &format!("{prefix}/pagination/pageSizeDefault"),
+                        "the default page size lies outside the declared bounds",
+                        "Declare a pageSizeDefault between pageSizeMinimum and pageSizeMaximum.",
+                    ));
+                }
+            }
         }
     }
     findings.extend(envelope_checks(
@@ -875,6 +899,43 @@ fn request_envelope_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Di
     findings
 }
 
+/// The request envelope of a read operation: a closed template over the
+/// caller's JSON body whose slots are the request slots. A GET declares
+/// none, and a read over POST declares one.
+fn read_request_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Diagnostic> {
+    let Some(request_envelope) = &operation.request_envelope else {
+        return Vec::new();
+    };
+    let path = format!("{prefix}/requestEnvelope");
+    let mut findings = Vec::new();
+    if has_malformed_envelope_placeholder(request_envelope.text()) {
+        findings.push(finding(
+            CheckCode::EnvelopeInvalidPlaceholder,
+            &path,
+            "the envelope carries a malformed placeholder",
+            "Write placeholders as {{name}}, {{?name}}, or {{??name}}.",
+        ));
+    }
+    for (name, _) in envelope_placeholders(request_envelope.text()) {
+        if !READ_REQUEST_SLOTS.contains(&name.as_str()) {
+            findings.push(finding(
+                CheckCode::ProfileUnknownSlot,
+                &path,
+                "the request envelope of a read names a slot the caller's body does not fill",
+                "Use cursor, filters, pageSize, or recordId in a read's request envelope.",
+            ));
+        } else if matches!(name.as_str(), "cursor" | "pageSize") && operation.pagination.is_none() {
+            findings.push(finding(
+                CheckCode::ProfileUnknownSlot,
+                &path,
+                "the request envelope names a pagination slot on an operation with no pagination",
+                "Declare pagination on the operation, or drop the slot.",
+            ));
+        }
+    }
+    findings
+}
+
 /// The slots a per-record template may name.
 pub const ITEM_ENVELOPE_SLOTS: &[&str] = &["record", "recordId", "recordType", "requestId"];
 
@@ -920,6 +981,13 @@ fn envelope_checks(path: &str, envelope: &EnvelopeTemplate) -> Vec<Diagnostic> {
                 path,
                 "the envelope names a slot outside the closed vocabulary",
                 "Use a slot of the closed vocabulary in CONCEPT.md section 7.",
+            ));
+        } else if matches!(name.as_str(), "cursor" | "filters" | "pageSize") {
+            findings.push(finding(
+                CheckCode::ProfileUnknownSlot,
+                path,
+                "the envelope names a slot only a read's request body fills",
+                "Use cursor, filters, and pageSize only in a read operation's request envelope.",
             ));
         }
     }
@@ -3241,7 +3309,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 .get(binding.route.as_str())
                 .map(String::as_str)
                 .unwrap_or_default();
-            if !operation.method.is_safe() {
+            if !operation.is_read() {
                 findings.extend(write_route_checks(
                     &prefix,
                     body_prefix,
@@ -4367,6 +4435,8 @@ mod tests {
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }
     }
@@ -4651,6 +4721,8 @@ mod tests {
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{{mysterySlot}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         assert_has(&check_profile(&profile), CheckCode::ProfileUnknownSlot);
@@ -4727,6 +4799,8 @@ mod tests {
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"empty": true}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         assert_has(
@@ -4977,6 +5051,8 @@ mod tests {
             request_envelope: Some(EnvelopeTemplate(r#"{{records}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         assert_has(
@@ -4994,6 +5070,8 @@ mod tests {
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         assert_clean(check_profile(&good));
@@ -5041,14 +5119,97 @@ mod tests {
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: Some(PaginationParameters {
                 cursor_parameter: id("cursor"),
                 page_size_parameter: id("limit"),
                 page_size_minimum: BoundedU64::<1, 10_000>::new(1).expect("min"),
                 page_size_maximum: BoundedU64::<1, 100_000>::new(500).expect("max"),
+                page_size_default: None,
             }),
         }]);
         assert_clean(check_profile(&profile));
+    }
+
+    fn read_over_post() -> ProfileOperation {
+        let mut op = operation("records-lookup", HttpMethod::Post);
+        op.read_only = true;
+        op.request_envelope = Some(EnvelopeTemplate(
+            r#"{"selector": "byId", "values": {"id": "{{recordId}}"}}"#.to_string(),
+        ));
+        op.response_envelope = EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string());
+        op
+    }
+
+    fn paginated(default: u64) -> PaginationParameters {
+        PaginationParameters {
+            cursor_parameter: id("cursor"),
+            page_size_parameter: id("limit"),
+            page_size_minimum: BoundedU64::<1, 10_000>::new(5).expect("min"),
+            page_size_maximum: BoundedU64::<1, 100_000>::new(50).expect("max"),
+            page_size_default: Some(BoundedU64::<1, 100_000>::new(default).expect("default")),
+        }
+    }
+
+    #[test]
+    fn a_read_over_post_declares_a_closed_request_template() {
+        assert_clean(check_profile(&profile_builder(vec![read_over_post()])));
+        let mut unknown = read_over_post();
+        unknown.request_envelope = Some(EnvelopeTemplate(r#"{"x": {{record}}}"#.to_string()));
+        assert_has(
+            &check_profile(&profile_builder(vec![unknown])),
+            CheckCode::ProfileUnknownSlot,
+        );
+        let mut pagination_slot = read_over_post();
+        pagination_slot.request_envelope =
+            Some(EnvelopeTemplate(r#"{"n": {{?pageSize}}}"#.to_string()));
+        assert_has(
+            &check_profile(&profile_builder(vec![pagination_slot])),
+            CheckCode::ProfileUnknownSlot,
+        );
+        let mut malformed = read_over_post();
+        malformed.request_envelope = Some(EnvelopeTemplate(r#"{"n": {{???x}}}"#.to_string()));
+        assert_has(
+            &check_profile(&profile_builder(vec![malformed])),
+            CheckCode::EnvelopeInvalidPlaceholder,
+        );
+    }
+
+    #[test]
+    fn read_only_is_refused_on_a_method_that_is_neither_get_nor_post() {
+        let mut put = operation("records-put", HttpMethod::Put);
+        put.read_only = true;
+        assert_has(
+            &check_profile(&profile_builder(vec![put])),
+            CheckCode::ProfileReadOnlyMethod,
+        );
+    }
+
+    #[test]
+    fn a_request_only_slot_in_a_response_envelope_is_refused() {
+        let mut op = operation("records-find", HttpMethod::Get);
+        op.response_envelope =
+            EnvelopeTemplate(r#"{"cases": {{records}}, "f": {{filters}}}"#.to_string());
+        assert_has(
+            &check_profile(&profile_builder(vec![op])),
+            CheckCode::ProfileUnknownSlot,
+        );
+    }
+
+    #[test]
+    fn a_default_page_size_lies_within_the_declared_bounds() {
+        let mut inside = operation("records-find", HttpMethod::Get);
+        inside.pagination = Some(paginated(20));
+        assert_clean(check_profile(&profile_builder(vec![inside])));
+        for out in [4, 51] {
+            let mut op = operation("records-find", HttpMethod::Get);
+            op.pagination = Some(paginated(out));
+            assert_has(
+                &check_profile(&profile_builder(vec![op])),
+                CheckCode::ProfilePageSizeDefaultOutOfBounds,
+            );
+        }
     }
 
     /// The record-type parameter names a declared path parameter
@@ -5099,6 +5260,7 @@ mod tests {
             page_size_parameter: id("limit"),
             page_size_minimum: BoundedU64::<1, 10_000>::new(1).expect("min"),
             page_size_maximum: BoundedU64::<1, 100_000>::new(500).expect("max"),
+            page_size_default: None,
         });
         assert_clean(check_profile(&profile_builder(vec![search])));
 
@@ -6000,6 +6162,8 @@ mod tests {
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         let writer = RouteDefinition {
@@ -6141,6 +6305,8 @@ mod tests {
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         let pack = pack_builder(
@@ -7480,6 +7646,7 @@ mod tests {
             page_size_parameter: id("limit"),
             page_size_minimum: BoundedU64::<1, 10_000>::new(1).expect("minimum"),
             page_size_maximum: BoundedU64::<1, 100_000>::new(100).expect("maximum"),
+            page_size_default: None,
         });
         let profile = profile_builder(vec![search]);
         let route = RouteDefinition {
@@ -7785,6 +7952,8 @@ mod tests {
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         let bare = RouteDefinition {
@@ -8248,6 +8417,8 @@ mod tests {
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
+            read_only: false,
+            request_maximum_bytes: None,
             pagination: None,
         }]);
         let bare = RouteDefinition {

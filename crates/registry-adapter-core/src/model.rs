@@ -312,8 +312,11 @@ pub enum ErrorClass {
     FacadeUnauthenticated,
     FacadeForbidden,
     FacadeInvalidRequest,
+    FacadeInvalidField,
+    FacadeInvalidCursor,
     FacadeNotFound,
     FacadeMethodNotAllowed,
+    FacadePayloadTooLarge,
     FacadeUnsupportedMediaType,
     FacadeNotAcceptable,
     FacadeConflict,
@@ -351,10 +354,13 @@ impl ErrorClass {
         Self::FacadeConflict,
         Self::FacadeForbidden,
         Self::FacadeIdempotencyMismatch,
+        Self::FacadeInvalidCursor,
+        Self::FacadeInvalidField,
         Self::FacadeInvalidRequest,
         Self::FacadeMethodNotAllowed,
         Self::FacadeNotAcceptable,
         Self::FacadeNotFound,
+        Self::FacadePayloadTooLarge,
         Self::FacadeUnauthenticated,
         Self::FacadeUnsupportedMediaType,
     ];
@@ -390,6 +396,9 @@ impl ErrorClass {
             Self::FacadeUnauthenticated => "facade.unauthenticated",
             Self::FacadeForbidden => "facade.forbidden",
             Self::FacadeInvalidRequest => "facade.invalid-request",
+            Self::FacadeInvalidField => "facade.invalid-field",
+            Self::FacadeInvalidCursor => "facade.invalid-cursor",
+            Self::FacadePayloadTooLarge => "facade.payload-too-large",
             Self::FacadeNotFound => "facade.not-found",
             Self::FacadeMethodNotAllowed => "facade.method-not-allowed",
             Self::FacadeUnsupportedMediaType => "facade.unsupported-media-type",
@@ -436,6 +445,9 @@ impl ErrorClass {
                 | Self::FacadeUnauthenticated
                 | Self::FacadeForbidden
                 | Self::FacadeInvalidRequest
+                | Self::FacadeInvalidField
+                | Self::FacadeInvalidCursor
+                | Self::FacadePayloadTooLarge
                 | Self::FacadeNotFound
                 | Self::FacadeMethodNotAllowed
                 | Self::FacadeUnsupportedMediaType
@@ -948,6 +960,9 @@ mod tests {
             "facade.unauthenticated",
             "facade.forbidden",
             "facade.invalid-request",
+            "facade.invalid-field",
+            "facade.invalid-cursor",
+            "facade.payload-too-large",
             "facade.not-found",
             "facade.method-not-allowed",
             "facade.unsupported-media-type",
@@ -979,8 +994,8 @@ mod tests {
             .filter(|class| class.is_facade())
             .count();
         assert_eq!(
-            facade_count, 10,
-            "the facade branch carries the root and nine leaves"
+            facade_count, 13,
+            "the facade branch carries the root and twelve leaves"
         );
     }
 

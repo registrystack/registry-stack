@@ -31,10 +31,13 @@
         "facade.conflict",
         "facade.forbidden",
         "facade.idempotency-mismatch",
+        "facade.invalid-cursor",
+        "facade.invalid-field",
         "facade.invalid-request",
         "facade.method-not-allowed",
         "facade.not-acceptable",
         "facade.not-found",
+        "facade.payload-too-large",
         "facade.unauthenticated",
         "facade.unsupported-media-type"
       ],
