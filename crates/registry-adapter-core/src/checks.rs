@@ -20,7 +20,7 @@ use crate::route::{Step, TemplateParameterType};
 use crate::runtime::AdapterRuntimeConfig;
 use registry_platform_httputil::destination::{
     is_script_visible_response_header_name, is_script_writable_request_header_name,
-    MAX_DESTINATION_REQUEST_HEADERS,
+    MAX_DESTINATION_OPERATION_TIMEOUT, MAX_DESTINATION_REQUEST_HEADERS,
 };
 use registry_platform_yaml::{Diagnostic, Digest, ExternalId, UniqueList};
 use std::collections::{HashMap, HashSet};
@@ -28,6 +28,16 @@ use std::collections::{HashMap, HashSet};
 /// The deepest `direct:` call chain the graph may form
 /// (`products/adapter/CONCEPT.md` section 8.3).
 pub const MAX_DIRECT_DEPTH: usize = 16;
+
+/// The longest one outbound attempt may take, in milliseconds: the
+/// destination substrate's whole-operation ceiling that an endpoint's
+/// `attemptTimeoutMilliseconds` may not exceed
+/// (`products/adapter/CONCEPT.md` section 8.8), the same bound
+/// Messaging's provider sends carry.
+pub const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
+const _: () = assert!(
+    MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS == MAX_DESTINATION_OPERATION_TIMEOUT.as_millis() as u64
+);
 
 /// The headers the rest consumer places on the exchange before a route
 /// runs; a route reads them, never writes them
