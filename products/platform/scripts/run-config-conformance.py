@@ -46,6 +46,10 @@ A case file (`cases/<id>.yaml`) has these members:
                 duplicateItem: {role}     the first item of the list at the
                                           `idList` or `set` pointer, copied
                                           after its last item
+                duplicateSetItems: {}    one run per non-empty list of the
+                                          example its schema declares a set
+                                          (uniqueItems), the list's first
+                                          item copied after its last
                 separatorCollision: {role}
                                           a local-ID definition with a `-`
                                           or `_`, copied after the list with
@@ -205,6 +209,7 @@ OPERATIONS = (
     "retiredApiVersion",
     "spelling",
     "duplicateItem",
+    "duplicateSetItems",
     "separatorCollision",
     "pathOutside",
     "boundaries",
@@ -222,6 +227,7 @@ DEFAULT_FROM = {
     "spelling": "key",
     "retiredApiVersion": "apiVersion",
     "duplicateItem": "item",
+    "duplicateSetItems": "item",
     "separatorCollision": "itemId",
     "pathOutside": "value",
     "boundaries": "value",
@@ -755,6 +761,13 @@ def mutate_duplicate_item(
         raise missing_pointer(fmt, role, pointer)
     if not isinstance(node, yaml.SequenceNode) or not node.value:
         raise HarnessError(f"{fmt.id}: the {role} member at {pointer} is not a list with an item")
+    return [duplicate_item_at(text, pointer, fmt, item_index)]
+
+
+def duplicate_item_at(text: str, pointer: str, fmt: Format, item_index: int = 0) -> Variant:
+    """The text with one item of the list at a pointer copied after the
+    list's last item, anchored at the copy and the item it repeats."""
+    _, node = find(compose(text), pointer)
     first, count = node.value[item_index], len(node.value)
     if node.flow_style:
         source = text[first.start_mark.index : first.end_mark.index]
@@ -776,7 +789,24 @@ def mutate_duplicate_item(
         _, identifier = child(item, "id")
         if identifier is not None:
             anchors[name] = mark(identifier.start_mark)
-    return [Variant(text, [Site(anchors, dict(site_values(pointer), index=str(count), firstIndex=str(item_index)))])]
+    return Variant(text, [Site(anchors, dict(site_values(pointer), index=str(count), firstIndex=str(item_index)))])
+
+
+def mutate_duplicate_set_items(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
+    """One variant per non-empty list of the example the format's schema
+    declares a set (CFG-ID-6), each with its first item copied after the
+    list's last item."""
+    if not fmt.schema:
+        raise NotApplicable("the format registers no schema to read set types from")
+    schema = load_schema(fmt.schema)
+    variants = []
+    for pointer, _node in sequence_nodes(compose(text)):
+        if not schema_declares_unique_set(schema, pointer):
+            continue
+        variants.append(duplicate_item_at(text, pointer, fmt))
+    if not variants:
+        raise NotApplicable("the example has no non-empty list its schema declares a set")
+    return variants
 
 
 def mutate_separator_collision(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
@@ -933,6 +963,22 @@ def integer_scalars(node: yaml.Node | None, pointer: str = "") -> list[tuple[str
     return found
 
 
+def sequence_nodes(node: yaml.Node | None, pointer: str = "") -> list[tuple[str, yaml.SequenceNode]]:
+    """Each non-empty list of a composed document, in document order, with
+    its pointer: the list itself first, then its items' own lists."""
+    found = []
+    if isinstance(node, yaml.MappingNode):
+        for key, value in node.value:
+            if isinstance(key, yaml.ScalarNode):
+                found += sequence_nodes(value, f"{pointer}/{key.value.replace('~', '~0').replace('/', '~1')}")
+    elif isinstance(node, yaml.SequenceNode):
+        if node.value:
+            found.append((pointer, node))
+        for index, value in enumerate(node.value):
+            found += sequence_nodes(value, f"{pointer}/{index}")
+    return found
+
+
 def mutate_boundaries(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
     if not fmt.schema:
         raise NotApplicable("the format registers no schema to read bounds from")
@@ -951,6 +997,18 @@ def mutate_boundaries(text: str, spec: dict[str, Any], fmt: Format) -> list[Vari
     if not variants:
         raise NotApplicable("the example has no integer member its schema bounds on both sides")
     return variants
+
+
+def schema_declares_unique_set(schema: Any, pointer: str) -> bool:
+    """Whether the schema declares the list at a document pointer a set."""
+    lint = lint_module()
+    candidates = lint.resolve_member(schema, pointer)
+    if not candidates:
+        return False
+    return any(
+        isinstance(node, dict) and node.get("uniqueItems") is True and "array" in lint.types_of(node)
+        for node, _ in candidates
+    )
 
 
 def mappings(node: yaml.Node | None, pointer: str = "") -> list[str]:
@@ -1114,6 +1172,7 @@ def mutate(text: str, mutation: dict[str, Any] | None, fmt: Format) -> list[Vari
         "retiredApiVersion": mutate_retired,
         "spelling": mutate_spelling,
         "duplicateItem": mutate_duplicate_item,
+        "duplicateSetItems": mutate_duplicate_set_items,
         "separatorCollision": mutate_separator_collision,
         "pathOutside": mutate_path_outside,
         "boundaries": mutate_boundaries,

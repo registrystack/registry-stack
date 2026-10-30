@@ -465,6 +465,84 @@ class MutationTest(unittest.TestCase):
             with self.assertRaises(runner.NotApplicable):
                 runner.mutate("b: 3\n", {"boundaries": {}}, fmt)
 
+    def test_cfg_id_6_sweep_duplicates_each_schema_set_first_item(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "set": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                "plain": {"type": "array", "items": {"type": "string"}},
+                "empty": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                "flow": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tags": {"type": "array", "uniqueItems": True, "items": {"type": "string"}}
+                        },
+                    },
+                },
+            },
+        }
+        text = (
+            "set:\n  - alpha\n  - beta\nplain:\n  - alpha\nempty: []\n"
+            "flow: [x, y]\nitems:\n  - tags:\n      - x\n      - y\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            variants = runner.mutate(text, {"duplicateSetItems": {}}, fmt)
+        self.assertEqual(
+            [variant.text for variant in variants],
+            [
+                "set:\n  - alpha\n  - beta\n  - alpha\nplain:\n  - alpha\nempty: []\n"
+                "flow: [x, y]\nitems:\n  - tags:\n      - x\n      - y\n",
+                "set:\n  - alpha\n  - beta\nplain:\n  - alpha\nempty: []\n"
+                "flow: [x, y, x]\nitems:\n  - tags:\n      - x\n      - y\n",
+                "set:\n  - alpha\n  - beta\nplain:\n  - alpha\nempty: []\n"
+                "flow: [x, y]\nitems:\n  - tags:\n      - x\n      - y\n      - x\n",
+            ],
+        )
+        self.assertEqual([variant.sites[0].values["pointer"] for variant in variants], ["/set", "/flow", "/items/0/tags"])
+        self.assertEqual([variant.sites[0].values["index"] for variant in variants], ["2", "2", "2"])
+        self.assertEqual([variant.sites[0].values["firstIndex"] for variant in variants], ["0", "0", "0"])
+        self.assertEqual(variants[0].sites[0].anchors["item"], (4, 5))
+        self.assertEqual(variants[0].sites[0].anchors["first"], (2, 5))
+
+    def test_cfg_id_6_sweep_copies_a_multi_line_item_whole(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "scripts": {
+                    "type": "array",
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}, "digest": {"type": "string"}},
+                    },
+                }
+            },
+        }
+        text = "scripts:\n  - path: a\n    digest: d1\n  - path: b\n    digest: d2\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            variants = runner.mutate(text, {"duplicateSetItems": {}}, fmt)
+        self.assertEqual(
+            [variant.text for variant in variants],
+            ["scripts:\n  - path: a\n    digest: d1\n  - path: b\n    digest: d2\n  - path: a\n    digest: d1\n"],
+        )
+        self.assertEqual(variants[0].sites[0].values["pointer"], "/scripts")
+        self.assertEqual(variants[0].sites[0].anchors["item"], (6, 5))
+        self.assertEqual(variants[0].sites[0].anchors["first"], (2, 5))
+
+    def test_duplicate_set_items_without_a_set_or_a_schema_do_not_apply(self) -> None:
+        with self.assertRaises(runner.NotApplicable):
+            runner.mutate(EXAMPLE, {"duplicateSetItems": {}}, demo_format())
+        schema = {"type": "object", "properties": {"plain": {"type": "array", "items": {"type": "string"}}}}
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            with self.assertRaises(runner.NotApplicable):
+                runner.mutate("plain:\n  - a\n  - b\n", {"duplicateSetItems": {}}, fmt)
+
     UNKNOWN_KEY = {"unknownKey": {"key": "conformanceUnknown", "value": '"{marker}"'}}
     CLOSED = {
         "type": "object",
