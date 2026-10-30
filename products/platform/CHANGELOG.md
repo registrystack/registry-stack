@@ -13,6 +13,12 @@
   `require_trusted_runtime_path()`, which refuse an unsafe file with
   `platform.runtime-config.unsafe-file`.
 
+- `registry-platform-httputil` adds
+  `CredentialDestinationRequestTemplate::oauth2_client_credentials_form_basic`,
+  the client-credentials shape that carries the client credential as one
+  Basic authorization value beside the url-encoded grant body. The JSON
+  format stays authorization-free and a Bearer value is refused on the slot.
+
 ## 0.44.0 - 2026-10-27
 
 - Upgrade the P-256 dependency stack to use `crypto-bigint` 0.7.6, addressing

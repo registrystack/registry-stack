@@ -2341,9 +2341,9 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
     /// may carry.
     ///
     /// The closed slot admits no authorization, as reviewed, or one Basic
-    /// value riding the url-encoded form format: the Basic credential
-    /// travels in the header while the client secret stays in the body.
-    /// The JSON format stays authorization-free, and Bearer is refused on
+    /// value riding the url-encoded form format: the Basic value carries
+    /// the client credential, and the body carries the grant. The JSON
+    /// format stays authorization-free, and Bearer is refused on
     /// the slot outright, so an access token can never be presented to a
     /// token endpoint as a client credential.
     fn oauth2_credential_authorization_admissible(
@@ -6614,8 +6614,11 @@ mod tests {
     #[tokio::test]
     async fn a_form_basic_credential_template_delivers_the_exact_header_and_body() {
         const BASIC_VALUE: &[u8] = b"dXNlcjpwYXNz";
-        const FORM_BODY: &[u8] =
-            b"grant_type=client_credentials&client_id=doctor&client_secret=secret";
+        // The body carries the grant only: the client credential rides
+        // the Basic value (RFC 6749 section 2.3.1). The platform does
+        // not parse the body and enforces nothing about it; this is the
+        // shape the adapter's auth layer renders.
+        const FORM_BODY: &[u8] = b"grant_type=client_credentials";
         let captured_authorization = Arc::new(Mutex::new(None));
         let captured_body = Arc::new(Mutex::new(None));
         let route_authorization = Arc::clone(&captured_authorization);
