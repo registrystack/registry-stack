@@ -11,10 +11,11 @@
 //! the contract review.
 
 use registry_adapter_core::{
-    derive_operation_result_schema, derive_problem_envelope_schema, AdapterProfile, AdapterProject,
-    Binding, HttpMethod, ParameterizedPart, Problem, ProfileOperation, RecordField,
+    derive_binding_result_schema, derive_operation_request_schema, derive_problem_envelope_schema,
+    AdapterProfile, AdapterProject, Binding, HttpMethod, ParameterizedPart, Problem,
+    ProfileOperation, RecordField,
 };
-use registry_platform_yaml::{Diagnostic, UniqueIdList};
+use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Map, Value};
 
 /// The OpenAPI version every compiled contract declares.
@@ -71,7 +72,7 @@ pub(crate) fn assemble(
             ));
             continue;
         }
-        let mut response = match derived_envelope_schema(profile, project, binding, false) {
+        let mut response = match derive_binding_result_schema(profile, project, binding) {
             Ok(schema) => schema,
             Err(reason) => {
                 findings.push(derivation_refusal(binding, &reason));
@@ -79,6 +80,11 @@ pub(crate) fn assemble(
             }
         };
         unpin_parameterized_parts(&mut response, &parts);
+        let fields: &[RecordField] = &project
+            .record_types
+            .get(record_type)
+            .expect("the derivation resolved the binding's record type")
+            .fields;
         let mut members = Map::new();
         members.insert(
             "operationId".to_owned(),
@@ -86,10 +92,15 @@ pub(crate) fn assemble(
         );
         members.insert(
             "parameters".to_owned(),
-            Value::Array(operation_parameters(operation, substituted)),
+            Value::Array(operation_parameters(
+                operation,
+                binding,
+                fields,
+                substituted,
+            )),
         );
         if operation.request_envelope.is_some() {
-            match derived_envelope_schema(profile, project, binding, true) {
+            match derive_operation_request_schema(profile, project, binding) {
                 Ok(mut request) => {
                     unpin_parameterized_parts(&mut request, &parts);
                     members.insert(
@@ -157,33 +168,49 @@ pub(crate) fn assemble(
 /// The document's bytes: pretty JSON with sorted keys and a trailing
 /// newline, so the file's diff is the contract review.
 pub(crate) fn render(document: &Value) -> String {
-    let mut rendered = serde_json::to_string_pretty(document).expect("a Value serializes");
+    let mut rendered =
+        serde_json::to_string_pretty(&sorted_keys(document)).expect("a Value serializes");
     rendered.push('\n');
     rendered
 }
 
-/// The path parameter the bound record type substitutes into.
-///
-/// Stand-in rule for increment 1: the profile format does not yet name the
-/// record-type parameter explicitly (`recordTypeParameter` on every
-/// operation, a ruled format change for X1/X2), so the operation's first
-/// declared path parameter stands in. Only behavior that survives the
-/// format change is tested: one declared parameter is chosen, the concrete
-/// path carries the record type in its place, and the remaining declared
-/// parameters stay templated. An operation that declares no path parameter
-/// is not keyed by record type; its path compiles unchanged.
-fn record_type_parameter(operation: &ProfileOperation) -> Option<&str> {
-    operation.path_parameters.first().map(|name| name.as_str())
+/// Recursively sort an object's members by key, so the rendered bytes are
+/// the same whatever iteration order the in-memory maps carry: a build
+/// with `serde_json/preserve_order` enabled anywhere in its graph inserts
+/// members in construction order, while the default stores them sorted.
+/// Arrays keep their order; only member names sort.
+fn sorted_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(members) => {
+            let mut sorted: Vec<(String, Value)> = members
+                .iter()
+                .map(|(key, member)| (key.clone(), sorted_keys(member)))
+                .collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(sorted.into_iter().collect())
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted_keys).collect()),
+        scalar => scalar.clone(),
+    }
 }
 
-/// The success status the compiled contract answers with.
-///
-/// Stand-in rule for increment 1: the profile format does not yet declare a
-/// per-operation `successStatus` (a ruled format change for X1/X2;
-/// breg-records create will declare 201 for BReg parity), so every
-/// operation answers 200 until the field lands.
-fn success_status(_operation: &ProfileOperation) -> u16 {
-    200
+/// The path parameter the bound record type substitutes into: the
+/// operation's declared `recordTypeParameter`, which the profile checks
+/// require to be one of its `pathParameters`. The concrete path carries the
+/// record type in that parameter's place and the remaining declared
+/// parameters stay templated.
+fn record_type_parameter(operation: &ProfileOperation) -> Option<&str> {
+    operation
+        .path_parameters
+        .iter()
+        .find(|name| name.as_str() == operation.record_type_parameter.as_str())
+        .map(|name| name.as_str())
+}
+
+/// The success status the compiled contract answers with: the operation's
+/// declared `successStatus`, two hundreds only (CFG-QTY-4).
+fn success_status(operation: &ProfileOperation) -> u32 {
+    operation.success_status.get()
 }
 
 /// The OpenAPI method name of a facade method.
@@ -220,12 +247,16 @@ fn concrete_path(path: &str, parameter: Option<&str>, record_type: &str) -> Stri
 }
 
 /// The operation's OpenAPI parameters: the remaining declared path
-/// parameters in their declared order, then the query parameters sorted by
+/// parameters in their declared order, then the query parameters — the
+/// binding's declared filters beside the profile's pagination — sorted by
 /// name. The record-type parameter is substituted into the path, so it
-/// emits no parameter. No filter parameters are emitted in increment 1:
-/// a search binding's filter fields are a project format field that has
-/// not landed yet, so the contract offers none rather than invent them.
-fn operation_parameters(operation: &ProfileOperation, substituted: Option<&str>) -> Vec<Value> {
+/// emits no parameter.
+fn operation_parameters(
+    operation: &ProfileOperation,
+    binding: &Binding,
+    fields: &[RecordField],
+    substituted: Option<&str>,
+) -> Vec<Value> {
     let mut parameters = Vec::new();
     for name in operation.path_parameters.iter() {
         if Some(name.as_str()) == substituted {
@@ -257,22 +288,23 @@ fn operation_parameters(operation: &ProfileOperation, substituted: Option<&str>)
             },
         }));
     }
+    // A declared filter names a declared field (the project checks require
+    // it), so the field's declared type types the parameter; fields with no
+    // declared filter stay out of the contract.
+    let declared: Vec<&RecordField> = fields
+        .iter()
+        .filter(|field| binding.filters.iter().any(|name| name == &field.name))
+        .collect();
+    query.extend(filter_parameters(&declared));
     query.sort_by_key(|parameter| parameter["name"].as_str().unwrap_or_default().to_owned());
     parameters.extend(query);
     parameters
 }
 
 /// The typed equality query parameters of a search binding's declared
-/// filter fields.
-///
-/// Unwired stand-in for increment 1: the project format does not yet let a
-/// binding declare the fields it filters on (`filters`, a ruled format
-/// change for X1/X2), so the compiled contract emits no filter parameters.
-/// The assembler is the pure function the adaptation pass wires in: one
-/// optional parameter per declared field, typed by the field's declared
-/// type, in the record type's declared field order.
-#[allow(dead_code)]
-fn filter_parameters(fields: &[RecordField]) -> Vec<Value> {
+/// filter fields: one optional parameter per field, typed by the field's
+/// declared type, in the record type's declared field order.
+fn filter_parameters(fields: &[&RecordField]) -> Vec<Value> {
     fields
         .iter()
         .map(|field| {
@@ -289,7 +321,6 @@ fn filter_parameters(fields: &[RecordField]) -> Vec<Value> {
 /// The OpenAPI schema of one declared record field. The closed mapping of
 /// the declared field types; core owns the envelope-side twin of this
 /// table, which the derived schemas already carry.
-#[allow(dead_code)]
 fn field_schema(field_type: registry_adapter_core::RecordFieldType) -> Value {
     match field_type {
         registry_adapter_core::RecordFieldType::String => json!({"type": "string"}),
@@ -323,52 +354,6 @@ fn problem_responses(problems: &[Problem]) -> Map<String, Value> {
             });
     }
     responses
-}
-
-/// Derive one binding's envelope schema through the public core API.
-///
-/// Interim clone-swap, ruled for increment 1: core's
-/// `derive_operation_result_schema` resolves an operation's first binding
-/// and always takes the response envelope, so the project is cloned with
-/// only this binding kept, and for a request body the profile is cloned
-/// with the operation's request envelope swapped into the response
-/// envelope's place. This one private function holds the whole workaround;
-/// the adaptation pass removes it when core grows
-/// `derive_binding_result_schema` and `derive_operation_request_schema`.
-fn derived_envelope_schema(
-    profile: &AdapterProfile,
-    project: &AdapterProject,
-    binding: &Binding,
-    request: bool,
-) -> Result<Value, String> {
-    let mut solo = project.clone();
-    solo.bindings = UniqueIdList::new(vec![binding.clone()]).expect("one binding stays unique");
-    if !request {
-        return derive_operation_result_schema(profile, &solo, binding.operation.as_str());
-    }
-    let operation = profile
-        .operations
-        .get(binding.operation.as_str())
-        .expect("the workspace check accepted the binding's operation");
-    let request_envelope = operation
-        .request_envelope
-        .clone()
-        .expect("a request derivation is asked only of a write operation");
-    let swapped_operations = profile
-        .operations
-        .iter()
-        .map(|candidate| {
-            let mut candidate = candidate.clone();
-            if candidate.id == operation.id {
-                candidate.response_envelope = request_envelope.clone();
-            }
-            candidate
-        })
-        .collect();
-    let mut swapped = profile.clone();
-    swapped.operations =
-        UniqueIdList::new(swapped_operations).expect("the operation set keeps its ids");
-    derive_operation_result_schema(&swapped, &solo, binding.operation.as_str())
 }
 
 /// Type a parameterized part's member as a plain string, recursively.
@@ -447,7 +432,12 @@ mod tests {
     /// One profile with a read, a paginated search, and no parts beyond
     /// the one the envelope exercises.
     fn profile() -> AdapterProfile {
-        serde_json::from_value(json!({
+        serde_json::from_value(profile_value()).expect("the profile decodes")
+    }
+
+    /// The JSON of [`profile`], for tests that vary one declared field.
+    fn profile_value() -> Value {
+        json!({
             "id": "case-api",
             "version": "1",
             "operations": [
@@ -503,8 +493,7 @@ mod tests {
                     "description": "the registry this deployment serves",
                 },
             ],
-        }))
-        .expect("the profile decodes")
+        })
     }
 
     /// One project over that profile, with the given bindings.
@@ -635,6 +624,134 @@ mod tests {
         );
     }
 
+    /// A write operation answers with its declared `successStatus`, not a
+    /// uniform 200: a records-create style write answers 201.
+    #[test]
+    fn a_write_answers_its_declared_success_status() {
+        let mut value = profile_value();
+        let write = value["operations"]
+            .as_array_mut()
+            .expect("the operations are a list")
+            .iter_mut()
+            .find(|operation| operation["id"] == "cases-find")
+            .expect("the profile declares the write");
+        write["successStatus"] = json!(201);
+        let declared: AdapterProfile = serde_json::from_value(value).expect("the profile decodes");
+        let document = assemble(&declared, &project(both_bindings())).expect("the assembly runs");
+        let find = &document["paths"]["/v2/cases/case"]["post"];
+        assert!(
+            find["responses"].get("201").is_some(),
+            "the declared success status answers: {}",
+            find["responses"]
+        );
+        assert!(
+            find["responses"].get("200").is_none(),
+            "no uniform 200 shadows the declared status: {}",
+            find["responses"]
+        );
+    }
+
+    /// A search binding's declared filters appear as typed equality query
+    /// parameters, sorted by name beside the profile's pagination
+    /// parameters.
+    #[test]
+    fn filters_become_typed_equality_query_parameters() {
+        let document = assemble(
+            &profile(),
+            &project(json!([{
+                "id": "case-find",
+                "operation": "cases-find",
+                "recordType": "case",
+                "route": "case-find",
+                "filters": ["opened_on", "case_type"],
+                "maximumUpstreamCalls": 11,
+            }])),
+        )
+        .expect("the assembly runs");
+        let parameters = &document["paths"]["/v2/cases/case"]["post"]["parameters"];
+        assert_eq!(
+            parameters,
+            &json!([
+                {
+                    "name": "case_type",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "maxResults",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "integer", "minimum": 10, "maximum": 500},
+                },
+                {
+                    "name": "opened_on",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "string", "format": "date"},
+                },
+                {
+                    "name": "pageStateToken",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "string"},
+                },
+            ]),
+            "the binding's filters join the pagination parameters in name order"
+        );
+    }
+
+    /// Every binding of one operation resolves through its own record type:
+    /// the same operation bound to two record types compiles two concrete
+    /// operations, each envelope schema carrying its own record type's
+    /// fields.
+    #[test]
+    fn every_binding_of_an_operation_resolves_through_its_own_record_type() {
+        let two_types = serde_json::from_value(json!({
+            "project": {"id": "case-deployment", "version": "1"},
+            "profile": {"id": "case-api", "version": "1", "digest": PINNED_DIGEST},
+            "pack": {"id": "case-api-pack", "version": "1", "digest": PINNED_DIGEST},
+            "recordTypes": [
+                {
+                    "name": "case",
+                    "fields": [{"name": "case_type", "type": "string", "required": true}],
+                },
+                {
+                    "name": "incident",
+                    "fields": [{"name": "incident_kind", "type": "string", "required": true}],
+                },
+            ],
+            "templatedRoutes": [],
+            "bindings": [
+                {
+                    "id": "case-get",
+                    "operation": "cases-get",
+                    "recordType": "case",
+                    "route": "case-find",
+                    "maximumUpstreamCalls": 4,
+                },
+                {
+                    "id": "incident-get",
+                    "operation": "cases-get",
+                    "recordType": "incident",
+                    "route": "case-find",
+                    "maximumUpstreamCalls": 4,
+                },
+            ],
+            "accessProfiles": [],
+        }))
+        .expect("the project decodes");
+        let document = assemble(&profile(), &two_types).expect("the assembly runs");
+        let case = &document["paths"]["/v2/cases/case/{case_id}"]["get"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["properties"]["case"]["properties"];
+        assert_eq!(case["case_type"], json!({"type": "string"}));
+        assert!(case.get("incident_kind").is_none());
+        let incident = &document["paths"]["/v2/cases/incident/{case_id}"]["get"]["responses"]
+            ["200"]["content"]["application/json"]["schema"]["properties"]["case"]["properties"];
+        assert_eq!(incident["incident_kind"], json!({"type": "string"}));
+        assert!(incident.get("case_type").is_none());
+    }
+
     /// A parameterized part member keeps its string type and loses the
     /// stand-in const; a literal that names no part keeps its const.
     #[test]
@@ -737,9 +854,20 @@ mod tests {
         assert!(first.ends_with("}\n"));
     }
 
+    /// The sorted walk changes no member: the rendered bytes parse back to
+    /// exactly the document. Under the default map implementation the
+    /// members already iterate sorted, so the walk is unobservable here; a
+    /// `preserve_order` build renders these same bytes through it.
+    #[test]
+    fn the_rendered_bytes_round_trip_the_document() {
+        let document = assemble(&profile(), &project(both_bindings())).expect("assembles");
+        let text = render(&document);
+        let parsed: Value = serde_json::from_str(&text).expect("the rendered bytes parse");
+        assert_eq!(parsed, document);
+    }
+
     /// The filter assembler offers one optional typed equality parameter
-    /// per declared field, in the record type's declared order. Unwired
-    /// until the project format carries the binding's filter fields.
+    /// per declared field, in the record type's declared order.
     #[test]
     fn filter_parameters_are_typed_equality_parameters() {
         let record_type: RecordType = serde_json::from_value(json!({
@@ -752,7 +880,7 @@ mod tests {
         }))
         .expect("the record type decodes");
         assert_eq!(
-            filter_parameters(&record_type.fields),
+            filter_parameters(&record_type.fields.iter().collect::<Vec<_>>()),
             vec![
                 json!({
                     "name": "case_type",

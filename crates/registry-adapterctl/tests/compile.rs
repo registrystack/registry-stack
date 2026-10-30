@@ -417,6 +417,14 @@ fn the_maintained_example_compiles_under_breg_records() {
         json!({"type": "string"})
     );
     assert_eq!(create["requestBody"]["required"], json!(true));
+    // records-create declares successStatus 201 (BReg parity): the write
+    // answers 201, and no uniform 200 shadows it.
+    assert!(
+        create["responses"].get("201").is_some(),
+        "the declared success status answers: {}",
+        create["responses"]
+    );
+    assert!(create["responses"].get("200").is_none());
 
     // records-update and records-patch are unbound: no path carries them.
     for (path, item) in paths {
@@ -619,6 +627,55 @@ fn the_second_target_experiment_compiles() {
         search["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
             ["resourceType"],
         json!({"type": "string", "const": "Bundle"})
+    );
+}
+
+/// The graphql-cursor-source experiment compiles: its search binding
+/// declares `filters`, and the compiled contract offers exactly those
+/// fields as typed equality query parameters beside the profile's
+/// pagination parameters.
+#[test]
+fn the_graphql_experiment_exposes_its_filters_as_query_parameters() {
+    let experiment = repo_root().join("products/adapter/experiments/graphql-cursor-source");
+    let (root, project) = copied_tree(&experiment);
+    // The experiment pins the shared case-api profile, which sits outside
+    // its tree.
+    let profile = repo_root()
+        .join("products/adapter/profiles/case-api/profile.yaml")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let (document, _) = compile(&project, &["--profile", &profile]);
+    let _ = root;
+
+    let search = &document["paths"]["/v2/cases/benefit_case"]["post"];
+    assert_eq!(search["operationId"], "cases-find.benefit_case");
+    let parameters = search["parameters"].as_array().expect("parameters");
+    // The binding filters on `status`; the cursor pagination adds
+    // `pageStateToken` and `maxResults`; name order sorts them together.
+    assert_eq!(
+        parameters,
+        &vec![
+            json!({
+                "name": "maxResults",
+                "in": "query",
+                "required": false,
+                "schema": {"type": "integer", "minimum": 10, "maximum": 500},
+            }),
+            json!({
+                "name": "pageStateToken",
+                "in": "query",
+                "required": false,
+                "schema": {"type": "string"},
+            }),
+            json!({
+                "name": "status",
+                "in": "query",
+                "required": false,
+                "schema": {"type": "string"},
+            }),
+        ],
+        "the declared filters join the pagination parameters in name order"
     );
 }
 

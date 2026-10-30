@@ -1,5 +1,107 @@
 {
   "$defs": {
+    "ErrorClass": {
+      "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+      "enum": [
+        "aggregation.duplicate",
+        "breaker.open",
+        "budget.exhausted",
+        "conversion.unmapped",
+        "credential.rejected",
+        "disclosure.violation",
+        "egress.refused",
+        "loop.maximum-iterations-reached",
+        "script",
+        "script.budget-exceeded",
+        "throttle.rejected",
+        "upstream",
+        "upstream.connection",
+        "upstream.http",
+        "upstream.malformed",
+        "upstream.redirect",
+        "upstream.timeout",
+        "upstream.too-large",
+        "validation",
+        "outcome",
+        "outcome.conflict",
+        "outcome.invalid-request",
+        "outcome.not-found",
+        "outcome.rejected",
+        "facade",
+        "facade.conflict",
+        "facade.forbidden",
+        "facade.idempotency-mismatch",
+        "facade.invalid-request",
+        "facade.method-not-allowed",
+        "facade.not-acceptable",
+        "facade.not-found",
+        "facade.unauthenticated",
+        "facade.unsupported-media-type"
+      ],
+      "type": "string"
+    },
+    "ExpectedFacade": {
+      "description": "What the facade must answer one entry with: a recorded response, or a\nproblem named by class and code (G-FIXTURES). A problem expectation\ncarries no body: the profile's problem envelope owns that shape, and\nthe declared problem owns the status.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The facade answers with this recorded response.",
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/RecordedBody",
+              "description": "The response body the facade answers with."
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "The response headers the facade answers with.",
+              "type": "object"
+            },
+            "status": {
+              "description": "The status the facade answers with.",
+              "format": "uint32",
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "type": {
+              "const": "response",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The facade answers with the named problem.",
+          "properties": {
+            "class": {
+              "$ref": "#/$defs/ErrorClass",
+              "description": "The error class the facade answers with; a declared class or a\nclass a declared root covers resolves it."
+            },
+            "code": {
+              "$ref": "#/$defs/ExternalId",
+              "description": "The declared problem code the facade fills its envelope with."
+            },
+            "type": {
+              "const": "problem",
+              "type": "string"
+            }
+          },
+          "required": [
+            "class",
+            "code",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -9,30 +111,28 @@
     },
     "FixtureEntry": {
       "additionalProperties": false,
-      "description": "One fixture entry: a recorded upstream exchange and the facade response\nthe pack must produce for it.",
+      "description": "One fixture entry: the facade request, the upstream exchanges it\ndrives in the order the route makes them, and what the facade must\nanswer (G-FIXTURES, CONCEPT 13.3). At least one exchange is an\nauthoring invariant the checks refuse a suite without.",
       "properties": {
-        "expectedFacadeResponse": {
-          "$ref": "#/$defs/RecordedResponse",
-          "description": "The facade response the replay expects."
+        "expected": {
+          "$ref": "#/$defs/ExpectedFacade",
+          "description": "What the facade must answer."
         },
-        "given": {
-          "$ref": "#/$defs/RecordedRequest",
-          "description": "The recorded upstream exchange."
+        "facadeRequest": {
+          "$ref": "#/$defs/RecordedFacadeRequest",
+          "description": "The facade request this entry replays."
         },
-        "operation": {
-          "$ref": "#/$defs/ExternalId",
-          "description": "The profile operation this entry exercises; the facade-side\nprimary key of the entry."
-        },
-        "upstreamResponse": {
-          "$ref": "#/$defs/RecordedResponse",
-          "description": "The upstream reply the route works from."
+        "upstream": {
+          "description": "The upstream exchanges, in the order the route makes them.",
+          "items": {
+            "$ref": "#/$defs/RecordedExchange"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "operation",
-        "given",
-        "upstreamResponse",
-        "expectedFacadeResponse"
+        "facadeRequest",
+        "upstream",
+        "expected"
       ],
       "type": "object"
     },
@@ -113,7 +213,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Intercept the token requests of the named endpoint's OAuth2 kind\n(`products/adapter/CONCEPT.md` section 10.2).",
+          "description": "Intercept the token requests of the named endpoint's OAuth2 kind\n(`products/adapter/CONCEPT.md` section 10.2). Replay runs without\na credential: the recorded token request carries no credential\nheader or body, and the recorded reply's token is a synthetic\nvalue a captured recording must replace before it is committed.",
           "properties": {
             "endpoint": {
               "$ref": "#/$defs/ExternalId",
@@ -137,16 +237,78 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
+    "RecordedBody": true,
+    "RecordedExchange": {
+      "additionalProperties": false,
+      "description": "One recorded upstream exchange: the send the route made and the reply\nthe source gave it.",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/RecordedRequest",
+          "description": "The send the route made."
+        },
+        "response": {
+          "$ref": "#/$defs/RecordedResponse",
+          "description": "The reply the source gave it."
+        }
+      },
+      "required": [
+        "request",
+        "response"
+      ],
+      "type": "object"
+    },
+    "RecordedFacadeRequest": {
+      "additionalProperties": false,
+      "description": "The facade request one entry replays: the operation it exercises, plus\nthe request the deployment receives. The operation is the facade-side\nprimary key of the entry; the profile owns its method.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RecordedBody",
+          "description": "The request body: absent, JSON `null`, or a value (G-FIXTURES)."
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The request headers.",
+          "type": "object"
+        },
+        "operation": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The profile operation this entry exercises."
+        },
+        "path": {
+          "description": "The request path, with any template segments already filled.",
+          "type": "string"
+        },
+        "query": {
+          "description": "The encoded query string.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "path"
+      ],
+      "type": "object"
+    },
     "RecordedRequest": {
       "additionalProperties": false,
       "description": "One recorded upstream request the fixture replay matches against.",
       "properties": {
         "body": {
-          "description": "The request body."
+          "$ref": "#/$defs/RecordedBody",
+          "description": "The request body: absent, JSON `null`, or a value (G-FIXTURES)."
         },
         "endpoint": {
           "$ref": "#/$defs/ExternalId",
           "description": "The endpoint the request goes to."
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The request headers.",
+          "type": "object"
         },
         "method": {
           "$ref": "#/$defs/HttpMethod",
@@ -159,6 +321,10 @@
         "query": {
           "description": "The encoded query string.",
           "type": "string"
+        },
+        "tokenRequest": {
+          "description": "Whether this request is the endpoint's token request (CONCEPT\n10.2); only a token intercept answers it.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -173,7 +339,15 @@
       "description": "One recorded upstream reply.",
       "properties": {
         "body": {
-          "description": "The reply body."
+          "$ref": "#/$defs/RecordedBody",
+          "description": "The reply body: absent, JSON `null`, or a value (G-FIXTURES)."
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The response headers.",
+          "type": "object"
         },
         "status": {
           "description": "The status the upstream answered with.",

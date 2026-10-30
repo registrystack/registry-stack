@@ -275,6 +275,13 @@ fn derive_value(
                     required.push(Value::String(key.clone()));
                 }
             }
+            // The required names sort explicitly, so the derived schema
+            // never depends on the map's iteration order.
+            required.sort_by(|left, right| {
+                left.as_str()
+                    .unwrap_or_default()
+                    .cmp(right.as_str().unwrap_or_default())
+            });
             Ok(json!({
                 "type": "object",
                 "properties": Value::Object(properties),
@@ -718,7 +725,8 @@ mod tests {
         let deployment = project(true);
         let schema =
             derive_operation_result_schema(&profile, &deployment, "cases-find").expect("derive");
-        // serde_json objects are sorted, so member order follows.
+        // The required names sort explicitly, whatever order the envelope
+        // template declares its members in.
         assert_eq!(schema["required"], json!(["cases", "record", "recordType"]));
         assert_eq!(schema["additionalProperties"], json!(false));
         assert_eq!(schema["properties"]["record"]["required"], json!(["id"]));
