@@ -1129,6 +1129,11 @@ mod derived {
         request["properties"]["values"]["maxProperties"] = json!(MAX_LOOKUP_VALUES);
         let mut record = output::<LookedUpRecord>();
         set_observed_at_format(&mut record);
+        // BReg sends no ETag on a lookup, so the lookup contract does not offer one.
+        record["$defs"]["Provenance"]["properties"]
+            .as_object_mut()
+            .expect("the provenance lists its members")
+            .remove("etag");
         (request, record)
     }
 

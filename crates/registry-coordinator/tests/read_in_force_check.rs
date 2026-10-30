@@ -8,6 +8,38 @@ use std::{fs, path::Path, process::Command};
 
 const WARNING: &str = "coordinator.read-in-force.may-be-ambiguous";
 
+/// A runtime whose only BReg connection delegates to task authority, which a
+/// lookup or an in-force read cannot use.
+const TASK_AUTHORITY_RUNTIME: &str = "\
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+secretProviders:
+  environment: {}
+  file:
+    root: /run/registry-coordinator/secrets
+database:
+  runtimeUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+  migrationUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+namespace: coordinator_task_authority
+connections:
+  register:
+    type: breg
+    baseUrl: http://127.0.0.1:8100
+    profile: registrant-reader
+    authorization:
+      tokenEndpoint: http://127.0.0.1:8090/token
+      clientId: registrant-reader
+      signingKeyRef: secret:file/client-key
+      resource: urn:example:registrants
+      scopes: [registrants:read]
+      taskAuthority:
+        baseUrl: https://casework.example.org
+        issuer: https://casework.example.org
+        subject: registered-reader
+        exchangeAudience: https://issuer.example.org/oauth/token
+        bootstrapResource: urn:example:casework
+";
+
 /// A record type with a date validity interval; `scope` lists the fields each
 /// `temporal-non-overlap` constraint is scoped by.
 fn record_schema(value_kind: Option<&str>, scope: Value) -> Value {
@@ -467,5 +499,27 @@ fn a_reply_with_a_field_the_record_type_lacks_fails_the_scenario() {
     assert_eq!(
         report["diagnostics"][0]["code"],
         "coordinator.scenario.reply-output"
+    );
+}
+
+#[test]
+fn an_in_force_read_on_a_connection_with_task_authority_is_refused_at_check() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        &project(district_subject(), true),
+        &record_schema(Some("date"), json!([["district"]])),
+    );
+    fs::write(root.path().join("runtime.yaml"), TASK_AUTHORITY_RUNTIME).unwrap();
+    let (exit, report) = cli(root.path(), &["check"]);
+    assert_eq!(exit, 1, "{report}");
+    assert_eq!(
+        codes(&report),
+        ["coordinator.runtime.workflow-binding"],
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["path"],
+        "/workflow/steps/call/operation"
     );
 }

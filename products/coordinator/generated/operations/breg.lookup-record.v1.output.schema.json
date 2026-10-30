@@ -3,10 +3,6 @@
     "Provenance": {
       "description": "Where a record came from and when the workflow looked at it.\n\n`observedAt` is the Coordinator's clock when the read returned. It says when\nthe workflow looked, not when the fact became true.",
       "properties": {
-        "etag": {
-          "description": "The entity tag BReg sent with the record, where it sends one.",
-          "type": "string"
-        },
         "observedAt": {
           "format": "date-time",
           "type": "string"

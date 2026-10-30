@@ -1,12 +1,45 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `breg.lookup-record/v1` at check and test time: the input shapes it
-//! accepts, the refusal of a direct route from `unresolved` to a step that
-//! mutates, and one offline scenario through every answer BReg can give.
+//! accepts, the refusal of a direct route from `unresolved` to a step that can
+//! write a record, and one offline scenario through every answer BReg can give.
 use registry_coordinator::authoring;
 use serde_json::{json, Value};
 use std::{fs, path::Path, process::Command};
 
 const UNRESOLVED_ROUTE: &str = "coordinator.definition.unresolved-route";
+const FACILITIES: &str = include_str!("fixtures/breg-contracts/facilities.contract.json");
+
+/// A runtime whose only BReg connection delegates to task authority, which a
+/// lookup or an in-force read cannot use.
+const TASK_AUTHORITY_RUNTIME: &str = "\
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+secretProviders:
+  environment: {}
+  file:
+    root: /run/registry-coordinator/secrets
+database:
+  runtimeUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+  migrationUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+namespace: coordinator_task_authority
+connections:
+  register:
+    type: breg
+    baseUrl: http://127.0.0.1:8100
+    profile: registrant-reader
+    authorization:
+      tokenEndpoint: http://127.0.0.1:8090/token
+      clientId: registrant-reader
+      signingKeyRef: secret:file/client-key
+      resource: urn:example:registrants
+      scopes: [registrants:read]
+      taskAuthority:
+        baseUrl: https://casework.example.org
+        issuer: https://casework.example.org
+        subject: registered-reader
+        exchangeAudience: https://issuer.example.org/oauth/token
+        bootstrapResource: urn:example:casework
+";
 
 fn values(fields: Value) -> Value {
     json!({"type": "fields", "fields": fields})
@@ -40,7 +73,7 @@ fn absent_step() -> Value {
     json!({"type": "finish", "outcome": "absent"})
 }
 
-/// A mutating step: it submits a message, so it is not a read.
+/// A step that sends a message: it mutates, but it cannot create a record.
 fn notify_step(next: &str) -> Value {
     json!({
         "type": "call", "operation": "notices",
@@ -48,6 +81,35 @@ fn notify_step(next: &str) -> Value {
             "senderProfile": {"type": "literal", "value": "transactional"},
             "to": {"type": "literal", "value": {"email": "person@example.invalid"}}
         }},
+        "next": next
+    })
+}
+
+/// A step that asks a person to review: it mutates, but it cannot create a
+/// record.
+fn review_step(next: &str) -> Value {
+    json!({
+        "type": "call", "operation": "review",
+        "input": {"type": "literal", "value": {
+            "policy": {"id": "registrant-review", "version": "1", "digest": format!("sha256:{}", "b".repeat(64))},
+            "subject": {"source": "register", "type": "registrant", "id": "r-1", "version": "1",
+                "digest": format!("sha256:{}", "a".repeat(64))},
+            "requesterReference": "lookup-request-1",
+            "context": {"mode": "submitted", "snapshot": {"summary": "Synthetic registrant"}}
+        }},
+        "next": next
+    })
+}
+
+/// A step that writes a record: "not found, so create".
+fn register_step(next: &str) -> Value {
+    json!({
+        "type": "call", "operation": "register",
+        "input": {"type": "literal", "value": {"input": {
+            "facilityCode": "F-1", "name": "Synthetic clinic", "addressLine": "1 Main Street",
+            "city": "Colombo", "postalCode": "00100", "jurisdiction": "LK",
+            "operatorId": "00000000-0000-4000-8000-0000000000b1"
+        }}},
         "next": next
     })
 }
@@ -70,10 +132,14 @@ fn project(lookup: Value, steps: Value) -> Value {
     json!({
         "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
         "project": {"id": "record-lookup", "version": "1"},
+        "contracts": {"facilities": {"type": "breg", "source": "facilities.json"}},
         "operations": {
             "find": {"uses": "breg.lookup-record/v1", "connection": "register"},
             "second-find": {"uses": "breg.lookup-record/v1", "connection": "register"},
-            "notices": {"uses": "messaging.submit-message/v1", "connection": "notices"}
+            "notices": {"uses": "messaging.submit-message/v1", "connection": "notices"},
+            "review": {"uses": "casework.submit-review-request/v1", "connection": "review"},
+            "register": {"uses": "breg.invoke-action/v1", "connection": "register-writer",
+                "action": {"contract": "facilities", "id": "register-facility"}}
         },
         "workflow": {
             "input": {"type": "object", "additionalProperties": false,
@@ -140,6 +206,7 @@ fn cases() -> Value {
 
 fn write(root: &Path, project: &Value) {
     fs::write(root.join("workflow.yaml"), project.to_string()).unwrap();
+    fs::write(root.join("facilities.json"), FACILITIES).unwrap();
     fs::write(root.join("scenarios.yaml"), cases().to_string()).unwrap();
 }
 
@@ -157,9 +224,14 @@ fn cli(root: &Path, arguments: &[&str]) -> (i32, Value) {
     (output.status.code().unwrap(), report)
 }
 
+fn write_workflow(root: &Path, project: &Value) {
+    fs::write(root.join("workflow.yaml"), project.to_string()).unwrap();
+    fs::write(root.join("facilities.json"), FACILITIES).unwrap();
+}
+
 fn check(project: &Value) -> (i32, Value) {
     let root = tempfile::tempdir().unwrap();
-    fs::write(root.path().join("workflow.yaml"), project.to_string()).unwrap();
+    write_workflow(root.path(), project);
     cli(root.path(), &["check"])
 }
 
@@ -188,34 +260,73 @@ fn a_lookup_without_a_route_for_unresolved_passes() {
 }
 
 #[test]
-fn unresolved_routed_straight_to_a_mutation_is_refused() {
+fn unresolved_routed_straight_to_a_step_that_writes_a_record_is_refused() {
     let (exit, report) = check(&project(
-        lookup_call(lookup_fields(), "found", Some("notify")),
-        json!({"notify": notify_step("absent"), "absent": absent_step()}),
+        lookup_call(lookup_fields(), "found", Some("create")),
+        json!({"create": register_step("absent"), "absent": absent_step()}),
     ));
     assert_eq!(exit, 1, "{report}");
-    assert_eq!(
-        report["diagnostics"][0]["code"], UNRESOLVED_ROUTE,
-        "{report}"
-    );
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], UNRESOLVED_ROUTE, "{report}");
     assert_eq!(
         first_path(&report),
         "/workflow/steps/lookup/onDeclaredRefusal"
     );
-    let message = report["diagnostics"][0]["message"].as_str().unwrap();
-    assert!(message.contains("two records match"), "{message}");
-    assert!(message.contains("duplicate"), "{message}");
+    // The message is the sentence in the problem catalog; the step and the
+    // operation are in the suggestion.
+    assert_eq!(
+        diagnostic["message"],
+        "A lookup is unresolved when no record matches, but also when two records match or a record is hidden from this profile, so creating a record from this route can make a duplicate."
+    );
+    let suggestion = diagnostic["suggestedAction"].as_str().unwrap();
+    assert!(suggestion.contains("create"), "{suggestion}");
+    assert!(suggestion.contains("breg.invoke-action/v1"), "{suggestion}");
+    assert!(suggestion.contains("to another read"), "{suggestion}");
+}
+
+#[test]
+fn unresolved_routed_to_a_casework_review_request_passes() {
+    // Asking a person to look is the safe answer to an unresolved lookup.
+    let (exit, report) = check(&project(
+        lookup_call(lookup_fields(), "found", Some("ask")),
+        json!({"ask": review_step("absent"), "absent": absent_step()}),
+    ));
+    assert_eq!(exit, 0, "{report}");
+}
+
+#[test]
+fn unresolved_routed_to_a_message_passes() {
+    let (exit, report) = check(&project(
+        lookup_call(lookup_fields(), "found", Some("notify")),
+        json!({"notify": notify_step("absent"), "absent": absent_step()}),
+    ));
+    assert_eq!(exit, 0, "{report}");
 }
 
 #[test]
 fn unresolved_routed_to_another_read_before_a_mutation_passes() {
     // Only the direct route is refused: a person or another read can decide
     // between "unresolved" and a mutation.
-    let mut second = lookup_call(lookup_fields(), "notify", Some("absent"));
+    let mut second = lookup_call(lookup_fields(), "create", Some("absent"));
     second["operation"] = json!("second-find");
     let (exit, report) = check(&project(
         lookup_call(lookup_fields(), "found", Some("second")),
-        json!({"second": second, "notify": notify_step("absent"), "absent": absent_step()}),
+        json!({"second": second, "create": register_step("absent"), "absent": absent_step()}),
+    ));
+    assert_eq!(exit, 0, "{report}");
+}
+
+#[test]
+fn unresolved_routed_through_a_choose_to_a_record_write_passes() {
+    // Only the direct route is refused: a choose between the refusal and the
+    // write is a decision the workflow made.
+    let decide = json!({
+        "type": "choose", "choose": {"type": "input", "path": "/nationalId"},
+        "cases": {"synthetic-1": "create"}
+    });
+    let (exit, report) = check(&project(
+        lookup_call(lookup_fields(), "found", Some("decide")),
+        json!({"decide": decide, "create": register_step("absent"), "absent": absent_step()}),
     ));
     assert_eq!(exit, 0, "{report}");
 }
@@ -288,6 +399,20 @@ fn the_provenance_member_is_part_of_the_output_contract() {
 }
 
 #[test]
+fn a_lookup_has_no_etag_to_map() {
+    // A lookup sends and receives no ETag, so its output has no provenance etag.
+    let mut authored = well_formed();
+    authored["workflow"]["steps"]["found"]["output"]["fields"]["observedAt"]["path"] =
+        json!("/provenance/etag");
+    let (exit, report) = check(&authored);
+    assert_eq!(exit, 1, "{report}");
+    assert_eq!(
+        first_path(&report),
+        "/workflow/steps/found/output/fields/observedAt/path"
+    );
+}
+
+#[test]
 fn offline_scenarios_cover_found_unresolved_and_a_refused_lookup() {
     let root = tempfile::tempdir().unwrap();
     write(root.path(), &well_formed());
@@ -322,4 +447,24 @@ fn a_reply_without_provenance_fails_the_scenario() {
         report["diagnostics"][0]["code"],
         "coordinator.scenario.reply-output"
     );
+}
+
+#[test]
+fn a_lookup_on_a_connection_with_task_authority_is_refused_at_check() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("workflow.yaml"),
+        include_str!("../../../products/coordinator/examples/record-lookup/workflow.yaml"),
+    )
+    .unwrap();
+    fs::write(root.path().join("runtime.yaml"), TASK_AUTHORITY_RUNTIME).unwrap();
+    let (exit, report) = cli(root.path(), &["check"]);
+    assert_eq!(exit, 1, "{report}");
+    let finding = &report["diagnostics"][0];
+    assert_eq!(finding["code"], "coordinator.runtime.workflow-binding");
+    assert_eq!(finding["path"], "/workflow/steps/lookup/operation");
+    assert!(finding["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .contains("without taskAuthority"));
 }

@@ -1737,16 +1737,16 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                         .as_ref()
                         .and_then(|route| flow.steps.get(route))
                     {
-                        if target.operation.is_mutating() {
+                        if target.operation.writes_records() {
                             findings.push(authored(
                                 "definition.unresolved-route",
                                 &format!("steps.{name}.onDeclaredRefusal"),
+                                "A lookup is unresolved when no record matches, but also when two records match or a record is hidden from this profile, so creating a record from this route can make a duplicate.",
                                 &format!(
-                                    "unresolved is routed straight to step {}, which changes data ({}); a lookup is unresolved when no record matches, but also when two records match or a record is hidden from this profile, so creating a record here can make a duplicate",
+                                    "Route unresolved to a finish or to another read, and change data from a later step. Step {} ({}) creates or changes a record; a later step costs one extra step before a create.",
                                     on_declared_refusal.as_deref().unwrap_or_default(),
                                     target.operation.as_str()
                                 ),
-                                "Route unresolved to a finish step or to another read, and change data from a later step once a person or that read has decided. This costs one extra step before a create.",
                             ));
                         }
                     }

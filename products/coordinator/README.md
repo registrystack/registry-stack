@@ -284,8 +284,9 @@ to, and `breg.read-record/v2` reads a record by identifier with provenance. A lo
 number or flag fields; it never takes a filter string. BReg answers one value-free
 `lookup.unresolved` for no match, two matches, a hidden row and a missing claim alike, and that
 is the declared refusal `unresolved`. Check refuses a direct `onDeclaredRefusal` route from a
-lookup to a step that mutates (`definition.unresolved-route`), because "not found, so create"
-creates a duplicate when two records match. Route it to a finish or to another read. Both return
+lookup to a step that creates or changes a record (`definition.unresolved-route`), because "not
+found, so create" creates a duplicate when two records match. Route it to a finish or to another
+read. A review request or a message may follow directly. Both return
 a `provenance` member with `observedAt`, the Coordinator's clock when the read returned. The
 `breg` profile must grant the BReg operations `lookup` and `get`; `check` does not read the
 profile, so a missing grant shows at run time as `product-forbidden`.

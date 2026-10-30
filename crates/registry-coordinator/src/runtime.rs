@@ -883,6 +883,8 @@ impl RuntimeConfig {
         for (name, step) in &workflow.steps {
             if let crate::definition::Step::Call { call, .. } = step {
                 if (call.operation == crate::protocol::Operation::InvokeBregAction
+                    || call.operation == crate::protocol::Operation::LookupRecord
+                    || call.operation == crate::protocol::Operation::ReadInForce
                     || call.operation.takes_proposal_action())
                     && self
                         .connections
