@@ -11,6 +11,10 @@ publish = false
 [lints]
 workspace = true
 
+[[bin]]
+name = "adapter"
+path = "src/main.rs"
+
 [features]
 # Gates the suites that need a disposable database; test-postgres.sh runs
 # them and a plain cargo test run never silently skips them.
@@ -46,3 +50,18 @@ registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
+axum.workspace = true
+clap.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-authcommon.workspace = true
+rustls.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+registry-platform-crypto.workspace = true
+registry-platform-testing.workspace = true
+tempfile.workspace = true
