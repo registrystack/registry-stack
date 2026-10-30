@@ -2067,9 +2067,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "miniz_oxide"
-version = "0.8.5"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e3e04debbb59698c15bacbb6d93584a8c0ca9cc3213cb423d31f760d8843ce5"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
 ]
@@ -3370,9 +3370,9 @@ dependencies = [
 
 [[package]]
 name = "saphyr-parser"
-version = "0.1.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7429158804c36e705d9423b7848018e535b3e92d439a763e364ee12670ef473b"
+checksum = "b5a5ae547feb7cef826b95eeda515b77fa898d470bcaa18f50461103a96706fd"
 dependencies = [
  "arraydeque",
  "thiserror 2.0.21",

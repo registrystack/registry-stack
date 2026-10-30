@@ -222,7 +222,7 @@ lettre = { version = "0.11.23", default-features = false, features = ["builder",
 # Every default feature stays off here; each member enables only the features
 # its own templates need, and states why in its manifest.
 minijinja = { version = "2.24", default-features = false }
-miniz_oxide = "=0.8.5"
+miniz_oxide = "=0.9.1"
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
@@ -257,7 +257,7 @@ rusqlite = { version = "0.40", default-features = false, features = ["bundled", 
 rustix = { version = "1", features = ["fs", "process"] }
 rustls-native-certs = { version = "0.8.4" }
 ryu-js = { version = "=1.0.3" }
-saphyr-parser = { version = "=0.1.0" }
+saphyr-parser = { version = "=0.3.2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 schemars = { version = "=1.2.3" }
