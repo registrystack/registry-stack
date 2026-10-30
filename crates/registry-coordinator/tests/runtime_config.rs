@@ -1720,7 +1720,12 @@ fn casework_connections_name_a_producer_profile_and_bounded_result_checks_offlin
             "completion",
             original["connections"]["review"]["completion"].clone(),
         ),
-        ("applications", "resultCheckSeconds", json!(900)),
+        ("notices", "resultCheckSeconds", json!(900)),
+        (
+            "review",
+            "requestLink",
+            json!("https://casework.example.test/{proposalId}"),
+        ),
     ] {
         let mut document = original.clone();
         document["connections"][connection][member] = value;
@@ -2013,3 +2018,63 @@ fn generated_runtime_schema_keeps_event_source_identifier_bounds() {
         .collect::<serde_json::Map<_, _>>();
     assert!(!validator.is_valid(&Value::Object(too_many)));
 }
+
+#[test]
+fn breg_proposal_follow_settings_are_bounded_and_outside_the_binding_digest() {
+    let original: Value = yaml_value(RUNTIME).unwrap();
+    let base = load(&original.to_string()).unwrap();
+    let digest = base.binding_digest().unwrap();
+    assert_eq!(base.connections["applications"].result_check_seconds(), 900);
+    assert_eq!(
+        base.connections["applications"].request_link(VALID_ID),
+        None
+    );
+
+    let mut document = original.clone();
+    document["connections"]["applications"]["resultCheckSeconds"] = json!(60);
+    document["connections"]["applications"]["requestLink"] =
+        json!("https://breg.example.test/staff/proposals/{proposalId}?tab=review");
+    let changed = load(&document.to_string()).unwrap();
+    assert_eq!(
+        changed.connections["applications"].result_check_seconds(),
+        60
+    );
+    assert_eq!(
+        changed.connections["applications"]
+            .request_link(VALID_ID)
+            .as_deref(),
+        Some("https://breg.example.test/staff/proposals/018f2f9e-5d7a-7c3b-9a1e-2b3c4d5e6f70?tab=review")
+    );
+    // Both only change how a waiting run is read and shown, so a live run's
+    // binding stays the same.
+    assert_eq!(changed.binding_digest().unwrap(), digest);
+    document["connections"]["applications"]["resultCheckSeconds"] = json!(86_400);
+    assert!(load(&document.to_string()).is_ok());
+
+    for (member, value) in [
+        ("resultCheckSeconds", json!(59)),
+        ("resultCheckSeconds", json!(86_401)),
+        (
+            "requestLink",
+            json!("http://breg.example.test/{proposalId}"),
+        ),
+        ("requestLink", json!("https://breg.example.test/proposals")),
+        (
+            "requestLink",
+            json!("https://breg.example.test/{proposalId}/{proposalId}"),
+        ),
+        ("requestLink", json!("https://{proposalId}.example.test/")),
+        ("requestLink", json!("not a url {proposalId}")),
+    ] {
+        let mut document = original.clone();
+        document["connections"]["applications"][member] = value.clone();
+        let error = refused(&document.to_string());
+        assert_eq!(
+            error.field.as_deref(),
+            Some(format!("/connections/applications/{member}").as_str()),
+            "{value}"
+        );
+    }
+}
+
+const VALID_ID: &str = "018f2f9e-5d7a-7c3b-9a1e-2b3c4d5e6f70";

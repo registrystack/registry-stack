@@ -2380,7 +2380,8 @@ impl MutationTransaction {
                 record_id,
                 &current,
                 self.audit.profile(),
-                registry.registry_id(),
+                registry,
+                time::OffsetDateTime::now_utc(),
                 preconditions,
                 &mut guard_failure,
             )?;
@@ -3423,7 +3424,8 @@ fn verify_action_requirements(
     record_id: Uuid,
     current: &CurrentRow,
     audit: &AuditProfile,
-    registry_id: &str,
+    registry: &CompiledRegistry,
+    now: time::OffsetDateTime,
     preconditions: &BTreeMap<String, String>,
     guard_failure: &mut Option<String>,
 ) -> Result<(), MutationError> {
@@ -3440,7 +3442,7 @@ fn verify_action_requirements(
         if requirement.revision_unchanged {
             let expected = action_condition_token(
                 audit,
-                registry_id,
+                registry.registry_id(),
                 &action.id,
                 &requirement.input,
                 &entity.id,
@@ -3462,7 +3464,8 @@ fn verify_action_requirements(
                 requirement,
                 inputs,
                 &current.data,
-                &time::OffsetDateTime::now_utc().date().to_string(),
+                registry,
+                now,
                 matches!(field.field_type, FieldTypeSource::Timestamp),
             ) && guard_failure.is_none()
             {

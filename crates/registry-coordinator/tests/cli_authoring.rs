@@ -615,6 +615,7 @@ fn only_commands_that_call_the_service_take_service_arguments() {
         "retry-same",
         "cancel",
         "reconcile",
+        "check-now",
         "doctor",
         "restore-hold",
         "release-restore-hold",

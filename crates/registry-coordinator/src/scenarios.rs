@@ -1301,6 +1301,9 @@ fn interpreted_reply(outcome: crate::protocol::CallOutcome) -> Reply {
         CallOutcome::ReceiptExpired => Reply::ReceiptExpired {
             receipt_expired: true,
         },
+        CallOutcome::InForceAmbiguous(_) => Reply::Refused {
+            refused: crate::read_in_force::IN_FORCE_AMBIGUOUS.to_owned(),
+        },
     }
 }
 
@@ -1417,6 +1420,20 @@ fn correlate(
                 )),
                 None => Ok(()),
             }
+        }
+        CompletionKind::BregProposal {} => {
+            let accepted = outputs
+                .get(request)
+                .and_then(|output| output.get("proposalId"));
+            if accepted.is_some() && value.get("proposalId") == accepted {
+                return Ok(());
+            }
+            Err(error(
+                "scenario.wait-event",
+                format!("/waits/{step}/value/proposalId"),
+                format!("the Proposal outcome stated for step {step} names a proposalId other than the one step {request} returned; a follow settles only the Proposal it reads"),
+                format!("Copy proposalId from the success reply to step {request}."),
+            ))
         }
         CompletionKind::BoundedPoll { .. } => Ok(()),
     }

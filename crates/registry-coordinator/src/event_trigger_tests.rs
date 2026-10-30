@@ -26,9 +26,9 @@ fn trigger() -> EventTrigger {
         input: Mapping::Fields {
             fields: BTreeMap::from([(
                 "recordId".into(),
-                crate::definition::Reference::Input {
+                crate::definition::Member::Reference(crate::definition::Reference::Input {
                     path: Some("/data/recordId".into()),
-                },
+                }),
             )]),
         },
     }

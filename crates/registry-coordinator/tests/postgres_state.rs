@@ -3485,7 +3485,7 @@ async fn the_run_list_returns_the_most_recently_admitted_runs_newest_first_up_to
 
 #[tokio::test]
 async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filters() {
-    use registry_coordinator::store::RunListState;
+    use registry_coordinator::store::{RunListFilter, RunListState};
 
     let h = harness().await;
     let owner = actor("owner", false);
@@ -3539,7 +3539,7 @@ async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filte
 
     let first = h
         .store
-        .list_owned_page(100, None, None, None, &owner, &flows)
+        .list_owned_page(100, None, RunListFilter::default(), &owner, &flows)
         .await
         .unwrap();
     assert_eq!(first.runs.len(), 100);
@@ -3560,7 +3560,7 @@ async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filte
         .unwrap();
     let second = h
         .store
-        .list_owned_page(100, Some(&cursor), None, None, &owner, &flows)
+        .list_owned_page(100, Some(&cursor), RunListFilter::default(), &owner, &flows)
         .await
         .unwrap();
     assert!(second.next_cursor.is_none());
@@ -3572,7 +3572,16 @@ async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filte
 
     let attention = h
         .store
-        .list_owned_page(10, None, None, Some(true), &owner, &flows)
+        .list_owned_page(
+            10,
+            None,
+            RunListFilter {
+                attention: Some(true),
+                ..RunListFilter::default()
+            },
+            &owner,
+            &flows,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -3588,8 +3597,10 @@ async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filte
         .list_owned_page(
             10,
             None,
-            Some(RunListState::Attention),
-            None,
+            RunListFilter {
+                state: Some(RunListState::Attention),
+                ..RunListFilter::default()
+            },
             &owner,
             &flows,
         )
@@ -3605,27 +3616,43 @@ async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filte
             .list_owned_page(
                 100,
                 Some(&cursor),
-                None,
-                None,
+                RunListFilter::default(),
                 &actor("other", false),
                 &flows,
             )
             .await,
         h.store
-            .list_owned_page(100, Some(&cursor), None, None, &owner, &changed_flows)
+            .list_owned_page(
+                100,
+                Some(&cursor),
+                RunListFilter::default(),
+                &owner,
+                &changed_flows,
+            )
             .await,
         h.store
             .list_owned_page(
                 100,
                 Some(&cursor),
-                Some(RunListState::Running),
-                None,
+                RunListFilter {
+                    state: Some(RunListState::Running),
+                    ..RunListFilter::default()
+                },
                 &owner,
                 &flows,
             )
             .await,
         h.store
-            .list_owned_page(100, Some(&cursor), None, Some(true), &owner, &flows)
+            .list_owned_page(
+                100,
+                Some(&cursor),
+                RunListFilter {
+                    attention: Some(true),
+                    ..RunListFilter::default()
+                },
+                &owner,
+                &flows,
+            )
             .await,
     ] {
         assert_eq!(refused.unwrap_err().code, "request.invalid");

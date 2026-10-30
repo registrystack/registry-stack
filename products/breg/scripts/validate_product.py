@@ -774,7 +774,7 @@ def validate_fixture(errors: list[str]) -> None:
     registry = as_mapping(document.get("project"), "asset fixture.project", errors)
     exact_keys(
         registry,
-        {"id", "version", "defaultLanguage", "canonicalBaseIri"},
+        {"id", "version", "defaultLanguage", "canonicalBaseIri", "timezone"},
         "asset fixture.project",
         errors,
     )

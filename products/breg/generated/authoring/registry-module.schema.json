@@ -1502,6 +1502,10 @@
             "id": {
               "$ref": "#/$defs/LocalId"
             },
+            "lastDayField": {
+              "description": "The inclusive last day, named in place of `endField` when the\nRecord type's interval declares `lastDayField`.",
+              "type": "string"
+            },
             "scopeFields": {
               "items": {
                 "type": "string"
@@ -4031,6 +4035,11 @@
       "additionalProperties": false,
       "properties": {
         "endField": {
+          "description": "The exclusive end: the interval stops just before this value.",
+          "type": "string"
+        },
+        "lastDayField": {
+          "description": "The inclusive last day of a date interval, named in place of\n`endField` when the source records the last day in force.",
           "type": "string"
         },
         "startField": {
@@ -4038,8 +4047,7 @@
         }
       },
       "required": [
-        "startField",
-        "endField"
+        "startField"
       ],
       "type": "object"
     },

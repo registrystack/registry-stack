@@ -189,8 +189,8 @@ impl CoordinatorClient {
         self.list_page(token, &RunListQuery::new(limit)).await
     }
 
-    /// One stable page of caller-visible runs under an optional state or
-    /// attention filter. Pass `next_cursor` back unchanged with the same
+    /// One stable page of caller-visible runs under optional state,
+    /// attention, Proposal and turn filters. Pass `next_cursor` back unchanged with the same
     /// filters and caller.
     pub async fn list_page(
         &self,
@@ -214,6 +214,12 @@ impl CoordinatorClient {
         }
         if let Some(attention) = query.attention {
             parameters.push(("attention", attention.to_string()));
+        }
+        if let Some(proposal) = query.proposal {
+            parameters.push(("proposal", proposal.to_string()));
+        }
+        if let Some(turn) = query.turn {
+            parameters.push(("turn", turn.as_str().to_owned()));
         }
         let request = self
             .prepare(token, Method::GET, "v1/runs", None, None)?

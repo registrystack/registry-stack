@@ -38,9 +38,10 @@ receives the call, which decides it under its own authorization.
   object of named inputs and gain no I/O capability. Runtime uses one tagged
   connections map. Caller policies are keyed by exact verified client identity and
   scope run actions through workflows. Start requires the expected workflowRevision.
-- The applicant drives a BReg Proposal in BReg. Coordinator invokes only immediate
-  BReg Actions, follows a Proposal by product event or record read, and is not a
-  Review provider.
+- BReg and its review authority decide a Proposal. Coordinator invokes immediate
+  BReg Actions, reads, starts, submits and cancels Proposals of one pinned
+  Proposal Action, follows a Proposal by its current Proposal Get, never
+  approves, decides or applies one, and is not a Review provider.
 - No product crate depends on a Coordinator crate. The only allowed dependent
   is `registry-cli-docs`, on `registry-coordinator` for the published CLI
   reference. Adding a dependent, or a Coordinator crate, means naming its rule

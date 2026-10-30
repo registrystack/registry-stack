@@ -4258,7 +4258,7 @@ fn statistics_registry_source() -> Value {
     json!({"datasets":[{"id": "statistics-http"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
-        "project":{"id":"statistics-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test"},
+        "project":{"id":"statistics-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
         "recordTypes":[{
             "id":"record","primaryDataset":"statistics-http","route":"records","mutationMode":"mutable",
             "accessLog":{"subjectField":"subject"},
@@ -4322,7 +4322,7 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
     let source = json!({"datasets":[{"id": "statistics-caps"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
-        "project":{"id":"statistics-cap-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics-caps.example.test"},
+        "project":{"id":"statistics-cap-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics-caps.example.test","timezone":"UTC"},
         "recordTypes":[{
             "id":"record","primaryDataset":"statistics-caps","route":"records","mutationMode":"mutable",
             "fields":[

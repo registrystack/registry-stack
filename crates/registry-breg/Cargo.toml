@@ -319,6 +319,7 @@ ipnet = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
+registry-platform-calendar.workspace = true
 registry-manifest-core.workspace = true
 registry-platform-audit = { workspace = true, optional = true }
 registry-platform-authcommon = { workspace = true, optional = true }

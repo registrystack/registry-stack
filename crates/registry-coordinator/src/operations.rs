@@ -93,6 +93,14 @@ impl OperationDescriptor {
                 "terminalEvidence":"typed-response-and-pinned-pure-interpretation",
                 "authenticatedWake":false, "intervalSource":"authored-completion"
             }),
+            id if Operation::parse(id).is_some_and(Operation::follows_proposal) => json!({
+                "name":"proposal", "profile":"breg-proposal",
+                "acceptedBinding":["proposalId","submissionVersion"],
+                "authority":"bound-connection-profile-get-grant",
+                "terminalEvidence":"current-proposal-get",
+                "authenticatedWake":false,
+                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+            }),
             _ => serde_json::Value::Null,
         };
         if let Some(fields) = observation.as_object_mut() {
@@ -217,6 +225,13 @@ const fn mutation(
     }
 }
 
+const fn declared_read(id: &'static str, product: &'static str) -> OperationDescriptor {
+    OperationDescriptor {
+        declared_refusal: true,
+        ..read(id, product)
+    }
+}
+
 const fn declared_mutation(
     id: &'static str,
     product: &'static str,
@@ -280,6 +295,11 @@ macro_rules! operation_catalog {
             CancelReviewRequest => "casework.cancel-review-request/v1", mutation("casework", false, false), cancel_review_request;
             PreviewAvailability => "scheduling.preview-availability/v1", read("scheduling"), preview_availability;
             ExternalCommand => "external.command/v1", declared_mutation("external-http", false, false), external_command;
+            ReadInForce => "breg.read-in-force/v1", declared_read("breg"), read_in_force;
+            ReadProposal => "breg.read-proposal/v1", read("breg"), read_proposal;
+            StartProposal => "breg.start-proposal/v1", mutation("breg", false, true), start_proposal;
+            SubmitProposal => "breg.submit-proposal/v1", mutation("breg", false, true), submit_proposal;
+            CancelProposal => "breg.cancel-proposal/v1", mutation("breg", false, true), cancel_proposal;
         }
     };
 }
@@ -336,6 +356,9 @@ pub fn failure_code(code: &str) -> Option<&'static str> {
         "decision-unavailable" => Some("decision-unavailable"),
         "decision-uncertain" => Some("decision-uncertain"),
         "decision-refused" => Some("decision-refused"),
+        "in-force-ambiguous" => Some("in-force-ambiguous"),
+        "proposal-unreadable" => Some("proposal-unreadable"),
+        "proposal-handoff-refused" => Some("proposal-handoff-refused"),
         _ => None,
     }
 }
@@ -388,6 +411,11 @@ mod tests {
                 "scheduling.preview-availability/v1",
             ),
             (Operation::ExternalCommand, "external.command/v1"),
+            (Operation::ReadInForce, "breg.read-in-force/v1"),
+            (Operation::ReadProposal, "breg.read-proposal/v1"),
+            (Operation::StartProposal, "breg.start-proposal/v1"),
+            (Operation::SubmitProposal, "breg.submit-proposal/v1"),
+            (Operation::CancelProposal, "breg.cancel-proposal/v1"),
         ];
         assert_eq!(
             descriptors()
@@ -470,6 +498,21 @@ mod tests {
             RecoverySemantics::SameCommandAndReceipt
         );
         assert!(Operation::ConfirmHold.supports_read_receipt());
+        assert!(Operation::ReadInForce.is_read());
+        assert!(!Operation::ReadInForce.requires_key());
+        assert!(!Operation::ReadInForce.requires_preparation());
+        assert!(!Operation::ReadInForce.has_dispatch_risk());
+        assert!(!Operation::ReadInForce.supports_read_receipt());
+        assert_eq!(Operation::ReadInForce.product(), "breg");
+        assert_eq!(
+            Operation::ReadInForce.recovery(),
+            RecoverySemantics::ReadAgain
+        );
+        assert!(Operation::ReadInForce.descriptor().declared_refusal);
+        assert_eq!(
+            failure_code("in-force-ambiguous"),
+            Some("in-force-ambiguous")
+        );
         assert!(Operation::ExternalGet.is_read());
         assert!(!Operation::ExternalGet.requires_key());
         assert!(!Operation::ExternalGet.requires_preparation());
@@ -515,6 +558,49 @@ mod tests {
             assert!(!review.supports_read_receipt());
             assert_eq!(review.recovery(), RecoverySemantics::SameCommand);
         }
+    }
+
+    #[test]
+    fn no_operation_decides_a_proposal() {
+        // BReg and its review authority approve, reject, decide and apply
+        // Proposals. A run starts, submits, cancels or follows one only.
+        for registered in descriptors() {
+            let verb = registered
+                .id
+                .split_once('.')
+                .and_then(|(_, rest)| rest.split(['-', '/']).next())
+                .unwrap();
+            assert!(
+                !["approve", "reject", "decide", "apply"].contains(&verb),
+                "{}",
+                registered.id
+            );
+        }
+        for operation in [
+            Operation::ReadProposal,
+            Operation::StartProposal,
+            Operation::SubmitProposal,
+            Operation::CancelProposal,
+        ] {
+            assert_eq!(operation.product(), "breg");
+            assert!(operation.takes_proposal_action());
+        }
+        assert!(Operation::ReadProposal.is_read());
+        for operation in [
+            Operation::StartProposal,
+            Operation::SubmitProposal,
+            Operation::CancelProposal,
+        ] {
+            assert!(operation.requires_key());
+            assert_eq!(operation.recovery(), RecoverySemantics::SameCommand);
+        }
+        assert!(Operation::SubmitProposal.follows_proposal());
+        assert!(!Operation::CancelProposal.follows_proposal());
+        assert_eq!(
+            Operation::StartProposal.descriptor().host_contract()["completionObservation"]
+                ["profile"],
+            "breg-proposal"
+        );
     }
 
     #[test]

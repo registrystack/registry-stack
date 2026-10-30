@@ -440,6 +440,11 @@ test('Proposal turn, decision and the submission read decode exactly', async () 
     const read = await client.readProposalSubmission(current, 2);
     assert.deepEqual(read.value, submission);
     assert.ok(requests.at(-1).startsWith(`/v1/proposals/${id}/submissions/2?accessProfile=reader`));
+    submission.handoffRefusal = {code: 'review.policy-mismatch'};
+    assert.deepEqual((await client.readProposalSubmission(current, 2)).value, submission);
+    submission.handoffRefusal = {code: 'review.authority-said-no'};
+    await assert.rejects(client.readProposalSubmission(current, 2), error => error.kind === 'invalid-request');
+    delete submission.handoffRefusal;
     await assert.rejects(client.readProposalSubmission(current, 1),
       error => error.kind === 'problem' && error.code === 'proposal.submission_expired');
     await assert.rejects(client.readProposalSubmission(current, 0), error => error.kind === 'invalid-request');

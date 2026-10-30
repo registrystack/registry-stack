@@ -792,3 +792,178 @@ fn quote(identifier: &str) -> String {
         .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit()));
     format!("\"{identifier}\"")
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_last_day_interval_is_in_force_through_its_last_day() {
+    let database = TestDatabase::create(4).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the compiled temporal prerequisite");
+    let (migration, migration_task) = database.connect_migration().await;
+    let registry = Arc::new(last_day_registry());
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("migration installs the last-day schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: "temporal-last-day",
+            database_id: "temporal-last-day-database",
+            label: "temporal-last-day-package-1",
+        },
+    )
+    .await
+    .expect("migration initializes the active package identity");
+    migration_task.abort();
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let lock_key =
+        RegistryLockKey::derive("temporal-last-day").expect("registry lock key is valid");
+    let audit_profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x59; 32].into())
+            .expect("test audit profile is keyed"),
+    );
+    let app = mutation_router(pool, registry, identity, lock_key, audit_profile, None);
+    let claims = claims();
+    let create =
+        |key: &'static str, holder: &'static str, from: &'static str, through: &'static str| {
+            let app = app.clone();
+            let claims = claims.clone();
+            async move {
+                send_json(
+                    &app,
+                    "/v1/records/licences",
+                    Some(claims),
+                    key,
+                    json!({"data":{"holder":holder,"validFrom":from,"validThrough":through}}),
+                )
+                .await
+            }
+        };
+
+    let january = create("january", "holder-a", "2026-01-01", "2026-01-31").await;
+    assert_eq!(january.status(), StatusCode::CREATED);
+    let january = body_json(january).await;
+    assert_eq!(
+        january["data"]["domainData"]["validThrough"], "2026-01-31",
+        "the response returns the stored last day, not a computed end: {january}"
+    );
+    let one_day = create("one-day", "holder-b", "2026-03-01", "2026-03-01").await;
+    assert_eq!(
+        one_day.status(),
+        StatusCode::CREATED,
+        "a last day equal to the start is one day in force"
+    );
+    let reversed = create("reversed", "holder-c", "2026-03-02", "2026-03-01").await;
+    assert_eq!(reversed.status(), StatusCode::CONFLICT);
+    assert_problem_code(reversed, "mutation.conflict").await;
+    let shared_last_day = create("shared-last-day", "holder-a", "2026-01-31", "2026-02-28").await;
+    assert_eq!(
+        shared_last_day.status(),
+        StatusCode::CONFLICT,
+        "an interval starting on another's last day overlaps it"
+    );
+    assert_problem_code(shared_last_day, "mutation.conflict").await;
+    let next_day = create("next-day", "holder-a", "2026-02-01", "2026-02-28").await;
+    assert_eq!(
+        next_day.status(),
+        StatusCode::CREATED,
+        "the day after the last day is free"
+    );
+
+    for (as_of, expected) in [
+        ("2026-01-31", vec!["holder-a"]),
+        ("2026-02-01", vec!["holder-a"]),
+        ("2026-03-01", vec!["holder-b"]),
+        ("2026-03-02", vec![]),
+    ] {
+        let response = send(
+            &app,
+            Method::GET,
+            &format!("/v1/records/licences:as-of?asOf={as_of}"),
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{as_of}");
+        let body = body_json(response).await;
+        assert_eq!(
+            body["meta"]["asOf"], as_of,
+            "the response echoes the date it used"
+        );
+        let mut holders = body["items"]
+            .as_array()
+            .expect("as-of list has items")
+            .iter()
+            .map(|item| {
+                (
+                    item["domainData"]["holder"]
+                        .as_str()
+                        .expect("holder")
+                        .to_owned(),
+                    item["domainData"]["validThrough"]
+                        .as_str()
+                        .expect("last day")
+                        .to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        holders.sort();
+        assert_eq!(
+            holders
+                .iter()
+                .map(|(holder, _)| holder.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "{as_of}"
+        );
+        assert!(
+            holders.iter().all(|(_, through)| through.as_str() >= as_of),
+            "{as_of}: every listed record is in force through its stored last day"
+        );
+    }
+}
+
+fn last_day_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id": "test-dataset"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"temporal-last-day","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","timezone":"UTC"},
+          "recordTypes":[{
+            "id":"licence","primaryDataset":"test-dataset","route":"licences","mutationMode":"mutable","classification":"internal",
+            "fields":[
+              {"id":"holder","type":"string","maximumLength":96,"required":true,"classification":"internal"},
+              {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+              {"id":"valid-through","type":"date","classification":"internal"}
+            ],
+            "temporal":{"startField":"valid-from","lastDayField":"valid-through"},
+            "constraints":[{
+              "type":"temporal-non-overlap",
+              "scopeFields":["holder"],
+              "startField":"valid-from",
+              "lastDayField":"valid-through"
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
+            "permissions":{"records":[{
+              "recordType":"licence","operations":["create","get","list"],
+              "readableFields":["holder","valid-from","valid-through"],
+              "writableFields":["holder","valid-from","valid-through"],
+              "rowBoundaries": "unrestricted"
+            }]}
+          }]
+        }"#,
+    )
+    .expect("last-day fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("last-day fixture compiles")
+}

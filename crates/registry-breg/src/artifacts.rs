@@ -8,7 +8,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    EventTrigger, FieldTypeSource, HookSource, MutationMode, Operation, ProvenanceFieldSource,
+    ConstraintSource, EventTrigger, FieldTypeSource, HookSource, MutationMode, Operation,
+    ProvenanceFieldSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -18,8 +19,9 @@ use crate::model::{
     CompiledActionInventory, CompiledActionRoute, CompiledEntity, CompiledEventDeliveryInventory,
     CompiledManifestProjection, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
-    CompiledQueryTemporalValueKind, CompiledRecipients, CompiledRevisionKind, CompiledRoute,
-    CompiledRouteInventory, CompiledStatisticalDataset, HttpMethod,
+    CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledQueryTemporalValueKind,
+    CompiledRecipients, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
+    CompiledStatisticalDataset, HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
@@ -80,6 +82,8 @@ pub(crate) struct EffectiveModel<'a> {
     pub default_language: &'a str,
     #[serde(skip_serializing_if = "crate::model::display_is_empty")]
     pub display: &'a crate::contract::DisplaySource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<&'a str>,
     #[serde(skip_serializing_if = "<[crate::contract::ReviewAuthoritySource]>::is_empty")]
     pub review_authorities: &'a [crate::contract::ReviewAuthoritySource],
     pub datasets: &'a [crate::contract::DatasetSource],
@@ -108,6 +112,7 @@ pub(crate) fn generate_artifacts(
     version: &str,
     default_language: &str,
     display: &crate::contract::DisplaySource,
+    timezone: Option<&str>,
     review_authorities: &[crate::contract::ReviewAuthoritySource],
     datasets: &[crate::contract::DatasetSource],
     access_profiles: &[crate::model::CompiledAccessProfileDisplay],
@@ -132,6 +137,7 @@ pub(crate) fn generate_artifacts(
         version,
         default_language,
         display,
+        timezone,
         review_authorities,
         datasets,
         access_profiles,
@@ -454,7 +460,53 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
             render_mutation_policy(entity),
         );
     }
+    if let Some(temporal) = temporal_marker(entity) {
+        object.insert("x-registry-temporal".to_owned(), temporal);
+    }
     schema
+}
+
+/// The validity interval of a record type that has one, its route, and the
+/// scopes its non-overlap constraints cover, in API names. A caller reading the
+/// record in force on a date needs all three: the interval kind says whether a
+/// date can select a record, the route names the record type the check applies
+/// to, and a scope that is a subset of the caller's subject says the register
+/// allows at most one match.
+fn temporal_marker(entity: &CompiledEntity) -> Option<Value> {
+    let binding = crate::compiler::temporal_binding(entity, entity.temporal.as_ref()?)?;
+    let scopes = entity
+        .constraints
+        .values()
+        .filter_map(|constraint| match constraint {
+            ConstraintSource::TemporalNonOverlap { scope_fields, .. } => {
+                Some(api_field_names(entity, scope_fields))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut marker = rendered_temporal(entity, &binding);
+    marker["route"] = json!(entity.route);
+    marker["nonOverlapScopeProperties"] = json!(scopes);
+    Some(marker)
+}
+
+/// The validity interval as query profiles and record-type schemas both render
+/// it, so the two cannot describe the interval differently. `endProperty` is
+/// the field that closes the interval; `semantics` says whether it holds the
+/// exclusive end or the inclusive last day.
+fn rendered_temporal(entity: &CompiledEntity, temporal: &CompiledQueryTemporalBinding) -> Value {
+    json!({
+        "startProperty": api_field_name(entity, &temporal.start_field).unwrap_or(temporal.start_field.as_str()),
+        "endProperty": api_field_name(entity, &temporal.end_field).unwrap_or(temporal.end_field.as_str()),
+        "valueKind": match temporal.value_kind {
+            CompiledQueryTemporalValueKind::Date => "date",
+            CompiledQueryTemporalValueKind::Timestamp => "timestamp",
+        },
+        "semantics": match temporal.semantics {
+            CompiledQueryTemporalSemantics::StartInclusiveEndExclusive => "start-inclusive-end-exclusive",
+            CompiledQueryTemporalSemantics::StartInclusiveLastDayInclusive => "start-inclusive-last-day-inclusive",
+        },
+    })
 }
 
 pub(crate) fn openapi_input_schema_id(entity_id: &str, operation: Operation) -> String {
@@ -1360,6 +1412,7 @@ pub fn proposal_schema() -> Value {
         "applicationStatus":proposal_application_status_schema(),
         "turn":{"enum":["party","official","nobody"]},
         "decision":proposal_decision_schema(),
+        "handoffRefusal":proposal_handoff_refusal_schema(),
         "blockedReason":{"enum":["package-changed"]},"effectDigest":{"type":"string"},
         "attachments":{"type":"object","maxProperties":8,"additionalProperties":proposal_attachment_schema()},
         "links":{"type":"object","additionalProperties":{
@@ -1370,6 +1423,14 @@ pub fn proposal_schema() -> Value {
                 "ifMatch":{"type":"string"},"availability":availability_schema()}
         }}
     }})
+}
+
+/// Why the review authority refused a submission's hand-off for good. Only
+/// allowlisted codes are named; the authority's text is never served.
+pub(crate) fn proposal_handoff_refusal_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["code"],"properties":{
+        "code":{"enum":["review.initiator-required","review.initiator-excluded",
+            "review.policy-mismatch","review.refused"]}}})
 }
 
 /// The reviewer's decision on a submission. The public reason is the only
@@ -2577,7 +2638,7 @@ fn operation_parameters(
                 json!({"type": "string", "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}),
                 "Opaque Registry history snapshot reference. Omit to capture the latest committed position.",
             ));
-            if let Some(schema) = snapshot_valid_at_schema(route, query, access_profiles) {
+            if let Some(schema) = temporal_value_schema(route, query, access_profiles) {
                 parameters.push(query_parameter(
                     "validAt",
                     false,
@@ -2673,8 +2734,9 @@ fn read_query_parameters(
             "asOf",
             true,
             false,
-            json!({"type": "string", "format": "date-time"}),
-            "Strict UTC RFC3339 instant for the as-of temporal query.",
+            temporal_value_schema(route, query, access_profiles)
+                .expect("as-of routes have a compiled temporal binding"),
+            "The date to read on a date interval, or a strict UTC RFC3339 instant on a timestamp interval.",
         ));
     }
     if query_profiles_for_route(route, query, access_profiles)
@@ -2698,7 +2760,9 @@ fn read_query_parameters(
     parameters
 }
 
-fn snapshot_valid_at_schema(
+/// The schema of a temporal read's instant (`validAt`, `asOf`): a calendar
+/// date on a date interval and a UTC instant on a timestamp interval.
+fn temporal_value_schema(
     route: &CompiledRoute,
     query: &CompiledQueryInventory,
     access_profiles: OpenApiAccessProfiles<'_>,
@@ -3391,7 +3455,7 @@ fn collection_response_schema(
 }
 
 fn list_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value {
-    collection_response_schema(
+    let mut schema = collection_response_schema(
         spec,
         record_member_schema(spec),
         Map::from_iter([(
@@ -3400,7 +3464,20 @@ fn list_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value 
         )]),
         &[],
         json_ld,
-    )
+    );
+    if matches!(
+        spec.route.query_kind,
+        Some(CompiledQueryKind::Current | CompiledQueryKind::AsOf)
+    ) {
+        let as_of = temporal_value_schema(spec.route, spec.query, spec.access_profiles)
+            .expect("current and as-of routes have a compiled temporal binding");
+        let meta = &mut schema["properties"]["meta"];
+        meta["properties"]["asOf"] = as_of;
+        if let Some(required) = meta["required"].as_array_mut() {
+            required.push(json!("asOf"));
+        }
+    }
+    schema
 }
 
 fn snapshot_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value {
@@ -3411,7 +3488,7 @@ fn snapshot_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Va
             json!({"type": "integer", "format": "int64", "minimum": 0}),
         ),
     ]);
-    if let Some(valid_at) = snapshot_valid_at_schema(spec.route, spec.query, spec.access_profiles) {
+    if let Some(valid_at) = temporal_value_schema(spec.route, spec.query, spec.access_profiles) {
         extensions.insert("validAt".to_owned(), valid_at);
     }
     collection_response_schema(
@@ -4179,15 +4256,7 @@ fn render_query_profile(
             })
         }).collect::<Vec<_>>(),
         "selectorProperties": api_field_names(entity, &operation.selector_fields),
-        "temporal": operation.temporal.as_ref().map(|temporal| json!({
-            "startProperty": api_field_name(entity, &temporal.start_field).unwrap_or(temporal.start_field.as_str()),
-            "endProperty": api_field_name(entity, &temporal.end_field).unwrap_or(temporal.end_field.as_str()),
-            "valueKind": match temporal.value_kind {
-                CompiledQueryTemporalValueKind::Date => "date",
-                CompiledQueryTemporalValueKind::Timestamp => "timestamp",
-            },
-            "semantics": "start-inclusive-end-exclusive",
-        }))
+        "temporal": operation.temporal.as_ref().map(|temporal| rendered_temporal(entity, temporal))
     });
     if let Some(bbox) = operation
         .spatial

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The input of `breg.read-proposal/v1` and `breg.cancel-proposal/v1`.",
+  "properties": {
+    "proposalId": {
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "required": [
+    "proposalId"
+  ],
+  "title": "breg.read-proposal/v1 input",
+  "type": "object"
+}

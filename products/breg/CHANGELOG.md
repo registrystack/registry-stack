@@ -32,6 +32,46 @@
   starting this runtime, test, build, plan, and apply one governed successor
   with the current tooling. The successor installs the shared engine store;
   there is no separate timer schema command.
+- BREAKING: take today's date in the registry's time zone, set by
+  `project.timezone` (an IANA zone name such as `Asia/Colombo`). Earlier
+  releases used UTC. A project with a date-interval Record type, a
+  `currentDate` requirement, an `evaluation_date()` field or a statistics
+  dataset fails `bregctl check` with `breg.timezone.required` until it adds
+  the line; `timezone: UTC` keeps the dates the project had before. A name
+  that is not an IANA zone is refused as `breg.timezone.unknown`. See
+  [the registry's time zone](HISTORY.md#the-registrys-time-zone).
+- BREAKING: `:as-of` on a date-interval Record type takes a calendar date such
+  as `2026-06-05`; a timestamp interval keeps the UTC RFC 3339 instant. Any
+  other `asOf` value answers `400 query.invalid` naming `asOf`. On a date
+  interval, `:current` uses the registry's local date.
+- Echo the `asOf` each `:current` and `:as-of` read used in collection `meta`.
+- Add `lastDayField` to date intervals: a nullable `date` field holding the
+  inclusive last day in force, in place of an exclusive `endField`. Declare
+  exactly one of them; `bregctl check` refuses both, or neither, with
+  `breg.temporal.end-conflict`, and a `lastDayField` on a timestamp interval
+  or a non-date field with `breg.temporal.last-day-type`. A statistics stock
+  counts a record through its last day, under `validity: temporal` or a
+  `validity.until` that names the field.
+- Add `handoffRefusal` to Proposal Get, each Proposal in a list, and the
+  per-version submission read, while the current submission stands refused by
+  the review authority. The code is `review.initiator-required`,
+  `review.initiator-excluded` or `review.policy-mismatch`, and any other
+  authority refusal reads `review.refused`; BReg never copies the authority's
+  text. The member is absent for a failure on BReg's side. See
+  [the hand-off refusal](proposals.md#when-the-review-authority-refuses-the-hand-off).
+- The Rust, Node.js and Python clients read `handoffRefusal` on Proposal Get
+  and on the per-version submission read, and refuse a code outside the
+  four above.
+- Generated record-type schemas of a Record type with a validity interval
+  carry an `x-registry-temporal` marker: `startProperty`, `endProperty`,
+  `valueKind` (`date` or `timestamp`), `semantics`
+  (`start-inclusive-end-exclusive`, or `start-inclusive-last-day-inclusive`
+  for a `lastDayField`), the collection `route`, and the
+  `nonOverlapScopeProperties` of each `temporal-non-overlap` constraint. The
+  query profile's interval uses the same rendering.
+- BREAKING: the Proposal hand-off store keeps the refusal code in its own
+  column, and the managed schema fingerprint changes with it. Migration:
+  install the release on a fresh database.
 - Add `bregctl generate odrl` for an experimental, partial ODRL description of
   configured `get` and `list` permissions. Preserve token requirements and field
   projections; omit permissions with unsupported row, membership, consent or

@@ -12,8 +12,9 @@ use axum::{
     Json, Router,
 };
 use registry_breg_client::{
-    BRegIdempotencyKey, BRegMetadata, BRegPreparedProposal, BRegProposal, BRegProposalQuery,
-    BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig,
+    BRegIdempotencyKey, BRegMetadata, BRegPreparedProposal, BRegProposal,
+    BRegProposalHandoffRefusal, BRegProposalQuery, BRegRecordOptions, BaseRegistryClient,
+    BaseRegistryClientConfig,
 };
 use serde_json::{json, Value};
 
@@ -1799,4 +1800,116 @@ async fn attachment_availability_uses_the_same_complete_unavailable_contract_as_
     receipt["revision"] = json!(4);
     fixture.answer(receipt);
     assert!(fixture.client.execute_proposal(&attempt).await.is_ok());
+}
+
+#[tokio::test]
+async fn handoff_refusal_reads_only_an_allowlisted_code_on_a_submitted_proposal() {
+    let fixture = Fixture::start().await;
+    let binding = fixture.metadata.select_proposal_get("writer").unwrap();
+    let with_refusal = |state: &str, code: &str| {
+        let mut value = proposal(state);
+        value["handoffRefusal"] = json!({"code": code});
+        value
+    };
+    for code in [
+        "review.initiator-required",
+        "review.initiator-excluded",
+        "review.policy-mismatch",
+        "review.refused",
+    ] {
+        fixture.answer(with_refusal("submitted", code));
+        let read = fixture
+            .client
+            .get_proposal(&binding, ID)
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(
+            read.handoff_refusal().map(|refusal| refusal.as_str()),
+            Some(code)
+        );
+    }
+    assert!(fixture
+        .proposal(proposal("submitted"))
+        .await
+        .handoff_refusal()
+        .is_none());
+    let mut accepted = vec![];
+    for (state, code) in [
+        ("submitted", "review.authority-text"),
+        ("submitted", ""),
+        ("draft", "review.refused"),
+    ] {
+        fixture.answer(with_refusal(state, code));
+        if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+            accepted.push(format!("{state}/{code}"));
+        }
+    }
+    let mut extra = with_refusal("submitted", "review.refused");
+    extra["handoffRefusal"]["detail"] = json!("authority text");
+    fixture.answer(extra);
+    if fixture.client.get_proposal(&binding, ID).await.is_ok() {
+        accepted.push("extra member".into());
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
+async fn submission_read_carries_only_an_allowlisted_handoff_refusal() {
+    let fixture = Fixture::start().await;
+    let held = fixture.proposal(proposal("submitted")).await;
+    let submission = |refusal: Option<Value>| {
+        let mut value = json!({"id":ID,"actionId":"correct","submissionVersion":1,"current":true,
+            "effectDigest":DIGEST,"review":null,"application":null});
+        if let Some(refusal) = refusal {
+            value["handoffRefusal"] = refusal;
+        }
+        value
+    };
+    fixture.answer(submission(Some(
+        json!({"code": "review.initiator-required"}),
+    )));
+    let read = fixture
+        .client
+        .read_proposal_submission(&held, 1)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        read.handoff_refusal(),
+        Some(BRegProposalHandoffRefusal::InitiatorRequired)
+    );
+    assert_eq!(
+        serde_json::to_value(&read).unwrap()["handoffRefusal"],
+        json!({"code": "review.initiator-required"})
+    );
+    fixture.answer(submission(None));
+    let read = fixture
+        .client
+        .read_proposal_submission(&held, 1)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(read.handoff_refusal(), None);
+    assert!(serde_json::to_value(&read)
+        .unwrap()
+        .get("handoffRefusal")
+        .is_none());
+    let mut accepted = vec![];
+    for refusal in [
+        json!({"code": "review.authority-text"}),
+        json!({"code": "review.refused", "detail": "authority text"}),
+        json!("review.refused"),
+    ] {
+        fixture.answer(submission(Some(refusal.clone())));
+        if fixture
+            .client
+            .read_proposal_submission(&held, 1)
+            .await
+            .is_ok()
+        {
+            accepted.push(refusal);
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
 }

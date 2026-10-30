@@ -2613,7 +2613,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
-          "project":{"id":"history-erasure-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "project":{"id":"history-erasure-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","timezone":"UTC"},
           "recordTypes":[{
             "id":"membership",
             "primaryDataset":"test-dataset",

@@ -2689,6 +2689,12 @@ fn constraint_sql(
         }
         ConstraintSource::TemporalNonOverlap { scope_fields, .. } => {
             let (valid_from, valid_to) = temporal_boundary_fields(entity);
+            // A last day is in force, so two intervals sharing one overlap.
+            let bounds = if interval_has_last_day(entity) {
+                "[]"
+            } else {
+                "[)"
+            };
             let function = match valid_from.field_type {
                 FieldTypeSource::Date => "daterange",
                 FieldTypeSource::Timestamp => "tstzrange",
@@ -2699,7 +2705,7 @@ fn constraint_sql(
                 .map(|field| format!("{} WITH =", field_name(entity, field)))
                 .collect::<Vec<_>>();
             elements.push(format!(
-                "{function}({}, {}, '[)') WITH &&",
+                "{function}({}, {}, '{bounds}') WITH &&",
                 quote_identifier(&valid_from.physical_name),
                 quote_identifier(&valid_to.physical_name)
             ));
@@ -2716,12 +2722,25 @@ fn temporal_order_constraint_sql(entity: &CompiledEntity) -> String {
     let table = quote_identifier(&entity.physical_table);
     let name = quote_identifier(&temporal_order_constraint_name(&entity.id));
     let (valid_from, valid_to) = temporal_boundary_fields(entity);
+    // A last day may equal the start: the interval is then one day long.
+    let order = if interval_has_last_day(entity) {
+        "<="
+    } else {
+        "<"
+    };
     format!(
-        "ALTER TABLE registry_data.{table} ADD CONSTRAINT {name} CHECK ({} IS NULL OR {} < {})",
+        "ALTER TABLE registry_data.{table} ADD CONSTRAINT {name} CHECK ({} IS NULL OR {} {order} {})",
         quote_identifier(&valid_to.physical_name),
         quote_identifier(&valid_from.physical_name),
         quote_identifier(&valid_to.physical_name)
     )
+}
+
+fn interval_has_last_day(entity: &CompiledEntity) -> bool {
+    entity
+        .temporal
+        .as_ref()
+        .is_some_and(|temporal| temporal.last_day)
 }
 
 fn temporal_order_constraint_name(entity_id: &str) -> String {

@@ -8,7 +8,7 @@ export declare class CoordinatorClient {
   status(token: string, runId: import('./client').RunId): Promise<import('./client').CoordinatorOutcome<import('./client').RunStatus>>
   inspect(token: string, runId: import('./client').RunId): Promise<import('./client').CoordinatorOutcome<import('./client').RunInspection>>
   reconcile(token: string, runId: import('./client').RunId, reason: string): Promise<import('./client').CoordinatorOutcome<import('./client').RunInspection>>
-  list(token: string, limit: number, cursor?: string | null, state?: import('./client').RunListState | null, attention?: boolean | null): Promise<import('./client').CoordinatorOutcome<import('./client').RunList>>
+  list(token: string, limit: number, cursor?: string | null, state?: import('./client').RunListState | null, attention?: boolean | null, proposal?: string | null, turn?: import('./client').ProposalTurn | null): Promise<import('./client').CoordinatorOutcome<import('./client').RunList>>
   retrySame(token: string, runId: import('./client').RunId, reason: string): Promise<import('./client').CoordinatorOutcome<import('./client').RetryScheduled>>
   cancel(token: string, runId: import('./client').RunId, reason: string): Promise<import('./client').CoordinatorOutcome<import('./client').RunStatus>>
 }

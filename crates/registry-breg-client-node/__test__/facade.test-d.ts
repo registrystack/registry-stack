@@ -271,7 +271,9 @@ client.readProposalReviewStatus(proposal).then(outcome => {
 client.readProposalSubmission(proposal, 1).then(outcome => {
   const status: 'approved' | 'rejected' | 'changes-requested' | 'answered' | undefined = outcome.value.decision?.status
   const publicReason: string | undefined = outcome.value.decision?.publicReason
+  const refusal: 'review.initiator-required' | 'review.initiator-excluded' | 'review.policy-mismatch' | 'review.refused' | undefined = outcome.value.handoffRefusal?.code
   void status
+  void refusal
   publicReason?.toUpperCase()
 })
 

@@ -40,7 +40,10 @@ pub(crate) struct ActionInput {
 }
 
 fn input(request: &CallRequest) -> Result<(ActionInput, BRegIdempotencyKey), CallOutcome> {
-    if request.operation != Operation::InvokeBregAction {
+    if !matches!(
+        request.operation,
+        Operation::InvokeBregAction | Operation::StartProposal | Operation::SubmitProposal
+    ) {
         return Err(refused("invalid-command"));
     }
     let input =
@@ -107,6 +110,7 @@ pub(crate) fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOut
 async fn binding(
     client: &BaseRegistryClient,
     profile: &str,
+    operation: Operation,
     expected: &ActionContract,
 ) -> Result<BRegActionBinding, CallOutcome> {
     let metadata = client
@@ -120,9 +124,14 @@ async fn binding(
     if action.definition_revision() != expected.action_revision || action.mode() != expected.mode {
         return Err(refused("action-contract-changed"));
     }
-    // The applicant drives a Proposal in the Base Registry Engine; this
-    // operation invokes only immediate Actions.
-    if action.mode() == BRegActionMode::Proposal {
+    // Invoke changes a Record at once; start and submit open a Proposal that
+    // BReg's review authority decides. Neither runs the other mode's Action.
+    let wanted = if operation == Operation::InvokeBregAction {
+        BRegActionMode::Immediate
+    } else {
+        BRegActionMode::Proposal
+    };
+    if action.mode() != wanted {
         return Err(refused("action-unavailable"));
     }
     Ok(action)
@@ -140,7 +149,7 @@ pub async fn prepare(
         .operation_contract
         .as_ref()
         .ok_or_else(|| refused("action-contract-missing"))?;
-    let action = binding(client, profile, expected).await?;
+    let action = binding(client, profile, request.operation, expected).await?;
     BRegActionInvocationRequest::validate_inputs(&action, &input.input)
         .map_err(|_| refused("invalid-command"))?;
     let conditions = if action.required_condition_keys().is_empty() {
@@ -206,7 +215,7 @@ pub async fn execute(
     let Some(expected) = request.operation_contract.as_ref() else {
         return refused("action-contract-missing");
     };
-    let action = match binding(client, profile, expected).await {
+    let action = match binding(client, profile, request.operation, expected).await {
         Ok(action) => action,
         Err(outcome) => return outcome,
     };
@@ -214,6 +223,10 @@ pub async fn execute(
         Ok(invocation) => invocation,
         Err(_) => return refused("prepared-command-mismatch"),
     };
+    if request.operation != Operation::InvokeBregAction {
+        return crate::breg_proposal::start(client, &action, &invocation, &key, request.operation)
+            .await;
+    }
     match client.invoke_action(&action, &invocation, &key).await {
         Ok(answer) => match serde_json::to_value(answer.value) {
             Ok(value) => CallOutcome::Success(value),

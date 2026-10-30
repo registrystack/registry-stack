@@ -98,6 +98,8 @@ fn advance(next: String, output: Option<Value>) -> Detail {
         receipt_expired: false,
         completed_without_effect: false,
         recheck_seconds: None,
+        follow: None,
+        hold_detail: None,
     }
 }
 
@@ -120,6 +122,17 @@ fn call_result(
             outcome: SendOutcome::Transient { retry_after },
             detail: Detail::failure(safe_code(&code, "remote-uncertain"), true),
         },
+        // Two records in force on one date is a fault in the register, not in
+        // the run. Retrying cannot clear it and failing the run would hide it,
+        // so the run is held for a person to correct the register.
+        CallOutcome::Refused { code } if code == crate::read_in_force::IN_FORCE_AMBIGUOUS => {
+            held(crate::read_in_force::IN_FORCE_AMBIGUOUS)
+        }
+        CallOutcome::InForceAmbiguous(detail) => {
+            let mut sent = held(crate::read_in_force::IN_FORCE_AMBIGUOUS);
+            sent.detail.hold_detail = Some(detail);
+            sent
+        }
         CallOutcome::Refused { code } => failed(safe_code(&code, "remote-refused"), uncertain),
         CallOutcome::DeclaredRefusal(refusal) if !uncertain => {
             let Some(step) = on_declared_refusal else {
@@ -243,6 +256,18 @@ fn wait_result(
         }
         Some(CompletionObservation::Hold { code }) => {
             held(safe_code(&code, "completion-unavailable"))
+        }
+        Some(CompletionObservation::Followed { proposal, read }) => {
+            let mut result = wait_result(
+                contract,
+                Some(*read),
+                next,
+                on_timeout,
+                timed_out,
+                recheck_seconds,
+            );
+            result.detail.follow = Some(proposal);
+            result
         }
         _ if timed_out => match on_timeout {
             Some(step) => accepted(advance(step.to_owned(), None)),
@@ -413,7 +438,7 @@ impl Worker {
             Step::Choose { cases, .. } => {
                 let value = match evaluate() {
                     Ok(value) => value,
-                    Err(_) => return Ok(failed("mapping-invalid", false)),
+                    Err(error) => return Ok(failed(crate::compare::failure_code(&error), false)),
                 };
                 let Some(next) = value.as_str().and_then(|case| cases.get(case)) else {
                     return Ok(failed("choice-invalid", false));
@@ -443,6 +468,8 @@ impl Worker {
                     receipt_expired: false,
                     completed_without_effect: false,
                     recheck_seconds: None,
+                    follow: None,
+                    hold_detail: None,
                 }))
             }
             Step::Call {
@@ -1039,6 +1066,33 @@ mod tests {
         assert_eq!(held.detail.next, None);
         assert_eq!(held.detail.failure_code, Some("product-refused"));
         assert!(!held.detail.completed_without_effect);
+    }
+
+    #[test]
+    fn two_records_in_force_hold_the_run_for_a_person() {
+        for uncertain in [false, true] {
+            let sent = call_result(
+                CallOutcome::Refused {
+                    code: "in-force-ambiguous".into(),
+                },
+                "success",
+                Some("none-in-force"),
+                uncertain,
+            );
+            assert_eq!(sent.detail.failure_code, Some("in-force-ambiguous"));
+            assert!(sent.detail.recovery_hold, "the run waits for a person");
+            assert_eq!(sent.detail.next, None);
+            assert_eq!(sent.detail.output, None);
+        }
+        let other = call_result(
+            CallOutcome::Refused {
+                code: "product-forbidden".into(),
+            },
+            "success",
+            None,
+            false,
+        );
+        assert!(!other.detail.recovery_hold, "other refusals still fail");
     }
 
     #[test]

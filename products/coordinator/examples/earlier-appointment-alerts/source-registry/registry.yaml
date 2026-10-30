@@ -5,6 +5,7 @@ project:
   version: "1"
   canonicalBaseIri: https://example.invalid/earlier-appointment-alerts
   defaultLanguage: en
+  timezone: UTC
 package:
   sourceRevision: earlier-appointment-alert-source-v1
 datasets:

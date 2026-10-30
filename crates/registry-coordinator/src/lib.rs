@@ -4,6 +4,8 @@
 pub mod adapters;
 pub mod authoring;
 pub mod breg_action;
+mod breg_proposal;
+pub mod compare;
 pub mod completion;
 pub mod contracts;
 pub mod decision;
@@ -11,6 +13,7 @@ pub mod definition;
 pub mod error;
 pub mod event_trigger;
 pub mod external_http;
+mod follow_check;
 mod functions;
 mod mapping_check;
 pub mod operations;
@@ -18,6 +21,7 @@ pub mod problem;
 pub mod project;
 mod project_check;
 pub mod protocol;
+mod read_in_force;
 mod review;
 pub mod runtime;
 #[cfg(feature = "schema")]

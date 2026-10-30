@@ -33,13 +33,16 @@ if current["continuation"] is not None:
     current = client.continue_current_list(current["continuation"])
 
 historical = client.list_records_as_of(
-    "companies", "2026-09-10T00:00:00Z", access_profile=profile
+    "companies", "2026-09-10", access_profile=profile
 )
 snapshot = client.list_snapshot_records("companies", access_profile=profile)
 related = client.list_relationship_records(
     "companies", record_id, "directors", access_profile=profile
 )
 ```
+
+`as_of` is a calendar date such as `2026-09-10` for a date-interval Record type,
+and a UTC RFC 3339 instant such as `2026-09-10T00:00:00Z` for a timestamp interval.
 
 Use `get_record_revision` for one strict-decoded historical envelope and
 `record_revisions` when the revisions resource itself must remain exact inert

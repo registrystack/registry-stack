@@ -947,6 +947,36 @@ fn terminal_submission_error(error: &ReviewClientError) -> bool {
     }
 }
 
+/// The authority refusal codes a Proposal names as its hand-off refusal.
+/// Each tells the author what to change; any other authority refusal reads
+/// `review.refused`, and the authority's own text is never kept.
+const PUBLIC_REFUSAL_CODES: [&str; 3] = [
+    "review.initiator-required",
+    "review.initiator-excluded",
+    "review.policy-mismatch",
+];
+
+/// The hand-off refusal a Proposal names for a terminal hand-off failure.
+/// Only a refusal the authority answered as a problem is one; a failure on
+/// this side (configuration, an invalid request) names none, so the author
+/// is not told to change a Proposal that was never judged. The operator
+/// still sees every failure in the job's `last_error_code`.
+fn public_refusal_code(error: &ReviewClientError) -> Option<&'static str> {
+    match error {
+        ReviewClientError::Problem { problem, .. } => {
+            Some(allowlisted_refusal_code(Some(problem.code.as_str())))
+        }
+        _ => None,
+    }
+}
+
+fn allowlisted_refusal_code(code: Option<&str>) -> &'static str {
+    PUBLIC_REFUSAL_CODES
+        .into_iter()
+        .find(|allowed| Some(*allowed) == code)
+        .unwrap_or("review.refused")
+}
+
 fn terminal_submission_problem_status(status: u16) -> bool {
     (400..=499).contains(&status) && status != 429
 }
@@ -1550,6 +1580,12 @@ pub(crate) async fn install(
                  ON registry_internal.registry_proposal_review_submissions
                  (next_attempt_at, created_at)
                  WHERE state IN ('pending','submitting','uncertain');
+             -- The public reason a remote-refused hand-off reads on the
+             -- Proposal: one allowlisted authority code, never its text.
+             ALTER TABLE registry_internal.registry_proposal_review_submissions
+                 ADD COLUMN IF NOT EXISTS refusal_code text CHECK (refusal_code IS NULL OR refusal_code IN
+                     ('review.initiator-required','review.initiator-excluded',
+                      'review.policy-mismatch','review.refused'));
              CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_completions (
                  authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
                  event_id uuid NOT NULL,
@@ -2276,7 +2312,7 @@ pub async fn run_one_submission(
                 .execute(
                     "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state='failed',lease_until=NULL,last_error_code='remote-refused',
-                            updated_at=transaction_timestamp()
+                            refusal_code=$5,updated_at=transaction_timestamp()
                       WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='submitting' AND lease_until=$4",
                     &[
@@ -2284,6 +2320,7 @@ pub async fn run_one_submission(
                         &job.proposal_id,
                         &job.submission_version,
                         &job.lease_until,
+                        &public_refusal_code(&error),
                     ],
                 )
                 .await
@@ -3086,6 +3123,27 @@ mod tests {
         assert!(!terminal_submission_error(&ReviewClientError::Transport {
             kind: registry_platform_httputil::client::TransportKind::Timeout,
         }));
+    }
+
+    #[test]
+    fn a_hand_off_refusal_names_only_an_allowlisted_authority_code() {
+        for code in PUBLIC_REFUSAL_CODES {
+            assert_eq!(allowlisted_refusal_code(Some(code)), code);
+        }
+        for other in [None, Some("producer.refused"), Some("review.refused-later")] {
+            assert_eq!(
+                allowlisted_refusal_code(other),
+                "review.refused",
+                "{other:?}"
+            );
+        }
+        assert_eq!(
+            public_refusal_code(&ReviewClientError::Configuration {
+                reason: "invalid configuration"
+            }),
+            None,
+            "a failure on this side is not an authority refusal"
+        );
     }
 
     #[test]

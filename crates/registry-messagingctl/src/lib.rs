@@ -685,7 +685,7 @@ where
         .windows(2)
         .any(|pair| pair[0] == OsStr::new("--format") && pair[1] == OsStr::new("json"))
         || args.iter().any(|arg| arg == OsStr::new("--format=json"));
-    let cli = match Cli::try_parse_from(args) {
+    let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(error)
             if matches!(
@@ -699,7 +699,10 @@ where
             };
         }
         Err(error) => {
-            let message = report::usage_message(&error);
+            let mut message = report::usage_message(&error);
+            if let Some(hint) = report::directory_hint(&error, &args) {
+                message = format!("{message}; {hint}");
+            }
             if machine_mode {
                 let outcome = Outcome::refused(USAGE_EXIT, "usage.invalid", "arguments", message);
                 return finish(&outcome, "usage", OutputFormat::Json, stdout, stderr);

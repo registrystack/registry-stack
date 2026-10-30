@@ -6990,10 +6990,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
         .find(|parameter| parameter["name"] == "asOf")
         .expect("asOf parameter is rendered");
     assert_eq!(as_of["required"], true);
-    assert_eq!(
-        as_of["schema"],
-        json!({"type": "string", "format": "date-time"})
-    );
+    assert_eq!(as_of["schema"], json!({"type": "string", "format": "date"}));
     let page_size = as_of_parameters
         .iter()
         .find(|parameter| parameter["name"] == "$top")
@@ -7048,7 +7045,7 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
         br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
-          "project":{"id":"temporal-open","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "project":{"id":"temporal-open","version":"1","defaultLanguage":"en","timezone":"UTC","canonicalBaseIri":"https://authoring.example.test"},
           "recordTypes":[{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "fields":[
@@ -7125,7 +7122,7 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
     let project = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
-      "project":{"id":"snapshot-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "project":{"id":"snapshot-demo","version":"1","defaultLanguage":"en","timezone":"UTC","canonicalBaseIri":"https://authoring.example.test"},
       "recordTypes":[{
         "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"internal",
         "fields":[
@@ -9009,4 +9006,55 @@ fn an_identifier_is_read_in_the_local_grammar_and_refused_outside_it() {
     check::<EventConditionSource>(|id| json!({"type": "fields", "beforeEquals": {id: true}}));
     check::<EventConditionSource>(|id| json!({"type": "fields", "afterEquals": {id: true}}));
     check::<LookupPermissionSource>(|id| json!({"claimMapping": {id: "claim"}}));
+}
+
+#[test]
+fn entity_schema_marks_the_validity_interval_and_the_non_overlap_scopes() {
+    let compiled = compile_json(
+        br#"{"datasets":[{"id": "test-dataset"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"temporal-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "recordTypes":[
+            {
+              "id":"assignment","primaryDataset":"test-dataset","route":"assignments","mutationMode":"create-only",
+              "fields":[
+                {"id":"district-code","apiName":"district","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+                {"id":"starts-on","apiName":"startsOn","type":"date","validTimeRole":"valid-from","required":true,"classification":"internal"},
+                {"id":"ends-on","apiName":"endsOn","type":"date","validTimeRole":"valid-to","classification":"internal"}
+              ],
+              "temporal":{"startField":"starts-on","endField":"ends-on"},
+              "constraints":[{
+                "id":"one-per-district","type":"temporal-non-overlap",
+                "scopeFields":["district-code"],"startField":"starts-on","endField":"ends-on"
+              }]
+            },
+            {
+              "id":"note","primaryDataset":"test-dataset","route":"notes","mutationMode":"create-only",
+              "fields":[{"id":"text","type":"string","maximumLength":32,"classification":"internal"}]
+            }
+          ]
+        }"#,
+    )
+    .expect("a date-interval record type compiles");
+    let schema = |id: &str| -> Value {
+        let artifact = compiled
+            .artifacts()
+            .get(&format!("generated/schemas/{id}.schema.json"))
+            .expect("entity schema is generated");
+        parse_json_strict(&artifact.bytes).expect("entity schema is strict JSON")
+    };
+
+    assert_eq!(
+        schema("assignment")["x-registry-temporal"],
+        json!({
+            "startProperty": "startsOn",
+            "endProperty": "endsOn",
+            "valueKind": "date",
+            "semantics": "start-inclusive-end-exclusive",
+            "route": "assignments",
+            "nonOverlapScopeProperties": [["district"]]
+        })
+    );
+    assert!(schema("note").get("x-registry-temporal").is_none());
 }

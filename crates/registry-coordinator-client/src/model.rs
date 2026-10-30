@@ -134,6 +134,18 @@ pub struct StepStatus {
     /// pointer that names no value.
     #[serde(default, deserialize_with = "failure_path")]
     pub failure_path: Option<String>,
+    /// What a person needs to clear a hold: for `in-force-ambiguous`, the
+    /// two records in force and the date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_detail: Option<HoldDetail>,
+}
+
+/// The records and date behind a held step.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HoldDetail {
+    pub date: String,
+    pub record_identifiers: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -249,6 +261,29 @@ pub struct WaitStatus {
     pub minimum_interval_seconds: u32,
     pub observations: u32,
     pub observation_limit: u32,
+    /// What the latest answered read of a followed BReg Proposal showed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_observation: Option<LastObservation>,
+    /// The operator's "Open the request" link for a followed Proposal, when
+    /// the deployment configures one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_link: Option<String>,
+}
+
+/// The latest answered read of a followed BReg Proposal. It carries no
+/// Proposal input and names no person. `state_since` is when Coordinator
+/// first saw the current state and turn, not when BReg entered it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LastObservation {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<String>,
+    pub submission_version: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_refusal: Option<String>,
+    pub observed_at: DateTime<Utc>,
+    pub state_since: DateTime<Utc>,
 }
 
 // The runtime owns the polling fence; inspection must preserve its valid budget.
@@ -266,6 +301,10 @@ struct WaitStatusDocument {
     minimum_interval_seconds: u32,
     observations: u32,
     observation_limit: u32,
+    #[serde(default)]
+    last_observation: Option<LastObservation>,
+    #[serde(default)]
+    request_link: Option<String>,
 }
 
 impl TryFrom<WaitStatusDocument> for WaitStatus {
@@ -289,6 +328,8 @@ impl TryFrom<WaitStatusDocument> for WaitStatus {
             minimum_interval_seconds: document.minimum_interval_seconds,
             observations: document.observations,
             observation_limit: document.observation_limit,
+            last_observation: document.last_observation,
+            request_link: document.request_link,
         })
     }
 }
@@ -386,14 +427,36 @@ impl RunListState {
     }
 }
 
-/// One caller-controlled page request. A continuation must preserve its state
-/// and attention filters.
+/// Whose turn a followed BReg Proposal showed at its last answered read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProposalTurn {
+    Party,
+    Official,
+    Nobody,
+}
+
+impl ProposalTurn {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Party => "party",
+            Self::Official => "official",
+            Self::Nobody => "nobody",
+        }
+    }
+}
+
+/// One caller-controlled page request. A continuation must preserve every
+/// filter that produced its cursor. `proposal` selects runs waiting on that
+/// Proposal; `turn` selects runs whose Proposal wait last showed that turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunListQuery {
     pub limit: u32,
     pub cursor: Option<String>,
     pub state: Option<RunListState>,
     pub attention: Option<bool>,
+    pub proposal: Option<Uuid>,
+    pub turn: Option<ProposalTurn>,
 }
 
 impl RunListQuery {
@@ -404,6 +467,8 @@ impl RunListQuery {
             cursor: None,
             state: None,
             attention: None,
+            proposal: None,
+            turn: None,
         }
     }
 }

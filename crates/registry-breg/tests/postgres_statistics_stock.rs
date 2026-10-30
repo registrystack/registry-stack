@@ -300,13 +300,158 @@ async fn partial_vocabulary_population_matches_the_authorized_list_count() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stock_counts_a_record_on_its_last_day_whichever_way_the_validity_is_named() {
+    let database = postgres_harness::TestDatabase::create(3).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(last_day_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "statistics-last-day-registry",
+            database_id: "statistics-last-day-database",
+            label: "package-statistics-last-day-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+
+    // The registry's zone is UTC, so the current period's reference date is
+    // today's UTC date.
+    let today = Utc::now().date_naive();
+    let yesterday = today.checked_sub_days(Days::new(1)).unwrap();
+    let period = current_period(PeriodGranularity::Month, today).expect("current month resolves");
+    let entity = &compiled.entities()["permit"];
+    let table = quote_stock_identifier(&entity.physical_table);
+    let boundary = quote_stock_identifier(&entity.fields["administrative-boundary"].physical_name);
+    let from = quote_stock_identifier(&entity.fields["valid-from"].physical_name);
+    let through = quote_stock_identifier(&entity.fields["valid-through"].physical_name);
+    let sql = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, record_revision, record_lifecycle, active_package_revision,
+              {boundary}, {from}, {through})
+         VALUES ($1::text::uuid, 1, 'active', $2, 'north-district', '2025-01-01', $3)"
+    );
+    for (id, last_day) in [
+        ("00000000-0000-4000-8000-000000000201", today),
+        ("00000000-0000-4000-8000-000000000202", today),
+        ("00000000-0000-4000-8000-000000000203", yesterday),
+        ("00000000-0000-4000-8000-000000000204", yesterday),
+    ] {
+        database
+            .admin
+            .execute(&sql, &[&id, &identity.activation_id, &last_day])
+            .await
+            .expect("last-day permit fixture inserts");
+    }
+    let app = partial_text_router(
+        database.runtime_config.build_pool().expect("pool builds"),
+        compiled,
+        identity,
+        RegistryLockKey::derive("statistics-last-day-registry").expect("lock key derives"),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x62; 32].into())
+                .expect("audit profile is keyed"),
+        ),
+    );
+    for dataset in ["permits-in-force-temporal", "permits-in-force-fields"] {
+        let statistics = partial_text_json(
+            partial_text_send(
+                &app,
+                Method::GET,
+                &format!(
+                    "/v1/statistics/{dataset}:live?accessProfile=facility-operator&from={0}&to={0}",
+                    period.code
+                ),
+                partial_text_claims(),
+            )
+            .await,
+        )
+        .await;
+        let total = statistics["cells"]
+            .as_array()
+            .expect("statistics cells are an array")
+            .iter()
+            .find(|cell| cell["dimensions"]["administrative-boundary"] == "_T")
+            .expect("total cell exists");
+        assert_eq!(
+            total["value"], 2,
+            "{dataset} counts the two permits whose last day is today and not the two that ended yesterday: {statistics}"
+        );
+    }
+    database.cleanup().await;
+}
+
+/// Permits in force from `valid-from` through the inclusive `valid-through`,
+/// counted once through the temporal declaration and once by naming the
+/// same fields.
+fn last_day_registry() -> registry_breg::CompiledRegistry {
+    let source = json!({"datasets":[{"id": "facility"}],
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{
+            "id":"statistics-last-day-registry","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://statistics-last-day.example.test","timezone":"UTC"
+        },
+        "recordTypes":[{
+            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+            "fields":[
+                {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+                {"id":"valid-through","type":"date","classification":"internal"},
+                {"id":"administrative-boundary","type":"vocabulary-code","vocabulary":"administrative-boundary","required":true,"classification":"internal"}
+            ],
+            "temporal":{"startField":"valid-from","lastDayField":"valid-through"}
+        }],
+        "accessProfiles":[{
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"permit","operations":["list"],
+                "readableFields":["valid-from","valid-through","administrative-boundary"],
+                "filterableFields":["valid-from","valid-through","administrative-boundary"],
+                "allowCount":true,
+                "rowBoundaries":"unrestricted"
+            }],"datasets":[
+                {"dataset":"permits-in-force-temporal","operations":["read-live"]},
+                {"dataset":"permits-in-force-fields","operations":["read-live"]}
+            ]}
+        }],
+        "vocabularies":[
+            {"id":"administrative-boundary","values":["north-district","south-district"]}
+        ],
+        "statisticalDatasets":[
+            {
+                "id":"permits-in-force-temporal","unit":"permit","population":"validFrom ne null",
+                "period":{"type":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"},
+                "dimensions":["administrative-boundary"],
+                "disclosure":{"minimumCount":2,"roundingBase":2}
+            },
+            {
+                "id":"permits-in-force-fields","unit":"permit","population":"validFrom ne null",
+                "period":{"type":"stock","granularity":"month","firstPeriod":"2025-01",
+                    "validity":{"from":"valid-from","until":"valid-through"}},
+                "dimensions":["administrative-boundary"],
+                "disclosure":{"minimumCount":2,"roundingBase":2}
+            }
+        ]
+    });
+    let bytes = serde_json::to_vec(&source).expect("last-day fixture serializes");
+    let project = parse_project_json(&bytes).expect("last-day fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("last-day statistical datasets compile")
+}
+
 fn partial_text_registry() -> registry_breg::CompiledRegistry {
     let source = json!({"datasets":[{"id": "facility"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{
             "id":"statistics-partial-text-registry","version":"1","defaultLanguage":"en",
-            "canonicalBaseIri":"https://statistics-partial-text.example.test"
+            "canonicalBaseIri":"https://statistics-partial-text.example.test","timezone":"UTC"
         },
         "recordTypes":[{
             "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
@@ -577,7 +722,7 @@ async fn assert_count_twins(
             format!("accessProfile=facility-operator&$count=true&$top=1&$filter={encoded_filter}");
         if collection.ends_with(":as-of") {
             query.push_str(&format!(
-                "&asOf={}T00:00:00Z",
+                "&asOf={}",
                 document["periods"][0]["referenceDate"].as_str().unwrap()
             ));
         }

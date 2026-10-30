@@ -9,8 +9,8 @@ use napi::{Error as NapiError, Result};
 use napi_derive::napi;
 use registry_coordinator_client::{
     BearerToken, CoordinatorClient as CoreClient, CoordinatorClientConfig as CoreConfig,
-    CoordinatorClientError, CoordinatorComplete, CoordinatorProtocolFailure, RunListQuery,
-    RunListState, StartRunRequest,
+    CoordinatorClientError, CoordinatorComplete, CoordinatorProtocolFailure, ProposalTurn,
+    RunListQuery, RunListState, StartRunRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -150,9 +150,10 @@ impl CoordinatorClient {
     }
 
     #[napi(
-        ts_args_type = "token: string, limit: number, cursor?: string | null, state?: import('./client').RunListState | null, attention?: boolean | null",
+        ts_args_type = "token: string, limit: number, cursor?: string | null, state?: import('./client').RunListState | null, attention?: boolean | null, proposal?: string | null, turn?: import('./client').ProposalTurn | null",
         ts_return_type = "Promise<import('./client').CoordinatorOutcome<import('./client').RunList>>"
     )]
+    #[allow(clippy::too_many_arguments)] // JavaScript callers pass the list filters positionally, as the other bindings do.
     pub async fn list(
         &self,
         token: String,
@@ -160,6 +161,8 @@ impl CoordinatorClient {
         cursor: Option<String>,
         state: Option<String>,
         attention: Option<bool>,
+        proposal: Option<String>,
+        turn: Option<String>,
     ) -> Result<CoordinatorOutcome> {
         let token = bearer(token)?;
         let limit = list_limit(limit)?;
@@ -167,6 +170,9 @@ impl CoordinatorClient {
         query.cursor = cursor;
         query.state = state.map(|state| list_state(&state)).transpose()?;
         query.attention = attention;
+        // A Proposal id is a UUID, checked as a run id is.
+        query.proposal = proposal.map(run_id_value).transpose()?;
+        query.turn = turn.map(|turn| list_turn(&turn)).transpose()?;
         outcome(self.inner.list_page(&token, &query).await)
     }
 
@@ -390,6 +396,18 @@ fn list_state(value: &str) -> Result<RunListState> {
         "expired" => Ok(RunListState::Expired),
         "attention" => Ok(RunListState::Attention),
         "cancel-requested" => Ok(RunListState::CancelRequested),
+        _ => Err(binding_error(
+            "invalid-request",
+            "Coordinator client arguments are invalid",
+        )),
+    }
+}
+
+fn list_turn(value: &str) -> Result<ProposalTurn> {
+    match value {
+        "party" => Ok(ProposalTurn::Party),
+        "official" => Ok(ProposalTurn::Official),
+        "nobody" => Ok(ProposalTurn::Nobody),
         _ => Err(binding_error(
             "invalid-request",
             "Coordinator client arguments are invalid",

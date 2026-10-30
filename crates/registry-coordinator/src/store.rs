@@ -5,7 +5,7 @@ use crate::{
     definition::{Definition, DefinitionCache, Step},
     metrics::{DispatchDepth, Metrics, RunOutcome},
     protected_state::StateKeys,
-    protocol::CallRequest,
+    protocol::{CallRequest, HoldDetail, ProposalObservation},
     CoordinatorError, Result,
 };
 use async_trait::async_trait;
@@ -33,9 +33,11 @@ use std::{
 use tokio_postgres::{NoTls, Row, Transaction};
 use uuid::Uuid;
 
+mod check_now;
 mod readiness;
 mod recovery;
-pub use recovery::DoctorStatus;
+pub use check_now::CheckNowAnswer;
+pub use recovery::{DoctorStatus, ProposalWaitsByTurn};
 
 enum InspectionBinding<'a> {
     RecordedOrRuntime(&'a crate::runtime::RuntimeConfig),
@@ -45,7 +47,7 @@ enum InspectionBinding<'a> {
 /// The protected state schema version. It is written once, when apply creates
 /// the namespace, to `control.schema_version` and to the activation migration
 /// ledger, and every state transaction fences on it.
-pub(crate) const SCHEMA_VERSION: i32 = 4;
+pub(crate) const SCHEMA_VERSION: i32 = 5;
 
 /// Identifies a namespace whose tables this runtime created and owns.
 const NAMESPACE_MARKER: &str = "registry-coordinator protected-state";
@@ -162,6 +164,37 @@ impl RunListState {
     }
 }
 
+/// Whose turn a followed BReg Proposal showed at its last answered read.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProposalTurn {
+    Party,
+    Official,
+    Nobody,
+}
+
+impl ProposalTurn {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Party => "party",
+            Self::Official => "official",
+            Self::Nobody => "nobody",
+        }
+    }
+}
+
+/// The optional filters a run-list page applies. A cursor is valid only with
+/// the filters that produced it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RunListFilter {
+    pub state: Option<RunListState>,
+    pub attention: Option<bool>,
+    /// Runs waiting on this BReg Proposal.
+    pub proposal: Option<Uuid>,
+    /// Runs whose Proposal wait last observed this turn.
+    pub turn: Option<ProposalTurn>,
+}
+
 /// One stable page of caller-visible runs.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +217,9 @@ struct RunListCursor {
     flow_binding: String,
     state: Option<RunListState>,
     attention: Option<bool>,
+    /// The keyed Proposal wait commitment, never the Proposal id itself.
+    proposal: Option<String>,
+    turn: Option<ProposalTurn>,
 }
 
 /// Bounded durable step state from Dispatch, without prepared request contents.
@@ -203,6 +239,10 @@ pub struct StepStatus {
     /// Where a refused call input left its operation contract, as an RFC 6901
     /// pointer that names no value.
     pub failure_path: Option<String>,
+    /// What a person needs to clear a hold: for `in-force-ambiguous`, the
+    /// two records in force and the date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold_detail: Option<HoldDetail>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -273,6 +313,24 @@ pub struct WaitStatus {
     pub minimum_interval_seconds: u32,
     pub observations: u32,
     pub observation_limit: u32,
+    /// What the latest answered read of a followed Proposal showed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_observation: Option<LastObservation>,
+    /// The operator's "Open the request" link, when inspection reads the
+    /// runtime and the BReg connection configures one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_link: Option<String>,
+}
+
+/// The latest read of a followed Proposal. `state_since` is when Coordinator
+/// first saw the current state and turn, not when BReg entered it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastObservation {
+    #[serde(flatten)]
+    pub proposal: ProposalObservation,
+    pub observed_at: DateTime<Utc>,
+    pub state_since: DateTime<Utc>,
 }
 
 fn observation_limit(started: DateTime<Utc>, timeout: DateTime<Utc>, interval: u32) -> u32 {
@@ -391,6 +449,10 @@ pub struct Detail {
     /// Seconds until a waiting step reads its result again; set only while
     /// the wait goes on.
     pub recheck_seconds: Option<u32>,
+    /// What a read of a followed BReg Proposal showed, kept on the wait.
+    pub follow: Option<ProposalObservation>,
+    /// Why a held step is held, sealed on its job until the next attempt.
+    pub hold_detail: Option<HoldDetail>,
 }
 impl Detail {
     pub(crate) fn failure(code: &'static str, uncertain: bool) -> Self {
@@ -406,6 +468,8 @@ impl Detail {
             receipt_expired: false,
             completed_without_effect: false,
             recheck_seconds: None,
+            follow: None,
+            hold_detail: None,
         }
     }
 }
@@ -451,6 +515,7 @@ pub(crate) fn schema_statements(namespace: &str) -> Result<Vec<String>> {
                 ADD COLUMN pure boolean NOT NULL DEFAULT false,
                 ADD COLUMN failure_code text,
                 ADD COLUMN failure_path text,
+                ADD COLUMN hold_detail jsonb CHECK(hold_detail IS NULL OR failure_code IS NOT NULL),
                 DROP CONSTRAINT jobs_shape,
                 ADD CONSTRAINT jobs_shape CHECK (({1}) OR (
                 state='dead-lettered' AND attempt=0 AND command IS NULL
@@ -467,7 +532,10 @@ pub(crate) fn schema_statements(namespace: &str) -> Result<Vec<String>> {
     // hash of the producer's request identifier, so a completion event
     // finds its wait without the identifier being stored in clear. Rows
     // name a job but carry no foreign key: deployment cleanup deletes
-    // jobs and runs in its own order.
+    // jobs and runs in its own order. A wait that follows a BReg Proposal
+    // keeps only the latest thing a read saw: the Proposal's state, turn,
+    // submission version and any hand-off refusal code, when it was read,
+    // and when Coordinator first saw that state and turn.
     statements.push(format!(
         "CREATE TABLE {0}.completion_waits (
                 run_id uuid NOT NULL, step text NOT NULL, wait_key text NOT NULL,
@@ -477,6 +545,10 @@ pub(crate) fn schema_statements(namespace: &str) -> Result<Vec<String>> {
                 not_before timestamptz NOT NULL DEFAULT transaction_timestamp(),
                 observations integer NOT NULL DEFAULT 0 CHECK(observations>=0),
                 interval_seconds integer NOT NULL DEFAULT 30 CHECK(interval_seconds BETWEEN 30 AND 86400),
+                follows_proposal boolean NOT NULL DEFAULT false,
+                last_observation jsonb, observed_at timestamptz, state_since timestamptz,
+                CHECK((last_observation IS NULL)=(observed_at IS NULL) AND (observed_at IS NULL)=(state_since IS NULL)),
+                CHECK(follows_proposal OR last_observation IS NULL),
                 PRIMARY KEY (run_id, step));
             CREATE INDEX completion_waits_key_idx ON {0}.completion_waits (wait_key)",
         namespace
@@ -902,6 +974,16 @@ impl Store {
         )
     }
 
+    /// The keyed commitment every wait on one BReg Proposal shares. It leaves
+    /// out the connection, so the run list can find those waits from the
+    /// Proposal id alone.
+    fn proposal_wait_key(&self, proposal: Uuid) -> String {
+        self.security.keys.commitment(
+            "proposal-wait",
+            &[self.security.database_id.as_bytes(), proposal.as_bytes()],
+        )
+    }
+
     /// Hash the protected accepted binding. Only Casework exposes a public
     /// signal protocol, whose authenticated locator uses the same keyed hash.
     fn completion_wait_key(
@@ -923,6 +1005,15 @@ impl Store {
                 serde_json::from_value(accepted.clone()).ok()?;
             return (!accepted.request_id.is_nil())
                 .then(|| self.wait_key(&call.connection, accepted.request_id));
+        }
+        if matches!(
+            contract.kind,
+            crate::definition::CompletionKind::BregProposal {}
+        ) {
+            // Every wait that follows one Proposal shares its key, so a
+            // later wake for that Proposal reaches each of them.
+            let proposal = accepted.get("proposalId")?.as_str()?;
+            return Some(self.proposal_wait_key(Uuid::parse_str(proposal).ok()?));
         }
         let bytes = registry_platform_canonical_json::canonicalize_json(accepted).ok()?;
         Some(self.security.keys.commitment(
@@ -1241,8 +1332,7 @@ impl Store {
         cursor: Option<&str>,
         actor: &Actor,
         flows: &[String],
-        state: Option<RunListState>,
-        attention: Option<bool>,
+        filter: RunListFilter,
     ) -> Result<Option<(DateTime<Utc>, Uuid)>> {
         let Some(cursor) = cursor else {
             return Ok(None);
@@ -1260,12 +1350,14 @@ impl Store {
         let value =
             registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|_| invalid())?;
         let decoded: RunListCursor = serde_json::from_value(value).map_err(|_| invalid())?;
-        if decoded.version != 1
+        if decoded.version != 2
             || decoded.owner != self.owner(actor)?
             || decoded.operator != actor.operator
             || decoded.flow_binding != Self::run_list_flow_binding(flows)?
-            || decoded.state != state
-            || decoded.attention != attention
+            || decoded.state != filter.state
+            || decoded.attention != filter.attention
+            || decoded.proposal != filter.proposal.map(|id| self.proposal_wait_key(id))
+            || decoded.turn != filter.turn
         {
             return Err(invalid());
         }
@@ -1277,18 +1369,19 @@ impl Store {
         status: &RunStatus,
         actor: &Actor,
         flows: &[String],
-        state: Option<RunListState>,
-        attention: Option<bool>,
+        filter: RunListFilter,
     ) -> Result<String> {
         let document = serde_json::to_vec(&RunListCursor {
-            version: 1,
+            version: 2,
             admitted_at: status.admitted_at.to_owned(),
             run_id: status.run_id,
             owner: self.owner(actor)?,
             operator: actor.operator,
             flow_binding: Self::run_list_flow_binding(flows)?,
-            state,
-            attention,
+            state: filter.state,
+            attention: filter.attention,
+            proposal: filter.proposal.map(|id| self.proposal_wait_key(id)),
+            turn: filter.turn,
         })
         .map_err(|_| unavailable("cannot encode the run-list cursor"))?;
         let cursor = URL_SAFE_NO_PAD.encode(document);
@@ -1337,7 +1430,7 @@ impl Store {
             .map_err(unavailable)?
             .ok_or_else(|| refused("run-absent", "run was not found"))?;
         let status = self.status_from_row(&row)?;
-        let rows = tx.query(&format!("SELECT step,state,generation,attempt,next_attempt_at,lease_expires_at,command IS NOT NULL,uncertain,receipt_expired,failure_code,failure_path FROM {}.jobs WHERE run_id=$1 ORDER BY updated_at,step LIMIT 65", self.namespace), &[&run]).await.map_err(unavailable)?;
+        let rows = tx.query(&format!("SELECT step,state,generation,attempt,next_attempt_at,lease_expires_at,command IS NOT NULL,uncertain,receipt_expired,failure_code,failure_path,hold_detail FROM {}.jobs WHERE run_id=$1 ORDER BY updated_at,step LIMIT 65", self.namespace), &[&run]).await.map_err(unavailable)?;
         if rows.len() > 64 {
             return Err(refused(
                 "run-state-invalid",
@@ -1346,20 +1439,28 @@ impl Store {
         }
         let steps = rows
             .iter()
-            .map(|row| StepStatus {
-                step: row.get(0),
-                state: row.get(1),
-                generation: row.get(2),
-                attempt: row.get(3),
-                next_due_at: row.get(4),
-                lease_expires_at: row.get(5),
-                command_prepared: row.get(6),
-                uncertain: row.get(7),
-                receipt_expired: row.get(8),
-                failure_code: row.get(9),
-                failure_path: row.get(10),
+            .map(|row| {
+                let step: String = row.get(0);
+                let hold_detail = row
+                    .get::<_, Option<Value>>(11)
+                    .map(|sealed| self.open_value(run, "hold-detail", &step, &sealed))
+                    .transpose()?;
+                Ok(StepStatus {
+                    step,
+                    state: row.get(1),
+                    generation: row.get(2),
+                    attempt: row.get(3),
+                    next_due_at: row.get(4),
+                    lease_expires_at: row.get(5),
+                    command_prepared: row.get(6),
+                    uncertain: row.get(7),
+                    receipt_expired: row.get(8),
+                    failure_code: row.get(9),
+                    failure_path: row.get(10),
+                    hold_detail,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let row = tx.query_one(&format!("SELECT r.snapshot,j.state,j.receipt_expired,j.pure OR r.deadline_at>transaction_timestamp(),r.cancel_requested,r.payload_erased_at, (SELECT restore_hold FROM {0}.control WHERE id), ({1}) AND NOT r.restore_review_required, EXISTS(SELECT 1 FROM {0}.completion_waits w WHERE w.run_id=r.run_id AND w.step=r.step),r.outputs FROM {0}.runs r JOIN {0}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1", self.namespace,self.terminal_retention_predicate()), &[&run]).await.map_err(unavailable)?;
         // Only genuinely settled terminal history may use its recorded binding.
         // Decide inside this same repeatable-read inspection, never from a stale
@@ -1437,7 +1538,7 @@ impl Store {
                     });
                 }
             }
-            let rows = tx.query(&format!("SELECT w.step,w.timeout_at,CASE WHEN j.state IN ('pending','leased') THEN j.next_attempt_at ELSE NULL END,w.not_before,w.interval_seconds,w.observations,w.started_at FROM {0}.completion_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.run_id=$1 ORDER BY w.step LIMIT 65",self.namespace),&[&run]).await.map_err(unavailable)?;
+            let rows = tx.query(&format!("SELECT w.step,w.timeout_at,CASE WHEN j.state IN ('pending','leased') THEN j.next_attempt_at ELSE NULL END,w.not_before,w.interval_seconds,w.observations,w.started_at,w.last_observation,w.observed_at,w.state_since FROM {0}.completion_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.run_id=$1 ORDER BY w.step LIMIT 65",self.namespace),&[&run]).await.map_err(unavailable)?;
             if rows.len() > 64 {
                 return Err(refused(
                     "run-state-invalid",
@@ -1456,6 +1557,49 @@ impl Store {
                 let completion = definition.completion(wait_for)?;
                 let timeout_at = row.get(1);
                 let interval = row.get::<_, i32>(4) as u32;
+                let last_observation = match (
+                    row.get::<_, Option<Value>>(7),
+                    row.get::<_, Option<DateTime<Utc>>>(8),
+                    row.get::<_, Option<DateTime<Utc>>>(9),
+                ) {
+                    (Some(proposal), Some(observed_at), Some(state_since)) => {
+                        Some(LastObservation {
+                            proposal: serde_json::from_value(proposal).map_err(|_| {
+                                refused(
+                                    "run-state-invalid",
+                                    "a kept Proposal observation is unreadable",
+                                )
+                            })?,
+                            observed_at,
+                            state_since,
+                        })
+                    }
+                    _ => None,
+                };
+                let request_link = match binding {
+                    InspectionBinding::RecordedOrRuntime(runtime) => {
+                        match definition.workflow.steps.get(&wait_for.step) {
+                            Some(Step::Call { call, .. })
+                                if matches!(
+                                    completion.kind,
+                                    crate::definition::CompletionKind::BregProposal {}
+                                ) =>
+                            {
+                                outputs
+                                    .as_ref()
+                                    .and_then(|values| values.get(&wait_for.step))
+                                    .and_then(|accepted| accepted.get("proposalId"))
+                                    .and_then(Value::as_str)
+                                    .zip(runtime.connections.get(&call.connection))
+                                    .and_then(|(proposal, connection)| {
+                                        connection.request_link(proposal)
+                                    })
+                            }
+                            _ => None,
+                        }
+                    }
+                    InspectionBinding::Supplied(_) => None,
+                };
                 waits.push(WaitStatus {
                     step,
                     accepted_step: wait_for.step.clone(),
@@ -1467,6 +1611,8 @@ impl Store {
                     minimum_interval_seconds: interval,
                     observations: row.get::<_, i32>(5) as u32,
                     observation_limit: observation_limit(row.get(6), timeout_at, interval),
+                    last_observation,
+                    request_link,
                 });
             }
         }
@@ -1743,8 +1889,14 @@ impl Store {
                     timeout_seconds,
                     ..
                 })) => {
+                    let follows = definition.completion(wait_for).is_ok_and(|contract| {
+                        matches!(
+                            contract.kind,
+                            crate::definition::CompletionKind::BregProposal {}
+                        )
+                    });
                     match self.completion_wait_key(&definition, wait_for, &outputs) {
-                        Some(key) => wait = Some((key, *timeout_seconds)),
+                        Some(key) => wait = Some((key, *timeout_seconds, follows)),
                         None => failure = Some("protected-state-invalid"),
                     }
                     None
@@ -1792,15 +1944,15 @@ impl Store {
                     due,
                 )
                 .await?;
-                if let Some((key, timeout_seconds)) = &wait {
+                if let Some((key, timeout_seconds, follows)) = &wait {
                     let timeout_seconds =
                         i32::try_from(*timeout_seconds).map_err(|_| DispatchError::Unavailable)?;
                     tx.execute(
                         &format!(
-                            "INSERT INTO {0}.completion_waits(run_id,step,wait_key,timeout_at) SELECT $1,$2,$3,LEAST(r.deadline_at,transaction_timestamp()+$4::integer*interval '1 second') FROM {0}.runs r WHERE r.run_id=$1",
+                            "INSERT INTO {0}.completion_waits(run_id,step,wait_key,timeout_at,follows_proposal) SELECT $1,$2,$3,LEAST(r.deadline_at,transaction_timestamp()+$4::integer*interval '1 second'),$5 FROM {0}.runs r WHERE r.run_id=$1",
                             self.namespace
                         ),
-                        &[&id, next, key, &timeout_seconds],
+                        &[&id, next, key, &timeout_seconds, follows],
                     )
                     .await?;
                 }
@@ -2020,35 +2172,50 @@ impl Store {
     /// wait whose read is in flight records the wake, and that read
     /// schedules one more. A request no wait names changes nothing.
     pub async fn wake(&self, connection: &str, request: Uuid) -> Result<()> {
-        let key = self.wait_key(connection, request);
+        self.wake_where("w.wait_key=$1", &[&self.wait_key(connection, request)])
+            .await
+    }
+
+    /// `wake` for the one wait of a run's step.
+    pub(crate) async fn wake_step(&self, run: Uuid, step: &str) -> Result<()> {
+        self.wake_where("w.run_id=$1 AND w.step=$2", &[&run, &step])
+            .await
+    }
+
+    /// Wake the waits a filter over `w` (the wait row) names.
+    async fn wake_where(
+        &self,
+        filter: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<()> {
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
         self.verify_transaction(&tx).await.map_err(unavailable)?;
         // Dispatch's lock order: a job row before anything that names it.
         tx.query(
             &format!(
-                "SELECT j.run_id FROM {0}.completion_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.wait_key=$1 ORDER BY j.run_id,j.step FOR UPDATE OF j",
+                "SELECT j.run_id FROM {0}.completion_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE {filter} ORDER BY j.run_id,j.step FOR UPDATE OF j",
                 self.namespace
             ),
-            &[&key],
+            params,
         )
         .await
         .map_err(unavailable)?;
         tx.execute(
             &format!(
-                "UPDATE {}.completion_waits SET woken_at=clock_timestamp() WHERE wait_key=$1",
+                "UPDATE {}.completion_waits w SET woken_at=clock_timestamp() WHERE {filter}",
                 self.namespace
             ),
-            &[&key],
+            params,
         )
         .await
         .map_err(unavailable)?;
         tx.execute(
             &format!(
-                "UPDATE {0}.jobs j SET next_attempt_at=LEAST(j.next_attempt_at,LEAST(w.timeout_at,GREATEST(transaction_timestamp(),w.not_before))) FROM {0}.completion_waits w WHERE w.wait_key=$1 AND j.run_id=w.run_id AND j.step=w.step AND j.state='pending'",
+                "UPDATE {0}.jobs j SET next_attempt_at=LEAST(j.next_attempt_at,LEAST(w.timeout_at,GREATEST(transaction_timestamp(),w.not_before))) FROM {0}.completion_waits w WHERE {filter} AND j.run_id=w.run_id AND j.step=w.step AND j.state='pending'",
                 self.namespace
             ),
-            &[&key],
+            params,
         )
         .await
         .map_err(unavailable)?;
@@ -2372,7 +2539,15 @@ impl DispatchStore for Store {
         let detail = &sent.detail;
         let id = job.key.id();
         let step = job.key.part();
-        tx.execute(&format!("UPDATE {}.jobs SET uncertain=$3,receipt_expired=receipt_expired OR $4,failure_code=COALESCE($5,failure_code),failure_path=CASE WHEN $5::text IS NULL THEN failure_path ELSE $6 END WHERE run_id=$1 AND step=$2", self.namespace), &[&id, &step, &detail.uncertain, &detail.receipt_expired, &detail.failure_code, &detail.failure_path]).await?;
+        // The hold detail describes this attempt only: a later attempt that
+        // answers clears it.
+        let hold_detail = detail
+            .hold_detail
+            .as_ref()
+            .map(|value| self.seal(id, "hold-detail", step, value))
+            .transpose()
+            .map_err(|_| DispatchError::Unavailable)?;
+        tx.execute(&format!("UPDATE {}.jobs SET uncertain=$3,receipt_expired=receipt_expired OR $4,failure_code=COALESCE($5,failure_code),failure_path=CASE WHEN $5::text IS NULL THEN failure_path ELSE $6 END,hold_detail=$7 WHERE run_id=$1 AND step=$2", self.namespace), &[&id, &step, &detail.uncertain, &detail.receipt_expired, &detail.failure_code, &detail.failure_path, &hold_detail]).await?;
         let state = if detail.recovery_hold {
             "attention"
         } else {
@@ -2427,14 +2602,30 @@ impl DispatchStore for Store {
             .map(i32::try_from)
             .transpose()
             .map_err(|_| DispatchError::Unavailable)?;
+        // A read the Proposal answered replaces the kept observation. The
+        // state's start time carries over while the state and turn stay the
+        // same, and restarts when either changes.
+        let observation = detail
+            .follow
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|_| DispatchError::Unavailable)?;
         let changed = tx.execute(&format!(
             "UPDATE {0}.completion_waits w SET
+                last_observation=COALESCE($5::jsonb,w.last_observation),
+                observed_at=CASE WHEN $5::jsonb IS NULL THEN w.observed_at ELSE transaction_timestamp() END,
+                state_since=CASE WHEN $5::jsonb IS NULL THEN w.state_since
+                    WHEN w.state_since IS NOT NULL
+                        AND w.last_observation->>'state' IS NOT DISTINCT FROM $5::jsonb->>'state'
+                        AND w.last_observation->>'turn' IS NOT DISTINCT FROM $5::jsonb->>'turn'
+                    THEN w.state_since ELSE transaction_timestamp() END,
                 not_before=CASE WHEN $4::integer IS NULL THEN w.not_before ELSE GREATEST(w.not_before,transaction_timestamp()+$4::integer*interval '1 second') END,
                 recheck_at=CASE WHEN $3::integer IS NULL THEN NULL ELSE LEAST(w.timeout_at,GREATEST(w.not_before,
                     transaction_timestamp()+COALESCE($4::integer,0)*interval '1 second',
                     CASE WHEN w.woken_at>=j.attempt_started_at THEN transaction_timestamp() ELSE transaction_timestamp()+$3::integer*interval '1 second' END)) END
              FROM {0}.jobs j WHERE w.run_id=$1 AND w.step=$2 AND j.run_id=w.run_id AND j.step=w.step",self.namespace),
-            &[&id,&step,&recheck,&pause]).await?;
+            &[&id,&step,&recheck,&pause,&observation]).await?;
         if recheck.is_some() && !cancelled && changed != 1 {
             return Err(DispatchError::Unavailable);
         }
@@ -2486,7 +2677,7 @@ impl DispatchStore for Store {
                 &format!(
                     "UPDATE {0}.jobs j SET generation=j.generation+1,state='pending',attempt=0,next_attempt_at=w.recheck_at,
                         attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,dead_lettered_at=NULL,
-                        expired_at=NULL,failure_code=NULL,failure_path=NULL,updated_at=transaction_timestamp()
+                        expired_at=NULL,failure_code=NULL,failure_path=NULL,hold_detail=NULL,updated_at=transaction_timestamp()
                      FROM {0}.completion_waits w
                      WHERE j.run_id=$1 AND j.step=$2 AND w.run_id=j.run_id AND w.step=j.step
                        AND j.state='delivered' AND w.recheck_at IS NOT NULL",
@@ -2549,7 +2740,7 @@ impl DispatchStore for Store {
         };
         tx.execute(
             &format!(
-                "UPDATE {}.jobs SET uncertain=$3,failure_code=$4,failure_path=NULL WHERE run_id=$1 AND step=$2",
+                "UPDATE {}.jobs SET uncertain=$3,failure_code=$4,failure_path=NULL,hold_detail=NULL WHERE run_id=$1 AND step=$2",
                 self.namespace
             ),
             &[&audit.key.id(), &audit.key.part(), &uncertain, &code],
@@ -2718,15 +2909,15 @@ mod tests {
     /// every statement that creates the schema, including the shared dispatch
     /// job table, its product widening, and the activation ledger.
     #[test]
-    fn schema_version_4_is_pinned() {
+    fn schema_version_5_is_pinned() {
         let mut ddl = schema_statements("coordinator_pin").expect("a valid namespace");
         ddl.push(crate::deployment::activation_ledger_statements());
         let digest = hex::encode(Sha256::digest(ddl.join("\n")));
         assert_eq!(
             (SCHEMA_VERSION, digest.as_str()),
             (
-                4,
-                "300095e7d11e42ce13af316bdbca00b8b90577020fae056fd589ddf7f53340e9"
+                5,
+                "acd91ebb3a5a9ee98b0b83a5900b5dedd2648d150fbd0b22049acc1d8cb38817"
             ),
             "the protected state schema DDL changed at this SCHEMA_VERSION; {MIGRATION_PIN_RULE}"
         );

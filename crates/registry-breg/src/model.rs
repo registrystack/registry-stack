@@ -203,8 +203,21 @@ pub enum CompiledStatisticalPeriod {
     rename_all_fields = "camelCase"
 )]
 pub enum CompiledStatisticalValidity {
-    Temporal { from: String, until: String },
-    Fields { from: String, until: Option<String> },
+    Temporal {
+        from: String,
+        until: String,
+        /// `until` is the inclusive last day rather than the exclusive end.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        last_day: bool,
+    },
+    Fields {
+        from: String,
+        until: Option<String>,
+        /// `until` is the unit's `lastDayField`, so it is the inclusive last
+        /// day rather than the exclusive end.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        last_day: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1410,14 +1423,30 @@ pub struct CompiledGeoJsonBinding {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledTemporal {
     pub start_field: String,
+    /// The field that closes the interval: the exclusive end, or the
+    /// inclusive last day when `last_day` is set.
     pub end_field: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub last_day: bool,
 }
 
-impl From<TemporalSource> for CompiledTemporal {
-    fn from(source: TemporalSource) -> Self {
-        Self {
-            start_field: source.start_field,
-            end_field: source.end_field,
+impl CompiledTemporal {
+    /// The compiled interval, when the source names exactly one closing field.
+    pub fn from_source(source: &TemporalSource) -> Option<Self> {
+        Some(Self {
+            start_field: source.start_field.clone(),
+            end_field: source.closing_field()?.to_owned(),
+            last_day: source.last_day_field.is_some(),
+        })
+    }
+
+    /// How a value compares with the closing field while the interval is in
+    /// force: strictly before an exclusive end, on or before a last day.
+    pub fn closing_operator(&self) -> &'static str {
+        if self.last_day {
+            "<="
+        } else {
+            "<"
         }
     }
 }
@@ -1735,6 +1764,7 @@ pub enum CompiledQueryTemporalValueKind {
 #[serde(rename_all = "kebab-case")]
 pub enum CompiledQueryTemporalSemantics {
     StartInclusiveEndExclusive,
+    StartInclusiveLastDayInclusive,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1828,6 +1858,8 @@ pub struct CompiledRegistry {
     default_language: String,
     #[serde(default, skip_serializing_if = "display_is_empty")]
     display: crate::contract::DisplaySource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timezone: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     review_authorities: Vec<crate::contract::ReviewAuthoritySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1863,6 +1895,7 @@ impl CompiledRegistry {
         version: String,
         default_language: String,
         display: crate::contract::DisplaySource,
+        timezone: Option<String>,
         review_authorities: Vec<crate::contract::ReviewAuthoritySource>,
         datasets: Vec<crate::contract::DatasetSource>,
         access_profile_displays: Vec<CompiledAccessProfileDisplay>,
@@ -1890,6 +1923,7 @@ impl CompiledRegistry {
             version,
             default_language,
             display,
+            timezone,
             review_authorities,
             datasets,
             access_profile_displays,
@@ -1948,6 +1982,40 @@ impl CompiledRegistry {
 
     pub fn display(&self) -> &crate::contract::DisplaySource {
         &self.display
+    }
+
+    /// The IANA time zone the registry answers "today" in, when declared.
+    pub fn timezone(&self) -> Option<&str> {
+        self.timezone.as_deref()
+    }
+
+    /// The registry's calendar date at `now`. Check refuses a project that
+    /// answers "today" without a time zone, so a site that asks for the date
+    /// of a registry without one is a defect: it is logged and refused, never
+    /// answered with a UTC date.
+    pub fn local_date(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<chrono::NaiveDate, registry_platform_calendar::CalendarEvaluationError> {
+        let Some(timezone) = self.timezone.as_deref() else {
+            #[cfg(feature = "runtime")]
+            tracing::error!(
+                registry = %self.registry_id,
+                "a site asked for today's date but the registry declares no time zone; check should have refused it"
+            );
+            return Err(registry_platform_calendar::CalendarEvaluationError::InvalidTimezone);
+        };
+        registry_platform_calendar::local_date(now, timezone)
+    }
+
+    /// [`Self::local_date`] at an instant held as a `time` value.
+    pub fn local_date_at(
+        &self,
+        now: time::OffsetDateTime,
+    ) -> Result<chrono::NaiveDate, registry_platform_calendar::CalendarEvaluationError> {
+        let now = chrono::DateTime::from_timestamp(now.unix_timestamp(), now.nanosecond())
+            .ok_or(registry_platform_calendar::CalendarEvaluationError::Overflow)?;
+        self.local_date(now)
     }
 
     pub fn review_authorities(&self) -> &[crate::contract::ReviewAuthoritySource] {

@@ -1235,6 +1235,71 @@ async fn malformed_purpose_and_row_boundary_shapes_are_refused_before_record_io(
     }
 }
 
+/// A multi-valued row-boundary claim that is an empty array is refused as an
+/// unauthenticated token on the list, `:current` and `:as-of` reads; a token
+/// that omits the claim passes authentication and is concealed at profile
+/// admission. Neither reaches the store, so neither can read as "no record in
+/// force".
+#[tokio::test]
+async fn empty_or_missing_row_boundary_claim_refuses_list_current_and_as_of_reads() {
+    let source = PROJECT
+        .replace(
+            "      - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}\n",
+            "      - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}\n      - {id: valid-from, type: date, required: true, classification: internal}\n      - {id: valid-to, type: date, classification: internal}\n    temporal:\n      startField: valid-from\n      endField: valid-to\n",
+        )
+        .replace(
+            "operations: [get]\n          readableFields: [label, secret]",
+            "operations: [get, list]\n          readableFields: [label, secret, valid-from, valid-to]",
+        )
+        .replace(
+            "  canonicalBaseIri: https://authoring.example.test\n",
+            "  canonicalBaseIri: https://authoring.example.test\n  timezone: UTC\n",
+        );
+    let harness = Harness::with_source(&source).await;
+    let uris = [
+        "/v1/records/cases?accessProfile=caseworker",
+        "/v1/records/cases:current?accessProfile=caseworker",
+        "/v1/records/cases:as-of?accessProfile=caseworker&asOf=2026-06-05",
+    ];
+
+    let control = harness.signed_token(valid_claims(), "JWT");
+    for uri in uris {
+        let before = harness.records.calls.load(Ordering::SeqCst);
+        let response = harness.send(uri, &[bearer(&control)], None).await;
+        assert_eq!(response.status(), StatusCode::OK, "control {uri}");
+        assert_eq!(
+            harness.records.calls.load(Ordering::SeqCst),
+            before + 1,
+            "control {uri}"
+        );
+    }
+
+    let mut empty = valid_claims();
+    empty["jurisdictions"] = json!([]);
+    let empty = harness.signed_token(empty, "JWT");
+    let mut missing = valid_claims();
+    missing.as_object_mut().unwrap().remove("jurisdictions");
+    let missing = harness.signed_token(missing, "JWT");
+    for (token, status, code) in [
+        (&empty, StatusCode::UNAUTHORIZED, "authentication.refused"),
+        (&missing, StatusCode::NOT_FOUND, "resource.not_found"),
+    ] {
+        for uri in uris {
+            let before = harness.records.calls.load(Ordering::SeqCst);
+            let response = harness.send(uri, &[bearer(token)], None).await;
+            assert_eq!(response.status(), status, "{uri}");
+            let body = body_json(response).await;
+            assert_eq!(body["code"], code, "{uri}");
+            assert!(body.get("items").is_none(), "{uri}");
+            assert_eq!(
+                harness.records.calls.load(Ordering::SeqCst),
+                before,
+                "{uri} reached the store"
+            );
+        }
+    }
+}
+
 /// An identity provider that repeats one value in a multi-valued claim asserts
 /// the same authority once, so the repeats collapse instead of refusing the
 /// token. The bound on distinct values still applies.
@@ -2522,7 +2587,7 @@ async fn ambiguous_route_without_default_requires_explicit_selection_without_gue
 
 fn dataset_only_claim_source() -> Value {
     json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
-        "project":{"id":"dataset-auth", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://statistics.example.test"},
+        "project":{"id":"dataset-auth", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://statistics.example.test", "timezone":"UTC"},
         "datasets":[{"id":"records"}],
         "recordTypes":[{"id":"record", "primaryDataset":"records", "route":"records", "mutationMode":"mutable",
             "fields":[{"id":"active", "type":"boolean", "required":true, "classification":"internal"},

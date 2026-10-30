@@ -365,3 +365,58 @@ async fn recovery_audit_failure_preserves_request_and_response_release_gates() {
     );
     assert_eq!(h.store.status(h.run).await.unwrap().state, "cancelled");
 }
+
+#[tokio::test]
+async fn check_now_audits_the_caller_and_the_run_without_a_reason() {
+    let h = harness().await;
+    let operator = actor("operator", true);
+    let (client, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        connection.await.unwrap();
+    });
+    client
+        .execute(
+            &format!(
+                "INSERT INTO {}.completion_waits(run_id,step,wait_key,timeout_at) VALUES ($1,'wait','synthetic-key',clock_timestamp()+interval '1 hour')",
+                h.namespace
+            ),
+            &[&h.run],
+        )
+        .await
+        .unwrap();
+    let answer = h
+        .store
+        .check_now_owned(h.run, "wait", &operator)
+        .await
+        .unwrap();
+    assert_eq!(answer.step, "wait");
+    let entries = h.capture.entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["schema"], "registry-coordinator/audit/v1");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[0]["record"]["action"], "check-now");
+    assert_eq!(entries[1]["record"]["action"], "check-now");
+    assert_eq!(entries[1]["record"]["outcome"], "accepted");
+    assert!(entries[0]["record"]["actorRef"].is_string());
+    assert!(entries[0]["record"]["runRef"].is_string());
+    assert!(
+        entries[0]["record"].get("reasonRef").is_none(),
+        "Check now takes no reason"
+    );
+    assert!(!entries[0].to_string().contains("synthetic-key"));
+
+    h.capture.clear();
+    let error = h
+        .store
+        .check_now_owned(h.run, "done", &operator)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "check-not-waiting");
+    let entries = h.capture.entries();
+    assert_eq!(entries.len(), 2, "a refused Check now is audited too");
+    assert_eq!(entries[1]["record"]["outcome"], "unknown");
+}

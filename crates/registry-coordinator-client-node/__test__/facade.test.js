@@ -154,6 +154,33 @@ test('status, inspect, and reconcile use only the requested run routes', async (
   assert.deepEqual(JSON.parse(requests[2].body), { reason: 'operator reviewed the original receipt' });
 });
 
+test('inspect carries the records and date behind a held step and refuses an unknown member in them', async (context) => {
+  const held = {
+    ...INSPECTION.steps[0],
+    failureCode: 'in-force-ambiguous',
+    holdDetail: { date: '2026-06-05', recordIdentifiers: ['licence-a1', 'licence-a2'] },
+  };
+  const document = { ...INSPECTION, steps: [held] };
+  const unknown = {
+    ...INSPECTION,
+    steps: [{ ...held, holdDetail: { ...held.holdDetail, value: 'protected-detail-canary' } }],
+  };
+  const answers = [document, unknown];
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: answers.shift() }));
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+
+  assert.deepEqual(await client.inspect('token', RUN_ID), { kind: 'complete', value: document });
+  await assert.rejects(() => client.inspect('token', RUN_ID), (error) => {
+    assert.ok(error instanceof CoordinatorClientError);
+    assert.equal(error.kind, 'protocol');
+    assert.equal(error.protocolFailure, 'body');
+    assert.doesNotMatch(inspectValue(error), /protected-detail-canary/);
+    return true;
+  });
+  assert.equal(requests.length, 2);
+});
+
 test('every run response rejects an unknown effective state without disclosing it', async (context) => {
   const run = { ...STATUS, state: 'protected-state-canary' };
   const { baseUrl, requests } = await serve(context, (request) => ({
@@ -327,6 +354,36 @@ test('inspect and reconcile validate wait budgets and preserve exhausted waits',
       assert.equal(requests.length, before + 1);
     }
   }
+});
+
+test('inspect returns what the last Proposal read showed and the request link', async (context) => {
+  let document;
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  const observation = {
+    state: 'draft', turn: 'party', submissionVersion: 1, handoffRefusal: 'verification-failed',
+    observedAt: STATUS.admittedAt, stateSince: STATUS.admittedAt,
+  };
+  const observing = { ...INSPECTION.steps[0], step: 'observe', state: 'pending', uncertain: false, failureCode: null };
+  const wait = {
+    step: 'observe', acceptedStep: 'submit', completion: 'proposal',
+    completionRevision: STATUS.workflowRevision,
+    timeoutAt: STATUS.deadlineAt, nextObservationAt: null, notBefore: STATUS.admittedAt,
+    minimumIntervalSeconds: 30, observations: 1, observationLimit: 4,
+    lastObservation: observation, requestLink: 'https://breg.example.invalid/requests/one',
+  };
+  document = { ...INSPECTION, steps: [...INSPECTION.steps, observing], waits: [wait] };
+  assert.deepEqual(await client.inspect('token-canary', RUN_ID), { kind: 'complete', value: document });
+
+  document = { ...document, waits: [{ ...wait, lastObservation: { ...observation, applicant: 'protected-canary' } }] };
+  await assert.rejects(() => client.inspect('token-canary', RUN_ID), (error) => {
+    assert.equal(error.kind, 'protocol');
+    assert.equal(error.protocolFailure, 'body');
+    assert.doesNotMatch(inspectValue(error), /protected-canary|token-canary/);
+    return true;
+  });
+  assert.equal(requests.length, 2);
 });
 
 test('run status requires coherent terminal evidence and preserves restore review', async (context) => {
@@ -518,6 +575,25 @@ test('list preserves the opaque cursor and state and attention filters', async (
     async () => client.list('secret', 20, null, 'waiting'),
     (error) => error.kind === 'invalid-request',
   );
+  assert.equal(requests.length, 1);
+});
+
+test('list forwards the Proposal and turn filters', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: { runs: [STATUS] } }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+
+  assert.deepEqual(
+    await client.list('secret', 1, null, null, null, RUN_ID, 'official'),
+    { kind: 'complete', value: { runs: [STATUS] } },
+  );
+  assert.equal(requests[0].path, `/v1/runs?limit=1&proposal=${RUN_ID}&turn=official`);
+  for (const [proposal, turn] of [['not-a-proposal', null], [null, 'someone'], [null, 'Official']]) {
+    await assert.rejects(
+      async () => client.list('secret', 20, null, null, null, proposal, turn),
+      (error) => error.kind === 'invalid-request',
+    );
+  }
   assert.equal(requests.length, 1);
 });
 

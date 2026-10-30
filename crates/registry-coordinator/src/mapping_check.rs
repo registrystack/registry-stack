@@ -13,10 +13,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value};
 
 use crate::{
+    compare::{Bound, Compare, Test},
     contracts::{first_violation, Violation},
     definition::{
         authored, compile_schema, output_routes, parse_timestamp, AvailableOutputs, Mapping,
-        OutputRoute, Reference, Step, Workflow,
+        Member, OutputRoute, Reference, Step, Workflow,
     },
     CoordinatorError, Result,
 };
@@ -142,6 +143,7 @@ fn check_step(
         (Step::Choose { cases, .. }, Mapping::Reference(reference)) => {
             label_fits(reference, read.get(""), cases, &base)?
         }
+        (Step::Choose { .. }, Mapping::Compare { compare }) => compare_fits(compare, &read, &base)?,
         _ => {}
     }
     Ok(())
@@ -266,12 +268,13 @@ fn source<'a>(
 
 /// Check a fields mapping against the object it builds: every member it
 /// sets is declared, every required member is set, and each literal or
-/// reference fits its member.
+/// reference fits its member. A nested member is checked the same way
+/// against the schema its target declares at that member.
 fn fields_fit(
     target: &Value,
     name: &str,
     base: &str,
-    fields: &BTreeMap<String, Reference>,
+    fields: &BTreeMap<String, Member>,
     read: &BTreeMap<String, Read<'_>>,
 ) -> Result<()> {
     let whole = facts(target, target, &mut budget());
@@ -286,9 +289,24 @@ fn fields_fit(
             "Build the output with a function, or declare an object outcome.",
         ));
     }
-    for (field, reference) in fields {
-        let path = format!("{base}.fields.{field}");
-        let declared = match member(target, target, field, &mut budget()) {
+    members_fit(target, target, name, base, "", fields, read)
+}
+
+/// Check the members one level of a fields mapping sets against `schema`,
+/// the object schema at `prefix` inside `target`.
+fn members_fit(
+    target: &Value,
+    schema: &Value,
+    name: &str,
+    base: &str,
+    prefix: &str,
+    fields: &BTreeMap<String, Member>,
+    read: &BTreeMap<String, Read<'_>>,
+) -> Result<()> {
+    for (field, member) in fields {
+        let key = format!("{prefix}.fields.{field}");
+        let path = format!("{base}{key}");
+        let declared = match self::member(target, schema, field, &mut budget()) {
             Reach::Schema(schema) => schema,
             Reach::Silent => Value::Bool(true),
             Reach::Forbidden | Reach::Undeclared => {
@@ -300,47 +318,67 @@ fn fields_fit(
                 ))
             }
         };
-        if let Reference::Literal { value } = reference {
-            if let Some(violation) = literal_violation(target, &declared, value) {
-                let at = if violation.path.is_empty() {
-                    format!("for {field}")
-                } else {
-                    format!("at {} inside {field}", violation.path)
-                };
-                return Err(authored(
-                    "mapping.literal",
-                    &format!("{path}.value"),
-                    &format!(
-                        "expected {} {at}, as {name} declares; the literal does not match",
-                        violation.expected
-                    ),
-                    &format!("Correct the literal to match what {name} declares, or select the value with a reference."),
-                ));
+        match member {
+            Member::Fields(nested) => {
+                let wanted = facts(target, &declared, &mut budget());
+                if !wanted.allows(&Kind::Object) {
+                    return Err(authored(
+                        "mapping.type",
+                        &path,
+                        &format!(
+                            "expected {} for {field}, as {name} declares; fields builds an object",
+                            wanted.describe()
+                        ),
+                        "Select the value with a reference, or remove the nested fields.",
+                    ));
+                }
+                members_fit(target, &declared, name, base, &key, &nested.fields, read)?;
             }
-        } else if let Some(read) = read.get(&format!(".fields.{field}")) {
-            let wanted = facts(target, &declared, &mut budget());
-            let offered = facts(read.root, &read.schema, &mut budget());
-            if !wanted.accepts(&offered) {
-                return Err(authored(
-                    "mapping.type",
-                    &path,
-                    &format!(
-                        "expected {} for {field}, as {name} declares; the reference reads {}",
-                        wanted.describe(),
-                        offered.describe()
-                    ),
-                    "Select a member of the declared type, or convert the value in a function.",
-                ));
+            Member::Reference(Reference::Literal { value }) => {
+                if let Some(violation) = literal_violation(target, &declared, value) {
+                    let at = if violation.path.is_empty() {
+                        format!("for {field}")
+                    } else {
+                        format!("at {} inside {field}", violation.path)
+                    };
+                    return Err(authored(
+                        "mapping.literal",
+                        &format!("{path}.value"),
+                        &format!(
+                            "expected {} {at}, as {name} declares; the literal does not match",
+                            violation.expected
+                        ),
+                        &format!("Correct the literal to match what {name} declares, or select the value with a reference."),
+                    ));
+                }
+            }
+            Member::Reference(_) => {
+                if let Some(read) = read.get(&key) {
+                    let wanted = facts(target, &declared, &mut budget());
+                    let offered = facts(read.root, &read.schema, &mut budget());
+                    if !wanted.accepts(&offered) {
+                        return Err(authored(
+                            "mapping.type",
+                            &path,
+                            &format!(
+                                "expected {} for {field}, as {name} declares; the reference reads {}",
+                                wanted.describe(),
+                                offered.describe()
+                            ),
+                            "Select a member of the declared type, or convert the value in a function.",
+                        ));
+                    }
+                }
             }
         }
     }
-    if let Some(missing) = required(target, target, &mut budget())
+    if let Some(missing) = required(target, schema, &mut budget())
         .into_iter()
         .find(|member| !fields.contains_key(member))
     {
         return Err(authored(
             "mapping.field",
-            &format!("{base}.fields"),
+            &format!("{base}{prefix}.fields"),
             &format!("expected every member {name} requires; fields does not set {missing}"),
             &format!("Add a {missing} field with a reference or a literal."),
         ));
@@ -442,6 +480,65 @@ fn label_fits(
         ));
     }
     Ok(())
+}
+
+/// Each condition's test must be one its reference's schema can satisfy:
+/// equals and oneOf take the kind the reference reads, less and greater take
+/// a number, and a calendar date only from a reference that declares
+/// `format: date`. As elsewhere, a schema that does not decide a number or a
+/// scalar kind leaves the test to scenarios and the runtime.
+fn compare_fits(compare: &Compare, read: &BTreeMap<String, Read<'_>>, base: &str) -> Result<()> {
+    for (member, condition) in compare.conditions() {
+        let Some(read) = read.get(&format!(".{member}.value")) else {
+            continue;
+        };
+        let Ok(test) = condition.test() else {
+            continue;
+        };
+        let (name, wanted) = match test {
+            Test::Present(_) => continue,
+            Test::Equals(literal) => ("equals", Kind::of(literal)),
+            Test::OneOf(literals) => ("oneOf", Kind::of(&literals[0])),
+            Test::Order(ordering, Bound::Number(_)) => (order_name(ordering), Kind::Number),
+            Test::Order(ordering, Bound::Date(_)) => {
+                (order_name(ordering), Kind::String(Some("date".to_owned())))
+            }
+        };
+        let offered = facts(read.root, &read.schema, &mut budget());
+        let fits = match &wanted {
+            // A null among the kinds is the absent value: a present guard or
+            // the runtime decides it, as for a nullable number.
+            Kind::String(Some(_)) => offered.kinds.as_ref().is_some_and(|kinds| {
+                let dated = || kinds.iter().filter(|offered| **offered != Kind::Null);
+                dated().next().is_some() && dated().all(|offered| *offered == wanted)
+            }),
+            _ => Facts::kinds([wanted.clone()]).accepts(&offered),
+        };
+        if !fits {
+            let article = match wanted {
+                Kind::String(Some(_)) => "a date string".to_owned(),
+                _ => wanted.describe(),
+            };
+            return Err(authored(
+                "mapping.type",
+                &format!("{base}.{member}.value"),
+                &format!(
+                    "expected {article} for {name}; the reference reads {}",
+                    offered.describe()
+                ),
+                "Select a member of the type the test takes, or declare format: date on a date string.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn order_name(ordering: std::cmp::Ordering) -> &'static str {
+    if ordering == std::cmp::Ordering::Less {
+        "less"
+    } else {
+        "greater"
+    }
 }
 
 /// Validate a literal against its member's schema. The member is checked

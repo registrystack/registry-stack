@@ -23,6 +23,11 @@ Each catalog operation has an input contract, the type its adapter decodes, and 
 | [`casework.cancel-review-request/v1`](#casework.cancel-review-request/v1) | 1 | `casework` | mutation | required | none | same-command | none | none |
 | [`scheduling.preview-availability/v1`](#scheduling.preview-availability/v1) | 1 | `scheduling` | read | none | none | read-again | none | none |
 | [`external.command/v1`](#external.command/v1) | 1 | `external-http` | mutation | required | none | same-command | none | [`onDeclaredRefusal`](external.command.v1.declared-refusal.schema.json) |
+| [`breg.read-in-force/v1`](#breg.read-in-force/v1) | 1 | `breg` | read | none | none | read-again | none | [`onDeclaredRefusal`](breg.read-in-force.v1.declared-refusal.schema.json) |
+| [`breg.read-proposal/v1`](#breg.read-proposal/v1) | 1 | `breg` | read | none | none | read-again | none | none |
+| [`breg.start-proposal/v1`](#breg.start-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
+| [`breg.submit-proposal/v1`](#breg.submit-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
+| [`breg.cancel-proposal/v1`](#breg.cancel-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
 
 ## breg.read-record/v1
 
@@ -1297,6 +1302,386 @@ Declared-refusal output ([`external.command.v1.declared-refusal.schema.json`](ex
 | Member | Type | Required |
 |---|---|---|
 | `refusalCode` | string | yes |
+
+No other members are accepted.
+
+## breg.read-in-force/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "read",
+    "id": "breg.read-in-force/v1",
+    "keyRequirement": "none",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.read-in-force.v1.input.schema.json`](breg.read-in-force.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `date` | string (date) | yes |
+| `entity` | string | yes |
+| `subject` | object | yes |
+
+No other members are accepted.
+
+Output ([`breg.read-in-force.v1.output.schema.json`](breg.read-in-force.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `asOf` | string (date) | yes |
+| `domainData` | object | yes |
+| `observedAt` | string (date-time) | yes |
+| `recordIdentifier` | string | yes |
+| `revisionIdentifier` | string | yes |
+
+Other members are tolerated.
+
+Declared-refusal output ([`breg.read-in-force.v1.declared-refusal.schema.json`](breg.read-in-force.v1.declared-refusal.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `refusalCode` | string | yes |
+
+No other members are accepted.
+
+## breg.read-proposal/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": {
+    "acceptedBinding": [
+      "proposalId",
+      "submissionVersion"
+    ],
+    "authenticatedWake": false,
+    "authority": "bound-connection-profile-get-grant",
+    "deadline": "original-wait-timeout-within-original-run-deadline",
+    "defaultIntervalSeconds": 900,
+    "maximumRetryAfterSeconds": 86400,
+    "minimumIntervalSeconds": 30,
+    "name": "proposal",
+    "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+    "profile": "breg-proposal",
+    "signalCarriesResult": false,
+    "terminalEvidence": "current-proposal-get"
+  },
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "read",
+    "id": "breg.read-proposal/v1",
+    "keyRequirement": "none",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.read-proposal.v1.input.schema.json`](breg.read-proposal.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `proposalId` | string (uuid) | yes |
+
+No other members are accepted.
+
+Output ([`breg.read-proposal.v1.output.schema.json`](breg.read-proposal.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `actionId` | string | yes |
+| `actionRevision` | string | yes |
+| `proposalId` | string (uuid) | yes |
+| `state` | `BRegProposalState` | yes |
+| `submissionVersion` | integer | yes |
+
+No other members are accepted.
+
+## breg.start-proposal/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": {
+    "acceptedBinding": [
+      "proposalId",
+      "submissionVersion"
+    ],
+    "authenticatedWake": false,
+    "authority": "bound-connection-profile-get-grant",
+    "deadline": "original-wait-timeout-within-original-run-deadline",
+    "defaultIntervalSeconds": 900,
+    "maximumRetryAfterSeconds": 86400,
+    "minimumIntervalSeconds": 30,
+    "name": "proposal",
+    "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+    "profile": "breg-proposal",
+    "signalCarriesResult": false,
+    "terminalEvidence": "current-proposal-get"
+  },
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "mutation",
+    "id": "breg.start-proposal/v1",
+    "keyRequirement": "required",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": true,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.start-proposal.v1.input.schema.json`](breg.start-proposal.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `input` | object | yes |
+| `preconditions` | any | no |
+
+No other members are accepted.
+
+Output ([`breg.start-proposal.v1.output.schema.json`](breg.start-proposal.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `actionId` | string | yes |
+| `actionRevision` | string | yes |
+| `proposalId` | string (uuid) | yes |
+| `state` | `BRegProposalState` | yes |
+| `submissionVersion` | integer | yes |
+
+No other members are accepted.
+
+## breg.submit-proposal/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": {
+    "acceptedBinding": [
+      "proposalId",
+      "submissionVersion"
+    ],
+    "authenticatedWake": false,
+    "authority": "bound-connection-profile-get-grant",
+    "deadline": "original-wait-timeout-within-original-run-deadline",
+    "defaultIntervalSeconds": 900,
+    "maximumRetryAfterSeconds": 86400,
+    "minimumIntervalSeconds": 30,
+    "name": "proposal",
+    "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+    "profile": "breg-proposal",
+    "signalCarriesResult": false,
+    "terminalEvidence": "current-proposal-get"
+  },
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "mutation",
+    "id": "breg.submit-proposal/v1",
+    "keyRequirement": "required",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": true,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.submit-proposal.v1.input.schema.json`](breg.submit-proposal.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `input` | object | yes |
+| `preconditions` | any | no |
+
+No other members are accepted.
+
+Output ([`breg.submit-proposal.v1.output.schema.json`](breg.submit-proposal.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `actionId` | string | yes |
+| `actionRevision` | string | yes |
+| `proposalId` | string (uuid) | yes |
+| `state` | `BRegProposalState` | yes |
+| `submissionVersion` | integer | yes |
+
+No other members are accepted.
+
+## breg.cancel-proposal/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "mutation",
+    "id": "breg.cancel-proposal/v1",
+    "keyRequirement": "required",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": true,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.cancel-proposal.v1.input.schema.json`](breg.cancel-proposal.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `proposalId` | string (uuid) | yes |
+
+No other members are accepted.
+
+Output ([`breg.cancel-proposal.v1.output.schema.json`](breg.cancel-proposal.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `actionId` | string | yes |
+| `actionRevision` | string | yes |
+| `proposalId` | string (uuid) | yes |
+| `state` | `BRegProposalState` | yes |
+| `submissionVersion` | integer | yes |
 
 No other members are accepted.
 

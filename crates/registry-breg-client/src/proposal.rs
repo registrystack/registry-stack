@@ -93,6 +93,36 @@ pub struct BRegProposalDecision {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_reason: Option<String>,
 }
+/// Why the review authority refused to take the current submission. BReg
+/// names only these codes and never copies the authority's own text.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BRegProposalHandoffRefusal {
+    #[serde(rename = "review.initiator-required")]
+    InitiatorRequired,
+    #[serde(rename = "review.initiator-excluded")]
+    InitiatorExcluded,
+    #[serde(rename = "review.policy-mismatch")]
+    PolicyMismatch,
+    #[serde(rename = "review.refused")]
+    Refused,
+}
+impl BRegProposalHandoffRefusal {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InitiatorRequired => "review.initiator-required",
+            Self::InitiatorExcluded => "review.initiator-excluded",
+            Self::PolicyMismatch => "review.policy-mismatch",
+            Self::Refused => "review.refused",
+        }
+    }
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HandoffRefusalMember {
+    code: BRegProposalHandoffRefusal,
+}
 fn valid_decision(decision: &BRegProposalDecision) -> bool {
     proposal_instant(&decision.decided_at).is_some()
         && decision
@@ -457,6 +487,15 @@ pub struct BRegProposalSubmission {
     pub application: Option<BRegProposalSubmissionApplication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<BRegProposalDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handoff_refusal: Option<HandoffRefusalMember>,
+}
+impl BRegProposalSubmission {
+    /// The allowlisted code when the review authority refused to take this
+    /// submission.
+    pub fn handoff_refusal(&self) -> Option<BRegProposalHandoffRefusal> {
+        self.handoff_refusal.map(|member| member.code)
+    }
 }
 /// Application progress of one submission. An applied submission names its
 /// receipt and no mode.
@@ -535,6 +574,8 @@ pub struct BRegProposal {
     turn: Option<BRegProposalTurn>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     decision: Option<BRegProposalDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handoff_refusal: Option<HandoffRefusalMember>,
     #[serde(skip)]
     source: Option<String>,
 }
@@ -576,6 +617,8 @@ impl BRegProposal {
                 .as_deref()
                 .is_some_and(|created_at| proposal_instant(created_at).is_none())
             || self.state == BRegProposalState::Draft && self.decision.is_some()
+            // A refused hand-off belongs to a submission; a later draft has none.
+            || self.state == BRegProposalState::Draft && self.handoff_refusal.is_some()
             // Only a rejected review result ends a Proposal in rejected.
             || self.state == BRegProposalState::Rejected
                 && self.decision.as_ref().is_some_and(|decision| {
@@ -795,6 +838,11 @@ impl BRegProposal {
     /// The current submission's review decision, served on reads only.
     pub fn decision(&self) -> Option<&BRegProposalDecision> {
         self.decision.as_ref()
+    }
+    /// The review authority's allowlisted reason for refusing the current
+    /// submission, served on reads only.
+    pub fn handoff_refusal(&self) -> Option<BRegProposalHandoffRefusal> {
+        self.handoff_refusal.map(|member| member.code)
     }
     pub const fn revision(&self) -> u64 {
         self.revision

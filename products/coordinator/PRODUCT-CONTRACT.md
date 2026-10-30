@@ -18,6 +18,24 @@ checks both schemas and enforces operation, call, expression, string, array, map
 Explicit limits can only narrow those ceilings. Functions cannot obtain credentials, access a
 clock, filesystem, network, or database, or construct additional workflow steps.
 
+The profile's callable names are the interpreter's own calls, the arithmetic, logic, string,
+array, map and iterator packages, the number helpers `parse_int`, `parse_float`, `to_int`,
+`to_float`, `sqrt`, `floor`, `ceiling`, `round`, `int`, `fraction`, `is_nan`, `is_finite`,
+`is_infinite`, `to_degrees`, `to_radians`, `PI` and `E` (the arithmetic package adds `abs`, `sign`,
+`min` and `max`), and `add_seconds` and `seconds_between`. The trigonometric, hyperbolic,
+exponential and logarithmic functions are not available because their results can differ by host.
+`replace` and `pad` are the host's own bounded versions: each refuses a result over the string limit
+before building it, and `pad` refuses an empty padding string. A result that holds NaN or an
+infinite number is refused with `function.execution`. Check
+reports a call to any other name as `coordinator.function.unknown-call` at its position in the
+Function source, unless the source defines that name. Calls are matched by name only: a wrong
+argument count still fails when the Function runs. The check is an authoring aid, not a security
+boundary: the engine still refuses any name it lacks when the Function runs. It also reads a string
+literal given to `Fn`, `is_def_fn` or an array method such as `map` as a function name, and skips a
+method call whose name the source also uses as a map key or property. `coordinatorctl explain functions` prints the
+names, the interpreter ABI and the limits. The interpreter ABI names the helper set, so a frozen
+definition from an earlier ABI is refused with `definition.abi` and the project is re-authored.
+
 An Operation alias binds one exact versioned host operation to a logical runtime connection.
 The [generated operation catalog](generated/operations/README.md) owns transport, preparation,
 effect classification, recovery, and completion contracts. A Workflow sequences `call`, `choose`,
@@ -26,6 +44,30 @@ prior step output, or literals; construct fields; or invoke a named Function wit
 The compiler resolves schema references and proves data availability on every route. Computed
 commands are validated again before preparation, saving, or dispatch. Invalid commands report a
 bounded `failurePath` without the submitted value.
+
+A `fields` mapping builds an object member by member. Each member is a reference (`input`, `step`
+or `literal`) or itself a `fields` mapping, so a Workflow builds a structured operation input, such
+as a Proposal's Action input or a read-in-force `subject`, without a Function. Nesting reaches a
+depth of 4, counting the outermost mapping as 1, and the whole mapping holds at most 64 members
+across all levels; a nested object counts as one member, and so does each of its own members. A
+nested member holds only references and further `fields` mappings, never a Function: compute such
+a value in an earlier step and reference it. Member names follow the same rule at every level.
+`wait-until`, `choose` and Function `inputs` still take references only. Compilation refuses a
+fifth level with `mapping.fields-depth` and a 65th member with `mapping.fields-count`, each at the
+member's path. The compiler checks every member against the operation input schema at that
+member's path, and the built object is validated again before preparation, as for a flat mapping.
+Service Studio's catalog forms write nested `fields` from an operation's input schema and read
+them back in the same form.
+
+A `choose` step routes on one mapped string with a case for every value it can read, or on a
+`compare`. A compare has exactly one of `all` or `any`, each a list of 1 to 16 conditions. A
+condition names a `value` reference and exactly one test: `equals` and `oneOf`, spelled as in
+Casework routing, or `less`, `greater` or `present`. `less` and `greater` take a number, or a
+calendar date when the reference's schema declares `format: date`; compilation refuses them on
+any other type. The cases are exactly `matched` and `unmatched`. Conditions run in order and stop
+at the first decisive one, so `present: true` before a numeric test guards an optional value. A
+missing or wrongly typed value in any other test fails the run with `choice-invalid`, as a missing
+case does today; it never routes silently to `unmatched`. Compare holds no Function and no clock.
 
 Owner-generated numeric width annotations such as `int64` are accepted only on
 matching numeric types. Validation intersects explicit bounds with the declared
@@ -47,9 +89,9 @@ Compilation pins the generated Action revision, mode, input, output, and declare
 maintained BReg client verifies current metadata without silently replacing a saved command or
 condition. The operation invokes immediate Actions and returns their exact application results.
 Compilation refuses a Proposal Action with `coordinator.operation.proposal-action`, and
-preparation refuses one with `action-unavailable`. The applicant drives a Proposal in BReg, and
-BReg decides application under its current policy and commit-time conditions. A Workflow follows
-that Proposal through a committed BReg product event or a later `breg.read-record/v1` read.
+preparation refuses one with `action-unavailable`. Proposal Actions use the
+[Proposal operations](#breg-proposals-and-in-force-reads) instead. BReg decides application under
+its current policy and commit-time conditions.
 A notice after application is a separate `messaging.submit-message/v1` call,
 authorized by Messaging. A refused notice leaves the registry application intact.
 
@@ -59,6 +101,155 @@ preparation failures stay operational failures. A later refusal cannot settle an
 attempt. Success and refusal outputs are available only on their respective routes; after a join
 reachable from both, the call output has no unambiguous schema and is unavailable. Without the
 edge, a declared refusal fails the run with `product-refused`, like any other refusal.
+
+## BReg Proposals and in-force reads
+
+Five operations work with BReg Proposals and temporal records. Each Proposal operation names one
+Proposal Action through `action.contract` and `action.id`, and compilation pins its revision as
+for `breg.invoke-action/v1`. No operation in the catalog approves, rejects, decides or applies a
+Proposal, and a catalog test holds that rule for every operation. BReg and its review authority
+keep those decisions.
+
+| Operation | Effect | Contract |
+|---|---|---|
+| `breg.read-proposal/v1` | read | Reads the Proposal named by input `proposalId` and declares the completion `proposal`. Use it when a person submitted the Proposal in BReg and the run started from it. |
+| `breg.start-proposal/v1` | mutation, `same-command` | Starts a draft with inputs the workflow checked, for example facts read from other registries, and declares `proposal`. A person reviews and submits the draft in BReg and so becomes its initiator. |
+| `breg.submit-proposal/v1` | mutation, `same-command` | Starts and submits a Proposal as two frozen BReg commands, each with its own idempotency key derived from the run's start identity and the step, and declares `proposal`. Use it only when no person started the run: an event, a schedule or a batch. |
+| `breg.cancel-proposal/v1` | mutation, `same-command` | Cancels a Proposal this run started or submitted. |
+| `breg.read-in-force/v1` | read | Reads the one record of a temporal Record type in force for a subject on a date. |
+
+Each mutation sends its frozen command with the same key on every attempt, as other BReg calls
+do. `breg.start-proposal/v1` and `breg.submit-proposal/v1` lift the Proposal refusal for their
+own Action only. `breg.invoke-action/v1` keeps refusing a Proposal Action. Coordinator never
+asserts who started a run. An initiator-excluding review policy refuses a workflow submission in
+the review authority, and BReg reports it as the Proposal's `handoffRefusal`. A follow of
+`breg.submit-proposal/v1` then holds the run with `proposal-handoff-refused` and shows the
+allowlisted code to operators. A follow of `breg.read-proposal/v1` or `breg.start-proposal/v1`
+keeps waiting and records the code in `lastObservation`, because the person who submitted cures it
+by revising and resubmitting in BReg, and the refusal clears for that later submission version.
+
+`breg.cancel-proposal/v1` is limited to work the run owns. Compilation requires its `proposalId`
+input to map from the output of an earlier `breg.start-proposal/v1` or `breg.submit-proposal/v1`
+step on every route, and refuses any other source with `definition.proposal-not-run-owned`. BReg
+separately checks the connection profile's Cancel grant and caller ownership. Cancellation of a
+Proposal a person started or submitted belongs to that person or an officer in BReg.
+
+### The `breg-proposal` completion
+
+`breg-proposal` is a host-owned completion kind, beside Casework `result` and the authored
+`bounded-poll`. Compilation inserts the completion `proposal` for `breg.read-proposal/v1`,
+`breg.start-proposal/v1` and `breg.submit-proposal/v1`, and refuses an authored completion that
+tries to replace it; a start step needs no extra read step before a wait. A `wait-for` names it as
+`completion: {step, name: proposal}`. The wait is keyed by the Proposal id. Scheduled reads follow
+the BReg connection's `resultCheckSeconds` (60 to 86,400 seconds, default 900). The wait spaces
+and budgets its reads by the deployment read floor, `minimumObservationIntervalSeconds` (default 30
+seconds), as a Casework `result` wait does: its observation limit is
+one read per floor interval over its timeout, plus one, and a wake-up or Check now may read
+early, down to the floor, without exhausting that budget before the timeout. The step settles
+only from the current Proposal Get, never from a Casework result for the Proposal subject and
+never from a lifecycle event. A later `wait-for` may name the same `proposal` completion after an
+earlier wait on it timed out, and observes the same Proposal afresh.
+
+The settled output has `outcome`, `proposalId`, `submissionVersion`, `actionRevision`, the
+retained `decision` (`status`, `decidedAt` and any `publicReason`), and the frozen `input` the
+connection profile may read. Later steps bind to that input so they act on the record the
+Proposal named. Each operation declares its own outcome set: `breg.read-proposal/v1` and
+`breg.start-proposal/v1` declare `applied`, `rejected` and `cancelled`, and
+`breg.submit-proposal/v1` declares those three and `returned`. An expired wait takes `onTimeout`
+or reports `wait-timed-out`, as for any wait.
+
+| Proposal read | Run started from a person's Proposal (`read-proposal`, `start-proposal`) | Run submitted it (`submit-proposal`) |
+|---|---|---|
+| `state: applied` | `applied` | `applied` |
+| `state: rejected` | `rejected` | `rejected` |
+| `state: cancelled` | `cancelled` | `cancelled` |
+| `state: draft`, or `submitted` with `turn: party` | keeps waiting: the holder corrects and resubmits in BReg | `returned` |
+| `submitted` with a `submissionVersion` above the one the run submitted | keeps waiting, recording the new version | `returned` |
+| `submitted` with `turn: official` or `nobody` | keeps waiting | keeps waiting |
+| `handoffRefusal` present | keeps waiting, recording the code in `lastObservation` | holds with `proposal-handoff-refused` |
+| 404, 401 or 403 from BReg | holds with `proposal-unreadable` | holds with `proposal-unreadable` |
+
+Route on `applied`, never on an approval. In manual application an approved Proposal is still
+`submitted` until an officer applies it. A blocked application, including `package-changed` with
+recovery `rebase`, is a turn change, not an outcome. For a follow of `breg.submit-proposal/v1`,
+Revise or Rebase by someone other than the run ends the wait as `returned`, and that operation's
+`choose` over `outcome` names all four cases. Read and start follows declare three, so their
+`choose` names three. Case coverage refuses a missing case and a case the operation cannot return.
+Coordinator never follows a different Proposal id.
+
+Each read stores `last_observation` on the wait: Proposal `state`, `turn`, `submissionVersion`,
+any allowlisted `handoffRefusal` code, `observedAt`, and `stateSince`, which is Coordinator's first
+observation of the current state and turn and so is only as precise as the read interval. It holds
+no person's name or other value, keeps only the latest read, and is deleted with the wait. BReg's
+own Proposal history remains the audit trail. Inspection shows it in `waits[].lastObservation`.
+
+### Reading the record in force
+
+`breg.read-in-force/v1` takes `entity`, a structured `subject` of equality values on declared
+fields, and a calendar `date`. It never accepts a filter string. Coordinator sends one BReg
+`:as-of` read with `asOf` set to the date, an equality filter built from the subject and
+`$top=2`, so BReg reads at most two rows. Only entities whose `temporal` uses date intervals are
+accepted; compilation refuses other imports with `definition.read-in-force-entity`. BReg applies
+the interval's own semantics, an exclusive end or an inclusive last day, as the record schema's
+`x-registry-temporal` marker states; Coordinator never evaluates the interval itself.
+
+| BReg answer | Step result |
+|---|---|
+| One record | Success with that record and its provenance as the output. |
+| A successful read with zero records | The declared refusal `none-in-force`, routed by `onDeclaredRefusal`, which is required. |
+| Two records | Holds the run with `in-force-ambiguous`; inspection names the two record identifiers and the date. |
+| 401, 403 or 404 | A failure of the read through the ordinary error path. It is never `none-in-force`. |
+
+BReg never answers a missing or empty row-boundary claim with an empty list: a missing claim is a
+404 and an empty claim a 401, so a refused read cannot become "none in force". `coordinatorctl
+check` warns `coordinator.read-in-force.may-be-ambiguous` unless some `temporal-non-overlap`
+constraint on the entity is scoped only by fields the subject names, since otherwise BReg allows
+two records for the same subject on the same date.
+
+### Connection, codes and catalog
+
+A `breg` connection gains two optional members. `resultCheckSeconds` spaces Proposal reads, with
+the Casework bounds and default. `requestLink` is an `https` URL template with exactly one
+`{proposalId}` placeholder, usually the BReg staff page for `/v1/proposals/{id}`; inspection then
+offers "Open the request" for each Proposal wait. Neither is part of a live run's binding, so both
+can change while runs wait. The link carries only the opaque id, which grants nothing without
+BReg's own grant.
+
+The table gives the plain sentence an operator UI shows for each code. For a run hold the engine
+stores and returns only the code, and the UI maps it to the sentence; a `check` diagnostic also
+carries its sentence as its `message`.
+
+| Code | Where | Sentence shown |
+|---|---|---|
+| `coordinator.follow.long` | `check` warning | "This wait follows a request for more than 90 days. Long waits delay drain-based upgrades; shorten the time limit or route the timeout." |
+| `coordinator.follow.timeout-unrouted` | `check` warning | "This wait has no route for a request that gets no decision in time, so the run fails with wait-timed-out. Add onTimeout." |
+| `coordinator.read-in-force.may-be-ambiguous` | `check` warning | "The register allows two records in force for this subject on one date, so this read can hold the run. Add a temporal-non-overlap constraint over these subject fields in BReg, or name every field the constraint is scoped by." |
+| `definition.proposal-not-run-owned` | `check` error | "Cancel only a request this run started or submitted: map proposalId from that step's output." |
+| `definition.read-in-force-entity` | `check` error | "This record type has no date validity interval, so no record can be in force on a date." |
+| `mapping.fields-depth` | `check` error | "This fields mapping nests deeper than 4 levels. Flatten it, or build the inner value in an earlier step." |
+| `mapping.fields-count` | `check` error | "This fields mapping builds more than 64 members across its levels. Remove members, or build part of the value in an earlier step." |
+| `proposal-unreadable` | run hold | "BReg refused or concealed the request. Check the connection profile's get grant and row boundary, then retry." |
+| `proposal-handoff-refused` | run hold | "The review authority refused to take the request this run submitted. A person may need to submit it; see the code shown." |
+| `in-force-ambiguous` | run hold | "Two records are in force for this subject on this date. Correct the register, then retry." |
+| `check.not-waiting` | HTTP 409 | "That step is not waiting." |
+
+Run hold and failure codes stay in the closed kebab-case list; the dotted `breg.in-force.ambiguous`
+spelling is not used. Doctor makes no BReg call for these waits; it adds a
+`state.proposalWaitsByTurn` count of `party`, `official`, `nobody` and `unobserved` from stored
+observations. A missing grant shows on the run itself as `proposal-unreadable`, or as BReg's
+refusal of the start or submit step.
+
+The generated operation catalog gains `breg.read-proposal/v1`, `breg.start-proposal/v1`,
+`breg.submit-proposal/v1`, `breg.cancel-proposal/v1` and `breg.read-in-force/v1`. In outline: the
+Proposal operations take `{proposalId}` or the Action's input object, built with a nested `fields`
+mapping where it is structured, and return the Proposal output above; `breg.read-in-force/v1`
+takes `{entity, subject, date}` and returns one Registry Record (`recordIdentifier`, string
+`revisionIdentifier`, `domainData`) with its provenance: `asOf`, the date BReg echoed in the
+response `meta`, and `observedAt`, Coordinator's clock when the read returned. The declared
+refusal is `none-in-force`. The completion kind list gains `breg-proposal`, whose catalog
+`minimumIntervalSeconds` is 30, as for Casework `result`. `breg.lookup-record/v1` and
+`breg.read-record/v2` are outside this contract; their own lane specifies them with the same
+`asOf` and `observedAt` provenance.
 
 ## Standalone review and named completions
 
@@ -140,13 +331,29 @@ as the project interprets it; Coordinator does not independently verify the prov
 
 ## Observation and uncertainty
 
-Read observations have a persistent floor of at least 30 seconds, including after restarts,
-wake-ups, retry, and timeout. `minimumObservationIntervalSeconds` can raise that deployment-wide
-floor, up to 86,400 seconds. Casework pending reads default to 900 seconds. Casework
-`resultCheckSeconds` accepts 60 to 86,400. An external completion's `intervalSeconds` is constrained
-by the operation and deployment floor. Retry hints can postpone observations within the host's
-86,400-second ceiling. Invalid or excessive retry hints hold the wait instead of accelerating it.
-Inspection exposes timing and observation count/limit, without protected correlation values.
+Read observations have a persistent floor, including after restarts, wake-ups, retry, and
+timeout: the deployment read floor, 30 seconds by default, for a Casework `result`, BReg
+`proposal` or external `bounded-poll` read. `minimumObservationIntervalSeconds` can raise that
+deployment-wide floor, up to 86,400 seconds.
+Casework and BReg pending reads default to 900 seconds. The
+`resultCheckSeconds` of a Casework or BReg connection accepts 60 to 86,400. An external
+completion's `intervalSeconds` is constrained by the operation and deployment floor. Retry hints
+can postpone observations within the host's 86,400-second ceiling. Invalid or excessive retry
+hints hold the wait instead of accelerating it. Inspection exposes timing, observation
+count/limit and the latest Proposal observation, without protected correlation values.
+
+A Casework `result` or BReg `proposal` wait's observation limit is one read per deployment read
+floor interval over its timeout, plus one. Scheduled reads follow `resultCheckSeconds`, which is
+never below the floor, so reads brought forward by a completion wake-up or by Check now fit within the budget and
+the wait still reaches its timeout route.
+
+Check now (`POST /v1/runs/{run}/check` with the wait's `step`, or `coordinatorctl check-now --run
+--step`) brings that wait's next read forward to now, or to the read floor when the last read was
+more recent. It writes nothing downstream, performs no recovery, and needs the existing `inspect`
+grant for the workflow; no new access action exists. It answers with the next read time and the
+count and limit. A run that is not visible answers 404 `run.not-visible`, and a step that is not
+an open wait answers 409 `check.not-waiting`. Every accepted Check now is audited with the caller
+and the run.
 
 Unavailable reads remain pending within the original budget. A refusal, invalid correlation, or
 blocked source state stays held for investigation and recovery. None is evidence of a negative
@@ -265,7 +472,11 @@ added later, and require `operator: true` instead of a workflow list.
 newest first, from the workflows its policy lists; an operator policy lists every
 owner's runs in those workflows. `limit` takes 1 to 100 and defaults to 20. The list supports `state` and `attention` filters and returns `nextCursor` when there
 may be another page. `attention=true` selects effective states `attention` and `failed`;
-`attention=false` excludes both. Continue with the same filters and cursor; each page
+`attention=false` excludes both. `proposal=<id>` selects the runs waiting on that BReg
+Proposal, matched through the wait-key commitment, so no Proposal id is stored in clear.
+`turn=party`, `official` or `nobody` selects runs whose Proposal wait last observed that turn.
+Cursors carry these filters, and a cursor from an earlier version is refused. Continue with the
+same filters and cursor; each page
 reapplies the caller's current authority. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one
 fits. The Rust client and its Node.js and Python bindings are built from source;
@@ -328,7 +539,7 @@ Unknown product mutations do not qualify for this exception.
 
 ## Compatibility and verification
 
-Protected state schema version 4 directly replaces earlier pilot layouts. Apply and runtime access
+Protected state schema version 5 directly replaces earlier layouts. Apply and runtime access
 refuse incompatible namespaces. Settle old work with its matching binary and preserve original
 packages, keys, and audit until retention allows erasure, then provision a fresh namespace and
 database identity. There are no legacy authoring aliases or automatic state conversions.

@@ -7,14 +7,16 @@ use std::fmt;
 use registry_record::{RegistryRecordCollectionResponse, RegistryRecordMeta};
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
-use time::{OffsetDateTime, UtcOffset};
+use time::macros::format_description;
+use time::{Date, OffsetDateTime, UtcOffset};
 
 use crate::{
     BRegContinuation, BRegContinuationProjection, BRegListRequest, BRegRecordFormat,
     BRegRecordOptions, BRegRequestError,
 };
 
-const INVALID_AS_OF: &str = "the Base Registry Engine as-of instant must be canonical UTC RFC 3339";
+const INVALID_AS_OF: &str =
+    "the Base Registry Engine as-of value must be a calendar date or a canonical UTC RFC 3339 instant";
 const INVALID_SNAPSHOT: &str = "the Base Registry Engine snapshot reference is invalid";
 const INVALID_VALID_AT: &str = "the Base Registry Engine snapshot validity value is invalid";
 
@@ -688,7 +690,14 @@ impl fmt::Debug for BRegRelationshipContinuation {
     }
 }
 
+/// A date interval reads in force on a calendar date such as `2026-06-05`; a
+/// timestamp interval reads at a canonical UTC RFC 3339 instant. The server
+/// refuses the form that does not match the record type's interval.
 fn validate_as_of(value: &str) -> Result<(), BRegRequestError> {
+    if value.len() == 10 && Date::parse(value, format_description!("[year]-[month]-[day]")).is_ok()
+    {
+        return Ok(());
+    }
     let parsed =
         OffsetDateTime::parse(value, &Rfc3339).map_err(|_| BRegRequestError::new(INVALID_AS_OF))?;
     let canonical = parsed
@@ -775,10 +784,14 @@ mod tests {
     }
 
     #[test]
-    fn as_of_requires_the_servers_canonical_utc_timestamp() {
+    fn as_of_takes_a_calendar_date_or_the_servers_canonical_utc_timestamp() {
         assert!(BRegAsOfListRequest::new("2026-09-10T00:00:00Z").is_ok());
+        assert!(BRegAsOfListRequest::new("2026-09-10").is_ok());
         for invalid in [
-            "2026-09-10",
+            "2026-9-10",
+            "2026-02-30",
+            "2026-09-10 ",
+            "+2026-09-10",
             "2026-09-10T00:00:00+00:00",
             "2026-09-10T07:00:00+07:00",
             "2026-09-10t00:00:00z",

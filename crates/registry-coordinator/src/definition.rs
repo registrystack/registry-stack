@@ -73,7 +73,8 @@ pub struct Workflow {
 }
 
 /// How a step computes its value: a pure function over references, an
-/// object built member by member from references, or one reference.
+/// object built member by member from references and nested objects, or one
+/// reference.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Mapping {
@@ -82,9 +83,40 @@ pub enum Mapping {
         inputs: BTreeMap<String, Reference>,
     },
     Fields {
-        fields: BTreeMap<String, Reference>,
+        fields: BTreeMap<String, Member>,
+    },
+    Compare {
+        compare: crate::compare::Compare,
     },
     Reference(Reference),
+}
+
+/// One member of a fields mapping: a reference, or a nested object built
+/// the same way. A member never calls a Function.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum Member {
+    Reference(Reference),
+    Fields(Fields),
+}
+
+/// A nested object a fields member builds, written `{"type": "fields",
+/// "fields": {...}}`. The tag is a field rather than a serde tag so that
+/// unknown members stay refused.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Fields {
+    #[serde(rename = "type")]
+    pub kind: FieldsTag,
+    pub fields: BTreeMap<String, Member>,
+}
+
+/// The `type` of a nested fields member.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum FieldsTag {
+    #[default]
+    #[serde(rename = "fields")]
+    Fields,
 }
 
 /// A value a mapping reads. A path is an RFC 6901 JSON Pointer into the
@@ -108,8 +140,11 @@ pub enum Reference {
 
 /// The longest reference path accepted.
 pub(crate) const MAXIMUM_PATH_CHARS: usize = 256;
-/// The most members one fields mapping builds.
+/// The most members one fields mapping builds, counted across its levels:
+/// a nested object is one member, and so is each of its own members.
 pub(crate) const MAXIMUM_FIELDS: usize = 64;
+/// The deepest a fields mapping nests, counting the outermost mapping as 1.
+pub(crate) const MAXIMUM_FIELDS_DEPTH: usize = 4;
 
 /// An RFC 6901 pointer below the root: `~` only as `~0` or `~1`.
 pub(crate) fn valid_pointer(text: &str) -> bool {
@@ -138,13 +173,74 @@ impl Mapping {
                 .iter()
                 .map(|(name, reference)| (format!(".inputs.{name}"), reference))
                 .collect(),
-            Self::Fields { fields } => fields
-                .iter()
-                .map(|(name, reference)| (format!(".fields.{name}"), reference))
-                .collect(),
+            Self::Fields { fields } => {
+                let mut references = Vec::new();
+                member_references(fields, "", &mut references);
+                references
+            }
+            Self::Compare { compare } => compare.references(),
             Self::Reference(reference) => vec![(String::new(), reference)],
         }
     }
+}
+
+/// Each reference below a fields mapping, nested members included, with its
+/// member path such as `.fields.premises.fields.district`.
+fn member_references<'a>(
+    fields: &'a BTreeMap<String, Member>,
+    prefix: &str,
+    references: &mut Vec<(String, &'a Reference)>,
+) {
+    for (name, member) in fields {
+        let path = format!("{prefix}.fields.{name}");
+        match member {
+            Member::Reference(reference) => references.push((path, reference)),
+            Member::Fields(nested) => member_references(&nested.fields, &path, references),
+        }
+    }
+}
+
+/// Refuse the first member of a fields mapping that breaks its bounds, in
+/// name order depth first: a name a product cannot carry, a 65th member
+/// across the levels, or a fifth level.
+fn fields_bounds(
+    fields: &BTreeMap<String, Member>,
+    prefix: &str,
+    depth: usize,
+    count: &mut usize,
+) -> Result<()> {
+    for (name, member) in fields {
+        let path = format!("{prefix}.fields.{name}");
+        if !valid_field_name(name) {
+            return Err(authored(
+                "mapping.reference",
+                &format!("{prefix}.fields"),
+                "expected fields named by ASCII letters, digits, hyphens or underscores, starting with a letter",
+                "Rename the fields to the members the target declares.",
+            ));
+        }
+        *count += 1;
+        if *count > MAXIMUM_FIELDS {
+            return Err(authored(
+                "mapping.fields-count",
+                &path,
+                "This fields mapping builds more than 64 members across its levels.",
+                "Remove members, or build part of the value in an earlier step.",
+            ));
+        }
+        if let Member::Fields(nested) = member {
+            if depth == MAXIMUM_FIELDS_DEPTH {
+                return Err(authored(
+                    "mapping.fields-depth",
+                    &path,
+                    "This fields mapping nests deeper than 4 levels.",
+                    "Flatten it, or build the inner value in an earlier step.",
+                ));
+            }
+            fields_bounds(&nested.fields, &path, depth + 1, count)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -275,6 +371,9 @@ pub struct CompletionDefinition {
 )]
 pub enum CompletionKind {
     CaseworkResult {},
+    /// The decision on a BReg Proposal the run started, submitted or read,
+    /// settled only from the current Proposal Get.
+    BregProposal {},
     BoundedPoll {
         interpret: String,
         interval_seconds: u32,
@@ -499,7 +598,7 @@ impl Definition {
             .map_err(|_| fail("definition.read").at(project, ""))?;
         let path = project.join("workflow.yaml");
         let bytes = read_bytes(&path, MAX_DOCUMENT_BYTES)?;
-        let (mut workflow, document) = crate::authoring::parse_project(&path, &bytes)?;
+        let (mut workflow, mut document) = crate::authoring::parse_project(&path, &bytes)?;
         let mut sources = BTreeMap::new();
         for (name, function) in &workflow.functions {
             if !sources.contains_key(&function.source) {
@@ -536,6 +635,9 @@ impl Definition {
         findings.extend(crate::event_trigger::mapping_findings(&definition.workflow));
         if !findings.is_empty() {
             return Err(crate::authoring::placed(&document, findings));
+        }
+        for warning in crate::follow_check::warnings(&definition.workflow, &document) {
+            document.push_warning(warning);
         }
         Ok((definition, document))
     }
@@ -938,19 +1040,18 @@ impl Definition {
                     .map_err(|error| error.at("workflow.yaml", field))?
             }
             Mapping::Fields { fields } => {
-                let members = fields
-                    .iter()
-                    .map(|(member, reference)| {
-                        resolve(reference, input, outputs)
-                            .map(|value| (member.clone(), value.clone()))
-                            .map_err(|error| {
-                                error.at("workflow.yaml", format!("{field}.fields.{member}"))
-                            })
-                    })
-                    .collect::<Result<serde_json::Map<_, _>>>()?;
-                let value = Value::Object(members);
+                let value = build_fields(fields, input, outputs, field)?;
                 check_value(&value).map_err(|error| error.at("workflow.yaml", field))?;
                 value
+            }
+            Mapping::Compare { compare } => {
+                let matched =
+                    compare.matches(field, |reference| resolve(reference, input, outputs))?;
+                Value::from(if matched {
+                    crate::compare::MATCHED
+                } else {
+                    crate::compare::UNMATCHED
+                })
             }
             Mapping::Reference(reference) => resolve(reference, input, outputs)
                 .map_err(|error| error.at("workflow.yaml", field))?
@@ -1282,11 +1383,36 @@ fn resolve<'a>(
     }
 }
 
+/// The object a fields mapping builds from its resolved references, nested
+/// members built the same way. Errors name the member, never a value.
+fn build_fields(
+    fields: &BTreeMap<String, Member>,
+    input: &Value,
+    outputs: &BTreeMap<String, Value>,
+    field: &str,
+) -> Result<Value> {
+    fields
+        .iter()
+        .map(|(name, member)| {
+            let path = format!("{field}.fields.{name}");
+            let value = match member {
+                Member::Reference(reference) => resolve(reference, input, outputs)
+                    .map_err(|error| error.at("workflow.yaml", &path))?
+                    .clone(),
+                Member::Fields(nested) => build_fields(&nested.fields, input, outputs, &path)?,
+            };
+            Ok((name.clone(), value))
+        })
+        .collect::<Result<serde_json::Map<_, _>>>()
+        .map(Value::Object)
+}
+
 /// What computed a mapping's value, as a refusal names it.
 fn producer(mapping: &Mapping) -> String {
     match mapping {
         Mapping::Function { function, .. } => format!("function {function}"),
         Mapping::Fields { .. } => "the fields mapping".into(),
+        Mapping::Compare { .. } => "the compare".into(),
         Mapping::Reference(_) => "the reference".into(),
     }
 }
@@ -1420,6 +1546,14 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                     operation.uses == Operation::SubmitReviewRequest
                         && completion.output == *crate::contracts::casework_completion_schema()
                 }
+                CompletionKind::BregProposal {} => {
+                    operation.action.as_ref().is_some_and(|action| {
+                        action.mode == registry_breg_client::BRegActionMode::Proposal
+                    }) && crate::breg_proposal::completion_matches(
+                        operation.uses,
+                        &completion.output,
+                    )
+                }
                 CompletionKind::BoundedPoll {
                     interpret,
                     interval_seconds,
@@ -1460,6 +1594,16 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                     "Recompile the project from its canonical Operation aliases.",
                 ));
             }
+        }
+    }
+    for (name, step) in &flow.steps {
+        if !cancels_only_run_owned(flow, step) {
+            findings.push(authored(
+                "definition.proposal-not-run-owned",
+                &format!("steps.{name}.input"),
+                "Cancel only a request this run started or submitted: map proposalId from that step's output.",
+                "Map proposalId from the output of the breg.start-proposal/v1 or breg.submit-proposal/v1 step that opened the request.",
+            ));
         }
     }
     let mut resolved_connections = BTreeMap::new();
@@ -1578,6 +1722,14 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                             call.operation.as_str()
                         ),
                         "Remove onDeclaredRefusal, or use it on an invoke-breg-action call.",
+                    ));
+                }
+                if call.operation == Operation::ReadInForce && on_declared_refusal.is_none() {
+                    findings.push(authored(
+                        "definition.operation",
+                        &format!("steps.{name}.onDeclaredRefusal"),
+                        "breg.read-in-force/v1 requires onDeclaredRefusal: no record in force is a routine answer that needs its own next step",
+                        "Add onDeclaredRefusal naming the step that handles no record in force.",
                     ));
                 }
             }
@@ -1914,16 +2066,8 @@ pub(crate) fn validate_mapping(
         (_, Mapping::Function { function, .. }) if !valid_name(function) => {
             return Err(fail("mapping.function").at("workflow.yaml", format!("steps.{name}")))
         }
-        (_, Mapping::Fields { fields })
-            if fields.len() > MAXIMUM_FIELDS || !fields.keys().all(|key| valid_field_name(key)) =>
-        {
-            return Err(authored(
-                "mapping.reference",
-                &format!("{base}.fields"),
-                "expected at most 64 fields named by ASCII letters, digits, hyphens or underscores, starting with a letter",
-                "Rename or remove fields, or build a larger value in a function.",
-            ))
-        }
+        (_, Mapping::Fields { fields }) => fields_bounds(fields, &base, 1, &mut 0)?,
+        (_, Mapping::Compare { compare }) => compare.check(step, name)?,
         _ => {}
     }
     for (member, reference) in mapping.references() {
@@ -2132,6 +2276,32 @@ fn fail(code: &'static str) -> CoordinatorError {
         "definition.schema" => "the schema is invalid or uses an unsupported format or external reference",
         _ => "the workflow definition or mapping was refused",
     }).suggest("Inspect the authored field and function, correct the definition, then rerun check. Admitted runs keep their original snapshot.")
+}
+
+/// A run cancels only a Proposal it opened: the cancel's `proposalId` is
+/// the `proposalId` a start or submit call step returned. Ordinary step
+/// reference checks then hold that the step ran on every route here.
+fn cancels_only_run_owned(flow: &Workflow, step: &Step) -> bool {
+    let Step::Call { call, input, .. } = step else {
+        return true;
+    };
+    if call.operation != Operation::CancelProposal {
+        return true;
+    }
+    let Mapping::Fields { fields } = input else {
+        return false;
+    };
+    let Some(Member::Reference(Reference::Step { step, path })) = fields.get("proposalId") else {
+        return false;
+    };
+    path.as_deref() == Some("/proposalId")
+        && matches!(
+            flow.steps.get(step),
+            Some(Step::Call { call, .. }) if matches!(
+                call.operation,
+                Operation::StartProposal | Operation::SubmitProposal
+            )
+        )
 }
 
 pub(crate) fn authored(

@@ -2,6 +2,85 @@
 
 ## Unreleased
 
+- BREAKING: protected state schema version 5 adds the latest Proposal
+  observation to each wait that follows a BReg Proposal. Version 4 namespaces
+  from 0.44.0 are refused. Settle their runs with the 0.44.0 binaries, then
+  apply to a fresh namespace and database identity.
+- Breaking: the pure Function interpreter ABI is now `v2` because the profile gained helpers. A
+  definition frozen under `v1` is refused with `definition.abi`; re-author the project and promote
+  it. Drain or finish runs started on 0.44.0 before upgrading: a run whose Function was frozen under
+  `v1` cannot continue on `v2`. A 1.0 install starts on `v2`.
+- Add the BReg Proposal operations `breg.read-proposal/v1`,
+  `breg.start-proposal/v1`, `breg.submit-proposal/v1` and
+  `breg.cancel-proposal/v1`. Each names a Proposal of one pinned Proposal
+  Action, and the host-owned Proposal completion follows it by Proposal Get
+  until it is applied, rejected or cancelled, or returned to the party after
+  this run submitted it. Start and submit replay as frozen commands under
+  stable keys; check refuses a cancel that does not name a Proposal the run
+  opened. No operation decides a Proposal.
+- A `breg` connection takes `resultCheckSeconds` (60 to 86,400, default 900)
+  for how often a Proposal wait reads, and an `https` `requestLink` template.
+  Neither enters the binding digest, so both can change while runs wait.
+- `coordinatorctl check` warns `coordinator.follow.long` for a Proposal wait
+  longer than 90 days and `coordinator.follow.timeout-unrouted` for one with
+  no `onTimeout` route.
+- Add `breg.read-in-force/v1`: one `:as-of` read for the record of a
+  date-interval Record type in force for a structured `subject` on a `date`.
+  It sends the date as a calendar date. No record is the declared refusal
+  `none-in-force`, which needs an `onDeclaredRefusal` route; two records hold
+  the run with `in-force-ambiguous`, and inspection names both record
+  identifiers and the date. Check refuses a Record type without a date
+  interval (`definition.read-in-force-entity`) and warns
+  `coordinator.read-in-force.may-be-ambiguous` when no `temporal-non-overlap`
+  constraint is scoped only by fields the subject names. It needs a BReg
+  record schema that carries the `x-registry-temporal` marker.
+- Add Check now: `POST /v1/runs/{run}/check` and `coordinatorctl check-now`
+  bring forward the next read of a step's open wait. It keeps the read floor,
+  counts against the wait's read budget, needs only the inspect grant, is
+  audited as `check-now`, and answers `409 check.not-waiting` when the step
+  has no pending wait, including a wait held for recovery.
+- A `fields` mapping member can be a nested `fields` mapping, up to 4 levels
+  and 64 members across levels, so a Workflow builds a structured input
+  without a Function. Check reports `mapping.fields-depth` and
+  `mapping.fields-count`, and checks each nested member against the input
+  schema at its path.
+- A `choose` step can route on `type: compare`, with `all` or `any` over one
+  to sixteen conditions (`equals`, `oneOf`, `less`, `greater`, `present`),
+  to the cases `matched` and `unmatched`. Dates order as calendar dates. A
+  missing or wrongly typed value fails the run with `choice-invalid` rather
+  than routing to `unmatched`.
+- Inspection shows each Proposal wait's `lastObservation` (state, turn,
+  submission version, any hand-off refusal code, `observedAt` and
+  `stateSince`) and, when the BReg connection sets `requestLink`, its
+  `requestLink`.
+- `GET /v1/runs` and `coordinatorctl list` take `proposal=<id>` (`--proposal`)
+  for the runs waiting on one BReg Proposal and `turn=party|official|nobody`
+  (`--turn`) for runs whose Proposal wait last read that turn. List cursors
+  carry these filters; a cursor issued by 0.44.0 is refused, so start the
+  list again.
+- Doctor reports `state.proposalWaitsByTurn`, the Proposal waits counted by
+  their last observed turn plus those not yet observed, from stored rows
+  without calling BReg.
+- The Rust, Python and Node Coordinator clients decode a wait's
+  `lastObservation` and `requestLink` on inspection, a held step's
+  `holdDetail`, and their run lists take the `proposal` and `turn` filters.
+- Functions can call Rhai's string helpers (`trim`, `split`, `starts_with`, `index_of`,
+  `sub_string`, `pad`, `replace`, and the rest of its string package) and these number helpers:
+  `parse_int`, `parse_float`, `to_int`, `to_float`, `sqrt`, `floor`, `ceiling`, `round`, `int`,
+  `fraction`, `is_nan`, `is_finite`, `is_infinite`, `to_degrees`, `to_radians`, `PI` and `E`, next to
+  the arithmetic package's `abs`, `sign`, `min` and `max`. The trigonometric, hyperbolic,
+  exponential and logarithmic functions (`sin`, `exp`, `ln`, `log`, `hypot` and the like) are not
+  available, because their last digits depend on the host's math library and Function results are
+  recomputed. `replace` and `pad` refuse a result over the string limit before building it, and
+  `pad` refuses an empty padding string. A Function result that holds NaN or an infinite number is
+  refused with `function.execution` instead of becoming JSON `null`.
+- `coordinatorctl check` reports a call to a name the pure profile lacks as
+  `coordinator.function.unknown-call`, with its line and column, before any Function runs. It also reads a string literal given to `Fn`, `is_def_fn` or an array
+  method such as `map` as a function name. It is an authoring aid; the engine still refuses an
+  unknown name when the Function runs.
+- `coordinatorctl explain functions` lists the helpers a Function may call, the interpreter ABI
+  and the limits. `coordinatorctl explain --project DIR` is unchanged.
+
 ## 0.44.0 - 2026-10-27
 
 First release of Registry Coordinator.

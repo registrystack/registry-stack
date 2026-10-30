@@ -9,22 +9,19 @@ use std::{collections::BTreeMap, fs};
 const FUNCTIONS: &str = r#"
 fn due(inputs) { add_seconds(inputs.request.at, inputs.request.seconds) }
 fn elapsed(inputs) { seconds_between(inputs.request.at, inputs.request.other) }
-fn clock(inputs) { timestamp() }
 "#;
 
-fn definition() -> Definition {
+fn project(functions: &str) -> tempfile::TempDir {
     let workflow = json!({
         "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
         "project": {"id": "instants", "version": "1"},
         "functions": {
             "due": {"runtime":"rhai","source":"functions.rhai","entrypoint":"due","inputs":{"request":{"type":"object"}},"output":{"type":"string","format":"date-time"}},
-            "clock": {"runtime":"rhai","source":"functions.rhai","entrypoint":"clock","inputs":{"request":{"type":"object"}},"output":{"type":"string","format":"date-time"}},
             "elapsed": {"runtime":"rhai","source":"functions.rhai","entrypoint":"elapsed","inputs":{"request":{"type":"object"}},"output":{"type":"integer"}}
         },
         "workflow": {"input": {"type": "object"}, "deadlineSeconds": 86400, "start": "due",
             "steps": {
-                "due": {"type": "wait-until", "waitUntil": {"type": "function", "function": "due", "inputs": {"request":{"type": "input"}}}, "next": "clock"},
-                "clock": {"type": "wait-until", "waitUntil": {"type": "function", "function": "clock", "inputs": {"request":{"type": "input"}}}, "next": "done"},
+                "due": {"type": "wait-until", "waitUntil": {"type": "function", "function": "due", "inputs": {"request":{"type": "input"}}}, "next": "done"},
                 "done": {"type": "finish", "outcome": "measured", "output": {"type": "function", "function": "elapsed", "inputs": {"request":{"type": "input"}}}}
             }, "outcomes": {"measured": {"type": "integer"}}
         }
@@ -35,8 +32,12 @@ fn definition() -> Definition {
         serde_json::to_string(&workflow).unwrap(),
     )
     .unwrap();
-    fs::write(root.path().join("functions.rhai"), FUNCTIONS).unwrap();
-    Definition::load(root.path()).unwrap()
+    fs::write(root.path().join("functions.rhai"), functions).unwrap();
+    root
+}
+
+fn definition() -> Definition {
+    Definition::load(project(FUNCTIONS).path()).unwrap()
 }
 
 fn shifted(at: &str, seconds: Value) -> registry_coordinator::Result<Value> {
@@ -131,9 +132,9 @@ fn an_instant_or_result_outside_rfc_3339_is_a_function_failure_that_omits_the_va
 
 #[test]
 fn the_function_profile_reads_no_clock() {
-    let error = definition()
-        .evaluate("clock", &json!({}), &BTreeMap::new())
+    let functions = format!("{FUNCTIONS}fn clock(inputs) {{ timestamp() }}\n");
+    let error = Definition::load(project(&functions).path())
         .err()
-        .unwrap();
-    assert_eq!(error.code, "function.execution");
+        .expect("a call to the clock is refused");
+    assert_eq!(error.code, "coordinator.function.unknown-call");
 }

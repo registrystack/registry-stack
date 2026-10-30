@@ -7,7 +7,7 @@ use crate::{
     problem::{for_error, type_uri, ProblemCode},
     protocol::AdapterSet,
     runtime::RuntimeConfig,
-    store::{RunListState, RunStatus, Store},
+    store::{ProposalTurn, RunListFilter, RunListState, RunStatus, Store},
     CoordinatorError, Result,
 };
 use axum::{
@@ -82,12 +82,19 @@ struct Reason {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CheckNow {
+    step: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct List {
     #[serde(default = "limit")]
     limit: u32,
     cursor: Option<String>,
     state: Option<RunListState>,
     attention: Option<bool>,
+    proposal: Option<Uuid>,
+    turn: Option<ProposalTurn>,
 }
 fn limit() -> u32 {
     20
@@ -108,6 +115,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/runs/{run}/retry-same", post(retry))
         .route("/v1/runs/{run}/cancel", post(cancel))
         .route("/v1/runs/{run}/reconcile", post(reconcile))
+        .route("/v1/runs/{run}/check", post(check_now))
         .route("/v1/doctor", get(doctor))
         .route("/v1/restore-hold", post(hold))
         .route("/v1/release-restore-hold", post(release))
@@ -844,10 +852,20 @@ mod list_query_tests {
         assert_eq!(query.cursor.as_deref(), Some("next"));
         assert_eq!(query.state, Some(RunListState::Attention));
         assert_eq!(query.attention, Some(true));
+        let query =
+            parse("/v1/runs?proposal=0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d&turn=nobody").unwrap();
+        assert_eq!(
+            query.proposal,
+            Some(Uuid::parse_str("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d").unwrap())
+        );
+        assert_eq!(query.turn, Some(ProposalTurn::Nobody));
         for refused in [
             "/v1/runs?state=waiting",
             "/v1/runs?state=ATTENTION",
             "/v1/runs?attention=maybe",
+            "/v1/runs?proposal=not-a-uuid",
+            "/v1/runs?turn=anyone",
+            "/v1/runs?turn=Party",
         ] {
             assert!(parse(refused).is_err(), "{refused}");
         }
@@ -1061,8 +1079,12 @@ async fn list(
                     .list_owned_page(
                         q.limit,
                         q.cursor.as_deref(),
-                        q.state,
-                        q.attention,
+                        RunListFilter {
+                            state: q.state,
+                            attention: q.attention,
+                            proposal: q.proposal,
+                            turn: q.turn,
+                        },
                         &c.actor,
                         workflows,
                     )
@@ -1086,6 +1108,27 @@ async fn inspect(State(s): State<HttpState>, headers: HeaderMap, run: RunPath) -
                     .inspect_runtime_owned(run, &s.runtime, &c.actor)
                     .await?,
             )
+        }
+        .await,
+    )
+}
+async fn check_now(
+    State(s): State<HttpState>,
+    headers: HeaderMap,
+    run: RunPath,
+    body: BoundedBody,
+) -> Response {
+    answer(
+        async {
+            let (c, run) = run_caller(&s, &headers, run, Action::Inspect).await?;
+            let CheckNow { step } = json_body(&headers, body).await?;
+            if !crate::definition::valid_name(&step) {
+                return Err(CoordinatorError::new(
+                    "request.invalid",
+                    "supply the name of one waiting step",
+                ));
+            }
+            encode(s.store.check_now_owned(run.run_id, &step, &c.actor).await?)
         }
         .await,
     )
@@ -1376,6 +1419,7 @@ fn summary(operation_id: &str) -> &'static str {
         "retrySame" => "Retry a held step with the same command",
         "cancelRun" => "Cancel a run",
         "reconcileRun" => "Reconcile an uncertain step against its receipt",
+        "checkNow" => "Read a waiting step's product now",
         "doctor" => "Report deployment readiness and run state",
         "restoreHold" => "Place the restore hold",
         "releaseRestoreHold" => "Release the restore hold",
@@ -1392,7 +1436,7 @@ pub fn openapi() -> Value {
     let run_state = json!({"type":"string","enum":["running","finished","failed","cancelled","cancelled-after-effect","expired","attention","cancel-requested"]});
     let run_param = json!({"name":"run","in":"path","required":true,"schema":{"type":"string","format":"uuid"}});
     let mut paths = serde_json::Map::new();
-    let operations: [DocumentedOperation; 14] = [
+    let operations: [DocumentedOperation; 15] = [
         (
             "/v1/workflows/{workflow}",
             "get",
@@ -1462,6 +1506,14 @@ pub fn openapi() -> Value {
                 ],
             ]
             .concat(),
+        ),
+        (
+            "/v1/runs/{run}/check",
+            "post",
+            "checkNow",
+            Some("CheckNow"),
+            "CheckNowResult",
+            [&BODY_PROBLEMS[..], &RUN_PROBLEMS[..], &[P::CheckNotWaiting]].concat(),
         ),
         (
             "/v1/runs/{run}/retry-same",
@@ -1595,9 +1647,11 @@ pub fn openapi() -> Value {
         if id == "listRuns" {
             op["parameters"] = json!([
                 {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
-                {"name":"cursor","in":"query","description":"Opaque nextCursor from the previous page. Keep state and attention filters unchanged; the current caller is authorized again on each page.","schema":{"type":"string","minLength":1,"maxLength":4096}},
+                {"name":"cursor","in":"query","description":"Opaque nextCursor from the previous page. Keep every filter unchanged; a cursor from an earlier version is refused. The current caller is authorized again on each page.","schema":{"type":"string","minLength":1,"maxLength":4096}},
                 {"name":"state","in":"query","schema":run_state},
-                {"name":"attention","in":"query","description":"True selects effective states attention and failed; false excludes both. Composes with state.","schema":{"type":"boolean"}}
+                {"name":"attention","in":"query","description":"True selects effective states attention and failed; false excludes both. Composes with state.","schema":{"type":"boolean"}},
+                {"name":"proposal","in":"query","description":"Selects runs waiting on this BReg Proposal, matched through the keyed wait commitment.","schema":{"type":"string","format":"uuid"}},
+                {"name":"turn","in":"query","description":"Selects runs whose Proposal wait last observed this turn.","schema":{"type":"string","enum":["party","official","nobody"]}}
             ]);
         }
         if id == "cancelRun" {
@@ -1664,16 +1718,20 @@ pub fn openapi() -> Value {
       "AdmissionHold":{"type":"object","required":["admissionsHold"],"properties":{"admissionsHold":{"type":"boolean"}}},
       "Retention":{"type":"object","additionalProperties":false,"required":["before","limit"],"properties":{"before":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":100}}},
       "RunStatus":status,"RunList":{"type":"object","required":["runs"],"properties":{"runs":{"type":"array","maxItems":100,"items":{"$ref":"#/components/schemas/RunStatus"}},"nextCursor":{"type":"string","description":"Present when another page may exist; continue with the same filters."}}},
-      "StepStatus":{"type":"object","required":["step","state","generation","attempt","commandPrepared","uncertain","receiptExpired"],"properties":{"step":{"type":"string"},"state":{"type":"string"},"generation":{"type":"integer"},"attempt":{"type":"integer"},"nextDueAt":{"type":["string","null"],"format":"date-time"},"leaseExpiresAt":{"type":["string","null"],"format":"date-time"},"commandPrepared":{"type":"boolean"},"uncertain":{"type":"boolean"},"receiptExpired":{"type":"boolean"},"failureCode":{"type":["string","null"]},"failurePath":{"type":["string","null"]}}},
+      "StepStatus":{"type":"object","required":["step","state","generation","attempt","commandPrepared","uncertain","receiptExpired"],"properties":{"step":{"type":"string"},"state":{"type":"string"},"generation":{"type":"integer"},"attempt":{"type":"integer"},"nextDueAt":{"type":["string","null"],"format":"date-time"},"leaseExpiresAt":{"type":["string","null"],"format":"date-time"},"commandPrepared":{"type":"boolean"},"uncertain":{"type":"boolean"},"receiptExpired":{"type":"boolean"},"failureCode":{"type":["string","null"]},"failurePath":{"type":["string","null"]},"holdDetail":{"type":"object","additionalProperties":false,"required":["date","recordIdentifiers"],"properties":{"date":{"type":"string","format":"date"},"recordIdentifiers":{"type":"array","items":{"type":"string"}}}}}},
       "OperationIdentity":{"type":"object","additionalProperties":false,"description":"Pinned public operation contract; does not establish current authority or receipt availability.","required":["id","version","product","effect","keyRequirement","requiresPreparation","recovery","readReceipt"],"properties":{"id":{"type":"string","enum":operation_ids},"version":{"type":"integer","minimum":1},"product":{"type":"string"},"effect":{"type":"string","enum":["read","mutation","evaluation"]},"keyRequirement":{"type":"string","enum":["none","required"]},"requiresPreparation":{"type":"boolean"},"recovery":{"type":"string","enum":["read-again","same-command-and-receipt","same-command","hold-after-dispatch"]},"readReceipt":{"type":"boolean"}}},
       "EffectStatus":{"type":"object","additionalProperties":false,"required":["step","operation","operationRevision","state"],"properties":{"step":{"type":"string"},"operation":{"$ref":"#/components/schemas/OperationIdentity"},"operationRevision":{"type":"string"},"state":{"type":"string","enum":["accepted","unknown"]}}},
-      "WaitStatus":{"type":"object","additionalProperties":false,"required":["step","acceptedStep","completion","completionRevision","timeoutAt","nextObservationAt","notBefore","minimumIntervalSeconds","observations","observationLimit"],"properties":{"step":{"type":"string"},"acceptedStep":{"type":"string"},"completion":{"type":"string"},"completionRevision":{"type":"string"},"timeoutAt":date,"nextObservationAt":{"type":["string","null"],"format":"date-time"},"notBefore":date,"minimumIntervalSeconds":{"type":"integer","minimum":30,"maximum":86400},"observations":{"type":"integer","minimum":0},"observationLimit":{"type":"integer","minimum":1}}},
+      "WaitStatus":{"type":"object","additionalProperties":false,"required":["step","acceptedStep","completion","completionRevision","timeoutAt","nextObservationAt","notBefore","minimumIntervalSeconds","observations","observationLimit"],"properties":{"step":{"type":"string"},"acceptedStep":{"type":"string"},"completion":{"type":"string"},"completionRevision":{"type":"string"},"timeoutAt":date,"nextObservationAt":{"type":["string","null"],"format":"date-time"},"notBefore":date,"minimumIntervalSeconds":{"type":"integer","minimum":30,"maximum":86400},"observations":{"type":"integer","minimum":0},"observationLimit":{"type":"integer","minimum":1},"lastObservation":{"type":"object","additionalProperties":false,"required":["state","submissionVersion","observedAt","stateSince"],"properties":{"state":{"type":"string"},"turn":{"type":"string"},"submissionVersion":{"type":"integer","minimum":0},"handoffRefusal":{"type":"string"},"observedAt":date,"stateSince":date}},"requestLink":{"type":"string","format":"uri"}}},
       "RunInspection":{"type":"object","required":["run","steps","effects","waits","recovery"],"properties":{"run":{"$ref":"#/components/schemas/RunStatus"},"steps":{"type":"array","items":{"$ref":"#/components/schemas/StepStatus"}},"effects":{"type":"array","items":{"$ref":"#/components/schemas/EffectStatus"}},"waits":{"type":"array","items":{"$ref":"#/components/schemas/WaitStatus"}},"recovery":{"type":"object","required":["retryAllowed"],"properties":{"retryAllowed":{"type":"boolean"},"reason":{"type":["string","null"]},"operation":{"$ref":"#/components/schemas/OperationIdentity"}}}}},
-      "Doctor":{"type":"object","required":["activationReady","state"],"properties":{"activationReady":{"type":"boolean"},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"}}}}},
+      "Doctor":{"type":"object","required":["activationReady","state"],"properties":{"activationReady":{"type":"boolean"},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt","proposalWaitsByTurn"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"},"proposalWaitsByTurn":{"$ref":"#/components/schemas/ProposalWaitsByTurn"}}}}},
       "RetryScheduled":{"type":"object","required":["runId","status"],"properties":{"runId":{"type":"string","format":"uuid"},"status":{"const":"retry-scheduled"}}},
       "Hold":{"type":"object","required":["restoreHold"],"properties":{"restoreHold":{"type":"boolean"}}},"Erased":{"type":"object","required":["erased"],"properties":{"erased":{"type":"integer","minimum":0}}},
       "Problem":{"type":"object","additionalProperties":false,"required":["type","title","status","detail","code","traceId"],"properties":{"type":{"type":"string","enum":problem_types},"title":{"type":"string"},"status":{"type":"integer"},"detail":{"type":"string"},"code":{"type":"string","enum":problem_codes},"traceId":{"type":"string"}}}
     });
+    let count = json!({"type":"integer","minimum":0});
+    schemas["ProposalWaitsByTurn"] = json!({"type":"object","description":"BReg Proposal waits by the turn their last answered read showed, counted from stored rows.","required":["party","official","nobody","unobserved"],"additionalProperties":false,"properties":{"party":count,"official":count,"nobody":count,"unobserved":count}});
+    schemas["CheckNow"] = json!({"type":"object","additionalProperties":false,"required":["step"],"properties":{"step":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$","description":"The waiting step to read now, as inspect lists it under waits."}}});
+    schemas["CheckNowResult"] = json!({"type":"object","required":["runId","step","nextObservationAt","observations","observationLimit"],"properties":{"runId":{"type":"string","format":"uuid"},"step":{"type":"string"},"nextObservationAt":{"type":["string","null"],"format":"date-time","description":"When the early read is due, no sooner than the read floor after the last read; null while a read is already in flight."},"observations":{"type":"integer","minimum":0},"observationLimit":{"type":"integer","minimum":1}}});
     admission_contracts::extend(&mut paths, &mut schemas);
     json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."},"eventSource":{"type":"apiKey","in":"header","name":"X-Registry-Signature","description":"The platform v1 HMAC delivery signature, bound to the canonical envelope, signed delivery headers, HTTP method and exact request target. The configured event source key is separate from caller bearer tokens."}},"schemas":schemas},"paths":paths})
 }

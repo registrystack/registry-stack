@@ -398,7 +398,7 @@ impl PostgresRecordReadService {
         self.outrun_request_deadline_for_test(transaction.transaction())
             .await?;
         let query = request_query(&request.kind);
-        install_evaluation_date(transaction.transaction(), query).await?;
+        install_evaluation_date(transaction.transaction(), &self.registry, query).await?;
         install_spatial_query_context(transaction.transaction(), query).await?;
         if let RecordReadKind::Relationship {
             root_id, path_id, ..
@@ -859,7 +859,7 @@ impl ReadResult {
                 if let Some(count) = materialized.total_count {
                     extensions.insert("count".to_owned(), json!(count));
                 }
-                let body = record_profile::collection_response(
+                let mut body = record_profile::collection_response(
                     registry.registry_id(),
                     &plan.entity,
                     items,
@@ -868,6 +868,7 @@ impl ReadResult {
                     RecordRepresentation::Json,
                 )
                 .map_err(|_| ReadServiceError::Unavailable)?;
+                echo_as_of(&mut body, &request.kind);
                 let response = HeldReadResponse::from_json(&body)?;
                 Ok(Self {
                     response: Some(response),
@@ -886,7 +887,7 @@ impl ReadResult {
                 if let Some(count) = materialized.total_count {
                     extensions.insert("count".to_owned(), json!(count));
                 }
-                let body = record_profile::collection_response(
+                let mut body = record_profile::collection_response(
                     registry.registry_id(),
                     &plan.entity,
                     items,
@@ -895,6 +896,7 @@ impl ReadResult {
                     RecordRepresentation::JsonLd,
                 )
                 .map_err(|_| ReadServiceError::Unavailable)?;
+                echo_as_of(&mut body, &request.kind);
                 let response = HeldReadResponse::from_json_ld(&body)?;
                 Ok(Self {
                     response: Some(response),
@@ -1218,6 +1220,21 @@ fn request_operation(kind: &RecordReadKind) -> Operation {
         RecordReadKind::Get { .. } => Operation::Get,
         RecordReadKind::List { .. } | RecordReadKind::Relationship { .. } => Operation::List,
         RecordReadKind::Lookup { .. } => Operation::Lookup,
+    }
+}
+
+/// `:current` and `:as-of` collections echo the instant they read at in
+/// `meta.asOf`: a calendar date on a date interval, a UTC instant otherwise.
+fn echo_as_of(body: &mut Value, kind: &RecordReadKind) {
+    if let Some(query) = request_query(kind).filter(|query| {
+        matches!(
+            query.kind,
+            CompiledQueryKind::Current | CompiledQueryKind::AsOf
+        )
+    }) {
+        if let Some(instant) = &query.temporal_instant {
+            body["meta"]["asOf"] = Value::String(instant.clone());
+        }
     }
 }
 
@@ -1885,14 +1902,17 @@ pub(crate) fn strict_claim_context(
 
 async fn install_evaluation_date(
     transaction: &tokio_postgres::Transaction<'_>,
+    registry: &CompiledRegistry,
     query: Option<&crate::api::CompiledReadQuery>,
 ) -> Result<(), ReadServiceError> {
-    let instant = query
-        .and_then(|query| query.temporal_instant.as_deref())
-        .map(parse_rfc3339_utc)
-        .transpose()?
-        .unwrap_or_else(time::OffsetDateTime::now_utc);
-    let evaluation_date = instant.date().to_string();
+    let Some(evaluation_date) = evaluation_date(
+        registry,
+        query.and_then(|query| query.temporal_instant.as_deref()),
+        time::OffsetDateTime::now_utc(),
+    )?
+    else {
+        return Ok(());
+    };
     transaction
         .execute_typed(
             "SELECT set_config('registry.evaluation_date', $1, true)",
@@ -1901,6 +1921,28 @@ async fn install_evaluation_date(
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
     Ok(())
+}
+
+/// The date `registry_context.evaluation_date()` answers on a read: the date a
+/// date-interval read is for, the registry's local date of a timestamp-interval
+/// read's instant, and otherwise the registry's local date now. A registry
+/// without a time zone has no local date; check refuses any derived field
+/// that reads the evaluation date there, so none is installed.
+fn evaluation_date(
+    registry: &CompiledRegistry,
+    temporal_instant: Option<&str>,
+    now: time::OffsetDateTime,
+) -> Result<Option<String>, ReadServiceError> {
+    let instant = match temporal_instant {
+        Some(date) if date.len() == 10 => return Ok(Some(date.to_owned())),
+        _ if registry.timezone().is_none() => return Ok(None),
+        Some(instant) => parse_rfc3339_utc(instant)?,
+        None => now,
+    };
+    registry
+        .local_date_at(instant)
+        .map(|date| Some(date.format("%Y-%m-%d").to_string()))
+        .map_err(|_| ReadServiceError::Unavailable)
 }
 
 pub(crate) async fn install_statistics_evaluation_date(
@@ -2529,8 +2571,9 @@ pub(crate) fn read_predicates(
         let parameter = push_value(&mut values, instant);
         let instant_expression =
             temporal_instant_expression(&start_field.field_type, &end_field.field_type, parameter)?;
+        let closing = temporal.closing_operator();
         predicates.push(format!(
-            "{start} <= {instant_expression} AND ({end} IS NULL OR {instant_expression} < {end})"
+            "{start} <= {instant_expression} AND ({end} IS NULL OR {instant_expression} {closing} {end})"
         ));
     }
     Ok(ReadPredicatePlan {
@@ -2844,15 +2887,16 @@ fn predicate_sql(
     }
 }
 
-fn temporal_instant_expression(
+/// The bound `asOf` of a temporal read: a calendar date on a date interval,
+/// already resolved in the registry's time zone, and a UTC instant on a
+/// timestamp interval.
+pub(crate) fn temporal_instant_expression(
     start_type: &FieldTypeSource,
     end_type: &FieldTypeSource,
     parameter: usize,
 ) -> Result<String, ReadServiceError> {
     match (start_type, end_type) {
-        (FieldTypeSource::Date, FieldTypeSource::Date) => Ok(format!(
-            "((${parameter}::text::timestamptz AT TIME ZONE 'UTC')::date)"
-        )),
+        (FieldTypeSource::Date, FieldTypeSource::Date) => Ok(format!("${parameter}::text::date")),
         (FieldTypeSource::Timestamp, FieldTypeSource::Timestamp) => {
             Ok(format!("${parameter}::text::timestamptz"))
         }
@@ -3085,11 +3129,11 @@ mod tests {
     }
 
     #[test]
-    fn temporal_query_instant_uses_utc_calendar_dates_without_session_timezone_dependence() {
+    fn temporal_query_instant_binds_the_registry_date_without_session_timezone_dependence() {
         assert_eq!(
             temporal_instant_expression(&FieldTypeSource::Date, &FieldTypeSource::Date, 7)
                 .expect("date temporal fields are valid"),
-            "(($7::text::timestamptz AT TIME ZONE 'UTC')::date)"
+            "$7::text::date"
         );
         assert_eq!(
             temporal_instant_expression(
@@ -3776,5 +3820,79 @@ impl ReadFaultControl {
         }
         let _ = (self, point);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod evaluation_date_tests {
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+    use time::macros::datetime;
+
+    use super::evaluation_date;
+
+    fn colombo() -> crate::CompiledRegistry {
+        registry(r#","timezone":"Asia/Colombo""#)
+    }
+
+    fn registry(timezone_member: &str) -> crate::CompiledRegistry {
+        let source = format!(
+            r#"{{
+                  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                  "kind":"BRegProject",
+                  "project":{{"id":"colombo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"{timezone_member}}},
+                  "datasets":[{{"id":"test-dataset"}}],
+                  "recordTypes":[{{"id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
+                    "fields":[{{"id":"code","type":"string","required":true,"maximumLength":32,"classification":"internal"}}]}}]
+                }}"#
+        );
+        compile_project(
+            &parse_project_json(source.as_bytes()).expect("project parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("project compiles")
+    }
+
+    #[test]
+    fn a_live_read_evaluates_on_the_registry_local_date() {
+        let registry = colombo();
+        let now = datetime!(2026-10-30 23:30 UTC);
+        assert_eq!(
+            evaluation_date(&registry, None, now).unwrap().as_deref(),
+            Some("2026-10-31")
+        );
+        assert_eq!(
+            evaluation_date(&registry, Some("2026-06-05"), now)
+                .unwrap()
+                .as_deref(),
+            Some("2026-06-05"),
+            "a date-interval read evaluates on the date it reads"
+        );
+        assert_eq!(
+            evaluation_date(&registry, Some("2026-06-05T20:00:00Z"), now)
+                .unwrap()
+                .as_deref(),
+            Some("2026-06-06"),
+            "a timestamp-interval read evaluates on the local date of its instant"
+        );
+        assert!(evaluation_date(&registry, Some("2026-06-05T20:00:00+05:30"), now).is_err());
+    }
+
+    #[test]
+    fn a_read_of_a_registry_without_a_time_zone_installs_no_evaluation_date() {
+        let registry = registry("");
+        let now = datetime!(2026-10-30 23:30 UTC);
+        assert_eq!(evaluation_date(&registry, None, now).unwrap(), None);
+        assert_eq!(
+            evaluation_date(&registry, Some("2026-06-05T20:00:00Z"), now).unwrap(),
+            None
+        );
+        assert_eq!(
+            evaluation_date(&registry, Some("2026-06-05"), now)
+                .unwrap()
+                .as_deref(),
+            Some("2026-06-05")
+        );
     }
 }

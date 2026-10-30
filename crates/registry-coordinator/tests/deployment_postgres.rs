@@ -563,8 +563,8 @@ async fn assert_reapply_preserves_schema_and_work(
         .get(0);
     assert!(!before["runs"].as_array().unwrap().is_empty());
     assert!(!before["jobs"].as_array().unwrap().is_empty());
-    assert_eq!(before["ledger"], json!([4]));
-    assert_eq!(before["schemaVersion"], 4);
+    assert_eq!(before["ledger"], json!([5]));
+    assert_eq!(before["schemaVersion"], 5);
     for _ in 0..2 {
         deployment::apply(migration, runtime, workflows, &[])
             .await
@@ -863,7 +863,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(checked["databaseId"], "router-test");
     assert_eq!(checked["workflowsDigest"], workflows_digest);
     assert_eq!(checked["workflows"], json!({"delayed-follow-up": digest}));
-    assert_eq!(checked["schemaVersion"], 4);
+    assert_eq!(checked["schemaVersion"], 5);
     assert_eq!(checked["runtimeRole"], role);
     assert_eq!(checked["active"]["roleMode"], "split");
     status_doc["deployment"]["runtimeRole"] = json!("wrong_runtime_role");
@@ -991,8 +991,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     admin
         .batch_execute(&format!(
-            "UPDATE {namespace}.control SET schema_version=4;
-             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=4)"
+            "UPDATE {namespace}.control SET schema_version=5;
+             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=5)"
         ))
         .await
         .unwrap();
@@ -1001,8 +1001,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // write authority all refuse status while plan still reports observation.
     for (damage, repair) in [
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(5)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=5"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(6)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=6"),
         ),
         (
             format!("REVOKE SELECT ON {namespace}.jobs FROM {role}"),
@@ -3152,6 +3152,134 @@ async fn clients_sharing_a_subject_keep_distinct_run_ownership_and_admission_key
             );
         }
     }
+    server.abort();
+    drop(migration);
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn check_now_answers_an_inspector_and_refuses_a_missing_wait_run_or_grant() {
+    let mut f = TwoFlowFixture::start().await;
+    f.doc["deployment"]["authentication"]["policies"]["operator"]["actions"] =
+        json!(["status", "inspect"]);
+    let delayed = f.pin(&f.delayed_project, "check-now-delayed");
+    let (_, runtime, workflows) = f.runtime("check-now.yaml", json!([delayed]));
+    let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+    deployment::apply(&migration, &runtime, &workflows, &[])
+        .await
+        .unwrap();
+    let (origin, server) = serve_runtime(&runtime, &workflows).await;
+    let http = reqwest::Client::new();
+    let producer = f.token("producer-a", "check-producer", "coordinator:start");
+    let operator = f.token("operator", "operator", "coordinator:operate");
+    let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
+    let (status, admitted) =
+        start_run(&http, &origin, &producer, "check-key", DELAYED, input).await;
+    assert_eq!(status, 200, "{admitted}");
+    let run = admitted["runId"].as_str().unwrap().to_owned();
+    let run_id: Uuid = run.parse().unwrap();
+    let namespace = &f.namespace;
+    let step: String = f
+        .admin
+        .query_one(
+            &format!("SELECT step FROM {namespace}.jobs WHERE run_id=$1"),
+            &[&run_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    f.admin
+        .execute(
+            &format!("INSERT INTO {namespace}.completion_waits(run_id,step,wait_key,timeout_at) VALUES ($1,$2,'synthetic-wait-key',clock_timestamp()+interval '1 hour')"),
+            &[&run_id, &step],
+        )
+        .await
+        .unwrap();
+    let audit = f.root_path.join("audit.jsonl");
+    let check = |credential: &str, run: &str, step: &str| {
+        http.post(format!("{origin}/v1/runs/{run}/check"))
+            .bearer_auth(credential)
+            .json(&json!({"step": step}))
+            .send()
+    };
+
+    let before = fs::read_to_string(&audit).unwrap().lines().count();
+    let response = check(&operator, &run, &step).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["runId"], run.as_str());
+    assert_eq!(body["step"], step.as_str());
+    assert_eq!(body["observations"], 0);
+    assert!(body["observationLimit"].as_u64().unwrap() >= 1);
+    assert!(body.get("nextObservationAt").is_some(), "{body}");
+    let entries = fs::read_to_string(&audit)
+        .unwrap()
+        .lines()
+        .skip(before)
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    // Like every run action, the visibility lookup is audited as a status
+    // pair before the Check now pair.
+    assert_eq!(entries.len(), 4, "{entries:?}");
+    let actions: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["record"]["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["status", "status", "check-now", "check-now"]);
+    let (request, response_entry) = (&entries[2], &entries[3]);
+    assert_eq!(request["phase"], "request");
+    assert_eq!(response_entry["phase"], "response");
+    assert_eq!(request["correlation"], response_entry["correlation"]);
+    assert_eq!(response_entry["record"]["outcome"], "accepted");
+    assert!(request["record"].get("reasonRef").is_none());
+
+    let response = check(&operator, &run, "another-step").await.unwrap();
+    assert_eq!(response.status(), 409);
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/problem+json"
+    );
+    let problem: Value = response.json().await.unwrap();
+    assert_eq!(problem["code"], "check.not-waiting");
+    assert_eq!(
+        problem["type"],
+        "https://id.registrystack.org/problems/registry-coordinator/check/not-waiting"
+    );
+
+    let absent = Uuid::new_v4().to_string();
+    let response = check(&operator, &absent, &step).await.unwrap();
+    assert_eq!(response.status(), 404);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["code"],
+        "run.not-visible"
+    );
+
+    // The start-only producer owns the run but holds no inspect grant.
+    let response = check(&producer, &run, &step).await.unwrap();
+    assert_eq!(response.status(), 403);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["code"],
+        "operation.not-authorized"
+    );
+
+    for invalid in ["", "has space", &"s".repeat(65)] {
+        let response = check(&operator, &run, invalid).await.unwrap();
+        assert_eq!(response.status(), 400, "{invalid:?}");
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["code"],
+            "request.invalid"
+        );
+    }
+
+    let response = http
+        .post(format!("{origin}/v1/runs/{run}/check"))
+        .bearer_auth(&operator)
+        .json(&json!({"step": step, "reason": "not accepted"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400, "Check now takes no reason");
     server.abort();
     drop(migration);
     f.stop().await;

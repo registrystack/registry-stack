@@ -34,6 +34,57 @@
         ],
         "type": "object"
       },
+      "CheckNow": {
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "description": "The waiting step to read now, as inspect lists it under waits.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step"
+        ],
+        "type": "object"
+      },
+      "CheckNowResult": {
+        "properties": {
+          "nextObservationAt": {
+            "description": "When the early read is due, no sooner than the read floor after the last read; null while a read is already in flight.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "observationLimit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "observations": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "step",
+          "nextObservationAt",
+          "observations",
+          "observationLimit"
+        ],
+        "type": "object"
+      },
       "Doctor": {
         "properties": {
           "activationReady": {
@@ -63,6 +114,9 @@
                   "string",
                   "null"
                 ]
+              },
+              "proposalWaitsByTurn": {
+                "$ref": "#/components/schemas/ProposalWaitsByTurn"
               },
               "restoreHold": {
                 "type": "boolean"
@@ -98,7 +152,8 @@
               "states",
               "uncertain",
               "terminalPayloads",
-              "oldestTerminalPayloadAt"
+              "oldestTerminalPayloadAt",
+              "proposalWaitsByTurn"
             ],
             "type": "object"
           }
@@ -326,7 +381,12 @@
               "casework.submit-review-request/v1",
               "casework.cancel-review-request/v1",
               "scheduling.preview-availability/v1",
-              "external.command/v1"
+              "external.command/v1",
+              "breg.read-in-force/v1",
+              "breg.read-proposal/v1",
+              "breg.start-proposal/v1",
+              "breg.submit-proposal/v1",
+              "breg.cancel-proposal/v1"
             ],
             "type": "string"
           },
@@ -383,6 +443,7 @@
               "authentication.refused",
               "binding.conflict",
               "binding.live-conflict",
+              "check.not-waiting",
               "definition.refused",
               "deployment.activation-changed",
               "deployment.refused",
@@ -445,6 +506,7 @@
               "https://id.registrystack.org/problems/registry-coordinator/authentication/refused",
               "https://id.registrystack.org/problems/registry-coordinator/binding/conflict",
               "https://id.registrystack.org/problems/registry-coordinator/binding/live-conflict",
+              "https://id.registrystack.org/problems/registry-coordinator/check/not-waiting",
               "https://id.registrystack.org/problems/registry-coordinator/definition/refused",
               "https://id.registrystack.org/problems/registry-coordinator/deployment/activation-changed",
               "https://id.registrystack.org/problems/registry-coordinator/deployment/refused",
@@ -495,6 +557,35 @@
           "detail",
           "code",
           "traceId"
+        ],
+        "type": "object"
+      },
+      "ProposalWaitsByTurn": {
+        "additionalProperties": false,
+        "description": "BReg Proposal waits by the turn their last answered read showed, counted from stored rows.",
+        "properties": {
+          "nobody": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "official": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "party": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unobserved": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "party",
+          "official",
+          "nobody",
+          "unobserved"
         ],
         "type": "object"
       },
@@ -801,6 +892,26 @@
           "generation": {
             "type": "integer"
           },
+          "holdDetail": {
+            "additionalProperties": false,
+            "properties": {
+              "date": {
+                "format": "date",
+                "type": "string"
+              },
+              "recordIdentifiers": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "date",
+              "recordIdentifiers"
+            ],
+            "type": "object"
+          },
           "leaseExpiresAt": {
             "format": "date-time",
             "type": [
@@ -851,6 +962,39 @@
           "completionRevision": {
             "type": "string"
           },
+          "lastObservation": {
+            "additionalProperties": false,
+            "properties": {
+              "handoffRefusal": {
+                "type": "string"
+              },
+              "observedAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "stateSince": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "submissionVersion": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "turn": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "submissionVersion",
+              "observedAt",
+              "stateSince"
+            ],
+            "type": "object"
+          },
           "minimumIntervalSeconds": {
             "maximum": 86400,
             "minimum": 30,
@@ -874,6 +1018,10 @@
           "observations": {
             "minimum": 0,
             "type": "integer"
+          },
+          "requestLink": {
+            "format": "uri",
+            "type": "string"
           },
           "step": {
             "type": "string"
@@ -3026,7 +3174,7 @@
             }
           },
           {
-            "description": "Opaque nextCursor from the previous page. Keep state and attention filters unchanged; the current caller is authorized again on each page.",
+            "description": "Opaque nextCursor from the previous page. Keep every filter unchanged; a cursor from an earlier version is refused. The current caller is authorized again on each page.",
             "in": "query",
             "name": "cursor",
             "schema": {
@@ -3058,6 +3206,28 @@
             "name": "attention",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Selects runs waiting on this BReg Proposal, matched through the keyed wait commitment.",
+            "in": "query",
+            "name": "proposal",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Selects runs whose Proposal wait last observed this turn.",
+            "in": "query",
+            "name": "turn",
+            "schema": {
+              "enum": [
+                "party",
+                "official",
+                "nobody"
+              ],
+              "type": "string"
             }
           }
         ],
@@ -4026,6 +4196,299 @@
           }
         ],
         "summary": "Cancel a run"
+      }
+    },
+    "/v1/runs/{run}/check": {
+      "post": {
+        "operationId": "checkNow",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckNow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckNowResult"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "operation.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: operation.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "run.not-visible"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: run.not-visible."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "check.not-waiting"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: check.not-waiting."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unsupported-media-type"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unsupported-media-type."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "runtime.failure"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: runtime.failure."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "audit.response-unavailable",
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: audit.response-unavailable, service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read a waiting step's product now"
       }
     },
     "/v1/runs/{run}/inspect": {

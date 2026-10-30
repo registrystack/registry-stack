@@ -323,14 +323,14 @@ fn an_input_names_its_form_function_or_fields() {
             "/workflow/steps/read/input",
             "config.missing-key",
             "the member `type` is missing; it names which form this mapping takes",
-            "Add `type` with one of `function`, `fields`, `input`, `step`, `literal`.",
+            "Add `type` with one of `function`, `fields`, `compare`, `input`, `step`, `literal`.",
         ),
         (
             json!({"type": "unknown"}),
             "/workflow/steps/read/input/type",
             "config.unknown-variant",
-            "expected one of `function`, `fields`, `input`, `step`, `literal`",
-            "Use one of `function`, `fields`, `input`, `step`, `literal`.",
+            "expected one of `function`, `fields`, `compare`, `input`, `step`, `literal`",
+            "Use one of `function`, `fields`, `compare`, `input`, `step`, `literal`.",
         ),
         (
             json!({"type": "function", "function": "f"}),
@@ -372,14 +372,14 @@ fn a_selector_names_its_form_function_or_one_reference() {
             "/workflow/steps/route/choose",
             "config.missing-key",
             "the member `type` is missing; it names which form this mapping takes",
-            "Add `type` with one of `function`, `fields`, `input`, `step`, `literal`.",
+            "Add `type` with one of `function`, `fields`, `compare`, `input`, `step`, `literal`.",
         ),
         (
             json!({"type": "unknown"}),
             "/workflow/steps/route/choose/type",
             "config.unknown-variant",
-            "expected one of `function`, `fields`, `input`, `step`, `literal`",
-            "Use one of `function`, `fields`, `input`, `step`, `literal`.",
+            "expected one of `function`, `fields`, `compare`, `input`, `step`, `literal`",
+            "Use one of `function`, `fields`, `compare`, `input`, `step`, `literal`.",
         ),
         (
             json!({"type": "step"}),
@@ -445,14 +445,18 @@ fn field_names_and_counts_are_bounded() {
         .map(|index| (format!("f{index}"), json!({"type": "input"})))
         .collect::<serde_json::Map<_, _>>();
     project["workflow"]["steps"]["read"]["input"]["fields"] = Value::Object(fields);
-    let error = parse_refused(&project);
+    let error = refused(load(&project, ""));
     let finding = &error.diagnostics[0];
-    assert_eq!(finding.code, "config.invalid-value");
-    assert_eq!(finding.path, "/workflow/steps/read/input/fields");
-    assert_eq!(finding.message, "expected at most 64 fields");
+    assert_eq!(finding.code, "coordinator.mapping.fields-count");
+    // The 65th member in name order.
+    assert_eq!(finding.path, "/workflow/steps/read/input/fields/f9");
+    assert_eq!(
+        finding.message,
+        "This fields mapping builds more than 64 members across its levels."
+    );
     assert_eq!(
         finding.suggested_action,
-        "Remove fields, or build a larger value in a function."
+        "Remove members, or build part of the value in an earlier step."
     );
 }
 

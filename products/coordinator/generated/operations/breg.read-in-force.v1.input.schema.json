@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "SubjectValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "A subject value the filter can carry as an equality literal."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "date": {
+      "description": "The calendar date, `YYYY-MM-DD`, read as midnight UTC.",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+    },
+    "entity": {
+      "description": "The BReg record-type route, for example `assignments`.",
+      "type": "string"
+    },
+    "subject": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SubjectValue"
+      },
+      "description": "The fields that identify the subject, each matched for equality.",
+      "maxProperties": 16,
+      "minProperties": 1,
+      "type": "object"
+    }
+  },
+  "required": [
+    "entity",
+    "subject",
+    "date"
+  ],
+  "title": "breg.read-in-force/v1 input",
+  "type": "object"
+}

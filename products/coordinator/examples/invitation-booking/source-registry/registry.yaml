@@ -5,6 +5,7 @@ project:
   version: "1"
   canonicalBaseIri: https://example.invalid/invitation-source
   defaultLanguage: en
+  timezone: UTC
 package:
   sourceRevision: invitation-source-v1
 datasets:

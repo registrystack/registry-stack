@@ -195,12 +195,18 @@ While Casework reviews it, the Proposal's `apply` link is unavailable with reaso
 and recovery `refresh`. A reviewer then finds the work as a
 [ReviewTask](../../reference/glossary/#review-task) in Casework.
 
-Two binding faults read differently:
+Hand-off faults read differently:
 
 - A credential that matches no producer, or a policy or source namespace the producer does not
   list, is refused with 403 `operation.not-authorized`. The registry logs a warning with the
   authority, status, and problem code, and the Proposal reads `review-ended` with recovery
   `revise`.
+- Every refusal of the hand-off for good, the one above included, reads `review-ended`. The
+  Proposal, its list item and its submission read then carry `handoffRefusal`, such as
+  `{"code": "review.initiator-required"}`. The code is `review.initiator-required`,
+  `review.initiator-excluded`, `review.policy-mismatch`, or `review.refused` for any other
+  refusal; the authority's own text is never copied. The two initiator codes usually mean a
+  service submitted work a person must submit, so let the person start or submit the Proposal.
 - A `producerId` that differs from the producer's key fails the registry's own acceptance check.
   The Proposal reads `dependency-outage` with recovery `retry` until `recoveryDays` pass, then
   `review-ended`. When a review never settles, check `producerId` first.
@@ -210,7 +216,10 @@ with Revise offered when changes are requested. [Proposals](../../configure/breg
 covers those states; a Casework decision never grants authority to apply.
 
 {/* Evidence: crates/registry-breg/src/mutation/proposal.rs, apply_refusal and review_progress;
-    crates/registry-breg/src/review_store.rs, terminal_submission_error;
+    crates/registry-breg/src/review_store.rs, terminal_submission_error and public_refusal_code;
+    crates/registry-breg/src/mutation/proposal.rs, handoff_refusal;
+    crates/registry-breg/tests/postgres_proposal_review_delivery.rs,
+    native_submission_remote_refusal_names_only_an_allowlisted_reason_on_the_proposal;
     crates/registry-casework-core/src/http.rs, OPERATION_NOT_AUTHORIZED_PROBLEM;
     crates/registry-casework/src/review.rs, producer_for_create;
     crates/registry-casework/tests/breg_review_journey.rs. */}

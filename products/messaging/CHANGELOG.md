@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `messagingctl check` given an existing directory as a bare argument now says
+  "did you mean `--project <dir>` or `--package <dir>`?" in its usage error.
+  The directory itself is not repeated.
+
 ## 0.44.0 - 2026-10-27
 
 - `messagingctl check --project` reads an optional `check-acceptances.yaml`,

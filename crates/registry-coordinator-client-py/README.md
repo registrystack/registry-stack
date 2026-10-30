@@ -33,7 +33,9 @@ graph, declared outcomes, used Operation and Function revisions, and host execut
 Presentation titles and descriptions do not change it. Exact package bytes have a separate
 package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
 Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned
-revisions, deadlines, next observations, persistent floors, and count/limit. Original inputs,
+revisions, deadlines, next observations, persistent floors, and count/limit. A wait that
+follows a BReg Proposal also carries `lastObservation` once a read has answered, and
+`requestLink` when the deployment configures one. Original inputs,
 raw product responses, prepared requests, and protected correlation values remain absent.
 The reviewed Workflow declares any terminal output projection.
 
@@ -46,7 +48,9 @@ schema checks remain with Coordinator. Regenerate the wrapper when the execution
 Pass `nextCursor` unchanged with the same caller and filter values. The state
 argument accepts one of the eight closed run states. `attention=True` selects
 effective state `attention` or `failed`; it can be combined with an exact
-state when that is useful.
+state when that is useful. `proposal=` selects runs waiting on that BReg
+Proposal, and `turn=` (`"party"`, `"official"` or `"nobody"`) selects runs
+whose Proposal wait last showed that turn.
 
 The client keeps service configuration, but never a bearer token. Supply it
 explicitly on each call. The binding never acquires a token and never invents

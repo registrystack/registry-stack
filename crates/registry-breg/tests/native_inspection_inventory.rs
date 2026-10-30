@@ -444,6 +444,7 @@ fn dataset_inventory_includes_dataset_only_profile_authentication() {
             json!({"id":"active", "type":"boolean", "required":true, "classification":"internal"}),
             json!({"id":"event-date", "type":"date", "required":true, "classification":"internal"}),
         ]);
+    source["project"]["timezone"] = json!("UTC");
     source["statisticalDatasets"] = json!([{"id":"directory-counts", "display":{"label":"Directory counts"}, "unit":"directory-entry", "population":"active eq true",
         "period":{"type":"flow", "field":"event-date", "granularity":"month", "firstPeriod":"2025-01"},
         "dimensions":["active"], "disclosure":{"minimumCount":5, "roundingBase":5}}]);

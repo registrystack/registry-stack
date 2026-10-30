@@ -2109,13 +2109,25 @@ fn grouped_sql(
             )
         }
         CompiledStatisticalPeriod::Stock { validity, .. } => {
-            let (from, until) = match validity {
-                CompiledStatisticalValidity::Temporal { from, until } => {
-                    (from.as_str(), Some(until.as_str()))
-                }
-                CompiledStatisticalValidity::Fields { from, until } => {
-                    (from.as_str(), until.as_deref())
-                }
+            let (from, until, closing) = match validity {
+                CompiledStatisticalValidity::Temporal {
+                    from,
+                    until,
+                    last_day,
+                } => (
+                    from.as_str(),
+                    Some(until.as_str()),
+                    if *last_day { "<=" } else { "<" },
+                ),
+                CompiledStatisticalValidity::Fields {
+                    from,
+                    until,
+                    last_day,
+                } => (
+                    from.as_str(),
+                    until.as_deref(),
+                    if *last_day { "<=" } else { "<" },
+                ),
             };
             let from = relations
                 .field_expression(entity, from)
@@ -2127,7 +2139,7 @@ fn grouped_sql(
                     .map_err(map_read_error)?
                     .sql;
                 format!(
-                    "{from} <= periods.reference_date AND ({until} IS NULL OR periods.reference_date < {until})"
+                    "{from} <= periods.reference_date AND ({until} IS NULL OR periods.reference_date {closing} {until})"
                 )
             } else {
                 format!("{from} <= periods.reference_date")

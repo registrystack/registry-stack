@@ -375,13 +375,13 @@ fn a_snapshot_using_a_removed_operation_names_it_and_asks_for_a_reseal() {
     );
     let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
     assert!(snapshot.contains("\"breg.invoke-action/v1\""));
-    let removed = snapshot.replace("\"breg.invoke-action/v1\"", "\"breg.submit-proposal/v1\"");
+    let removed = snapshot.replace("\"breg.invoke-action/v1\"", "\"breg.approve-proposal/v1\"");
     let error = Definition::from_snapshot(&removed)
         .err()
         .expect("a removed operation must refuse");
     assert_eq!(error.code, "definition.operation_removed");
     assert!(
-        error.message.contains("`breg.submit-proposal/v1`"),
+        error.message.contains("`breg.approve-proposal/v1`"),
         "{}",
         error.message
     );

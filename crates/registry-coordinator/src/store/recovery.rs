@@ -21,6 +21,17 @@ pub struct DoctorStatus {
     /// Terminal payloads that are safe to erase once the operator's cutoff passes.
     pub terminal_payloads: i64,
     pub oldest_terminal_payload_at: Option<DateTime<Utc>>,
+    pub proposal_waits_by_turn: ProposalWaitsByTurn,
+}
+
+/// BReg Proposal waits counted by the turn their last answered read showed,
+/// from stored rows only. `unobserved` waits have had no answered read yet.
+#[derive(Serialize)]
+pub struct ProposalWaitsByTurn {
+    pub party: i64,
+    pub official: i64,
+    pub nobody: i64,
+    pub unobserved: i64,
 }
 
 impl Store {
@@ -47,7 +58,12 @@ impl Store {
             ],
         ))
     }
-    async fn authorize_run(&self, tx: &Transaction<'_>, run: Uuid, actor: &Actor) -> Result<()> {
+    pub(super) async fn authorize_run(
+        &self,
+        tx: &Transaction<'_>,
+        run: Uuid,
+        actor: &Actor,
+    ) -> Result<()> {
         self.verify_transaction(tx).await.map_err(unavailable)?;
         let owner = self.owner(actor)?;
         if tx
@@ -285,7 +301,7 @@ impl Store {
         allowed_flows: &[String],
     ) -> Result<Vec<RunStatus>> {
         Ok(self
-            .list_owned_page(limit, None, None, None, actor, allowed_flows)
+            .list_owned_page(limit, None, RunListFilter::default(), actor, allowed_flows)
             .await?
             .runs)
     }
@@ -293,27 +309,28 @@ impl Store {
         &self,
         limit: u32,
         cursor: Option<&str>,
-        state: Option<RunListState>,
-        attention: Option<bool>,
+        filter: RunListFilter,
         actor: &Actor,
         allowed_flows: &[String],
     ) -> Result<RunListPage> {
         self.audited("list",actor,None, None,async {
             if !(1..=100).contains(&limit){return Err(refused("list-limit-invalid","choose a run list limit between 1 and 100"));}
             let flows=Self::run_list_flows(allowed_flows)?;
-            let anchor=self.run_list_anchor(cursor,actor,&flows,state,attention)?;
+            let anchor=self.run_list_anchor(cursor,actor,&flows,filter)?;
             let after_admitted_at=anchor.as_ref().map(|(admitted_at,_)|admitted_at.to_owned());
             let after_run_id=anchor.map(|(_,run_id)|run_id);
-            let state_value=state.map(RunListState::as_str);
+            let state_value=filter.state.map(RunListState::as_str);
+            let proposal_key=filter.proposal.map(|id|self.proposal_wait_key(id));
+            let turn_value=filter.turn.map(ProposalTurn::as_str);
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
-            let rows=tx.query(&format!("{} WHERE (r.owner_hash=$1 OR $2) AND r.workflow_id=ANY($3) AND ($4::text IS NULL OR {}=$4) AND ($5::boolean IS NULL OR ({} IN ('attention','failed'))=$5) AND ($6::timestamptz IS NULL OR (r.admitted_at,r.run_id)<($6,$7)) ORDER BY r.admitted_at DESC,r.run_id DESC LIMIT $8",self.status_select(),Self::status_state(),Self::status_state()),&[&self.owner(actor)?,&actor.operator,&flows,&state_value,&attention,&after_admitted_at,&after_run_id,&(i64::from(limit)+1)]).await.map_err(unavailable)?;
+            let rows=tx.query(&format!("{} WHERE (r.owner_hash=$1 OR $2) AND r.workflow_id=ANY($3) AND ($4::text IS NULL OR {}=$4) AND ($5::boolean IS NULL OR ({} IN ('attention','failed'))=$5) AND ($6::timestamptz IS NULL OR (r.admitted_at,r.run_id)<($6,$7)) AND ($9::text IS NULL OR EXISTS(SELECT 1 FROM {3}.completion_waits w WHERE w.run_id=r.run_id AND w.follows_proposal AND w.wait_key=$9)) AND ($10::text IS NULL OR EXISTS(SELECT 1 FROM {3}.completion_waits w WHERE w.run_id=r.run_id AND w.last_observation->>'turn'=$10)) ORDER BY r.admitted_at DESC,r.run_id DESC LIMIT $8",self.status_select(),Self::status_state(),Self::status_state(),self.namespace),&[&self.owner(actor)?,&actor.operator,&flows,&state_value,&filter.attention,&after_admitted_at,&after_run_id,&(i64::from(limit)+1),&proposal_key,&turn_value]).await.map_err(unavailable)?;
             let mut runs=rows.iter().map(|r|self.status_from_row(r)).collect::<Result<Vec<_>>>()?;
             let more=runs.len()>limit as usize;
             runs.truncate(limit as usize);
             let next_cursor=if more {
-                Some(self.run_list_cursor(runs.last().expect("a full nonempty page"),actor,&flows,state,attention)?)
+                Some(self.run_list_cursor(runs.last().expect("a full nonempty page"),actor,&flows,filter)?)
             } else {
                 None
             };
@@ -468,10 +485,10 @@ impl Store {
                 let input_row=tx.query_one(&format!("SELECT input FROM {}.runs WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 let input:Value=self.open_value(run,"input","",&input_row.get::<_,Value>(0))?;
                 let payload=Payload{snapshot,input,outputs,command:Some(command)};
-                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,recovery_hold:false,observation_pause_seconds:None,receipt_expired:false,completed_without_effect:false,recheck_seconds:None};
+                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,recovery_hold:false,observation_pause_seconds:None,receipt_expired:false,completed_without_effect:false,recheck_seconds:None,follow:None,hold_detail:None};
                 let written=self.apply_success(&tx,run,&step,payload,&detail,current.get(4)).await.map_err(unavailable)?;
                 let mapping_failed=written=="failed";
-                tx.execute(&format!("UPDATE {}.jobs SET state='delivered',attempt=GREATEST(attempt,1),uncertain=false,next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=transaction_timestamp(),dead_lettered_at=NULL,expired_at=NULL,failure_code=NULL,failure_path=NULL WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
+                tx.execute(&format!("UPDATE {}.jobs SET state='delivered',attempt=GREATEST(attempt,1),uncertain=false,next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=transaction_timestamp(),dead_lettered_at=NULL,expired_at=NULL,failure_code=NULL,failure_path=NULL,hold_detail=NULL WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
                 if mapping_failed || Self::no_external_calls_after(&definition,next) {
                     tx.execute(&format!("UPDATE {}.runs SET restore_review_required=false WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 }
@@ -572,6 +589,9 @@ impl Store {
         let retained = tx.query_one(&format!(
             "SELECT count(*),min(r.completed_at) FROM {}.runs r WHERE {} AND r.payload_erased_at IS NULL AND r.completed_at IS NOT NULL AND NOT r.restore_review_required",
             self.namespace, self.terminal_retention_predicate()), &[]).await.map_err(unavailable)?;
+        let turns = tx.query_one(&format!(
+            "SELECT count(*) FILTER(WHERE last_observation->>'turn'='party'),count(*) FILTER(WHERE last_observation->>'turn'='official'),count(*) FILTER(WHERE last_observation->>'turn'='nobody'),count(*) FILTER(WHERE last_observation IS NULL) FROM {}.completion_waits WHERE follows_proposal",
+            self.namespace), &[]).await.map_err(unavailable)?;
         Ok(DoctorStatus {
             database_id: row.get(0),
             schema_version: row.get(1),
@@ -594,6 +614,12 @@ impl Store {
             oldest_due_at: counts.get(1),
             terminal_payloads: retained.get(0),
             oldest_terminal_payload_at: retained.get(1),
+            proposal_waits_by_turn: ProposalWaitsByTurn {
+                party: turns.get(0),
+                official: turns.get(1),
+                nobody: turns.get(2),
+                unobserved: turns.get(3),
+            },
         })
     }
     pub async fn set_restore_hold(&self, actor: &Actor, reason: &str) -> Result<()> {
@@ -864,7 +890,7 @@ impl Store {
                 // Preserve the original command, generation, attempt, deadline
                 // and input. Clearing the token and leased state fences a prior
                 // paused worker; only a separate explicit replay may run again.
-                let changed = tx.execute(&format!("UPDATE {}.jobs j SET state='dead-lettered',next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,expired_at=NULL,dead_lettered_at=clock_timestamp(),failure_code=$7,failure_path=NULL,updated_at=clock_timestamp() WHERE j.run_id=$1 AND j.step=$2 AND j.generation=$3 AND j.attempt=$4 AND j.lease_token IS NOT DISTINCT FROM $5 AND j.state=$6 AND {eligible} AND NOT j.uncertain AND NOT j.receipt_expired", self.namespace), &[&run,&step,&row.get::<_,i64>(2),&row.get::<_,i16>(3),&row.get::<_,Option<Uuid>>(4),&row.get::<_,String>(7),&failure_code]).await.map_err(unavailable)?;
+                let changed = tx.execute(&format!("UPDATE {}.jobs j SET state='dead-lettered',next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,expired_at=NULL,dead_lettered_at=clock_timestamp(),failure_code=$7,failure_path=NULL,hold_detail=NULL,updated_at=clock_timestamp() WHERE j.run_id=$1 AND j.step=$2 AND j.generation=$3 AND j.attempt=$4 AND j.lease_token IS NOT DISTINCT FROM $5 AND j.state=$6 AND {eligible} AND NOT j.uncertain AND NOT j.receipt_expired", self.namespace), &[&run,&step,&row.get::<_,i64>(2),&row.get::<_,i16>(3),&row.get::<_,Option<Uuid>>(4),&row.get::<_,String>(7),&failure_code]).await.map_err(unavailable)?;
                 if changed != 1 {
                     return Err(invalid());
                 }
@@ -951,7 +977,7 @@ impl Store {
                 let eligible=tx.query_opt(&format!("SELECT run_id FROM {}.runs r WHERE run_id=$1 AND completed_at<$2 AND {} AND payload_erased_at IS NULL AND NOT restore_review_required FOR UPDATE",self.namespace,self.terminal_retention_predicate()),&[&run,&before]).await.map_err(unavailable)?;
                 if eligible.is_none(){continue;}
                 tx.execute(&format!("UPDATE {}.runs SET snapshot=NULL,input=NULL,outputs=NULL,terminal_output=NULL,payload_erased_at=transaction_timestamp() WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
-                tx.execute(&format!("UPDATE {}.jobs SET command=NULL WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
+                tx.execute(&format!("UPDATE {}.jobs SET command=NULL,hold_detail=NULL WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 tx.execute(&format!("DELETE FROM {}.completion_waits WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 erased+=1;
             }

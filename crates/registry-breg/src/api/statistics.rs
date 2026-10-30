@@ -597,6 +597,7 @@ async fn execute(
     commit_unresolved: &mut bool,
 ) -> HttpResult {
     let backend = service.statistics.as_ref().ok_or_else(unavailable)?;
+    let today = statistics_today(&service.registry, now)?;
     let selection = options.selection().map_err(statistics_invalid_query_at)?;
     let csv =
         !matches!(route.kind, Kind::List | Kind::Publish | Kind::Withdraw) && negotiate(headers);
@@ -607,7 +608,7 @@ async fn execute(
                 dataset_id: &route.dataset,
                 from: options.get("from"),
                 to: options.get("to"),
-                today: now.date_naive(),
+                today,
                 deadline,
             })
             .await
@@ -627,7 +628,7 @@ async fn execute(
                     from,
                     to,
                     selection,
-                    today: now.date_naive(),
+                    today,
                     deadline,
                 })
                 .await
@@ -759,7 +760,7 @@ async fn execute(
                         route_id: &route.id(),
                         canonical_request_digest: digest,
                         computed_at: now,
-                        today: now.date_naive(),
+                        today,
                         deadline,
                     })
                     .await
@@ -1069,9 +1070,50 @@ fn statistics_invalid_query_at(parameter: &'static str) -> Response {
     }
 }
 
+/// The registry's calendar date at `now`, the "today" a live or stock
+/// statistic counts on. A registry without a time zone is refused.
+#[allow(clippy::result_large_err)] // HTTP errors carry their complete response.
+fn statistics_today(
+    registry: &CompiledRegistry,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<chrono::NaiveDate, Response> {
+    registry.local_date(now).map_err(|_| unavailable())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statistics_count_on_the_registry_local_date() {
+        let source = serde_json::json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id": "statistics-today", "version": "1", "defaultLanguage": "en",
+                "canonicalBaseIri": "https://statistics.example.test", "timezone": "Asia/Colombo"},
+            "datasets": [{"id": "directory"}],
+            "recordTypes": [{"id": "site", "primaryDataset": "directory", "route": "sites",
+                "mutationMode": "mutable",
+                "fields": [{"id": "code", "type": "string", "required": true,
+                    "maximumLength": 32, "classification": "internal"}]}]
+        });
+        let project =
+            crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let late_evening_utc = chrono::DateTime::parse_from_rfc3339("2026-10-30T23:30:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        // Colombo is already on 31 October at 23:30 UTC.
+        assert_eq!(
+            statistics_today(&registry, late_evening_utc).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()
+        );
+    }
 
     #[test]
     fn work_deadline_reserves_terminal_audit_without_extending_short_budgets() {

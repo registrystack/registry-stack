@@ -67,6 +67,46 @@
       ],
       "type": "object"
     },
+    "AuthoredCondition": {
+      "additionalProperties": false,
+      "description": "One reference and exactly one test of it.",
+      "properties": {
+        "equals": {
+          "default": null,
+          "description": "Holds when the value equals this string, number or boolean of the same kind.",
+          "x-registry-foreign": "json"
+        },
+        "greater": {
+          "default": null,
+          "description": "Holds when the value is above this number, or after this calendar date such as `2026-01-31` when the reference declares `format: date`.",
+          "x-registry-foreign": "json"
+        },
+        "less": {
+          "default": null,
+          "description": "Holds when the value is below this number, or before this calendar date such as `2026-01-31` when the reference declares `format: date`.",
+          "x-registry-foreign": "json"
+        },
+        "oneOf": {
+          "description": "Holds when the value equals one of these strings, numbers or booleans, all of one kind.",
+          "items": {
+            "x-registry-foreign": "json"
+          },
+          "type": "array"
+        },
+        "present": {
+          "description": "`true` holds when the value exists and is not null; `false` holds when it is missing or null. Put `present: true` before a test on an optional value to guard it.",
+          "type": "boolean"
+        },
+        "value": {
+          "$ref": "#/$defs/Reference",
+          "description": "The value tested. Only `present` accepts a value that is missing or null; every other test fails the run on one."
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "type": "object"
+    },
     "AuthoredEventTrigger": {
       "additionalProperties": false,
       "properties": {
@@ -187,11 +227,11 @@
         },
         {
           "additionalProperties": false,
-          "description": "Builds an object from named references and literals.",
+          "description": "Builds an object from named references, literals and nested fields.",
           "properties": {
             "fields": {
               "$ref": "#/$defs/Fields",
-              "description": "Object members built from typed references or literals."
+              "description": "Object members built from typed references, literals or nested fields."
             },
             "type": {
               "const": "fields",
@@ -201,6 +241,38 @@
           "required": [
             "type",
             "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Decides a choose step by comparing values: `matched` when the conditions hold, `unmatched` when they do not.",
+          "properties": {
+            "all": {
+              "description": "One to sixteen conditions that must all hold; give exactly one of `all` or `any`. Conditions run in order and stop at the first that does not hold.",
+              "items": {
+                "$ref": "#/$defs/AuthoredCondition"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array"
+            },
+            "any": {
+              "description": "One to sixteen conditions of which one must hold; give exactly one of `all` or `any`. Conditions run in order and stop at the first that holds.",
+              "items": {
+                "$ref": "#/$defs/AuthoredCondition"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "compare",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },
@@ -608,9 +680,9 @@
     },
     "Fields": {
       "additionalProperties": {
-        "$ref": "#/$defs/Reference"
+        "$ref": "#/$defs/Member"
       },
-      "description": "Object members built from one typed reference or literal each.",
+      "description": "Object members built from one typed reference, literal or nested fields mapping each. A mapping nests at most 4 levels deep and holds at most 64 members across its levels.",
       "maxProperties": 64,
       "propertyNames": {
         "allOf": [
@@ -658,6 +730,89 @@
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "Member": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Reads the Workflow input.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/JsonPointer",
+              "description": "An optional RFC 6901 pointer; omit it to read the entire value."
+            },
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reads an earlier accepted call or completed wait on every incoming route.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/JsonPointer",
+              "description": "An optional RFC 6901 pointer; omit it to read the entire value."
+            },
+            "step": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The preceding accepted call or completed wait Step whose value is read."
+            },
+            "type": {
+              "const": "step",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "step"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Supplies one bounded literal JSON value.",
+          "properties": {
+            "type": {
+              "const": "literal",
+              "type": "string"
+            },
+            "value": {
+              "description": "A literal JSON value; it remains subject to bounded value checks.",
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Builds a nested object member by member, never with a Function.",
+          "properties": {
+            "fields": {
+              "$ref": "#/$defs/Fields",
+              "description": "Object members built from typed references, literals or nested fields."
+            },
+            "type": {
+              "const": "fields",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "fields"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "NarrowedLimits": {
       "additionalProperties": false,
@@ -734,7 +889,12 @@
         "casework.submit-review-request/v1",
         "casework.cancel-review-request/v1",
         "scheduling.preview-availability/v1",
-        "external.command/v1"
+        "external.command/v1",
+        "breg.read-in-force/v1",
+        "breg.read-proposal/v1",
+        "breg.start-proposal/v1",
+        "breg.submit-proposal/v1",
+        "breg.cancel-proposal/v1"
       ],
       "type": "string"
     },

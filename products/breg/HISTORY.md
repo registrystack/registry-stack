@@ -99,10 +99,81 @@ must be later than the start. To prohibit overlapping intervals for a subject,
 add a `temporal-non-overlap` constraint with its `scopeFields` and the same two
 boundary fields.
 
+A date interval can name an inclusive last day instead of an exclusive end:
+
+```yaml
+temporal:
+  startField: valid-from
+  lastDayField: valid-through
+```
+
+`lastDayField` is a nullable `date` field. A record is in force from its start through the
+whole of its last day, so "valid through 31 January" is stored as `2026-01-31`. Declare
+exactly one of `endField` and `lastDayField`. `bregctl check` refuses both, or neither, with
+`breg.temporal.end-conflict`, and refuses a `lastDayField` on a `timestamp` interval or a
+non-date field with `breg.temporal.last-day-type`. A last day earlier than the start is
+refused at write. A `temporal-non-overlap` constraint names `lastDayField` in place of the end.
+Responses return the stored last day unchanged; BReg never serves a computed exclusive end.
+
+### The registry's time zone
+
+A registry that answers "today" declares an IANA time zone, spelled as in Casework calendars
+and Scheduling:
+
+```yaml
+project:
+  id: licences
+  timezone: Asia/Colombo
+```
+
+It is required wherever BReg resolves "today":
+
+- the `:current` read of a date-interval Record type, which BReg serves for every such type
+  with a list grant;
+- an Action requirement's `currentDate` comparison, both when the Action commits and when BReg
+  reports whether the Action is available;
+- `registry_context.evaluation_date()` in a derived field on a live read;
+- the current period of a [statistics](STATISTICS.md) dataset.
+
+`bregctl check` refuses a project that uses any of these without a time zone as
+`breg.timezone.required`, naming the route, requirement or field that needs it, and refuses a
+name that is not an IANA zone as `breg.timezone.unknown`. A project that uses none of them needs
+no time zone. BReg takes today's date as `local_date(now, timezone)` from
+`registry-platform-calendar`, the helper Casework calendars and Scheduling use, at every one of
+these sites, so one registry has one today, and a registry in Colombo changes date at local
+midnight, not at 05:30.
+
+This is a breaking change for 1.0. Earlier releases took today's date in UTC and needed no time
+zone, so a project with a date-interval Record type, a `currentDate` requirement, an
+`evaluation_date()` field or a statistics dataset fails `bregctl check` after the upgrade until
+it adds the `project.timezone` line. The refusal names the line to add. The cost to a builder is
+that one line per project; `timezone: UTC` keeps the dates the project had before.
+
 Grant the `snapshot` operation explicitly to an authenticated access profile.
 Live `list` access and per-record `revisions` access do not grant snapshot access.
 Configure readable, filterable and sortable fields, count permission, purpose
 and row restrictions through the usual access profile.
+
+## Read what is in force
+
+A temporal Record type gains two live reads. `:current` returns the records in force now, and
+`:as-of` the records in force at `asOf`. Both follow the `validAt` rule by interval type: a
+date interval takes a calendar date such as `2026-06-05`, and a timestamp interval takes a UTC
+RFC 3339 instant. Any other `asOf` value answers `400 query.invalid` naming `asOf`. On a date
+interval, `:current` uses the registry's local date; on a timestamp interval it uses the
+current instant. Every `:current` and `:as-of` response echoes the `asOf` it used in collection
+`meta`, so a caller can record the date its answer was for.
+
+To tell one record in force from several without paging, read with `$top=2` and no `$count`
+or `$orderby`. BReg then returns at most two items, selected after access rules, and the item
+count (0, 1 or 2) is the answer; `nextCursor` need not be followed. Coordinator's `breg.read-in-force/v1`
+uses this read with an equality filter built from its structured subject.
+
+A list read never turns a missing row boundary into an empty answer. A caller whose
+row-boundary claim is missing receives `404 resource.not_found` on the plain list, `:current`
+and `:as-of` reads, and a caller whose claim is an empty array receives
+`401 authentication.refused`. Only a successful read with zero rows means that nothing
+matched. The HTTP read-only and authentication suites hold this rule.
 
 ## Query a saved state
 
@@ -127,7 +198,7 @@ repeat or override its snapshot, effective time or query options.
 
 Date intervals accept calendar dates such as `2026-06-05`. Timestamp intervals
 require a UTC RFC3339 timestamp. Non-temporal entities reject `validAt`.
-`recordedAsOf` is not supported, and live-query `asOf` keeps its existing meaning.
+`recordedAsOf` is not supported. Live `:as-of` reads take `asOf` under the same per-type rule.
 
 Historical queries use stored fields only. They remain usable on an entity
 that also defines live derived fields, but cannot select, filter or order by
