@@ -426,10 +426,13 @@ impl AuthPlan {
                 })
             });
         }
+        // Compile refuses an OAuth2 kind whose token endpoint is
+        // missing, so a compiled plan always carries one; refuse rather
+        // than panic if a future compile path forgets that.
         let plan = self
             .token
             .as_ref()
-            .expect("an OAuth2 plan carries its token endpoint");
+            .ok_or(AuthError::Plan(AuthPlanFault::KindMismatch))?;
         let (token, generation) = acquire_token(
             plan,
             context.budget,
@@ -1658,5 +1661,64 @@ mod tests {
             credential.header.value().as_bytes(),
             b"Bearer issued-b.example.invalid"
         );
+    }
+
+    /// An OAuth2 kind whose token endpoint went missing refuses rather
+    /// than panics: compile always binds one, and the uncatchable plan
+    /// fault keeps a future compile path honest.
+    #[tokio::test]
+    async fn a_missing_token_endpoint_refuses_instead_of_panicking() {
+        use crate::auth::{TokenRequest, TokenWire, TransportKind};
+        use std::future::Future;
+        use std::pin::Pin;
+
+        /// A send the refused plan must never reach; a call is a bug.
+        struct SendsNothing;
+        impl TokenSend for SendsNothing {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    Err(TransportFailure {
+                        kind: TransportKind::Connect,
+                    })
+                })
+            }
+        }
+
+        /// The client-credentials kind never signs an assertion; a call
+        /// is a bug.
+        struct NeverSigns;
+        impl ClientAssertionSigner for NeverSigns {
+            fn sign_client_assertion(
+                &self,
+                _request: crate::auth::ClientAssertion<'_>,
+            ) -> Result<crate::auth::ProtectedText, AuthError> {
+                panic!("the missing endpoint is refused before any send");
+            }
+        }
+
+        let plan = AuthPlan {
+            kind: AuthKind::Oauth2ClientCredentials,
+            static_credential: None,
+            token: None,
+        };
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let mut context = AuthorizeContext {
+            resolver: &resolver,
+            budget: &mut budget,
+            send: &SendsNothing,
+            signer: &NeverSigns,
+            events: &mut events,
+        };
+        assert_eq!(
+            plan.authorize(&mut context).await.unwrap_err(),
+            AuthError::Plan(AuthPlanFault::KindMismatch)
+        );
+        assert!(events.is_empty(), "the refusal precedes any token event");
     }
 }
