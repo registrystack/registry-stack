@@ -6,10 +6,11 @@
 //! offline check over authored artifacts (project, profile, pack, fixtures,
 //! and with `--runtime` the runtime config); `project lock`, the pin
 //! rewriter; `schemas`, the generator and drift gate of the five format
-//! JSON Schemas; `compile`, the per-deployment contract compiler; and
+//! JSON Schemas; `compile`, the per-deployment contract compiler;
 //! `fixtures replay`, the offline replay of a project's fixture suites
-//! against its compiled contract. Live verification is a later increment
-//! (`products/adapter/CONCEPT.md` section 8.1). It reads the same
+//! against its compiled contract; and `verify --live`, the probe that
+//! drives one constant-determined send per binding against the
+//! destination the runtime names. It reads the same
 //! source-neutral model the runtime serves, so an artifact `adapterctl
 //! check` accepts is one the runtime can interpret.
 
@@ -19,6 +20,7 @@ mod fixtures;
 mod project;
 mod report;
 mod schemas;
+mod verify;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_platform_yaml::Report;
@@ -62,6 +64,9 @@ enum Command {
     Compile(compile::CompileArgs),
     /// Replay the project's fixture suites, offline.
     Fixtures(fixtures::FixturesArgs),
+    /// Drive one constant-determined send per binding against the
+    /// destination the runtime names, live.
+    Verify(verify::VerifyArgs),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -135,6 +140,7 @@ where
         Command::Fixtures(fixtures) => match fixtures.command {
             fixtures::FixturesCommand::Replay(_) => "fixtures replay",
         },
+        Command::Verify(_) => "verify",
     };
     let outcome = match command {
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
@@ -142,6 +148,7 @@ where
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
         Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
         Command::Fixtures(args) => fixtures_command(args, format, command_name, stdout, stderr),
+        Command::Verify(args) => verify_command(args, format, command_name, stdout, stderr),
     };
     match outcome {
         Ok(exit) => exit,
@@ -423,6 +430,74 @@ fn fixtures_command(
     }
 }
 
+/// Run `verify --live` and write its verdict: the drove and waited
+/// counts with the wait reasons, a refusal carrying the findings, or a
+/// failure naming the broken environment or the step that stopped.
+fn verify_command(
+    args: verify::VerifyArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    match verify::run(&args) {
+        Ok(run) => {
+            let mut checked = Report::new(run.warnings);
+            checked.set_files_checked(run.files_checked);
+            let mut report = json!({
+                "command": command_name,
+                "project": run.project,
+                "runtime": run.runtime,
+                "drove": run.drove,
+                "waited": run.waited,
+                "waits": run.waits,
+                "filesChecked": run.files_checked,
+                "diagnostics": checked.to_json_value(),
+            });
+            report["ok"] = json!(true);
+            report["status"] = json!("complete");
+            write_success(&report, &checked, format, stdout)
+        }
+        Err(verify::VerifyFailure::Io { path, source }) => {
+            let exit = OPERATIONAL_FAILURE_EXIT;
+            let report = failure(
+                command_name,
+                exit,
+                vec![json!({
+                    "severity": "error",
+                    "code": "adapterctl.io-failure",
+                    "artifact": "filesystem",
+                    "path": path,
+                    "message": format!("the file could not be read: {source}"),
+                    "suggestedAction": "Correct the path or permissions, then retry.",
+                })],
+            );
+            write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
+        }
+        Err(verify::VerifyFailure::Refused {
+            diagnostics,
+            files_checked,
+        }) => {
+            let mut checked = Report::new(diagnostics);
+            checked.set_files_checked(files_checked);
+            let exit = DOMAIN_REFUSAL_EXIT;
+            let envelope = json!({
+                "ok": false,
+                "command": command_name,
+                "status": failure_status(exit),
+                "diagnostics": checked.to_json_value(),
+                "filesChecked": files_checked,
+            });
+            write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
+                .map(|()| ExitCode::from(exit))
+        }
+        Err(verify::VerifyFailure::Stopped { exit, diagnostics }) => {
+            let report = failure(command_name, exit, diagnostics);
+            write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
+        }
+    }
+}
+
 /// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
 /// or, with `--format json`, the CFG-DIAG-1 diagnostics in the report
 /// envelope on stdout.
@@ -495,6 +570,16 @@ fn human_lead(report: &Value) -> String {
             "Fixture contracts hold; send-by-send replay is not run yet (needs the route engine)."
                 .to_owned()
         }
+        "verify" => match report["drove"].as_u64().unwrap_or_default() {
+            0 => {
+                "Live verify drove no upstream send; every binding waits for the engine data path."
+                    .to_owned()
+            }
+            1 => "Live verify drove 1 upstream send within its declared range.".to_owned(),
+            drove => {
+                format!("Live verify drove {drove} upstream sends within their declared range.")
+            }
+        },
         other => format!("{other} completed."),
     }
 }

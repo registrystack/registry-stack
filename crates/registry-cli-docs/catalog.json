@@ -493,6 +493,87 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "verify",
+          "invocation": "adapterctl verify",
+          "about": "Drive one constant-determined send per binding against the destination the runtime names, live",
+          "long_about": null,
+          "usage": "adapterctl verify [OPTIONS] --runtime <FILE> --live <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authored adapter project: its directory (holding `project.yaml`) or the `project.yaml` file itself. The profile and pack are read beside the project either way",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--runtime <FILE>",
+              "description": "Operator runtime configuration: the destinations dialed and the credentials presented come from here and only here. Its `${NAME}` expressions are filled from the process environment",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--live",
+              "description": "Drive the destinations the runtime names. Live is the only mode today; the flag keeps the contract's spelling",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <FILE>",
+              "description": "Profile file read instead of the `profile.yaml` beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--pack <FILE>",
+              "description": "Pack file read instead of the `pack.yaml` beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
         }
       ]
     },

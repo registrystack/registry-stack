@@ -16,6 +16,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+base64.workspace = true
 clap.workspace = true
 graphql-parser.workspace = true
 registry-adapter-core = { workspace = true, features = ["schema"] }

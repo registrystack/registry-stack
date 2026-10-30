@@ -390,7 +390,7 @@ pub(crate) fn read<T: serde::de::DeserializeOwned>(
 /// position only, and a value it would fill is replaced whole by a stand-in
 /// so the members around it still decode. A file the loader cannot read is
 /// an environment failure; one it refuses is reported.
-fn read_runtime(
+pub(crate) fn read_runtime(
     path: &Path,
     substitute: bool,
     report: &mut Report,
@@ -492,7 +492,7 @@ pub(crate) fn discovered_fixtures(directory: &Path) -> Result<Vec<PathBuf>, Chec
 /// refuses with the pack's digest-pin code; the pack is incomplete as
 /// authored, which is a refusal, not an environment failure. Returns the
 /// bytes each read accepted, so the entrypoint compile reuses one read.
-fn verify_digest_pins(
+pub(crate) fn verify_digest_pins(
     pack: &registry_adapter_core::AdapterPack,
     pack_path: &Path,
     report: &mut Report,
@@ -573,7 +573,7 @@ fn verify_inventory(
 /// reference, over the bytes the digest pins accepted (CFG-EMBED-1). Core
 /// owns the exhaustive walk ([`script_references`]); a site whose file the
 /// pins refused is already reported there and compiles nowhere.
-fn verify_entrypoints(
+pub(crate) fn verify_entrypoints(
     pack: &registry_adapter_core::AdapterPack,
     pack_path: &Path,
     pinned: &BTreeMap<PathBuf, Vec<u8>>,
@@ -651,7 +651,7 @@ fn verify_entrypoints(
 /// parser's own message quotes the document, so the finding carries only
 /// a fixed description and the file's location (CFG-SEC-3). A file the
 /// digest pins refused is already reported there and parses nowhere.
-fn verify_query_files(
+pub(crate) fn verify_query_files(
     pack: &registry_adapter_core::AdapterPack,
     pack_path: &Path,
     pinned: &BTreeMap<PathBuf, Vec<u8>>,
@@ -691,7 +691,7 @@ fn verify_query_files(
 /// file that does not parse is already refused at its inventory entry.
 /// The kind the endpoint operation declares against the file stays with
 /// the core model checks; this command owns the file's own text.
-fn verify_graphql_operations(
+pub(crate) fn verify_graphql_operations(
     pack: &registry_adapter_core::AdapterPack,
     pack_path: &Path,
     pinned: &BTreeMap<PathBuf, Vec<u8>>,
@@ -833,7 +833,7 @@ pub(crate) fn pin_finding(
 /// Verify the versions and digests the project pins for its profile and
 /// pack against the artifacts as read (CFG-ID-4). Core owns the
 /// comparison; this command owns the hashing of the bytes it already read.
-fn verify_project_pins(
+pub(crate) fn verify_project_pins(
     project: &registry_adapter_core::AdapterProject,
     profile: &registry_adapter_core::AdapterProfile,
     profile_bytes: &[u8],
