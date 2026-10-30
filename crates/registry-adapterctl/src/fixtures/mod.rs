@@ -105,10 +105,13 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
         &mut files,
     )
     .map_err(io_failure)?;
-    let profile_path = args
-        .profile
-        .clone()
-        .unwrap_or_else(|| directory.join("profile.yaml"));
+    let profile_path = check::artifact_path(
+        args.profile.as_deref(),
+        &directory,
+        "profile.yaml",
+        "--profile",
+    )
+    .map_err(io_failure)?;
     let profile = check::read::<AdapterProfile>(
         &profile_path,
         &check::PROFILE_FORMAT,
@@ -116,10 +119,8 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
         &mut files,
     )
     .map_err(io_failure)?;
-    let pack_path = args
-        .pack
-        .clone()
-        .unwrap_or_else(|| directory.join("pack.yaml"));
+    let pack_path = check::artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")
+        .map_err(io_failure)?;
     let pack = check::read::<AdapterPack>(&pack_path, &check::PACK_FORMAT, &mut report, &mut files)
         .map_err(io_failure)?;
     let fixture_paths = if args.fixtures.is_empty() {

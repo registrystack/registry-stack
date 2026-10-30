@@ -22,9 +22,16 @@ enum Command {
         /// The operator runtime config.
         #[arg(long, value_name = "ABSOLUTE_FILE")]
         runtime_config: PathBuf,
-        /// The directory holding project.yaml, profile.yaml, pack.yaml and scripts/.
+        /// The directory holding project.yaml.
         #[arg(long, value_name = "DIRECTORY")]
         project: PathBuf,
+        /// The profile file; defaults to profile.yaml beside the project.
+        #[arg(long, value_name = "FILE")]
+        profile: Option<PathBuf>,
+        /// The pack file, whose scripts/ sit beside it; defaults to pack.yaml
+        /// beside the project.
+        #[arg(long, value_name = "FILE")]
+        pack: Option<PathBuf>,
     },
 }
 
@@ -45,8 +52,17 @@ async fn main() {
     let Command::Serve {
         runtime_config,
         project,
+        profile,
+        pack,
     } = cli.command;
-    if let Err(error) = registry_adapter::serve::run(&project, &runtime_config).await {
+    if let Err(error) = registry_adapter::serve::run(
+        &project,
+        profile.as_deref(),
+        pack.as_deref(),
+        &runtime_config,
+    )
+    .await
+    {
         eprintln!("adapter: {error}");
         std::process::exit(1);
     }

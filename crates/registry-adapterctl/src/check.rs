@@ -153,6 +153,31 @@ pub(crate) enum CheckFailure {
     Io { path: String, source: io::Error },
 }
 
+/// The pack or profile a command reads: the file the flag names, else the
+/// file beside the project. A project does not say where its pack lives, so
+/// a missing default refuses with the file and the flag to pass.
+pub(crate) fn artifact_path(
+    given: Option<&Path>,
+    directory: &Path,
+    file: &str,
+    flag: &str,
+) -> Result<PathBuf, CheckFailure> {
+    if let Some(path) = given {
+        return Ok(path.to_path_buf());
+    }
+    let beside = directory.join(file);
+    if beside.exists() {
+        return Ok(beside);
+    }
+    Err(CheckFailure::Io {
+        path: beside.display().to_string(),
+        source: io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no {file} beside the project; pass {flag} FILE"),
+        ),
+    })
+}
+
 /// One run's verdict: the findings collected over every file read, how many
 /// files were read, how many fixture suites were contract-checked, and the
 /// project path as given.
@@ -179,20 +204,19 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         &mut report,
         &mut files,
     )?;
-    let profile_path = args
-        .profile
-        .clone()
-        .unwrap_or_else(|| directory.join("profile.yaml"));
+    let profile_path = artifact_path(
+        args.profile.as_deref(),
+        &directory,
+        "profile.yaml",
+        "--profile",
+    )?;
     let profile = read::<registry_adapter_core::AdapterProfile>(
         &profile_path,
         &PROFILE_FORMAT,
         &mut report,
         &mut files,
     )?;
-    let pack_path = args
-        .pack
-        .clone()
-        .unwrap_or_else(|| directory.join("pack.yaml"));
+    let pack_path = artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")?;
     let pack = read::<registry_adapter_core::AdapterPack>(
         &pack_path,
         &PACK_FORMAT,

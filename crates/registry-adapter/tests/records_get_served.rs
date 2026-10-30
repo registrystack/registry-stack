@@ -179,6 +179,27 @@ async fn a_subject_the_journal_cannot_hold_is_refused_at_authentication() {
     assert_eq!(status, 200, "{body}");
 }
 
+/// The served example folder holds no pack, profile or scripts, so every
+/// test that starts over it proves the serve flags resolve the maintained
+/// artifacts rather than files beside the project.
+#[tokio::test]
+async fn the_example_folder_is_served_with_its_pack_and_profile_by_flag() {
+    let folder = Served::example_project();
+    for beside in ["pack.yaml", "profile.yaml", "scripts"] {
+        assert!(
+            !folder.join(beside).exists(),
+            "{beside} sits beside the project"
+        );
+    }
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let served = Served::start(&upstream.url("")).await;
+    let token = served.token("records.read");
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+    assert_eq!(status, 200, "{body}");
+}
+
 fn copy_example_project(directory: &std::path::Path) {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).expect("create the copy directory");
@@ -193,6 +214,12 @@ fn copy_example_project(directory: &std::path::Path) {
         }
     }
     copy(&Served::example_project(), directory);
+    // The example folder holds only the project: the copy carries its own
+    // pack, scripts and profile beside it, so a test can edit them.
+    let packs = Served::example_pack();
+    copy(packs.parent().expect("the pack directory"), directory);
+    std::fs::copy(Served::example_profile(), directory.join("profile.yaml"))
+        .expect("copy the profile");
 }
 
 /// A copy of the example project whose fetch route has no shaping step, so

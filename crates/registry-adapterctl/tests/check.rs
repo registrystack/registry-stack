@@ -890,6 +890,81 @@ fn project_lock_with_a_missing_pack_is_an_operational_failure() {
     assert_eq!(std::fs::read(&project).unwrap(), before);
 }
 
+/// A project folder that holds no pack or profile beside it refuses with
+/// the missing file named and the flag to pass, from every command that
+/// reads the pair: the project does not say where its pack lives.
+#[test]
+fn a_missing_pack_or_profile_names_the_file_and_the_flag() {
+    for (file, flag) in [("pack.yaml", "--pack"), ("profile.yaml", "--profile")] {
+        let (_root, project) = mutated_project(|root| {
+            std::fs::remove_file(root.join(file)).unwrap();
+        });
+        for command in [
+            vec!["check", project.as_str()],
+            vec!["compile", project.as_str()],
+            vec!["fixtures", "replay", project.as_str()],
+            vec!["project", "lock", project.as_str()],
+        ] {
+            let (exit, report, _) = run_json(&command);
+            assert_eq!(exit, ExitCode::from(3), "{command:?}: {report}");
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(diagnostic["code"], "adapterctl.io-failure");
+            assert!(
+                diagnostic["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(file)),
+                "{command:?}: {report}"
+            );
+            let message = diagnostic["message"].as_str().unwrap_or_default();
+            assert!(
+                message.contains(file) && message.contains(flag),
+                "{command:?}: {report}"
+            );
+        }
+    }
+}
+
+/// The committed example folder holds only the project: a bare `check` names
+/// the missing pack and the flag, and with the maintained pair it passes.
+#[test]
+fn the_example_folder_needs_its_pack_and_profile_by_flag() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let example = root.join("products/adapter/examples/dhis2-tracker/project.yaml");
+    let example = example.to_str().unwrap();
+
+    let (exit, report, _) = run_json(&["check", example]);
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.contains("profile.yaml") && message.contains("--profile"),
+        "{report}"
+    );
+
+    let profile = root.join("products/adapter/profiles/breg-records/profile.yaml");
+    let (exit, report, _) = run_json(&["check", example, "--profile", profile.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.contains("pack.yaml") && message.contains("--pack"),
+        "{report}"
+    );
+
+    let pack = root.join("products/adapter/packs/dhis2-tracker/pack.yaml");
+    let (exit, report, _) = run_json(&[
+        "check",
+        example,
+        "--profile",
+        profile.to_str().unwrap(),
+        "--pack",
+        pack.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+}
+
 /// A project the reader refuses is a domain refusal carrying the reader's
 /// findings, and nothing is written.
 #[test]

@@ -26,24 +26,25 @@
 #   - birth-search: 1 send x (1 + 1 redelivery) = 2; budget 4 (the check refused a budget of 2).
 #   - birth-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4 (the check refused a budget of 2).
 #
-# Check with the plain command of DELIVERY-PLAN acceptance 2; the check
-# resolves the profile and pack beside the project:
-#   target/debug/adapterctl check products/adapter/examples/opencrvs-events/project.yaml
+# This folder holds only the project. The profile and pack its pins name are
+# the maintained artifacts (products/adapter/profiles/breg-records/profile.yaml
+# and products/adapter/packs/opencrvs-events/pack.yaml with its scripts/); the
+# project does not say where they live, so every command takes them with
+# --profile and --pack, run from the repository root. The pinned id, version
+# and digest are the guarantee: a file that does not match them refuses.
+#   target/debug/adapterctl check products/adapter/examples/opencrvs-events/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/opencrvs-events/pack.yaml
 #
-# The profile.yaml, pack.yaml, and scripts/ beside this project are
-# byte-identical copies of the maintained artifacts the pins name
-# (products/adapter/profiles/breg-records/profile.yaml and
-# products/adapter/packs/opencrvs-events/pack.yaml with its scripts/).
-# Refresh them with `cp` in the same commit that moves the maintained
-# bytes: the digest pins refuse a stale copy.
-#
-# The fixtures sit in this example's own fixtures/ directory:
+# The fixtures live in products/adapter/fixtures/opencrvs-events/. They are
+# hand-derived from OpenCRVS documentation, marked synthetic, and nothing has
+# run against a real OpenCRVS:
 #   target/debug/adapterctl fixtures replay \
 #     products/adapter/examples/opencrvs-events/project.yaml \
 #     --profile products/adapter/profiles/breg-records/profile.yaml \
 #     --pack products/adapter/packs/opencrvs-events/pack.yaml \
-#     --fixtures products/adapter/examples/opencrvs-events/fixtures/get-found.yaml \
-#     (and each other file in fixtures/)
+#     --fixtures products/adapter/fixtures/opencrvs-events/get-found.yaml \
+#     (and each other file in that directory)
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:

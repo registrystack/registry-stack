@@ -8,6 +8,8 @@
 # its own runtime.yaml and fills in its environment's references. Check it
 # with the project (whose header comment carries the full command):
 #   adapterctl check products/adapter/examples/opencrvs-events/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/opencrvs-events/pack.yaml \
 #     --runtime products/adapter/examples/opencrvs-events/runtime.example.yaml
 #
 # Credentials travel in the token request's form body (client_id,

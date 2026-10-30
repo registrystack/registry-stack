@@ -338,9 +338,11 @@ fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, ServeError
 /// Load the deployment, migrate the journal, and serve until a stop signal.
 pub async fn run(
     project_directory: &std::path::Path,
+    profile_path: Option<&std::path::Path>,
+    pack_path: Option<&std::path::Path>,
     runtime_path: &std::path::Path,
 ) -> Result<(), ServeError> {
-    let loaded = load(project_directory, runtime_path)?;
+    let loaded = load(project_directory, profile_path, pack_path, runtime_path)?;
     for (binding, reason) in &loaded.unserved {
         tracing::warn!(binding = %binding, reason = %reason, "binding not served");
     }

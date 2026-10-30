@@ -558,7 +558,9 @@ stopped on.
 Increment 0:
 
 1. `products/adapter/scripts/check-contracts.sh` exits 0.
-2. `CARGO run --locked -p registry-adapterctl -- check products/adapter/examples/dhis2-tracker/project.yaml`
+2. `CARGO run --locked -p registry-adapterctl -- check products/adapter/examples/dhis2-tracker/project.yaml
+   --profile products/adapter/profiles/breg-records/profile.yaml
+   --pack products/adapter/packs/dhis2-tracker/pack.yaml`
    exits 0 with a value-free report (the integration report names the
    exact path if it differs).
 3. Each bad corpus member fails `check` with exactly its expected code and

@@ -121,15 +121,17 @@ pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
     let (project_path, directory) = resolve_project(&args.project);
     let project = read::<AdapterProject>(&project_path, &PROJECT_FORMAT, &mut report, &mut files)
         .map_err(io_failure)?;
-    let profile_path = args
-        .profile
-        .clone()
-        .unwrap_or_else(|| directory.join("profile.yaml"));
+    let profile_path = crate::check::artifact_path(
+        args.profile.as_deref(),
+        &directory,
+        "profile.yaml",
+        "--profile",
+    )
+    .map_err(io_failure)?;
     let profile_bytes = read_pinned(&profile_path, &mut files)?;
-    let pack_path = args
-        .pack
-        .clone()
-        .unwrap_or_else(|| directory.join("pack.yaml"));
+    let pack_path =
+        crate::check::artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")
+            .map_err(io_failure)?;
     let pack_bytes = read_pinned(&pack_path, &mut files)?;
     let Some((_, project_bytes)) = project else {
         return Ok(LockRun {

@@ -10,7 +10,7 @@
 //! refusal, never registered, so nothing it says is silently skipped.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use registry_adapter_core::{
@@ -70,6 +70,12 @@ impl From<&str> for BindingRefusal {
 pub enum LoadError {
     #[error("{path} could not be read")]
     Unreadable { path: String },
+    #[error("no {file} beside the project in {directory}; pass {flag} FILE")]
+    Absent {
+        file: &'static str,
+        directory: String,
+        flag: &'static str,
+    },
     #[error("{path} was refused: {reasons}")]
     Refused { path: String, reasons: String },
     #[error("the workspace check refused the deployment: {0}")]
@@ -167,22 +173,55 @@ fn digest_of(bytes: &[u8]) -> Digest {
     Digest::new(sha256_uri(bytes)).expect("a computed sha256 uri is a valid digest")
 }
 
-/// Load the deployment: `project_directory` holds `project.yaml`,
-/// `profile.yaml`, `pack.yaml` and `scripts/`; `runtime_path` is the
-/// operator runtime config.
-pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, LoadError> {
+/// The profile or pack a deployment loads: the file the flag names, else
+/// the file beside the project. A project does not say where its pack
+/// lives, so a missing default refuses with the file and the flag to pass.
+fn artifact_path(
+    given: Option<&Path>,
+    project_directory: &Path,
+    file: &'static str,
+    flag: &'static str,
+) -> Result<PathBuf, LoadError> {
+    if let Some(path) = given {
+        return Ok(path.to_path_buf());
+    }
+    let beside = project_directory.join(file);
+    if beside.exists() {
+        return Ok(beside);
+    }
+    Err(LoadError::Absent {
+        file,
+        directory: project_directory.display().to_string(),
+        flag,
+    })
+}
+
+/// Load the deployment: `project_directory` holds `project.yaml`;
+/// `profile_path` and `pack_path` name the profile and pack files, each
+/// defaulting to `profile.yaml` or `pack.yaml` beside the project. The
+/// pack's `scripts/` resolve against the pack file's own directory.
+/// `runtime_path` is the operator runtime config.
+pub fn load(
+    project_directory: &Path,
+    profile_path: Option<&Path>,
+    pack_path: Option<&Path>,
+    runtime_path: &Path,
+) -> Result<Loaded, LoadError> {
     let (project, project_bytes): (AdapterProject, _) = read(
         &project_directory.join("project.yaml"),
         &format_spec(ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_API_VERSION),
     )?;
+    let profile_path = artifact_path(profile_path, project_directory, "profile.yaml", "--profile")?;
     let (profile, profile_bytes): (AdapterProfile, _) = read(
-        &project_directory.join("profile.yaml"),
+        &profile_path,
         &format_spec(ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_API_VERSION),
     )?;
+    let pack_path = artifact_path(pack_path, project_directory, "pack.yaml", "--pack")?;
     let (pack, pack_bytes): (AdapterPack, _) = read(
-        &project_directory.join("pack.yaml"),
+        &pack_path,
         &format_spec(ADAPTER_PACK_KIND, ADAPTER_PACK_API_VERSION),
     )?;
+    let pack_directory = pack_path.parent().unwrap_or_else(|| Path::new("."));
     let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
         path: runtime_path.display().to_string(),
     })?;
@@ -287,7 +326,7 @@ pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, Loa
             &project,
             &pack,
             &profile,
-            project_directory,
+            pack_directory,
             &endpoints,
             &endpoint_refusals,
             has_cursor_key,
@@ -334,7 +373,7 @@ fn compile_binding(
     project: &AdapterProject,
     pack: &AdapterPack,
     profile: &AdapterProfile,
-    project_directory: &Path,
+    pack_directory: &Path,
     endpoints: &BTreeMap<String, EndpointRuntime>,
     endpoint_refusals: &BTreeMap<String, String>,
     has_cursor_key: bool,
@@ -389,7 +428,7 @@ fn compile_binding(
     }
     for (file, entrypoint) in script_uses {
         scripts
-            .add(pack, project_directory, &file, &entrypoint)
+            .add(pack, pack_directory, &file, &entrypoint)
             .map_err(|error| BindingRefusal::Fault(error.to_string()))?;
     }
     Ok(ServedOperation {
@@ -560,5 +599,32 @@ mod tests {
         let served = [operation];
         assert!(serves_path(&served, "/v1/records/{recordType}/{id}"));
         assert!(!serves_path(&served, "/v1/records/{recordType}"));
+    }
+
+    #[test]
+    fn a_missing_pack_beside_the_project_names_the_file_and_the_flag() {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let error = artifact_path(None, directory.path(), "pack.yaml", "--pack")
+            .expect_err("no pack sits beside the project");
+        let text = error.to_string();
+        assert!(
+            text.contains("pack.yaml") && text.contains("--pack"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_flag_wins_over_the_file_beside_the_project() {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        std::fs::write(directory.path().join("pack.yaml"), "").expect("write a pack");
+        let given = Path::new("/elsewhere/pack.yaml");
+        assert_eq!(
+            artifact_path(Some(given), directory.path(), "pack.yaml", "--pack").unwrap(),
+            given
+        );
+        assert_eq!(
+            artifact_path(None, directory.path(), "pack.yaml", "--pack").unwrap(),
+            directory.path().join("pack.yaml")
+        );
     }
 }

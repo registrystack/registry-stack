@@ -107,6 +107,18 @@ impl Served {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter/examples/dhis2-tracker")
     }
 
+    /// The maintained profile the example project pins.
+    pub fn example_profile() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/profiles/breg-records/profile.yaml")
+    }
+
+    /// The maintained pack the example project pins.
+    pub fn example_pack() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/packs/dhis2-tracker/pack.yaml")
+    }
+
     pub async fn start(upstream_url: &str) -> Self {
         Self::start_with_project(upstream_url, &Self::example_project()).await
     }
@@ -195,11 +207,22 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             ),
         )
         .expect("write the runtime config");
-        let child = Command::new(env!("CARGO_BIN_EXE_adapter"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_adapter"));
+        command
             .args(["serve", "--runtime-config"])
             .arg(&runtime)
             .arg("--project")
-            .arg(project)
+            .arg(project);
+        // The example folder holds only the project; its profile and pack
+        // are the maintained artifacts, passed by flag. A project directory
+        // that carries its own pair is served from beside the project.
+        if !project.join("pack.yaml").exists() {
+            command.arg("--pack").arg(Self::example_pack());
+        }
+        if !project.join("profile.yaml").exists() {
+            command.arg("--profile").arg(Self::example_profile());
+        }
+        let child = command
             .env("TEST_UPSTREAM_USERNAME", USERNAME)
             .env("TEST_UPSTREAM_PASSWORD", PASSWORD)
             .env("TEST_DB_URL", &database)

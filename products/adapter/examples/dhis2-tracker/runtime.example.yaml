@@ -7,6 +7,8 @@
 # references. Check it with the project (whose header comment carries the
 # full command):
 #   adapterctl check products/adapter/examples/dhis2-tracker/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/dhis2-tracker/pack.yaml \
 #     --runtime products/adapter/examples/dhis2-tracker/runtime.example.yaml
 apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
 kind: AdapterRuntimeConfig
