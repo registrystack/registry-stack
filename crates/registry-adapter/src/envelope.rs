@@ -9,14 +9,14 @@
 
 use std::collections::BTreeMap;
 
-use registry_adapter_core::{decode_slot, parse_envelope_template, ENVELOPE_SLOTS};
+use registry_adapter_core::{decode_slot, parse_envelope_template, SlotForm, ENVELOPE_SLOTS};
 use registry_platform_yaml::ExternalId;
 use serde_json::{Map, Value};
 
 #[derive(Clone, Debug)]
 enum Node {
     Literal(Value),
-    Slot { name: String, optional: bool },
+    Slot { name: String, form: SlotForm },
     Object(Vec<(String, Node)>),
     Array(Vec<Node>),
 }
@@ -62,9 +62,9 @@ impl CompiledEnvelope {
 fn node(template: &Value, parts: &BTreeMap<ExternalId, String>) -> Result<Node, String> {
     match template {
         Value::String(text) => Ok(match decode_slot(text) {
-            Some((name, optional)) => Node::Slot {
+            Some((name, form)) => Node::Slot {
                 name: name.to_owned(),
-                optional,
+                form,
             },
             None => Node::Literal(template.clone()),
         }),
@@ -86,9 +86,10 @@ fn node(template: &Value, parts: &BTreeMap<ExternalId, String>) -> Result<Node, 
                 .iter()
                 .map(|item| node(item, parts))
                 .collect::<Result<Vec<_>, _>>()?;
-            if compiled.iter().any(is_optional_slot) {
+            if compiled.iter().any(is_member_only_slot) {
                 return Err(
-                    "an optional slot fills an object member, never an array item".to_owned(),
+                    "an optional or null slot fills an object member, never an array item"
+                        .to_owned(),
                 );
             }
             Ok(Node::Array(compiled))
@@ -97,16 +98,23 @@ fn node(template: &Value, parts: &BTreeMap<ExternalId, String>) -> Result<Node, 
     }
 }
 
-fn is_optional_slot(node: &Node) -> bool {
-    matches!(node, Node::Slot { optional: true, .. })
+fn is_member_only_slot(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Slot {
+            form: SlotForm::Optional | SlotForm::Null,
+            ..
+        }
+    )
 }
 
 fn fill(node: &Node, slots: &BTreeMap<&str, Value>) -> Result<Option<Value>, String> {
     match node {
         Node::Literal(value) => Ok(Some(value.clone())),
-        Node::Slot { name, optional } => match slots.get(name.as_str()) {
+        Node::Slot { name, form } => match slots.get(name.as_str()) {
             Some(value) => Ok(Some(value.clone())),
-            None if *optional => Ok(None),
+            None if *form == SlotForm::Optional => Ok(None),
+            None if *form == SlotForm::Null => Ok(Some(Value::Null)),
             None => Err(format!("the slot {name} has no value")),
         },
         Node::Object(members) => {
@@ -193,6 +201,32 @@ mod tests {
                 ]))
                 .unwrap(),
             json!({"status": 404, "detail": "gone \"x\""})
+        );
+    }
+
+    #[test]
+    fn an_absent_null_slot_renders_null_and_a_present_one_its_value() {
+        let compiled = CompiledEnvelope::compile(
+            r#"{"pageInfo": {"nextCursor": {{??nextCursor}}, "also": "{{??nextCursor}}"}}"#,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            compiled.render(&slots(&[])).unwrap(),
+            json!({"pageInfo": {"nextCursor": null, "also": null}})
+        );
+        assert_eq!(
+            compiled
+                .render(&slots(&[("nextCursor", json!("abc"))]))
+                .unwrap(),
+            json!({"pageInfo": {"nextCursor": "abc", "also": "abc"}})
+        );
+    }
+
+    #[test]
+    fn a_null_slot_never_fills_an_array_item() {
+        assert!(
+            CompiledEnvelope::compile(r#"{"a": ["{{??nextCursor}}"]}"#, &BTreeMap::new()).is_err()
         );
     }
 

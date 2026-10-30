@@ -5,13 +5,24 @@
 //! runtime renderer so the three read a template the same way
 //! (`products/adapter/CONCEPT.md` section 7).
 
-use crate::checks::is_placeholder_name;
+use crate::checks::{is_placeholder_name, split_slot_form};
 use serde_json::Value;
 
 /// The sentinel opening (and closing) one slot in a parsed envelope
 /// template. A control character real template text cannot carry opens
 /// it, so no literal envelope string can decode as a slot.
 pub const SLOT_MARK: char = '\u{1}';
+
+/// How a slot fills its place: `{{name}}` is required, `{{?name}}` drops
+/// the member that carried it when absent, `{{??name}}` renders JSON `null`
+/// when absent. A null slot is unquoted-or-quoted like the others and fills
+/// an object member or a whole value, never an array item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotForm {
+    Required,
+    Optional,
+    Null,
+}
 
 /// The envelope grammar: a placeholder fills a whole member value or a
 /// whole string member, never a part of a string; inside a longer string
@@ -61,11 +72,7 @@ pub fn parse_envelope_template(text: &str) -> Result<Value, String> {
                         .to_string(),
                 );
             };
-            let inner = &text[index + 2..index + close];
-            let (name, optional) = match inner.strip_prefix('?') {
-                Some(stripped) => (stripped, true),
-                None => (inner, false),
-            };
+            let (name, form) = split_slot_form(&text[index + 2..index + close], true);
             if is_placeholder_name(name) {
                 let end = index + close + 2;
                 if in_string {
@@ -77,11 +84,11 @@ pub fn parse_envelope_template(text: &str) -> Result<Value, String> {
                         return Err(ENVELOPE_GRAMMAR_RULE.to_string());
                     }
                     parsed.pop();
-                    push_sentinel(&mut parsed, name, optional);
+                    push_sentinel(&mut parsed, name, form);
                     in_string = false;
                     index = end + 1;
                 } else {
-                    push_sentinel(&mut parsed, name, optional);
+                    push_sentinel(&mut parsed, name, form);
                     index = end;
                 }
                 continue;
@@ -96,21 +103,33 @@ pub fn parse_envelope_template(text: &str) -> Result<Value, String> {
         .map_err(|error| format!("the response envelope template is not a JSON template: {error}"))
 }
 
-fn push_sentinel(parsed: &mut Vec<u8>, name: &str, optional: bool) {
+fn push_sentinel(parsed: &mut Vec<u8>, name: &str, form: SlotForm) {
     parsed.extend_from_slice(b"\"\\u0001");
-    parsed.extend_from_slice(if optional { b"opt:" } else { b"req:" });
+    parsed.extend_from_slice(match form {
+        SlotForm::Required => b"req:",
+        SlotForm::Optional => b"opt:",
+        SlotForm::Null => b"nul:",
+    });
     parsed.extend_from_slice(name.as_bytes());
     parsed.extend_from_slice(b"\\u0001\"");
 }
 
-/// Decodes one sentinel string back to `(slot name, optional)`.
+/// Decodes one sentinel string back to `(slot name, form)`.
 #[must_use]
-pub fn decode_slot(text: &str) -> Option<(&str, bool)> {
+pub fn decode_slot(text: &str) -> Option<(&str, SlotForm)> {
     text.strip_prefix(SLOT_MARK)
         .and_then(|rest| rest.strip_suffix(SLOT_MARK))
-        .map(|inner| match inner.strip_prefix("opt:") {
-            Some(name) => (name, true),
-            None => (inner.strip_prefix("req:").unwrap_or(inner), false),
+        .map(|inner| {
+            if let Some(name) = inner.strip_prefix("opt:") {
+                (name, SlotForm::Optional)
+            } else if let Some(name) = inner.strip_prefix("nul:") {
+                (name, SlotForm::Null)
+            } else {
+                (
+                    inner.strip_prefix("req:").unwrap_or(inner),
+                    SlotForm::Required,
+                )
+            }
         })
 }
 
@@ -126,7 +145,7 @@ mod tests {
         assert_eq!(parsed["label"], json!("say \"hi\""));
         assert_eq!(
             decode_slot(parsed["data"].as_str().unwrap()),
-            Some(("record", false))
+            Some(("record", SlotForm::Required))
         );
     }
 
@@ -136,7 +155,7 @@ mod tests {
         assert_eq!(parsed["path"], json!("a\\"));
         assert_eq!(
             decode_slot(parsed["data"].as_str().unwrap()),
-            Some(("record", false))
+            Some(("record", SlotForm::Required))
         );
     }
 
@@ -144,5 +163,22 @@ mod tests {
     fn a_placeholder_inside_a_longer_string_is_refused() {
         let refusal = parse_envelope_template(r#"{"a": "x {{record}} y"}"#).unwrap_err();
         assert_eq!(refusal, ENVELOPE_GRAMMAR_RULE);
+    }
+
+    #[test]
+    fn the_null_form_decodes_bare_and_quoted() {
+        let parsed =
+            parse_envelope_template(r#"{"a": {{??nextCursor}}, "b": "{{??nextCursor}}"}"#).unwrap();
+        for member in ["a", "b"] {
+            assert_eq!(
+                decode_slot(parsed[member].as_str().unwrap()),
+                Some(("nextCursor", SlotForm::Null))
+            );
+        }
+    }
+
+    #[test]
+    fn a_triple_question_mark_is_not_a_slot() {
+        assert!(parse_envelope_template(r#"{"a": {{???x}}}"#).is_err());
     }
 }

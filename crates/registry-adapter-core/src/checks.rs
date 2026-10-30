@@ -8,6 +8,7 @@
 
 use crate::auth::{is_reserved_header_name, EndpointAuthentication, RuntimeCredential};
 use crate::diagnostics::{finding, CheckCode};
+use crate::envelope::SlotForm;
 use crate::fixture::{AdapterFixture, Intercept};
 use crate::model::{Expression, HttpMethod, SendComponent};
 use crate::pack::{AdapterPack, GraphQlOperationKind};
@@ -110,25 +111,36 @@ fn is_header_read_known(name: &str, placed: &HashSet<String>, allowlist: &HashSe
         || allowlist.contains(lower.as_str())
 }
 
-/// The valid placeholder references of an envelope or template text:
+/// The valid placeholder references of a route or template text:
 /// `(name, optional)` pairs for every `{{name}}` and `{{?name}}`. Any other
-/// text passes through; `has_malformed_placeholder` refuses a `{{` that
-/// opens neither form.
+/// text passes through. The null form `{{??name}}` is an envelope form
+/// only; here it is not a placeholder.
 #[must_use]
 pub fn placeholders(text: &str) -> Vec<(String, bool)> {
+    scan_placeholders(text, false)
+        .into_iter()
+        .map(|(name, form)| (name, form == SlotForm::Optional))
+        .collect()
+}
+
+/// The valid placeholder references of an envelope text, in all three
+/// forms: required `{{name}}`, optional `{{?name}}`, and null
+/// `{{??name}}`.
+#[must_use]
+pub fn envelope_placeholders(text: &str) -> Vec<(String, SlotForm)> {
+    scan_placeholders(text, true)
+}
+
+fn scan_placeholders(text: &str, allow_null: bool) -> Vec<(String, SlotForm)> {
     let mut found = Vec::new();
     let bytes = text.as_bytes();
     let mut index = 0;
     while index + 1 < bytes.len() {
         if bytes[index] == b'{' && bytes[index + 1] == b'{' {
             if let Some(close) = text[index..].find("}}") {
-                let inner = &text[index + 2..index + close];
-                let (name, optional) = match inner.strip_prefix('?') {
-                    Some(stripped) => (stripped, true),
-                    None => (inner, false),
-                };
+                let (name, form) = split_slot_form(&text[index + 2..index + close], allow_null);
                 if is_placeholder_name(name) {
-                    found.push((name.to_string(), optional));
+                    found.push((name.to_string(), form));
                     index += close + 2;
                     continue;
                 }
@@ -139,17 +151,40 @@ pub fn placeholders(text: &str) -> Vec<(String, bool)> {
     found
 }
 
-/// Whether an envelope or template text carries a `{{` that opens neither a
+/// Splits a placeholder's inner text into its name and form.
+pub(crate) fn split_slot_form(inner: &str, allow_null: bool) -> (&str, SlotForm) {
+    if allow_null {
+        if let Some(name) = inner.strip_prefix("??") {
+            return (name, SlotForm::Null);
+        }
+    }
+    match inner.strip_prefix('?') {
+        Some(name) => (name, SlotForm::Optional),
+        None => (inner, SlotForm::Required),
+    }
+}
+
+/// Whether a route or template text carries a `{{` that opens neither a
 /// valid required nor a valid optional placeholder.
 #[must_use]
 pub fn has_malformed_placeholder(text: &str) -> bool {
+    has_malformed(text, false)
+}
+
+/// Whether an envelope text carries a `{{` that opens none of the three
+/// valid placeholder forms.
+#[must_use]
+pub fn has_malformed_envelope_placeholder(text: &str) -> bool {
+    has_malformed(text, true)
+}
+
+fn has_malformed(text: &str, allow_null: bool) -> bool {
     let bytes = text.as_bytes();
     let mut index = 0;
     while index + 1 < bytes.len() {
         if bytes[index] == b'{' && bytes[index + 1] == b'{' {
             if let Some(close) = text[index..].find("}}") {
-                let inner = &text[index + 2..index + close];
-                let name = inner.strip_prefix('?').unwrap_or(inner);
+                let (name, _) = split_slot_form(&text[index + 2..index + close], allow_null);
                 if is_placeholder_name(name) {
                     index += close + 2;
                     continue;
@@ -836,15 +871,15 @@ fn request_envelope_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Di
 
 fn envelope_checks(path: &str, envelope: &EnvelopeTemplate) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    if has_malformed_placeholder(envelope.text()) {
+    if has_malformed_envelope_placeholder(envelope.text()) {
         findings.push(finding(
             CheckCode::EnvelopeInvalidPlaceholder,
             path,
             "the envelope carries a malformed placeholder",
-            "Write placeholders as {{name}} or {{?name}}.",
+            "Write placeholders as {{name}}, {{?name}}, or {{??name}}.",
         ));
     }
-    for (name, _) in placeholders(envelope.text()) {
+    for (name, _) in envelope_placeholders(envelope.text()) {
         if !crate::profile::ENVELOPE_SLOTS.contains(&name.as_str()) {
             findings.push(finding(
                 CheckCode::ProfileUnknownSlot,
@@ -4908,6 +4943,20 @@ mod tests {
             ]
         );
         assert!(has_malformed_placeholder("before {{oops"));
+        assert!(has_malformed_envelope_placeholder("{{???x}}"));
+        assert!(!has_malformed_envelope_placeholder("{{??x}}"));
+        assert!(
+            has_malformed_placeholder("{{??x}}"),
+            "the null form is an envelope form only"
+        );
+        assert_eq!(
+            envelope_placeholders("{{a}} {{?b}} {{??c}}"),
+            vec![
+                ("a".to_string(), SlotForm::Required),
+                ("b".to_string(), SlotForm::Optional),
+                ("c".to_string(), SlotForm::Null)
+            ]
+        );
         assert!(!has_malformed_placeholder("plain text"));
     }
 

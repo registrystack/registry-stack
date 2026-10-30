@@ -9,7 +9,9 @@
 //! `boolean`, and `null`.
 
 use crate::diagnostics::{finding, CheckCode};
-use crate::envelope::{decode_slot, parse_envelope_template, ENVELOPE_GRAMMAR_RULE, SLOT_MARK};
+use crate::envelope::{
+    decode_slot, parse_envelope_template, SlotForm, ENVELOPE_GRAMMAR_RULE, SLOT_MARK,
+};
 use crate::profile::{AdapterProfile, ParameterizedPart};
 use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
@@ -190,7 +192,10 @@ fn derive_value(
                 }
                 let text = value.as_str();
                 let (schema, optional) = match text.and_then(decode_slot) {
-                    Some(slot) => (slot_schema(slot.0, binding, project)?, slot.1),
+                    Some((name, form)) => (
+                        form_schema(slot_schema(name, binding, project)?, form),
+                        form == SlotForm::Optional,
+                    ),
                     None => (derive_value(value, binding, project, parts)?, false),
                 };
                 properties.insert(key.clone(), schema);
@@ -215,6 +220,15 @@ fn derive_value(
         Value::Array(items) => {
             let mut items_schema: Option<Value> = None;
             for item in items {
+                if matches!(
+                    item.as_str().and_then(decode_slot),
+                    Some((_, SlotForm::Optional | SlotForm::Null))
+                ) {
+                    return Err(
+                        "an optional or null slot fills an object member, never an array item"
+                            .to_string(),
+                    );
+                }
                 let schema = derive_value(item, binding, project, parts)?;
                 match &items_schema {
                     Some(previous) if previous != &schema => {
@@ -249,12 +263,23 @@ fn derive_member(
     parts: &[ParameterizedPart],
 ) -> Result<(Value, bool), String> {
     match decode_slot(text) {
-        Some((name, optional)) => Ok((slot_schema(name, binding, project)?, optional)),
+        Some((name, form)) => Ok((
+            form_schema(slot_schema(name, binding, project)?, form),
+            form == SlotForm::Optional,
+        )),
         None if text.contains(SLOT_MARK) => Err(ENVELOPE_GRAMMAR_RULE.to_string()),
         None if parts.iter().any(|part| part.name.as_str() == text) => {
             Ok((json!({"type": "string"}), false))
         }
         None => Ok((json!({"type": "string", "const": text}), false)),
+    }
+}
+
+/// A null slot is present and may be `null`: its schema admits either.
+fn form_schema(schema: Value, form: SlotForm) -> Value {
+    match form {
+        SlotForm::Null => json!({"anyOf": [schema, {"type": "null"}]}),
+        SlotForm::Required | SlotForm::Optional => schema,
     }
 }
 
@@ -341,6 +366,17 @@ pub fn validate_result_schema(value: &Value, schema: &Value) -> Vec<String> {
 }
 
 fn validate_at(value: &Value, schema: &Value, pointer: &str, violations: &mut Vec<String>) {
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        let admitted = branches.iter().any(|branch| {
+            let mut branch_violations = Vec::new();
+            validate_at(value, branch, pointer, &mut branch_violations);
+            branch_violations.is_empty()
+        });
+        if !admitted {
+            violations.push(pointer.to_string());
+        }
+        return;
+    }
     if let Some(fixed) = schema.get("const") {
         if value != fixed {
             violations.push(pointer.to_string());
@@ -731,6 +767,34 @@ mod tests {
             validate_result_schema(&other, &schema),
             vec!["/resourceType"]
         );
+    }
+
+    /// A null slot is a required member that admits `null`: the derived
+    /// schema accepts a string or `null`, refuses a missing member, and
+    /// refuses a null slot standing as an array item.
+    #[test]
+    fn a_null_slot_derives_as_a_required_nullable_member() {
+        let nullable = profile(r#"{"items": {{records}}, "next": {{??nextCursor}}}"#);
+        let schema = derive_operation_result_schema(&nullable, &project(true), "cases-find")
+            .expect("derive");
+        let required = schema["required"].as_array().expect("required");
+        assert!(required.iter().any(|name| name == "next"));
+        for body in [
+            json!({"items": [], "next": null}),
+            json!({"items": [], "next": "abc"}),
+        ] {
+            assert!(validate_result_schema(&body, &schema).is_empty(), "{body}");
+        }
+        assert_eq!(
+            validate_result_schema(&json!({"items": [], "next": 3}), &schema),
+            vec!["/next"]
+        );
+        assert_eq!(
+            validate_result_schema(&json!({"items": []}), &schema),
+            vec!["/next"]
+        );
+        let in_array = profile(r#"{"items": ["{{??nextCursor}}"]}"#);
+        assert!(derive_operation_result_schema(&in_array, &project(true), "cases-find").is_err());
     }
 
     /// A placeholder inside a longer string never binds: the derivation

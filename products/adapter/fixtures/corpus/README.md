@@ -11,13 +11,15 @@ file is its manifest.
 - `base/` is the clean control: profile, pack, and project that pass with
   zero findings. Any change here is a regression in the checks or reader.
 - `bad/<code>/` is one member per code. The directory name IS the expected
-  code, except the five suffixed members: the reader-level members
+  code, except the six suffixed members: the reader-level members
   `config.unknown-key-predicate` and `config.unknown-key-redelivery` both
   expect `config.unknown-key`, and `config.missing-key-project`,
   `config.invalid-value-token-endpoint`, and
   `adapter.runtime.insecure-origin-token-endpoint` expect the code their
   name starts with (the last one because the plain code's directory is
-  taken by the binding-origin member).
+  taken by the binding-origin member), and
+  `adapter.profile.response-envelope-uncompilable-null-slot-in-array`
+  (the plain code's directory holds the array-shapes member).
 - Each member carries `profile.yaml`, `pack.yaml`, and `project.yaml`
   (plus `scripts/`, `queries/`, or `fixtures/` where the defect needs
   them, and `runtime.yaml` where the expected code is a runtime or auth
@@ -66,7 +68,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 101 members.
+finding per code. The corpus holds 102 members.
 
 ### Profile members
 
@@ -81,6 +83,7 @@ finding per code. The corpus holds 101 members.
 | `adapter.profile.unresolved-path-parameter` | Facade path carries `{case_id}`, which the operation's `pathParameters` do not declare | `adapter.profile.unresolved-path-parameter` | checks |
 | `adapter.profile.problem-envelope-uncompilable` | Problem envelope carries a `{{record}}` slot, which the problem-envelope derivation refuses | `adapter.profile.problem-envelope-uncompilable` | checks |
 | `adapter.profile.response-envelope-uncompilable` | Response envelope is an array whose members derive different shapes | `adapter.profile.response-envelope-uncompilable` | checks |
+| `adapter.profile.response-envelope-uncompilable-null-slot-in-array` | Response envelope places a `{{??nextCursor}}` null slot as an array item | `adapter.profile.response-envelope-uncompilable` | checks |
 
 ### Pack members
 

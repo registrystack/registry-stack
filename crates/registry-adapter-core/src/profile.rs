@@ -53,10 +53,10 @@ impl EnvelopeTemplate {
     }
 
     /// Whether the template mentions a slot, in required (`{{slot}}`) or
-    /// optional (`{{?slot}}`) form.
+    /// optional (`{{?slot}}`), or null (`{{??slot}}`) form.
     #[must_use]
     pub fn mentions(&self, slot: &str) -> bool {
-        crate::checks::placeholders(self.text())
+        crate::checks::envelope_placeholders(self.text())
             .into_iter()
             .any(|(name, _)| name == slot)
     }
