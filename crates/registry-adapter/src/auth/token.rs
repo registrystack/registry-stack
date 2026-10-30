@@ -2194,6 +2194,160 @@ mod tests {
         assert_eq!(send.token_request_count(), 1);
     }
 
+    /// A send that panics cannot wedge the endpoint: the panic unwinds
+    /// through the acquisition, the cache lock releases with the guard,
+    /// the lock does not poison, and the next acquisition sends fresh.
+    #[tokio::test]
+    async fn a_panicking_send_releases_the_cache_lock() {
+        struct Panics;
+        impl TokenSend for Panics {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async { panic!("the send exploded mid-flight") })
+            }
+        }
+        std::env::set_var("ADAPTER_TEST_PANIC_ID", "cid-panic");
+        std::env::set_var("ADAPTER_TEST_PANIC_SECRET", "csecret-panic");
+        let plan = client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+            "ADAPTER_TEST_PANIC_ID",
+            "ADAPTER_TEST_PANIC_SECRET",
+        );
+        let spawned = tokio::spawn({
+            let plan = plan.clone();
+            async move {
+                let mut events = Vec::new();
+                let _ = acquire_token(
+                    &plan,
+                    &mut TokenBudget::new_exchange(),
+                    &resolver(),
+                    &Panics,
+                    &FixedSigner,
+                    &mut events,
+                )
+                .await;
+            }
+        });
+        assert!(
+            matches!(spawned.await, Err(error) if error.is_panic()),
+            "the send's panic surfaces instead of being swallowed"
+        );
+        // The lock is free and unpoisoned: the next acquisition takes
+        // the cache, sends, and answers normally.
+        let send = ScriptedSend::always(
+            200,
+            Some("application/json"),
+            r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
+        );
+        let mut events = Vec::new();
+        let (token, _) = acquire_token(
+            &plan,
+            &mut TokenBudget::new_exchange(),
+            &resolver(),
+            &send,
+            &FixedSigner,
+            &mut events,
+        )
+        .await
+        .expect("the next acquisition takes the freed lock");
+        assert_eq!(token.as_bytes(), b"at");
+        assert_eq!(send.token_request_count(), 1);
+    }
+
+    /// An acquisition dropped mid-send releases the cache lock and keeps
+    /// the charge: the send that entered was charged one send, the
+    /// aborted waiter leaves no wedge behind, and the next acquisition
+    /// takes the lock and spends the remaining allowance.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_dropped_acquisition_releases_the_lock_and_keeps_the_charge() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct EntersThenStalls {
+            entered: Arc<AtomicBool>,
+        }
+        impl TokenSend for EntersThenStalls {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    self.entered.store(true, Ordering::SeqCst);
+                    std::future::pending().await
+                })
+            }
+        }
+        std::env::set_var("ADAPTER_TEST_DROP_ID", "cid-drop");
+        std::env::set_var("ADAPTER_TEST_DROP_SECRET", "csecret-drop");
+        let plan = client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+            "ADAPTER_TEST_DROP_ID",
+            "ADAPTER_TEST_DROP_SECRET",
+        );
+        let entered = Arc::new(AtomicBool::new(false));
+        let budget = Arc::new(tokio::sync::Mutex::new(TokenBudget::new_exchange()));
+        let spawned = tokio::spawn({
+            let plan = plan.clone();
+            let budget = Arc::clone(&budget);
+            let entered = Arc::clone(&entered);
+            async move {
+                let mut budget = budget.lock().await;
+                let mut events = Vec::new();
+                let _ = acquire_token(
+                    &plan,
+                    &mut budget,
+                    &resolver(),
+                    &EntersThenStalls { entered },
+                    &FixedSigner,
+                    &mut events,
+                )
+                .await;
+            }
+        });
+        while !entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        spawned.abort();
+        let _ = spawned.await;
+        assert_eq!(
+            budget.lock().await.remaining(plan.endpoint()),
+            TOKEN_SENDS_PER_EXCHANGE - 1,
+            "the send that entered was charged, the drop changed nothing else"
+        );
+        // The lock is free: the next acquisition sends and spends the
+        // last allowance.
+        let send = ScriptedSend::always(
+            200,
+            Some("application/json"),
+            r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
+        );
+        let mut budget = budget.lock().await;
+        let mut events = Vec::new();
+        let (token, _) = acquire_token(
+            &plan,
+            &mut budget,
+            &resolver(),
+            &send,
+            &FixedSigner,
+            &mut events,
+        )
+        .await
+        .expect("the next acquisition takes the freed lock");
+        assert_eq!(token.as_bytes(), b"at");
+        assert_eq!(send.token_request_count(), 1);
+        assert_eq!(
+            budget.remaining(plan.endpoint()),
+            0,
+            "the follow-up spent the last allowance"
+        );
+    }
+
     /// The private-key-jwt request carries the assertion in the form
     /// body, with the client id beside it, the fixed assertion type, and
     /// no Basic header; the key's text travels only inside the
