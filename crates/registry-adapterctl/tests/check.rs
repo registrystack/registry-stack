@@ -1114,3 +1114,101 @@ fn an_expression_in_an_authored_file_is_refused_where_it_is_written() {
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert_eq!(report["profile"], "updated");
 }
+
+// ------------------------------------------------------------------------
+// GraphQL query files: the pinned file parses and the endpoint's
+// operation is one it declares.
+
+/// The valid pinned query the graphql tests use, and its sha256 digest.
+const CASES_QUERY: &str =
+    "query casesByType($type: String!) {\n  cases(type: $type) {\n    id\n  }\n}\n";
+const CASES_QUERY_DIGEST: &str =
+    "sha256:47c99d9134c4cd899c5e62082c182d1e396ecde75885af5c1907887c638ce24a";
+
+/// A query document no parser accepts, and its sha256 digest.
+const BROKEN_QUERY: &str = "query casesByType($type: String!) {\n  cases(type: $type)\n";
+const BROKEN_QUERY_DIGEST: &str =
+    "sha256:107613ff0621aaf624701eca66619eb1cc81c3ba9cc97b3cc7e08e382aa337d2";
+
+/// A copy of the minimal fixture turned into a graphql pack: the pinned
+/// query file, a graphql endpoint naming `operation_name`, and the
+/// graphql capability, repinned so the project's pack digest matches the
+/// edited pack.
+fn graphql_project(query: &str, digest: &str, operation_name: &str) -> (tempfile::TempDir, String) {
+    let root = tempfile::tempdir().unwrap();
+    let copy = root.path().join("minimal");
+    copy_fs(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal"),
+        &copy,
+    );
+    let query_file = copy.join("queries/cases-by-type.graphql");
+    std::fs::create_dir_all(query_file.parent().unwrap()).unwrap();
+    std::fs::write(&query_file, query).unwrap();
+    edit(
+        &copy.join("pack.yaml"),
+        "queryFiles: []",
+        &format!("queryFiles:\n  - path: queries/cases-by-type.graphql\n    digest: {digest}"),
+    );
+    edit(
+        &copy.join("pack.yaml"),
+        "      - id: cases-read\n        idempotentUpstream: true\n",
+        &format!(
+            "      - id: cases-read\n        idempotentUpstream: true\n  - id: case-graphql\n    component: graphql\n    authentication:\n      type: none\n    operationName: {operation_name}\n    queryFile: queries/cases-by-type.graphql\n    operations:\n      - id: cases-by-type\n        idempotentUpstream: true\n        graphql: query\n"
+        ),
+    );
+    edit(
+        &copy.join("pack.yaml"),
+        "    - http\n",
+        "    - http\n    - graphql\n",
+    );
+    let directory = directory_of(copy.join("project.yaml").to_str().unwrap());
+    let (exit, report, stderr) = lock_directory(&directory);
+    assert_eq!(
+        exit,
+        ExitCode::SUCCESS,
+        "the edited pack must repin: {report} {}",
+        String::from_utf8_lossy(&stderr)
+    );
+    (root, copy.join("project.yaml").to_str().unwrap().to_owned())
+}
+
+/// A graphql pack whose pinned query parses and whose endpoint names an
+/// operation the file declares checks green, one file more than the
+/// minimal fixture.
+#[test]
+fn a_graphql_pack_whose_operation_is_declared_checks_green() {
+    let (_root, project) = graphql_project(CASES_QUERY, CASES_QUERY_DIGEST, "casesByType");
+    let (exit, report, stderr) = run_json(&["check", &project]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["filesChecked"], 6, "{report}");
+    assert_eq!(report["diagnostics"], json!([]));
+}
+
+/// A pinned query file no GraphQL parser accepts refuses at its
+/// inventory entry.
+#[test]
+fn a_query_file_that_does_not_parse_refuses_with_the_query_code() {
+    let (_root, project) = graphql_project(BROKEN_QUERY, BROKEN_QUERY_DIGEST, "casesByType");
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.pack.graphql-query-invalid");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.pack.graphql-query-invalid"),
+        "/queryFiles/0",
+        "{report}"
+    );
+}
+
+/// An endpoint naming an operation the pinned query file does not
+/// declare refuses at the endpoint's operationName member.
+#[test]
+fn an_operation_the_query_file_does_not_declare_refuses_with_the_operation_code() {
+    let (_root, project) = graphql_project(CASES_QUERY, CASES_QUERY_DIGEST, "missingOperation");
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.pack.graphql-operation-unknown");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.pack.graphql-operation-unknown"),
+        "/endpoints/1/operationName",
+        "{report}"
+    );
+}

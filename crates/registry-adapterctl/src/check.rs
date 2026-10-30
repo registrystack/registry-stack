@@ -238,6 +238,8 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
 
     let pinned = verify_digest_pins(&pack, &pack_path, &mut report, &mut files)?;
     verify_entrypoints(&pack, &pack_path, &pinned, &mut report);
+    verify_query_files(&pack, &pack_path, &pinned, &mut report);
+    verify_graphql_operations(&pack, &pack_path, &pinned, &mut report);
     verify_project_pins(
         &project,
         &profile,
@@ -576,6 +578,129 @@ fn verify_entrypoints(
             }
         }
     }
+}
+
+/// Parse every query-file inventory entry the pack pins (CFG-ID-6). A
+/// file no GraphQL parser accepts refuses at its inventory entry; the
+/// parser's own message quotes the document, so the finding carries only
+/// a fixed description and the file's location (CFG-SEC-3). A file the
+/// digest pins refused is already reported there and parses nowhere.
+fn verify_query_files(
+    pack: &registry_adapter_core::AdapterPack,
+    pack_path: &Path,
+    pinned: &BTreeMap<PathBuf, Vec<u8>>,
+    report: &mut Report,
+) {
+    let directory = pack_path.parent();
+    let resolve = |file: &str| match directory {
+        Some(directory) => directory.join(file),
+        None => PathBuf::from(file),
+    };
+    for (index, file) in pack.query_files.iter().enumerate() {
+        let parses = pinned
+            .get(&resolve(&file.path))
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|source| graphql_parser::parse_query::<&str>(source).ok())
+            .is_some();
+        if parses {
+            continue;
+        }
+        let mut diagnostic = finding(
+            CheckCode::PackGraphQlQueryInvalid,
+            &format!("/queryFiles/{index}"),
+            "the pinned query file does not parse as a GraphQL document",
+            "Repair the query file beside the pack so it parses as a GraphQL document, or update its digest pin.",
+        );
+        diagnostic.source = Some(registry_platform_yaml::Source {
+            file: format!("{} ({})", pack_path.display(), file.path),
+            line: None,
+            column: None,
+        });
+        report.push(diagnostic);
+    }
+}
+
+/// Verify every graphql endpoint's named operation against the operations
+/// its pinned query file declares (CFG-ID-6). Each file parses once; a
+/// file that does not parse is already refused at its inventory entry.
+/// The kind the endpoint operation declares against the file stays with
+/// the core model checks; this command owns the file's own text.
+fn verify_graphql_operations(
+    pack: &registry_adapter_core::AdapterPack,
+    pack_path: &Path,
+    pinned: &BTreeMap<PathBuf, Vec<u8>>,
+    report: &mut Report,
+) {
+    let directory = pack_path.parent();
+    let resolve = |file: &str| match directory {
+        Some(directory) => directory.join(file),
+        None => PathBuf::from(file),
+    };
+    let mut declared: BTreeMap<&str, Option<Vec<&str>>> = BTreeMap::new();
+    for file in pack.query_files.iter().map(|file| file.path.as_str()) {
+        if declared.contains_key(file) {
+            continue;
+        }
+        let names = pinned
+            .get(&resolve(file))
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|source| graphql_parser::parse_query::<&str>(source).ok())
+            .map(document_operations);
+        declared.insert(file, names);
+    }
+    for (index, endpoint) in pack.endpoints.iter().enumerate() {
+        if endpoint.component != registry_adapter_core::ComponentKind::GraphQl {
+            continue;
+        }
+        let (Some(operation_name), Some(query_file)) =
+            (&endpoint.operation_name, &endpoint.query_file)
+        else {
+            continue;
+        };
+        let Some(Some(names)) = declared.get(query_file.as_str()) else {
+            continue;
+        };
+        if names.contains(&operation_name.as_str()) {
+            continue;
+        }
+        let mut diagnostic = finding(
+            CheckCode::PackGraphQlOperationUnknown,
+            &format!("/endpoints/{index}/operationName"),
+            "the endpoint names an operation its query file does not declare",
+            "Name an operation the endpoint's query file declares, or declare the operation in the file.",
+        );
+        diagnostic.source = Some(registry_platform_yaml::Source {
+            file: pack_path.display().to_string(),
+            line: None,
+            column: None,
+        });
+        report.push(diagnostic);
+    }
+}
+
+/// The names of the named operations a parsed query document declares.
+/// Anonymous selection sets and fragment definitions name no operation
+/// and match nothing.
+fn document_operations<'a>(document: graphql_parser::query::Document<'a, &'a str>) -> Vec<&'a str> {
+    let mut names = Vec::new();
+    for definition in &document.definitions {
+        match definition {
+            graphql_parser::query::Definition::Operation(
+                graphql_parser::query::OperationDefinition::Query(operation),
+            ) => names.extend(operation.name),
+            graphql_parser::query::Definition::Operation(
+                graphql_parser::query::OperationDefinition::Mutation(operation),
+            ) => names.extend(operation.name),
+            graphql_parser::query::Definition::Operation(
+                graphql_parser::query::OperationDefinition::Subscription(operation),
+            ) => names.extend(operation.name),
+            graphql_parser::query::Definition::Operation(
+                graphql_parser::query::OperationDefinition::SelectionSet(_),
+            )
+            | graphql_parser::query::Definition::Fragment(_) => {}
+        }
+    }
+    names
 }
 
 /// The compile finding for one script site. The message names the rule,

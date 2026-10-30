@@ -213,6 +213,9 @@ fs2 = { version = "0.4" }
 futures = { version = "0.3" }
 futures-core = { version = "0.3" }
 getrandom = { version = "0.4" }
+# Adapter pack graphql endpoints. Default features pull the GraphQL
+# introspection query schema; the pack checks parse authored documents only.
+graphql-parser = { version = "0.4", default-features = false }
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
