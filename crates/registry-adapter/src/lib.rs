@@ -23,13 +23,15 @@
 //! hold the exchange and route models, `processor` one submodule per
 //! EIP with the aggregation strategies, `component` the `direct`,
 //! `http`, and `rest` components, `language` the expression languages,
-//! `errorhandler` the error classes and handlers, `notifier` the
+//! `errorhandler` the error classes and handlers, `journal` the
+//! journal's PostgreSQL store and migration, `notifier` the
 //! journal, and `idempotent` the idempotency store.
 
 pub mod component;
 pub mod errorhandler;
 pub mod exchange;
 pub mod idempotent;
+pub mod journal;
 pub mod language;
 pub mod notifier;
 pub mod processor;
