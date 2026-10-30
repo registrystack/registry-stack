@@ -3847,9 +3847,14 @@ pub enum DestinationResponseError {
 /// Marker-typed bounded response bytes.
 ///
 /// Production code cannot inspect these bytes through this transport
-/// foundation. The reviewed strict data decoder and credential-token parser
-/// must be concrete platform-owned consumers rather than caller-supplied
-/// callbacks that can copy the raw body out of its zeroizing owner.
+/// foundation. There is no borrowing accessor: a caller-supplied callback
+/// could copy the raw body out of its zeroizing owner. The data slot stays
+/// opaque behind the reviewed strict data decoder. The event and credential
+/// slots are the two whose bodies are declared parts of their protocols, and
+/// each moves its whole buffer out in zeroizing storage
+/// ([`BoundedDestinationBody::to_event_answer`],
+/// [`BoundedDestinationBody::into_credential_bytes`]), never as an inspectable
+/// borrow.
 ///
 /// ```compile_fail
 /// use registry_platform_httputil::destination::DataDestinationBody;
@@ -3862,12 +3867,14 @@ pub enum DestinationResponseError {
 /// ```compile_fail
 /// use registry_platform_httputil::destination::CredentialDestinationBody;
 ///
-/// fn cannot_extract_credential_bytes(body: CredentialDestinationBody) -> Vec<u8> {
+/// fn cannot_copy_credential_bytes(body: CredentialDestinationBody) -> Vec<u8> {
 ///     body.inspect_credential(|bytes| bytes.to_vec())
 /// }
 /// ```
 pub struct BoundedDestinationBody<S: DestinationSlot> {
-    // Intentionally opaque until concrete platform-owned decoders land.
+    // Intentionally opaque: no borrowing accessor exists. Only the declared
+    // protocol slots move the whole zeroizing buffer out, and only for the
+    // platform-owned decodes their protocols name.
     #[cfg_attr(not(test), allow(dead_code))]
     bytes: Zeroizing<Vec<u8>>,
     slot: PhantomData<fn() -> S>,
@@ -3922,15 +3929,31 @@ impl<S: DestinationSlot> BoundedDestinationBody<S> {
 impl BoundedDestinationBody<EventDestination> {
     /// Take the bounded event-delivery response bytes.
     ///
-    /// The event slot is the one slot whose response body is a declared part
-    /// of the protocol: a hook handler reached over HTTP answers in its
-    /// response body, and the delivery worker reads that answer under the
-    /// handler output ceiling the caller already passed to `read_bounded`.
-    /// The data and credential slots stay opaque, so this is not a general
+    /// The event slot is one of the two slots whose response body is a
+    /// declared part of the protocol: a hook handler reached over HTTP
+    /// answers in its response body, and the delivery worker reads that
+    /// answer under the handler output ceiling the caller already passed to
+    /// `read_bounded`. The data slot stays opaque, so this is not a general
     /// response-body extraction API.
     #[must_use]
     pub fn to_event_answer(&self) -> Vec<u8> {
         self.bytes.to_vec()
+    }
+}
+
+impl BoundedDestinationBody<CredentialDestination> {
+    /// Take the bounded credential-exchange response bytes, moving the
+    /// zeroizing buffer whole.
+    ///
+    /// The credential slot is the other slot whose response body is a
+    /// declared part of the protocol: an OAuth 2.0 token answer the
+    /// consuming runtime decodes with the platform's own token parser. The
+    /// buffer moves, so no credential copy is made and the bytes stay in
+    /// zeroizing storage; there is no borrowing accessor, and the data slot
+    /// stays opaque, so this is not a general response-body extraction API.
+    #[must_use]
+    pub fn into_credential_bytes(self) -> Zeroizing<Vec<u8>> {
+        self.bytes
     }
 }
 
@@ -7568,6 +7591,19 @@ mod tests {
             DestinationResponseError::BodyTooLarge
         );
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// The credential slot's body moves out whole, in its zeroizing
+    /// buffer: the consuming runtime's token decode takes the bytes
+    /// without a copy, and the data slot has no such mover.
+    #[test]
+    fn the_credential_body_moves_out_whole_in_its_zeroizing_buffer() {
+        let body = BoundedDestinationBody::<CredentialDestination> {
+            bytes: Zeroizing::new(b"the-token-answer".to_vec()),
+            slot: PhantomData,
+        };
+        let bytes = body.into_credential_bytes();
+        assert_eq!(bytes.as_slice(), b"the-token-answer");
     }
 
     #[tokio::test]
