@@ -31,6 +31,7 @@ endpoints:
         entrypoint: find_variables
     operations:
       - id: cases-query
+        graphql: Query
     testedVersions:
       - "2024-01"
   - id: case-node
@@ -46,6 +47,7 @@ endpoints:
         entrypoint: get_variables
     operations:
       - id: cases-node
+        graphql: Query
     testedVersions:
       - "2024-01"
 routeTemplates:
@@ -102,6 +104,8 @@ routeTemplates:
             constant: "{{case_type}}"
       - to:
           uri: graphql:cases-query
+          parameters:
+            operation: cases-query
       - setProperty:
           name: nextCursor
           value:
@@ -157,6 +161,8 @@ routeTemplates:
             - stop: {}
       - to:
           uri: graphql:case-node
+          parameters:
+            operation: cases-node
       - choice:
           when:
             - rhai:

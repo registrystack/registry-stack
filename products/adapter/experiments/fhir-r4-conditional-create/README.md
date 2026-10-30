@@ -19,7 +19,7 @@ so that a retried create never makes a second Patient:
 - `412` maps to `source.write-rejected` (409); other `upstream.http` to the
   same code with a different title; malformed answers to
   `source.upstream-error` (502).
-- The created Patient is read back (`GET /Patient/{id}`) and mapped to the
+- The created Patient is read back (`GET /Patient/{{id}}`) and mapped to the
   record.
 
 ## What it proves

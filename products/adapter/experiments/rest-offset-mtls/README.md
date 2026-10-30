@@ -108,11 +108,16 @@ from a JSON:API household registry:
   does `tokenEndpoint: not a url at all` (probes `e4-token-http`,
   `e4-token-garbage`). The field is a `String`, not a `Url`, in
   `crates/registry-adapter-core/src/auth.rs`, so a client assertion can be
-  sent in the clear.
+  sent in the clear. (Landed 2026-10-30 as
+  `adapter.runtime.insecure-origin` on the token endpoint origin and
+  `config.invalid-value` at the reader for a value that is no URL.)
 - An unbound path placeholder passes: `path: /regions/{region}/households/{id}`
   with only `id` in `pathParameters` (probe `e4-unbound-placeholder`).
+  (Landed 2026-10-30 as `adapter.route.path-parameter-mismatch`: send paths
+  write `{{name}}` and both directions of the correspondence are checked.)
 - `okStatusCodeRange: 200-299,404` passes (probe `e4-status-range`); as in
-  experiment 1 the value is not validated at all.
+  experiment 1 the value is not validated at all. (Landed 2026-10-30 as
+  `adapter.route.invalid-status-code-range`, validated as Camel writes it.)
 - A problem body built outside a handled clause (in `onFallback`, in a
   `choice` branch) passes (probe `e4-fallback-problem`), though the runtime
   contract would validate it as a success body.

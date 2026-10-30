@@ -120,7 +120,11 @@ routeTemplates:
             file: scripts/to-households.rhai
             entrypoint: to_households
   - id: get-household
-    parameters: []
+    parameters:
+      - name: id
+        type: string
+        required: false
+        description: The household identifier the lookup resolves from the request.
     steps:
       - onException:
           exception:
@@ -180,7 +184,7 @@ routeTemplates:
                       uri: http:registry
                       parameters:
                         httpMethod: GET
-                        path: /households/{id}
+                        path: /households/{{id}}
                         pathParameters:
                           id:
                             header: recordId

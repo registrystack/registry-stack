@@ -49,6 +49,10 @@ routeTemplates:
         type: string
         required: true
         description: The identifier system URI the create is conditioned on.
+      - name: id
+        type: string
+        required: false
+        description: The patient identifier the read-back resolves from the request.
     steps:
       - onException:
           exception:
@@ -136,7 +140,7 @@ routeTemplates:
                 uri: http:fhir
                 parameters:
                   httpMethod: GET
-                  path: /Patient/{id}
+                  path: /Patient/{{id}}
                   pathParameters:
                     id:
                       exchangeProperty: fhirPatientId

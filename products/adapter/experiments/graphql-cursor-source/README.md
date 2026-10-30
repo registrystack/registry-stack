@@ -100,13 +100,19 @@ case system behind a static API key:
   Key"` pass (probe `e3-header-names`); the reserved list covers only
   `authorization`, `connection`, `content-length`, `expect`, `host`,
   `transfer-encoding`, and header-name syntax (RFC 9110 token) is not
-  checked.
+  checked. (Token syntax landed 2026-10-30 as
+  `adapter.pack.invalid-header-name` / `adapter.route.invalid-header-name`;
+  the reserved list has since grown too.)
 - **Problem codes unchecked.** A handled clause answering `source.not-found`
   (a breg-records code) or `totally.made-up` under `case-api` passes (probe
   `e3-foreign-problem-code`), though CONCEPT 8.7 requires "a code from the
   profile's problem code list".
 - **HTTP parameters on a graphql send.** `path`, `pathParameters`, and
   `query` on a `graphql:` `to` pass (probe `e3-graphql-http-parameters`).
+  (Landed 2026-10-30 as `adapter.route.graphql-send-members`; the pack now
+  declares `graphql: Query` on its endpoint operations and names the
+  operation on each send, which also makes the queries count as safe
+  upstream.)
 
 ## Check run
 

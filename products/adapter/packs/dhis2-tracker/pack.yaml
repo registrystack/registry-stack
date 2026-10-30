@@ -160,7 +160,11 @@ routeTemplates:
             file: scripts/shape-records.rhai
             entrypoint: shape_records
   - id: fetch-tracked-entity
-    parameters: []
+    parameters:
+      - name: id
+        type: string
+        required: false
+        description: The tracked-entity identifier the lookup resolves from the request.
     steps:
       - onException:
           exception:
@@ -224,7 +228,7 @@ routeTemplates:
           uri: http:tracker
           parameters:
             httpMethod: GET
-            path: /api/tracker/trackedEntities/{id}
+            path: /api/tracker/trackedEntities/{{id}}
             pathParameters:
               id:
                 header: recordId
