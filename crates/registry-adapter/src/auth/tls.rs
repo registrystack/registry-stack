@@ -4,14 +4,15 @@
 //! (`products/adapter/CONCEPT.md` section 10.2): the trust profile's
 //! CA bundle, read from the profile's process-local file, and the mTLS
 //! client identity, resolved from the binding's secret references into
-//! zeroizing buffers, and built once into platform destination material.
+//! zeroizing buffers, and parsed at load into the two platform
+//! materials the endpoint's policies install.
 //!
 //! TLS is orthogonal to the credential kinds: any kind may send under a
-//! private root, under a client identity, or both, and the one built
-//! material is installed on the endpoint's data policy and its token
-//! policy alike. Resolution runs at deployment load, and any failure
-//! refuses startup: the resolved PEM buffers are dropped here, so the
-//! material the engine holds is the only copy.
+//! private root, under a client identity, or both. Resolution runs at
+//! deployment load, and any failure refuses startup: the resolved PEM
+//! buffers are dropped here, so [`EndpointMaterials`] carries the only
+//! parsed copies, one for the data policy and one for the token policy,
+//! and neither policy re-parses or shares a value.
 
 use crate::auth::token::resolve_binary;
 use crate::auth::{AuthError, ProtectedText};
@@ -54,10 +55,23 @@ impl fmt::Display for TlsFault {
     }
 }
 
+/// The two platform TLS materials one resolved binding yields: the
+/// data destination's and the token destination's. The platform
+/// material is not `Clone` (it holds a private key), so resolution
+/// parses the PEM twice and each policy takes ownership exactly once.
+#[derive(Debug)]
+pub struct EndpointMaterials {
+    /// The endpoint's data destination policy installs this material.
+    pub data: Option<DestinationTlsMaterial>,
+    /// The endpoint's token destination policy installs this material.
+    pub token: Option<DestinationTlsMaterial>,
+}
+
 /// One endpoint's resolved outbound TLS material.
 #[derive(Debug, Default)]
 pub struct EndpointTls {
-    material: Option<DestinationTlsMaterial>,
+    data: Option<DestinationTlsMaterial>,
+    token: Option<DestinationTlsMaterial>,
 }
 
 impl EndpointTls {
@@ -65,15 +79,18 @@ impl EndpointTls {
     /// identity.
     #[must_use]
     pub const fn none() -> Self {
-        Self { material: None }
+        Self {
+            data: None,
+            token: None,
+        }
     }
 
     /// Resolve a binding's TLS material: the CA bundle of the trust
     /// profile the binding names, read from that profile's process-local
     /// file, and the client identity resolved from its secret references
     /// as the certificate chain followed by exactly one private key,
-    /// concatenated into one zeroizing buffer, then built into the one
-    /// platform material the endpoint's clients install.
+    /// concatenated into one zeroizing buffer, then parsed into the two
+    /// platform materials the endpoint's policies install.
     ///
     /// This runs at deployment load, never per exchange: a failure
     /// refuses startup with a value-free diagnostic that names the
@@ -101,36 +118,44 @@ impl EndpointTls {
             }
             None => None,
         };
-        let material = if ca.is_some() || identity.is_some() {
-            Some(
-                DestinationTlsMaterial::from_pem(
-                    ca.as_ref().map(|bundle| bundle.as_bytes()),
-                    identity.as_ref().map(|identity| identity.as_bytes()),
-                )
-                .map_err(|_| AuthError::Tls(TlsFault::Material))?,
+        let parse = || {
+            DestinationTlsMaterial::from_pem(
+                ca.as_ref().map(|bundle| bundle.as_bytes()),
+                identity.as_ref().map(|identity| identity.as_bytes()),
             )
+            .map_err(|_| AuthError::Tls(TlsFault::Material))
+        };
+        // The platform material owns a private key and is not Clone, so
+        // each policy gets its own parse of the same PEM, still once at
+        // load and never per exchange.
+        let materials = if ca.is_some() || identity.is_some() {
+            Some((parse()?, parse()?))
         } else {
             None
         };
-        // The resolved PEM buffers are dropped here; the built material
-        // the engine holds is the only copy.
+        // The resolved PEM buffers are dropped here; the materials the
+        // engine holds are the only parsed copies.
         drop(ca);
         drop(identity);
-        Ok(Self { material })
+        let (data, token) = materials.unzip();
+        Ok(Self { data, token })
     }
 
     /// Whether any trust material is configured.
     #[must_use]
     pub fn is_configured(&self) -> bool {
-        self.material.is_some()
+        self.data.is_some() || self.token.is_some()
     }
 
-    /// The platform TLS material this binding resolved, built once at
-    /// deployment load; the endpoint's data policy and token policy
-    /// install the same material.
+    /// Consume this resolved TLS into the two materials the endpoint's
+    /// data and token policies install, each exactly once. After this
+    /// call nothing remains to install and nothing is re-parsed.
     #[must_use]
-    pub fn material(&self) -> Option<&DestinationTlsMaterial> {
-        self.material.as_ref()
+    pub fn into_materials(self) -> EndpointMaterials {
+        EndpointMaterials {
+            data: self.data,
+            token: self.token,
+        }
     }
 }
 
@@ -178,6 +203,9 @@ fn resolve_ca_bundle(
 mod tests {
     use super::*;
     use registry_adapter_core::{MtlsIdentity, RuntimeCredential};
+    use registry_platform_httputil::destination::{
+        CredentialDestinationPolicy, DataDestinationPolicy, DestinationProfile,
+    };
     use registry_platform_yaml::{ExternalId, LocalId, SecretReference, Url};
 
     /// Throwaway self-signed fixtures generated for these tests only;
@@ -268,12 +296,16 @@ mod tests {
         let tls = EndpointTls::resolve(&binding(None, None), &runtime_config(None), &resolver())
             .expect("an unconfigured binding resolves");
         assert!(!tls.is_configured());
-        assert!(tls.material().is_none());
-        assert!(EndpointTls::none().material().is_none());
+        let materials = tls.into_materials();
+        assert!(materials.data.is_none());
+        assert!(materials.token.is_none());
+        let none = EndpointTls::none().into_materials();
+        assert!(none.data.is_none() && none.token.is_none());
     }
 
-    /// A declared trust profile's CA bundle file resolves and builds
-    /// platform material; the debug rendering never carries the PEM.
+    /// A declared trust profile's CA bundle file resolves and parses
+    /// into both platform materials; the debug rendering never carries
+    /// the PEM.
     #[test]
     fn a_declared_trust_profile_resolves_its_bundle_file() {
         let path = bundle_path("root");
@@ -283,14 +315,16 @@ mod tests {
             .expect("the bundle resolves");
         std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
-        assert!(tls.material().is_some(), "a bundle alone configures TLS");
         let rendered = format!("{tls:?}");
         assert!(!rendered.contains("BEGIN CERTIFICATE"), "{rendered}");
+        let materials = tls.into_materials();
+        assert!(materials.data.is_some(), "a bundle alone configures TLS");
+        assert!(materials.token.is_some());
     }
 
     /// The mTLS identity resolves as the certificate chain followed by
-    /// one private key, beside a trust profile's bundle, and builds
-    /// platform material.
+    /// one private key, beside a trust profile's bundle, and parses into
+    /// both materials.
     #[test]
     fn mtls_identities_resolve_and_build() {
         let path = bundle_path("mtls-root");
@@ -312,7 +346,59 @@ mod tests {
         .expect("the identity resolves");
         std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
-        assert!(tls.material().is_some());
+        let materials = tls.into_materials();
+        assert!(materials.data.is_some());
+        assert!(materials.token.is_some());
+    }
+
+    /// One resolved TLS installs on both the data policy and the token
+    /// policy of the same endpoint, from one resolve, each material
+    /// taken by value exactly once: CA-only and CA plus identity.
+    #[test]
+    fn one_resolve_installs_on_both_policies() {
+        let path = bundle_path("both-policies");
+        std::fs::write(&path, ROOT_CERTIFICATE_PEM).expect("write bundle");
+        let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
+        std::env::set_var("ADAPTER_TEST_CLIENT_CERT", CLIENT_CERTIFICATE_PEM);
+        std::env::set_var("ADAPTER_TEST_CLIENT_KEY", CLIENT_PRIVATE_KEY_PEM);
+        for with_identity in [false, true] {
+            let tls = EndpointTls::resolve(
+                &binding(
+                    Some(private_ca()),
+                    with_identity.then(|| {
+                        identity_refs("ADAPTER_TEST_CLIENT_CERT", "ADAPTER_TEST_CLIENT_KEY")
+                    }),
+                ),
+                &runtime,
+                &resolver(),
+            )
+            .expect("the binding resolves");
+            let materials = tls.into_materials();
+
+            let mut data = DataDestinationPolicy::new(
+                "case-api",
+                "https://cases.example.invalid",
+                DestinationProfile::ProductionHttps,
+                &[],
+            )
+            .expect("the data policy validates")
+            .require_configured_tls();
+            data.install_configured_tls(materials.data.expect("the data material resolved"))
+                .expect("the data policy installs its material");
+
+            let mut token = CredentialDestinationPolicy::new(
+                "case-api",
+                "https://token.example.invalid",
+                DestinationProfile::ProductionHttps,
+                &[],
+            )
+            .expect("the token policy validates")
+            .require_configured_tls();
+            token
+                .install_configured_tls(materials.token.expect("the token material resolved"))
+                .expect("the token policy installs its material");
+        }
+        std::fs::remove_file(&path).expect("remove bundle");
     }
 
     /// Resolved but unusable material refuses at deployment load,

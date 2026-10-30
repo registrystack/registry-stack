@@ -820,7 +820,7 @@ mod outbound_tls {
     }
 
     /// A binding without a trust profile resolves nothing; a declared
-    /// profile's bundle file resolves and builds platform material whose
+    /// profile's bundle file resolves into both materials whose
     /// rendering carries no PEM; an undeclared profile refuses
     /// value-free.
     #[test]
@@ -832,7 +832,9 @@ mod outbound_tls {
         )
         .expect("an unconfigured binding resolves");
         assert!(!plain.is_configured());
-        assert!(plain.material().is_none());
+        let plain_materials = plain.into_materials();
+        assert!(plain_materials.data.is_none());
+        assert!(plain_materials.token.is_none());
 
         let path = bundle_path("root");
         std::fs::write(&path, ROOT_CERTIFICATE_PEM).expect("write bundle");
@@ -843,11 +845,13 @@ mod outbound_tls {
             EndpointTls::resolve(&tls_binding, &runtime, &resolver()).expect("the bundle resolves");
         std::fs::remove_file(&path).expect("remove bundle");
         assert!(tls.is_configured());
-        assert!(tls.material().is_some());
         assert!(
             !format!("{tls:?}").contains("BEGIN CERTIFICATE"),
             "the rendering never carries the PEM"
         );
+        let materials = tls.into_materials();
+        assert!(materials.data.is_some());
+        assert!(materials.token.is_some());
 
         let fault =
             EndpointTls::resolve(&tls_binding, &runtime_config(None), &resolver()).unwrap_err();

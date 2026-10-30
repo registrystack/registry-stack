@@ -40,7 +40,7 @@ mod token;
 
 pub use material::{AuthHeader, ProtectedText};
 pub use plan::{AuthKind, AuthPlan, AuthPlanFault, AuthorizeContext, StaticCredential};
-pub use tls::{EndpointTls, TlsFault};
+pub use tls::{EndpointMaterials, EndpointTls, TlsFault};
 pub use token::{
     ClientAssertion, ClientAssertionSigner, TokenBudget, TokenCache, TokenEndpointPlan, TokenFault,
     TokenRequest, TokenSend, TokenWire, TransportFailure, UpstreamStatusAction,
