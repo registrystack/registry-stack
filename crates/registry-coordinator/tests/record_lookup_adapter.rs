@@ -151,7 +151,8 @@ fn observed_between(
 
 #[tokio::test]
 async fn a_lookup_that_finds_one_record_returns_it_with_provenance() {
-    let before = chrono::Utc::now();
+    // observedAt is written to the second, so the lower bound is too.
+    let before = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 0);
     let (outcome, received) = run(
         |_| {
             Mock::given(method("POST"))
@@ -327,7 +328,8 @@ async fn a_malformed_lookup_input_is_refused_before_any_request() {
 
 #[tokio::test]
 async fn read_record_v2_returns_the_record_with_provenance_and_the_etag() {
-    let before = chrono::Utc::now();
+    // observedAt is written to the second, so the lower bound is too.
+    let before = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 0);
     let (outcome, received) = run(
         read_mock(found(true)),
         request(

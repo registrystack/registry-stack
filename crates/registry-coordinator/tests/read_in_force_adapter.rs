@@ -103,7 +103,8 @@ fn refusal_code(outcome: &CallOutcome) -> String {
 
 #[tokio::test]
 async fn one_row_in_force_is_the_step_output() {
-    let before = chrono::Utc::now();
+    // observedAt is written to the second, so the lower bound is too.
+    let before = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 0);
     let (outcome, count) = run(
         collection(vec![row(ASSIGNMENT, "3")]),
         command(district(), "2026-06-05"),
