@@ -15,10 +15,10 @@ id: dhis2-tracker-search-page
 pack: dhis2-tracker
 upstreamVersion: "2.41"
 provenance:
-  kind: documented
+  type: documented
   reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/tracker.html
 intercepts:
-  - kind: endpoint
+  - type: endpoint
     endpoint: tracker
 entries:
   - operation: records.search

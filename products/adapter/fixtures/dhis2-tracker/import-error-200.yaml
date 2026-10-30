@@ -12,10 +12,10 @@ id: dhis2-tracker-import-error-200
 pack: dhis2-tracker
 upstreamVersion: "2.41"
 provenance:
-  kind: documented
+  type: documented
   reference: https://community.dhis2.org/t/unexpected-409-exception-null-with-api-tracker/56033
 intercepts:
-  - kind: endpoint
+  - type: endpoint
     endpoint: tracker
 entries:
   - operation: records.create
