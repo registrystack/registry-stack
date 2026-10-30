@@ -37,7 +37,6 @@ entries:
     expectedFacadeResponse:
       status: 404
       body:
-        type: https://id.registrystack.org/problems/registry-adapter/source.not-found
         title: No record with that identifier exists at the source.
         status: 404
         code: source.not-found

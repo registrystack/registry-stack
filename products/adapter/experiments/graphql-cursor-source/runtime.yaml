@@ -18,6 +18,8 @@ endpoints:
     credential:
       type: static-api-key
       valueRef: secret:env/CASES_API_KEY
+allowedPrivateCidrs:
+  - 10.0.0.0/8
 listener:
   bind: 127.0.0.1:8080
 database:

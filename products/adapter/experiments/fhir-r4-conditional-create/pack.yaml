@@ -61,7 +61,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
                   title: The source did not answer in time.
                   status: 503
                   code: source.unavailable
@@ -81,7 +80,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
                   title: More than one source record matches the identifier.
                   status: 409
                   code: source.write-rejected
@@ -97,7 +95,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
                   title: The source refused the write.
                   status: 409
                   code: source.write-rejected
@@ -116,7 +113,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
                   title: The source answered something unusable.
                   status: 502
                   code: source.upstream-error

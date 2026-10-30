@@ -13,7 +13,9 @@
 #     --runtime products/adapter/experiments/second-target-profile/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
-id: fhir-facade-households-experiment
+project:
+  id: fhir-facade-households-experiment
+  version: "1.0.0"
 profile:
   id: fhir-facade
   version: "1"
@@ -21,7 +23,7 @@ profile:
 pack:
   id: jsonapi-households
   version: "1"
-  digest: sha256:40f954e18bc6b301a8aaeb4fdad496457ccb2ccb027f7aaa76e04d2050ec9533
+  digest: sha256:0ed111e612284e8043cb2fa71162fc452cf1bc19ef23e157bf21c7f3180c4ccd
 recordTypes:
   - name: household
     fields:

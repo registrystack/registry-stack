@@ -13,15 +13,17 @@
 #     --runtime products/adapter/experiments/fhir-r4-conditional-create/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
-id: fhir-r4-conditional-create-experiment
+project:
+  id: fhir-r4-conditional-create-experiment
+  version: "1.0.0"
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:a4608387ad998d535bcd593b2b147d74cc25dc0167ef2a12a2171c228488fee6
+  digest: sha256:9d4cbff5a5427e8a3947b4354ad8bf45d8d48789bc1e66505de76bd938aec7a9
 pack:
   id: fhir-r4-conditional-create
   version: "1"
-  digest: sha256:9d308a8845d0712baac83ddf1fe3f26872bd99e81e08f8ee4e60a738c8819831
+  digest: sha256:c1d4999238fd5067352681e39e3e6c9a4f8107ccb372c21bdf1a2bf8dcf1b7b5
 recordTypes:
   - name: patient
     fields:

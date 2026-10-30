@@ -51,7 +51,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
                   title: The registry refused the request.
                   status: 502
                   code: source.upstream-error
@@ -69,7 +68,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
                   title: The registry answered something unusable.
                   status: 502
                   code: source.upstream-error
@@ -85,7 +83,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
                   title: The registry is unavailable.
                   status: 503
                   code: source.unavailable
@@ -101,7 +98,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
                   title: The search matches more households than this deployment serves at once.
                   status: 502
                   code: source.upstream-error
@@ -149,7 +145,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
                   title: The registry refused the request.
                   status: 502
                   code: source.upstream-error
@@ -167,7 +162,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
                   title: The registry answered something unusable.
                   status: 502
                   code: source.upstream-error
@@ -183,7 +177,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
                   title: The registry is unavailable.
                   status: 503
                   code: source.unavailable
@@ -199,7 +192,6 @@ routeTemplates:
           steps:
             - setBody:
                 constant:
-                  type: https://id.registrystack.org/problems/registry-adapter/source.not-found
                   title: No household has this identifier.
                   status: 404
                   code: source.not-found

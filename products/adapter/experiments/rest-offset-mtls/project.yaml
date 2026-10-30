@@ -14,15 +14,17 @@
 #     --runtime products/adapter/experiments/rest-offset-mtls/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
-id: jsonapi-households-experiment
+project:
+  id: jsonapi-households-experiment
+  version: "1.0.0"
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:a4608387ad998d535bcd593b2b147d74cc25dc0167ef2a12a2171c228488fee6
+  digest: sha256:9d4cbff5a5427e8a3947b4354ad8bf45d8d48789bc1e66505de76bd938aec7a9
 pack:
   id: jsonapi-households
   version: "1"
-  digest: sha256:40f954e18bc6b301a8aaeb4fdad496457ccb2ccb027f7aaa76e04d2050ec9533
+  digest: sha256:0ed111e612284e8043cb2fa71162fc452cf1bc19ef23e157bf21c7f3180c4ccd
 recordTypes:
   - name: household
     fields:

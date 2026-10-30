@@ -13,15 +13,17 @@
 #     --runtime products/adapter/experiments/fhir-r4-patient-source/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
-id: fhir-r4-patient-experiment
+project:
+  id: fhir-r4-patient-experiment
+  version: "1.0.0"
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:a4608387ad998d535bcd593b2b147d74cc25dc0167ef2a12a2171c228488fee6
+  digest: sha256:9d4cbff5a5427e8a3947b4354ad8bf45d8d48789bc1e66505de76bd938aec7a9
 pack:
   id: fhir-r4-patient
   version: "1"
-  digest: sha256:1777329bec31a44fe041ed72a482d7c882b213383f6be295b21bf5c1f1fca489
+  digest: sha256:4ed6d34b7c5c270275e76d87a2f4ab127f4a8297859b29b55f6bfbe31c84cc56
 recordTypes:
   - name: patient
     fields:

@@ -58,7 +58,7 @@ problemCodes:
   - source.upstream-error
   - source.write-rejected
   - source.write-partial
-problemEnvelope: '{"type": "https://id.registrystack.org/problems/registry-adapter/{{problemCode}}", "title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}"}'
+problemEnvelope: '{"title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}"}'
 parameterizedParts:
   - name: registryIdentifier
     description: >-

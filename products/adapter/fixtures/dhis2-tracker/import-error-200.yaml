@@ -48,7 +48,6 @@ entries:
     expectedFacadeResponse:
       status: 409
       body:
-        type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
         title: The source refused the write.
         status: 409
         code: source.write-rejected
