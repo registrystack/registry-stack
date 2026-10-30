@@ -341,7 +341,9 @@ operations:
 ```
 
 The record import limits `domainData` to the schema's API names. It allows omitted fields and
-leaves value types open, because current BReg access policy may hide fields. The template import
+leaves value types open, because current BReg access policy may hide fields. `record` applies to
+`breg.read-record/v1`, `breg.read-record/v2`, `breg.lookup-record/v1` and `breg.read-in-force/v1`.
+The template import
 fixes the template ID, version, locales and data schema; that alias accepts template submissions
 only. `coordinatorctl test` rejects misspelled fake record members with `scenario.reply-output`
 and invalid computed template data with `scenario.call-input`. Aliases without `record` or

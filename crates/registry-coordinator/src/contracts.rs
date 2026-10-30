@@ -329,10 +329,16 @@ pub fn resolve_operation(
         return resolve_in_force(record.ok_or_else(in_force_contract_invalid)?, imported);
     }
     if let Some(record) = record {
-        if operation != Operation::ReadRecord || action.is_some() || template.is_some() {
+        let returns_record = [
+            Operation::ReadRecord,
+            Operation::ReadRecordV2,
+            Operation::LookupRecord,
+        ]
+        .contains(&operation);
+        if !returns_record || action.is_some() || template.is_some() {
             return Err(record_contract_invalid());
         }
-        return resolve_record(record, imported);
+        return resolve_record(operation, record, imported);
     }
     if let Some(template) = template {
         if operation != Operation::SubmitMessage || action.is_some() {
@@ -510,11 +516,12 @@ pub(crate) fn is_messaging_template_export(value: &Value) -> bool {
 fn record_contract_invalid() -> crate::CoordinatorError {
     crate::CoordinatorError::new(
         "coordinator.operation.contract-invalid",
-        "select a generated BReg record schema for breg.read-record/v1 with record: {contract: <import>}",
+        "select a generated BReg record schema for breg.read-record/v1, breg.read-record/v2 or breg.lookup-record/v1 with record: {contract: <import>}",
     )
 }
 
 fn resolve_record(
+    operation: Operation,
     reference: &Value,
     imported: &BTreeMap<String, Value>,
 ) -> crate::Result<OperationContract> {
@@ -529,11 +536,18 @@ fn resolve_record(
     let properties = schema["properties"]
         .as_object()
         .ok_or_else(record_contract_invalid)?;
-    let base = contract(Operation::ReadRecord);
+    let base = contract(operation);
     let mut output = base.output.clone();
     // Reads retain current disclosure: required fields may be hidden, and
     // this specialization promises API names rather than value validation.
-    output["$defs"]["RegistryRecord"]["properties"]["domainData"] = record_domain_data(properties);
+    // A lookup returns the record's members at the top level; a read returns
+    // them inside the Registry Record envelope.
+    let domain_data = if operation == Operation::LookupRecord {
+        &mut output["properties"]["domainData"]
+    } else {
+        &mut output["$defs"]["RegistryRecord"]["properties"]["domainData"]
+    };
+    *domain_data = record_domain_data(properties);
     OperationContract::new(
         base.input.clone(),
         output,

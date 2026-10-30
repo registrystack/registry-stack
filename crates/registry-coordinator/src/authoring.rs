@@ -1131,7 +1131,12 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         for (selected, expected, field) in [
             (
                 operation.record.as_ref().map(|value| &value.contract),
-                &[Operation::ReadRecord, Operation::ReadInForce][..],
+                &[
+                    Operation::ReadRecord,
+                    Operation::ReadRecordV2,
+                    Operation::LookupRecord,
+                    Operation::ReadInForce,
+                ][..],
                 "record",
             ),
             (
