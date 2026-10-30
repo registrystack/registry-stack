@@ -493,10 +493,7 @@ impl TokenEndpointPlan {
             &self.client_authentication
         {
             let key = resolve_binary(resolver, key_ref)?;
-            let issued_at_unix = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_secs() as i64)
-                .unwrap_or_default();
+            let issued_at_unix = unix_now()?;
             assertion = Some(signer.sign_client_assertion(ClientAssertion {
                 client_id: &client_id,
                 audience,
@@ -555,6 +552,17 @@ impl TokenEndpointPlan {
             body,
         })
     }
+}
+
+/// The current instant as Unix seconds, for the client assertion's
+/// `iat`. A clock the platform reports before the epoch refuses rather
+/// than signing an assertion stamped `iat = 0`, which the server would
+/// reject as a confusing token refusal.
+fn unix_now() -> Result<i64, AuthError> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| AuthError::Credential)?;
+    i64::try_from(elapsed.as_secs()).map_err(|_| AuthError::Credential)
 }
 
 /// How many token sends one endpoint's allowance holds per exchange.
@@ -1635,6 +1643,58 @@ mod tests {
             "grant_type=client_credentials&client_id=cid\
              &client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer\
              &client_assertion=assertion.cid.https%3A%2F%2Ftoken.example.invalid%2Ftoken.key-pem"
+        );
+    }
+
+    /// The assertion's issuance instant is the real current Unix time:
+    /// a clock the platform reports before the epoch refuses instead of
+    /// signing `iat = 0`, and the signed instant tracks the clock.
+    #[test]
+    fn the_assertion_is_stamped_with_the_current_unix_instant() {
+        let now = unix_now().expect("a clock the platform reports after the epoch");
+        assert!(
+            now > 1_600_000_000,
+            "a plausible present instant, not the epoch: {now}"
+        );
+        // The refusal branch cannot be injected here: it needs a clock
+        // the harness reports before the epoch, and the layer reads the
+        // platform clock directly. The signed instant is pinned below by
+        // a signer that records it.
+        let before = unix_now().expect("a second reading");
+        std::env::set_var("CLIENT_ID", "cid");
+        std::env::set_var("ASSERTION_KEY", "key-pem");
+        struct StampsIat(std::sync::Mutex<Vec<i64>>);
+        impl ClientAssertionSigner for StampsIat {
+            fn sign_client_assertion(
+                &self,
+                request: ClientAssertion<'_>,
+            ) -> Result<ProtectedText, AuthError> {
+                self.0.lock().expect("stamps").push(request.issued_at_unix);
+                Ok(ProtectedText::from_str_value("assertion"))
+            }
+        }
+        let stamps = std::sync::Arc::new(StampsIat(std::sync::Mutex::new(Vec::new())));
+        let url = "https://token.example.invalid/token";
+        let plan = TokenEndpointPlan::private_key_jwt(
+            endpoint_id("case-api"),
+            url.to_owned(),
+            secret("CLIENT_ID"),
+            secret("ASSERTION_KEY"),
+            url.to_owned(),
+            TokenRequestParameters::default(),
+            CacheBounds {
+                maximum: Duration::from_secs(3600),
+                assumed: None,
+            },
+        );
+        plan.render(&resolver(), stamps.as_ref())
+            .expect("a rendered request");
+        let recorded = stamps.0.lock().expect("stamps").clone();
+        assert_eq!(recorded.len(), 1);
+        assert!(
+            recorded[0] >= before.saturating_sub(1) && recorded[0] <= before + 5,
+            "the signed iat is the render-time instant, not zero: {} vs {before}",
+            recorded[0]
         );
     }
 
