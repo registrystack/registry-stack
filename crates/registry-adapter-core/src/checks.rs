@@ -607,9 +607,6 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         bodies.iter().map(|(id, steps)| (*id, *steps)).collect();
     ordered_bodies.sort_by_key(|(id, _)| *id);
 
-    // The response-header allowlists every endpoint declares, lowercased;
-    // header names compare without case
-    // (`products/adapter/CONCEPT.md` section 8.11.4).
     let allowlist: HashSet<String> = pack
         .endpoints
         .iter()
@@ -623,6 +620,21 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
 
     // Graph shape over direct: edges.
     let mut edges: HashMap<&str, Vec<&str>> = HashMap::new();
+    // A template body is authored once: its defects report at the
+    // template's own /routeTemplates/N position, never again under each
+    // instantiation id, whose body is the same authored steps.
+    let template_positions: HashMap<&str, usize> = pack
+        .route_templates
+        .iter()
+        .enumerate()
+        .map(|(index, template)| (template.id.as_str(), index))
+        .collect();
+    let instantiated_ids: HashSet<&str> = project
+        .templated_routes
+        .iter()
+        .map(|instantiated| instantiated.route_id.as_str())
+        .collect();
+
     for (id, steps) in &ordered_bodies {
         let mut targets = Vec::new();
         collect_direct_targets(steps, &mut targets);
@@ -648,6 +660,15 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
     }
 
     for (id, steps) in &ordered_bodies {
+        if instantiated_ids.contains(id) {
+            // The instantiation's body is its template's authored steps;
+            // the template's defects already report at /routeTemplates/N.
+            continue;
+        }
+        let prefix = template_positions
+            .get(id)
+            .map(|index| format!("/routeTemplates/{index}"))
+            .unwrap_or_else(|| format!("/routes/{id}"));
         let steps: &[Step] = steps;
         let mut route_findings = Vec::new();
         let sends = collect_non_safe_sends(steps, &bodies, pack);
@@ -659,7 +680,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if let Some(fault) = origin_relative_path_fault(send_path) {
                             route_findings.push(finding(
                                 CheckCode::RouteInvalidPath,
-                                &format!("/routes/{id}/steps{path}/parameters/path"),
+                                &format!("{prefix}/steps{path}/parameters/path"),
                                 fault,
                                 "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
                             ));
@@ -669,7 +690,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         {
                             route_findings.push(finding(
                                 CheckCode::RoutePathParameterMismatch,
-                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                &format!("{prefix}/steps{path}/parameters/{member}"),
                                 fault,
                                 "Bind every {{name}} placeholder of the path in pathParameters, and keep no entry the path does not name.",
                             ));
@@ -682,7 +703,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     {
                         route_findings.push(finding(
                             CheckCode::RouteInvalidStatusCodeRange,
-                            &format!("/routes/{id}/steps{path}/parameters/okStatusCodeRange"),
+                            &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
                             fault,
                             "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
                         ));
@@ -691,7 +712,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if let Some(fault) = query_key_fault(key.as_str()) {
                             route_findings.push(finding(
                                 CheckCode::RouteInvalidQueryKey,
-                                &format!("/routes/{id}/steps{path}/parameters/query"),
+                                &format!("{prefix}/steps{path}/parameters/query"),
                                 fault,
                                 "Write query keys as upstream wire names: non-empty, at most 128 bytes, no control characters, and no unescaped `=` or `&`.",
                             ));
@@ -703,7 +724,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         for member in graphql_send_member_faults(parameters) {
                             route_findings.push(finding(
                                 CheckCode::RouteGraphQlSendMembers,
-                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                &format!("{prefix}/steps{path}/parameters/{member}"),
                                 "the graphql send carries an HTTP-send member",
                                 "Remove the HTTP-send members (httpMethod, path, pathParameters, query); a graphql send carries operation and body only.",
                             ));
@@ -715,7 +736,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if !endpoint_ids.contains(target.id.as_str()) {
                             route_findings.push(finding(
                                 CheckCode::RouteUnknownEndpoint,
-                                &format!("/routes/{id}/steps{path}"),
+                                &format!("{prefix}/steps{path}"),
                                 "the send names no declared endpoint",
                                 "Name an endpoint the pack declares.",
                             ));
@@ -725,7 +746,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if !known_ids.contains(target.id.as_str()) {
                             route_findings.push(finding(
                                     CheckCode::RouteUnknownDirectTarget,
-                                    &format!("/routes/{id}/steps{path}"),
+                                    &format!("{prefix}/steps{path}"),
                                     "the direct send names no route or template",
                                     "Name a route or template the pack declares or the project instantiates.",
                                 ));
@@ -739,7 +760,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if let Some(fault) = origin_relative_path_fault(send_path) {
                             route_findings.push(finding(
                                 CheckCode::RouteInvalidPath,
-                                &format!("/routes/{id}/steps{path}/parameters/path"),
+                                &format!("{prefix}/steps{path}/parameters/path"),
                                 fault,
                                 "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
                             ));
@@ -749,7 +770,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         {
                             route_findings.push(finding(
                                 CheckCode::RoutePathParameterMismatch,
-                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                &format!("{prefix}/steps{path}/parameters/{member}"),
                                 fault,
                                 "Bind every {{name}} placeholder of the path in pathParameters, and keep no entry the path does not name.",
                             ));
@@ -762,7 +783,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     {
                         route_findings.push(finding(
                             CheckCode::RouteInvalidStatusCodeRange,
-                            &format!("/routes/{id}/steps{path}/parameters/okStatusCodeRange"),
+                            &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
                             fault,
                             "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
                         ));
@@ -771,7 +792,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if let Some(fault) = query_key_fault(key.as_str()) {
                             route_findings.push(finding(
                                 CheckCode::RouteInvalidQueryKey,
-                                &format!("/routes/{id}/steps{path}/parameters/query"),
+                                &format!("{prefix}/steps{path}/parameters/query"),
                                 fault,
                                 "Write query keys as upstream wire names: non-empty, at most 128 bytes, no control characters, and no unescaped `=` or `&`.",
                             ));
@@ -783,7 +804,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         for member in graphql_send_member_faults(parameters) {
                             route_findings.push(finding(
                                 CheckCode::RouteGraphQlSendMembers,
-                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                &format!("{prefix}/steps{path}/parameters/{member}"),
                                 "the graphql enrichment carries an HTTP-send member",
                                 "Remove the HTTP-send members (httpMethod, path, pathParameters, query); a graphql enrichment carries operation and body only.",
                             ));
@@ -795,7 +816,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if !endpoint_ids.contains(enrich.uri.id.as_str()) {
                             route_findings.push(finding(
                                 CheckCode::RouteUnknownEndpoint,
-                                &format!("/routes/{id}/steps{path}"),
+                                &format!("{prefix}/steps{path}"),
                                 "the enrichment names no declared endpoint",
                                 "Name an endpoint the pack declares.",
                             ));
@@ -805,7 +826,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         if !known_ids.contains(enrich.uri.id.as_str()) {
                             route_findings.push(finding(
                                 CheckCode::RouteUnknownDirectTarget,
-                                &format!("/routes/{id}/steps{path}"),
+                                &format!("{prefix}/steps{path}"),
                                 "the direct enrichment names no route or template",
                                 "Name a route or template the pack declares or the project instantiates.",
                             ));
@@ -817,7 +838,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 if split.maximum_items.is_none() {
                     route_findings.push(finding(
                         CheckCode::RouteMaximumItemsRequired,
-                        &format!("/routes/{id}/steps{path}"),
+                        &format!("{prefix}/steps{path}"),
                         "the split declares no maximumItems bound",
                         "Declare maximumItems on every split.",
                     ));
@@ -828,7 +849,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             if is_non_safe_to(to, pack) {
                                 route_findings.push(finding(
                                     CheckCode::RouteNonSafeSendInSplit,
-                                    &format!("/routes/{id}/steps{path}/steps{inner_path}"),
+                                    &format!("{prefix}/steps{path}/steps{inner_path}"),
                                     "a non-safe send sits inside a split without stopOnException",
                                     "Set stopOnException on the split, or move the send out.",
                                 ));
@@ -844,7 +865,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 {
                     route_findings.push(finding(
                         CheckCode::RouteStopOnExceptionExclusive,
-                        &format!("/routes/{id}/steps{path}"),
+                        &format!("{prefix}/steps{path}"),
                         "the split sets stopOnException beside its failure accounting",
                         "Keep stopOnException or the failure accounting, not both.",
                     ));
@@ -852,7 +873,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             }
             Step::Choice(choice) => {
                 for (when_index, when) in choice.when.iter().enumerate() {
-                    let pointer = &format!("/routes/{id}/steps{path}/when/{when_index}");
+                    let pointer = &format!("{prefix}/steps{path}/when/{when_index}");
                     match when.language_members() {
                         0 => route_findings.push(finding(
                             CheckCode::RoutePredicateLanguageRequired,
@@ -871,7 +892,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 }
             }
             Step::Filter(filter) => {
-                let pointer = &format!("/routes/{id}/steps{path}");
+                let pointer = &format!("{prefix}/steps{path}");
                 match filter.language_members() {
                     0 => route_findings.push(finding(
                         CheckCode::RoutePredicateLanguageRequired,
@@ -889,7 +910,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 }
             }
             Step::Loop(loop_step) => {
-                let pointer = &format!("/routes/{id}/steps{path}");
+                let pointer = &format!("{prefix}/steps{path}");
                 match loop_step.language_members() {
                     0 => route_findings.push(finding(
                         CheckCode::RoutePredicateLanguageRequired,
@@ -936,7 +957,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 if members != 1 {
                     route_findings.push(finding(
                         CheckCode::RouteErrorHandlerShape,
-                        &format!("/routes/{id}/steps{path}"),
+                        &format!("{prefix}/steps{path}"),
                         "the errorHandler carries none or both handlers",
                         "Carry exactly one of defaultErrorHandler or noErrorHandler.",
                     ));
@@ -951,7 +972,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     if policy.retry_while.is_some() && policy.maximum_redeliveries == 0 {
                         route_findings.push(finding(
                             CheckCode::RouteRetryWhileWithoutRedeliveries,
-                            &format!("/routes/{id}/steps{path}"),
+                            &format!("{prefix}/steps{path}"),
                             "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
                             "Set maximumRedeliveries above zero, or drop the retryWhile.",
                         ));
@@ -963,7 +984,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             {
                 route_findings.push(finding(
                     CheckCode::RouteUncatchableClause,
-                    &format!("/routes/{id}/steps{path}"),
+                    &format!("{prefix}/steps{path}"),
                     "an onException clause names an uncatchable class",
                     "Remove the clause; the boundary classes cannot be handled.",
                 ));
@@ -976,7 +997,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             {
                 route_findings.push(finding(
                     CheckCode::RouteUncatchableClause,
-                    &format!("/routes/{id}/steps{path}"),
+                    &format!("{prefix}/steps{path}"),
                     "a doCatch clause names an uncatchable class",
                     "Remove the clause; the boundary classes cannot be handled.",
                 ));
@@ -990,7 +1011,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             {
                 route_findings.push(finding(
                     CheckCode::RouteRetryWhileWithoutRedeliveries,
-                    &format!("/routes/{id}/steps{path}"),
+                    &format!("{prefix}/steps{path}"),
                     "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
                     "Set maximumRedeliveries above zero, or drop the retryWhile.",
                 ));
@@ -999,7 +1020,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 if clause.exception.is_empty() {
                     route_findings.push(finding(
                         CheckCode::RouteEmptyExceptionList,
-                        &format!("/routes/{id}/steps{path}"),
+                        &format!("{prefix}/steps{path}"),
                         "the onException clause names no error class",
                         "Name at least one error class the clause matches.",
                     ));
@@ -1007,7 +1028,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 if clause.handled == Some(true) && clause.continued == Some(true) {
                     route_findings.push(finding(
                         CheckCode::RouteHandledAndContinued,
-                        &format!("/routes/{id}/steps{path}"),
+                        &format!("{prefix}/steps{path}"),
                         "the onException clause sets handled and continued together",
                         "Keep handled or continued, not both.",
                     ));
@@ -1018,7 +1039,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     if catch.exception.is_empty() {
                         route_findings.push(finding(
                             CheckCode::RouteEmptyExceptionList,
-                            &format!("/routes/{id}/steps{path}/doCatch/{catch_index}"),
+                            &format!("{prefix}/steps{path}/doCatch/{catch_index}"),
                             "the doCatch clause names no error class",
                             "Name at least one error class the clause matches.",
                         ));
@@ -1030,7 +1051,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
 
         // Header writes and reads stay bounded
         // (`products/adapter/CONCEPT.md` section 8.11.4).
-        check_route_headers(id, steps, &allowlist, &mut route_findings);
+        check_route_headers(&prefix, steps, &allowlist, &mut route_findings);
 
         // A non-safe send naming an operation the endpoint does not
         // declare is a reference defect on its own (CFG-ID-4).
@@ -1048,7 +1069,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             if !declared {
                 findings.push(finding(
                     CheckCode::RouteUnknownOperation,
-                    &format!("/routes/{id}"),
+                    &prefix,
                     "the send names no operation its endpoint declares",
                     "Name an operation the send's endpoint declares.",
                 ));
@@ -1064,7 +1085,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         {
             findings.push(finding(
                 CheckCode::RouteRedeliveryOverNonSafeSend,
-                &format!("/routes/{id}"),
+                &prefix,
                 "redelivery is declared over a non-safe send without an idempotentUpstream claim",
                 "Declare idempotentUpstream on the endpoint operation, or drop the redelivery.",
             ));
@@ -1075,7 +1096,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         if declares_redelivery(steps) && !reaches_component_send(steps, &bodies, 0) {
             findings.push(finding(
                 CheckCode::RouteRedeliveryWithoutUpstreamSend,
-                &format!("/routes/{id}"),
+                &prefix,
                 "redelivery is declared but the route reaches no http: or graphql: send",
                 "Send to an http: or graphql: endpoint, or drop the redelivery.",
             ));
@@ -1104,14 +1125,14 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
 /// allowlist declares, or a header an earlier step of the same body set.
 /// Findings sit at the step.
 fn check_route_headers(
-    id: &str,
+    prefix: &str,
     steps: &[Step],
     allowlist: &HashSet<String>,
     findings: &mut Vec<Diagnostic>,
 ) {
     let mut placed: HashSet<String> = HashSet::new();
     walk_steps(steps, &mut |step, path| {
-        let pointer = format!("/routes/{id}/steps{path}");
+        let pointer = format!("{prefix}/steps{path}");
         // Reads answer before the step runs, so a step's own setHeader
         // does not authorize its own value.
         for expression in step_expressions(step) {
@@ -3547,6 +3568,64 @@ mod tests {
         assert!(
             !codes(&check_project(&workspace(&profile, &pack, &project)))
                 .contains(&CheckCode::ProjectTemplateNotInstantiated.code())
+        );
+    }
+
+    /// A template body's defect reports once at the authored
+    /// /routeTemplates/N position, never again under each instantiation id
+    /// whose body is the same steps (staff review P2-1).
+    #[test]
+    fn template_defects_report_once_at_the_authored_position() {
+        let bad_send = Step::To(ToStep {
+            uri: send("case-api"),
+            parameters: Some(ToParameters {
+                http_method: Some(HttpMethod::Get),
+                path: Some("missing-leading-slash".to_string()),
+                path_parameters: BTreeMap::new(),
+                query: BTreeMap::new(),
+                body: None,
+                operation: None,
+                throw_exception_on_failure: false,
+                ok_status_code_range: None,
+                resume_bindings: Vec::new(),
+            }),
+        });
+        let template = RouteTemplate {
+            id: local("pager"),
+            parameters: Vec::new(),
+            steps: vec![bad_send],
+        };
+        let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
+        pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
+        let mut project = project_builder(&pack);
+        project.templated_routes = UniqueIdList::new(vec![
+            TemplatedRoute {
+                route_template: id("pager"),
+                route_id: id("pager-1"),
+                parameters: BTreeMap::new(),
+            },
+            TemplatedRoute {
+                route_template: id("pager"),
+                route_id: id("pager-2"),
+                parameters: BTreeMap::new(),
+            },
+        ])
+        .expect("unique");
+        let findings = check_routes(&pack, &project);
+        let path_faults: Vec<&Diagnostic> = findings
+            .iter()
+            .filter(|f| f.code == CheckCode::RouteInvalidPath.code())
+            .collect();
+        assert_eq!(path_faults.len(), 1, "one authored defect, reported once");
+        assert_eq!(
+            path_faults[0].path,
+            "/routeTemplates/0/steps/0/parameters/path"
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|f| !f.path.starts_with("/routes/pager-")),
+            "no finding repeats under an instantiation id"
         );
     }
 
