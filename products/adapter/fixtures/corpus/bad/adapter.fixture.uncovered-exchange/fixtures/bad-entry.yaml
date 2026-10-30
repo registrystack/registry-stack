@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.uncovered-exchange: this artifact set must be refused with
+# exactly adapter.fixture.uncovered-exchange. The suite declares only the token intercept, so
+# the entry's plain read send to the declared `cases` endpoint is covered by no intercept.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.uncovered-exchange/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: adapter-fixture-uncovered-exchange
+pack: case-api-pack
+upstreamVersion: "1.0"
+provenance:
+  type: documented
+  reference: https://case-api.example.invalid/docs
+intercepts:
+  - type: token-endpoint
+    endpoint: cases
+entries:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case/case_1
+    upstream:
+      - request:
+          endpoint: cases
+          method: GET
+          path: /v2/cases/x/case_1
+        response:
+          status: 200
+          body: {}
+    expected:
+      type: response
+      status: 200
+      body:
+        case:
+          case_type: "personal"
+        fetchedAt: "2026-01-01T00:00:00Z"

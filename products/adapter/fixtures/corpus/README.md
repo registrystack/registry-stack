@@ -205,6 +205,8 @@ Fixture files sit in the member's `fixtures/` directory, which
 | `adapter.fixture.unknown-problem-code` | Expected problem entry carries code `cases.spectre`, which no declared problem of the profile answers by class and code | `adapter.fixture.unknown-problem-code` | checks |
 | `adapter.fixture.unknown-operation` | Entry names operation `nope`, which the profile does not declare | `adapter.fixture.unknown-operation` | checks |
 | `adapter.fixture.credential-recorded` | Recorded read request carries the reserved header `authorization`; a fixture never sees credentials (CONCEPT 10.2), and replay supplies credentials from the runtime configuration | `adapter.fixture.credential-recorded` | checks |
+| `adapter.fixture.empty-upstream` | Entry records no upstream exchange, so a replay of it would hang on a send nothing answers | `adapter.fixture.empty-upstream` | checks |
+| `adapter.fixture.uncovered-exchange` | Suite declares only the token intercept, so the entry's plain read send to the declared `cases` endpoint is covered by no intercept | `adapter.fixture.uncovered-exchange` | checks |
 
 ### Reader-level members
 
