@@ -482,6 +482,13 @@ Scaffold: none needed beyond migrations, which D1 owns.
 - Integration: write property tests (idempotency, mapping totality), write
   security tests, write-safety refusals live, review report.
 
+The DHIS2 write route must carry the record: `to-bundle.rhai` sends
+`attributes: []` today, and on 2.43.2.1 that keeps every existing attribute value,
+so an import writes no attribute data. This increment maps attributes from the
+record, and captures a create and an attribute change from the real server. The
+deployment's account must reach a program of the entity's type: without that a
+create answers 200, a repeat 409 E1323, and a read 404.
+
 D16 is decided: an accepted but incomplete write answers a 202 with a status
 link or a bounded wait, chosen by configuration. This increment implements
 both, with their keys, the bound's expiry, and tests; until then such a route
