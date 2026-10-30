@@ -701,25 +701,25 @@ exceptions:
   format: adapter/pack
   location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/3/properties/json-array-append
   class: protocol-constant
-  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
+  reason: The member is one of the two JSON-body aggregation strategies this grammar adds beside Camel's own options; Apache Camel names no such strategy, so the kebab-case key is this grammar's own spelling, not a Camel option name
   resolution: Permanent.
 - rule: CFG-NAME-1
   format: adapter/pack
   location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/4/properties/json-merge
   class: protocol-constant
-  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
+  reason: The member is one of the two JSON-body aggregation strategies this grammar adds beside Camel's own options; Apache Camel names no such strategy, so the kebab-case key is this grammar's own spelling, not a Camel option name
   resolution: Permanent.
 - rule: CFG-NAME-4
   format: adapter/pack
   location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/CircuitBreakerStep/properties/slidingWindowCalls
   class: protocol-constant
-  reason: The member counts calls, written as Apache Camel names the circuit-breaker window option; appending a time unit would misstate the quantity
+  reason: The member counts calls, and a count carries no unit word; the name is a deliberate divergence from the Camel window option, `slidingWindowSize`, which may count either calls or time
   resolution: Permanent.
 - rule: CFG-SCHEMA-4
   format: adapter/pack
   location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/CodeMap/properties/entries
   class: exchange-model
-  reason: The entries keys are the source system's own code values, converted entry by entry into the pack's vocabulary; the shipped DHIS2 tracker pack maps OK, WARNING, and ERROR, and keys like M or 01 are equally plausible, so identifier grammar would refuse real sources
+  reason: The entries keys are the source system's own code values, converted entry by entry into the pack's vocabulary; keys like M or 01 are equally plausible, so identifier grammar would refuse real sources
   resolution: Permanent for the adapter pack code-map exchange model; the pack reader accepts any string key and raises conversion.unmapped for a code with no entry.
 - rule: CFG-SCHEMA-4
   format: adapter/project
