@@ -2178,11 +2178,13 @@ fn list_pointers_prints_the_selectable_leaves_in_both_formats() {
         serde_json::json!({
             "apiVersion": "id.registrystack.org/formats/evidence/ctl-report/v1alpha1",
             "command": "source suggest",
+            "diagnostics": [],
             "kind": "EvidenceCtlReport",
             "notes": [],
             "ok": true,
             "pointers": EXPECTED,
             "status": "complete",
+            "version": registry_platform_buildinfo::DISPLAY_VERSION,
         })
     );
 
