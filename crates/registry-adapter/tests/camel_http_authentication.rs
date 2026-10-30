@@ -90,7 +90,7 @@ fn oauth_binding(
     )
 }
 
-fn authorize_with_plan(
+async fn authorize_with_plan(
     plan: &registry_adapter::auth::AuthPlan,
     send: &dyn registry_adapter::auth::TokenSend,
     events: &mut Vec<AuthEvent>,
@@ -105,7 +105,7 @@ fn authorize_with_plan(
         signer: &KeyBindingSigner,
         events,
     };
-    plan.authorize(&mut context)
+    plan.authorize(&mut context).await
 }
 
 /// Decode standard base64 with padding, the inverse of the Basic
@@ -156,16 +156,17 @@ fn base64_decode(text: &str) -> Vec<u8> {
 }
 
 /// `none` sends nothing and reaches past loopback only under mTLS.
-#[test]
-fn none_sends_nothing_and_stays_loopbound() {
+#[tokio::test]
+async fn none_sends_nothing_and_stays_loopbound() {
     let plan = AuthPlan::compile(
         &EndpointAuthentication::None {},
         &binding("http://127.0.0.1:9/", Some(RuntimeCredential::None {})),
     )
     .expect("numeric loopback admits none");
     let mut events = Vec::new();
-    let header =
-        authorize_with_plan(&plan, &LoopbackSend::new(), &mut events).expect("none resolves");
+    let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        .await
+        .expect("none resolves");
     assert!(
         header.is_none(),
         "the none kind produces no header material"
@@ -187,8 +188,8 @@ fn none_sends_nothing_and_stays_loopbound() {
 
 /// `basic` resolves the pair preemptively into one Basic header; the
 /// layer itself sends nothing.
-#[test]
-fn basic_sends_one_preemptive_header() {
+#[tokio::test]
+async fn basic_sends_one_preemptive_header() {
     std::env::set_var("ADAPTER_IT_BASIC_USER", "user");
     std::env::set_var("ADAPTER_IT_BASIC_PASS", "pass");
     let double = UpstreamDouble::start();
@@ -205,6 +206,7 @@ fn basic_sends_one_preemptive_header() {
     .expect("a usable plan");
     let mut events = Vec::new();
     let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        .await
         .expect("the pair resolves")
         .expect("basic sends a header");
     assert_eq!(header.name(), "authorization");
@@ -215,8 +217,8 @@ fn basic_sends_one_preemptive_header() {
 
 /// `static-authorization` presents the token under the declared scheme,
 /// defaulting to `Bearer`.
-#[test]
-fn static_authorization_presents_the_declared_scheme() {
+#[tokio::test]
+async fn static_authorization_presents_the_declared_scheme() {
     std::env::set_var("ADAPTER_IT_AUTH_TOKEN", "tok");
     let cases: [(Option<&str>, &[u8]); 2] = [
         (None, b"Bearer tok".as_slice()),
@@ -238,6 +240,7 @@ fn static_authorization_presents_the_declared_scheme() {
         .expect("a usable plan");
         let mut events = Vec::new();
         let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
             .expect("the token resolves")
             .expect("a header is sent");
         assert_eq!(header.name(), "authorization");
@@ -247,8 +250,8 @@ fn static_authorization_presents_the_declared_scheme() {
 
 /// `static-api-key` places the key in the declared header, which the
 /// reserved-name rule keeps off the engine's own headers.
-#[test]
-fn static_api_key_uses_the_declared_header() {
+#[tokio::test]
+async fn static_api_key_uses_the_declared_header() {
     std::env::set_var("ADAPTER_IT_API_KEY", "key123");
     let plan = AuthPlan::compile(
         &EndpointAuthentication::StaticApiKey {
@@ -264,6 +267,7 @@ fn static_api_key_uses_the_declared_header() {
     .expect("a usable plan");
     let mut events = Vec::new();
     let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+        .await
         .expect("the key resolves")
         .expect("a header is sent");
     assert_eq!(header.name(), "X-Api-Key");
@@ -280,8 +284,8 @@ mod oauth2_client_credentials {
 
     /// Both placements carry the secret exactly once, in the declared
     /// place, and the issued credential becomes the bearer.
-    #[test]
-    fn both_placements_carry_the_secret_once() {
+    #[tokio::test]
+    async fn both_placements_carry_the_secret_once() {
         std::env::set_var("ADAPTER_IT_CC_BH_ID", "cid-bh");
         std::env::set_var("ADAPTER_IT_CC_BH_SECRET", "cc-secret-1");
         std::env::set_var("ADAPTER_IT_CC_FB_ID", "cid-fb");
@@ -304,6 +308,7 @@ mod oauth2_client_credentials {
         .expect("a usable plan");
         let mut events = Vec::new();
         let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
             .expect("a credential issues")
             .expect("a header is sent");
         assert_eq!(header.value().as_bytes(), b"Bearer issued-bh");
@@ -356,6 +361,7 @@ mod oauth2_client_credentials {
         .expect("a usable plan");
         let mut events = Vec::new();
         let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
             .expect("a credential issues")
             .expect("a header is sent");
         assert_eq!(header.value().as_bytes(), b"Bearer issued-fb");
@@ -374,8 +380,8 @@ mod oauth2_client_credentials {
 
     /// The endpoint's cache answers the second send, and a refusal
     /// surfaces the registered code name and nothing the server said.
-    #[test]
-    fn the_cache_answers_and_refusals_name_only_the_code() {
+    #[tokio::test]
+    async fn the_cache_answers_and_refusals_name_only_the_code() {
         std::env::set_var("ADAPTER_IT_CC_CACHE_ID", "cid-cache");
         std::env::set_var("ADAPTER_IT_CC_CACHE_SECRET", "cc-secret-3");
         let double = UpstreamDouble::start();
@@ -408,6 +414,7 @@ mod oauth2_client_credentials {
             events: &mut events,
         };
         plan.authorize(&mut first)
+            .await
             .expect("the first credential issues")
             .expect("a header is sent");
         let mut second = AuthorizeContext {
@@ -420,6 +427,7 @@ mod oauth2_client_credentials {
         };
         let header = plan
             .authorize(&mut second)
+            .await
             .expect("the cache answers")
             .expect("a header is sent");
         assert_eq!(header.value().as_bytes(), b"Bearer issued-cache");
@@ -442,7 +450,7 @@ mod oauth2_client_credentials {
             signer: &KeyBindingSigner,
             events: &mut events,
         };
-        let error = plan.authorize(&mut context).unwrap_err();
+        let error = plan.authorize(&mut context).await.unwrap_err();
         assert_eq!(
             error,
             AuthError::Token(registry_adapter::auth::TokenFault::Refused {
@@ -458,8 +466,8 @@ mod oauth2_client_credentials {
 
     /// The exchange budget holds two token sends; the third refuses
     /// without a request.
-    #[test]
-    fn the_budget_holds_two_sends() {
+    #[tokio::test]
+    async fn the_budget_holds_two_sends() {
         std::env::set_var("ADAPTER_IT_CC_BUDGET_ID", "cid-budget");
         std::env::set_var("ADAPTER_IT_CC_BUDGET_SECRET", "cc-secret-4");
         let double = UpstreamDouble::start();
@@ -490,7 +498,7 @@ mod oauth2_client_credentials {
                 signer: &KeyBindingSigner,
                 events: &mut events,
             };
-            let error = plan.authorize(&mut context).unwrap_err();
+            let error = plan.authorize(&mut context).await.unwrap_err();
             assert_eq!(
                 error,
                 AuthError::Token(registry_adapter::auth::TokenFault::Refused {
@@ -508,7 +516,7 @@ mod oauth2_client_credentials {
             signer: &KeyBindingSigner,
             events: &mut events,
         };
-        let error = plan.authorize(&mut context).unwrap_err();
+        let error = plan.authorize(&mut context).await.unwrap_err();
         assert_eq!(error, AuthError::BudgetExhausted);
         assert_eq!(error.to_string(), "the exchange's token budget is spent");
         assert_eq!(events, vec![AuthEvent::TokenBudgetExhausted]);
@@ -518,8 +526,8 @@ mod oauth2_client_credentials {
     /// A 401 from the upstream data send drives the plan's rule: one
     /// refresh with the cache invalidated, then the uncatchable
     /// credential class.
-    #[test]
-    fn the_401_rule_runs_over_the_issued_credential() {
+    #[tokio::test]
+    async fn the_401_rule_runs_over_the_issued_credential() {
         std::env::set_var("ADAPTER_IT_CC_401_ID", "cid-401");
         std::env::set_var("ADAPTER_IT_CC_401_SECRET", "cc-secret-5");
         let double = UpstreamDouble::start();
@@ -550,19 +558,24 @@ mod oauth2_client_credentials {
             events: &mut events,
         };
         plan.authorize(&mut context)
+            .await
             .expect("the credential issues")
             .expect("a header is sent");
-        assert!(cache.remaining_lifetime().is_some());
+        assert!(cache.remaining_lifetime().await.is_some());
 
         let mut refresh_used = false;
-        let action = plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events);
+        let action = plan
+            .on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+            .await;
         assert_eq!(
             action,
             registry_adapter::auth::UpstreamStatusAction::RetryWithFreshCredential
         );
         assert!(refresh_used);
-        assert!(cache.remaining_lifetime().is_none());
-        let action = plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events);
+        assert!(cache.remaining_lifetime().await.is_none());
+        let action = plan
+            .on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+            .await;
         assert_eq!(
             action,
             registry_adapter::auth::UpstreamStatusAction::CredentialRejected
@@ -572,7 +585,9 @@ mod oauth2_client_credentials {
             CREDENTIAL_REJECTED_CLASS,
             "the class a route cannot catch"
         );
-        let action = plan.on_upstream_status(403, &mut refresh_used, &cache, &mut events);
+        let action = plan
+            .on_upstream_status(403, &mut refresh_used, &cache, &mut events)
+            .await;
         assert_eq!(
             action,
             registry_adapter::auth::UpstreamStatusAction::Continue
@@ -604,8 +619,8 @@ mod oauth2_private_key_jwt {
 
     /// The assertion travels as the last form member, bound to the token
     /// endpoint as its audience, and the issued credential is the bearer.
-    #[test]
-    fn the_assertion_travels_bound_to_the_token_endpoint() {
+    #[tokio::test]
+    async fn the_assertion_travels_bound_to_the_token_endpoint() {
         std::env::set_var("ADAPTER_IT_PKJWT_ID", "cid-pj");
         std::env::set_var("ADAPTER_IT_PKJWT_KEY", "pkjwt-key-pem");
         let double = UpstreamDouble::start();
@@ -625,6 +640,7 @@ mod oauth2_private_key_jwt {
         .expect("a usable plan");
         let mut events = Vec::new();
         let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
             .expect("a credential issues")
             .expect("a header is sent");
         assert_eq!(header.value().as_bytes(), b"Bearer issued-pj");
@@ -765,8 +781,8 @@ mod marker_secret_absence {
 
     /// The static kinds: the marker resolves into the header value and
     /// appears in no rendering of it.
-    #[test]
-    fn static_kinds_render_no_marker() {
+    #[tokio::test]
+    async fn static_kinds_render_no_marker() {
         std::env::set_var("ADAPTER_MARK_USER", "marker-user");
         std::env::set_var("ADAPTER_MARK_PASS", MARKER_SECRET);
         std::env::set_var("ADAPTER_MARK_TOKEN", MARKER_SECRET);
@@ -807,6 +823,7 @@ mod marker_secret_absence {
             .unwrap_or_else(|fault| panic!("{tag} must compile: {fault}"));
             let mut events = Vec::new();
             let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+                .await
                 .unwrap_or_else(|error| panic!("{tag} must resolve: {error}"))
                 .expect("a header is sent");
             let value = String::from_utf8_lossy(header.value().as_bytes()).into_owned();
@@ -845,8 +862,8 @@ mod marker_secret_absence {
 
     /// The OAuth2 kinds: the marker is the client secret and the issued
     /// credential both; it appears only in the declared carriage.
-    #[test]
-    fn oauth2_kinds_carry_the_marker_only_in_credential_carriage() {
+    #[tokio::test]
+    async fn oauth2_kinds_carry_the_marker_only_in_credential_carriage() {
         std::env::set_var("ADAPTER_MARK_CC_ID", "cid-mark");
         std::env::set_var("ADAPTER_MARK_CC_SECRET", MARKER_SECRET);
         std::env::set_var("ADAPTER_MARK_PKJWT_ID", "cid-mark-pj");
@@ -876,6 +893,7 @@ mod marker_secret_absence {
             .unwrap_or_else(|fault| panic!("{tag} must compile: {fault}"));
             let mut events = Vec::new();
             let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+                .await
                 .unwrap_or_else(|error| panic!("{tag} must issue: {error}"))
                 .expect("a header is sent");
             assert_eq!(
@@ -961,6 +979,7 @@ mod marker_secret_absence {
         .expect("a usable plan");
         let mut events = Vec::new();
         let header = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
             .expect("a credential issues")
             .expect("a header is sent");
         assert_eq!(header.value().as_bytes(), b"Bearer issued-pj-mark");
@@ -991,8 +1010,8 @@ mod marker_secret_absence {
 
     /// The fault paths render no marker either: a refusal carries the
     /// registered code, never the server's description of the secret.
-    #[test]
-    fn fault_renderings_carry_no_marker() {
+    #[tokio::test]
+    async fn fault_renderings_carry_no_marker() {
         std::env::set_var("ADAPTER_MARK_FAULT_ID", "cid-fault");
         std::env::set_var("ADAPTER_MARK_FAULT_SECRET", MARKER_SECRET);
         let double = UpstreamDouble::start();
@@ -1012,7 +1031,9 @@ mod marker_secret_absence {
         )
         .expect("a usable plan");
         let mut events = Vec::new();
-        let error = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events).unwrap_err();
+        let error = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
+            .unwrap_err();
         assert_eq!(
             error,
             AuthError::Token(registry_adapter::auth::TokenFault::Refused {

@@ -11,7 +11,10 @@
 //! mTLS identity. Acquisition holds the endpoint's cache lock across
 //! the send, which is the single-flight refresh: concurrent exchanges
 //! over one endpoint serialize behind one token request, and a waiter
-//! wakes to a fresh credential.
+//! wakes to a fresh credential. Waiters queue for at most
+//! [`TOKEN_ADMISSION_TIMEOUT`]; past that bound a waiter refuses with a
+//! transport timeout instead of parking an engine worker behind a
+//! stalled authorization server.
 //!
 //! Token responses are read as Evidence reads them: `token_type` must be
 //! `Bearer` in any case; a missing `expires_in` takes the operator's
@@ -32,8 +35,11 @@ use registry_platform_httputil::{
 };
 use registry_platform_yaml::SecretReference;
 use std::fmt;
-use std::sync::Mutex;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 /// What a token request accepts, fixed.
 pub const TOKEN_REQUEST_ACCEPT: &str = "application/json";
@@ -55,6 +61,11 @@ pub(crate) const MAXIMUM_RESPONSE_SCOPE_BYTES: usize = 512;
 /// RFC 8707 registered sets; the server's own spelling never crosses
 /// into a diagnostic.
 pub const UNREGISTERED_ERROR_CODE: &str = "unregistered-error-code";
+/// How long one waiter may queue for the endpoint's cache lock behind an
+/// in-flight refresh before its own acquisition refuses, the admission
+/// bound of the single-flight refresh: a stalled authorization server
+/// must not park every engine worker that shares the endpoint.
+pub(crate) const TOKEN_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The registered RFC 6749 and RFC 8707 code names.
 const REGISTERED_ERROR_CODES: &[&str] = &[
@@ -189,12 +200,21 @@ impl fmt::Display for TransportFailure {
 
 /// Sends one token request through the endpoint's own outbound client:
 /// the same trust profile and the same mTLS identity as the endpoint's
-/// data sends. The implementation may block; it runs under the
-/// endpoint's cache lock, so a slow authorization server holds the
-/// refresh, not the callers.
-pub trait TokenSend {
+/// data sends.
+///
+/// The send is asynchronous and its future must be `Send`: the
+/// acquisition polls it while holding the endpoint's cache lock, and the
+/// engine polls many acquisitions at once. Waiters queue for that lock
+/// for at most [`TOKEN_ADMISSION_TIMEOUT`]; past the bound a waiter
+/// fails with a transport timeout rather than block its caller, so an
+/// implementation may take as long as its own request timeout but never
+/// longer than that plus the admission bound holds anyone else.
+pub trait TokenSend: Send + Sync {
     /// Send one rendered token request.
-    fn send(&self, request: &TokenRequest) -> Result<TokenWire, TransportFailure>;
+    fn send<'a>(
+        &'a self,
+        request: &'a TokenRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>;
 }
 
 /// The inputs of one RFC 7523 client assertion, everything the signer
@@ -217,8 +237,10 @@ pub struct ClientAssertion<'a> {
 /// Signs one RFC 7523 client assertion from the resolved private key.
 /// The engine provides the implementation; the adapter's concrete
 /// signer is the platform's client-assertion routine, which the runtime
-/// crate links once its manifest carries the crypto dependency.
-pub trait ClientAssertionSigner {
+/// crate links once its manifest carries the crypto dependency. The
+/// signer runs inside an acquisition's asynchronous context, so it must
+/// be shareable across threads.
+pub trait ClientAssertionSigner: Send + Sync {
     /// Sign one client assertion; the returned text is the JWS the token
     /// request carries as its `client_assertion`.
     fn sign_client_assertion(
@@ -475,32 +497,36 @@ struct CachedToken {
 
 /// The endpoint's token cache, shared by every exchange. One cache per
 /// endpoint: every binding with the same credential shares freshness,
-/// because the deployment holds one client identity per endpoint.
+/// because the deployment holds one client identity per endpoint. The
+/// lock never poisons: a send that panics releases it, and the next
+/// waiter starts a fresh acquisition.
 pub struct TokenCache {
     state: Mutex<Option<CachedToken>>,
+    admission_timeout: Duration,
 }
 
 impl TokenCache {
     /// An empty cache.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             state: Mutex::new(None),
+            admission_timeout: TOKEN_ADMISSION_TIMEOUT,
         }
     }
 
     /// Discard any cached credential; the 401 rule calls this before
     /// the single refresh.
-    pub fn invalidate(&self) {
-        *self.state.lock().expect("the endpoint's token cache lock") = None;
+    pub async fn invalidate(&self) {
+        *self.state.lock().await = None;
     }
 
     /// How much cached freshness remains, for operators and tests;
     /// `None` when nothing is cached.
-    #[must_use]
-    pub fn remaining_lifetime(&self) -> Option<Duration> {
-        let guard = self.state.lock().expect("the endpoint's token cache lock");
-        guard
+    pub async fn remaining_lifetime(&self) -> Option<Duration> {
+        self.state
+            .lock()
+            .await
             .as_ref()
             .map(|cached| cached.expires_at.saturating_duration_since(Instant::now()))
     }
@@ -516,11 +542,12 @@ impl Default for TokenCache {
 ///
 /// The acquisition holds the endpoint's cache lock from the miss through
 /// the store, which is the single-flight refresh: concurrent exchanges
-/// serialize behind the one request in flight. The lifetime anchor is
-/// taken just before the send, the earliest moment the issuer could
-/// have issued, so a cached credential can never outlive its real
-/// expiry.
-pub(crate) fn acquire_token(
+/// serialize behind the one request in flight, each waiting for the lock
+/// for at most the cache's admission bound before refusing with a
+/// transport timeout. The lifetime anchor is taken just before the send,
+/// the earliest moment the issuer could have issued, so a cached
+/// credential can never outlive its real expiry.
+pub(crate) async fn acquire_token(
     plan: &TokenEndpointPlan,
     cache: &TokenCache,
     budget: &mut TokenBudget,
@@ -529,7 +556,17 @@ pub(crate) fn acquire_token(
     signer: &dyn ClientAssertionSigner,
     events: &mut Vec<AuthEvent>,
 ) -> Result<ProtectedText, AuthError> {
-    let mut guard = cache.state.lock().expect("the endpoint's token cache lock");
+    let mut guard = match timeout(cache.admission_timeout, cache.state.lock()).await {
+        Ok(guard) => guard,
+        Err(_elapsed) => {
+            events.push(AuthEvent::TokenTransportFailed {
+                kind: TransportKind::Timeout.kind(),
+            });
+            return Err(AuthError::Token(TokenFault::Transport {
+                kind: TransportKind::Timeout,
+            }));
+        }
+    };
     if let Some(cached) = guard.as_ref() {
         if Instant::now() < cached.expires_at {
             events.push(AuthEvent::TokenCacheHit);
@@ -542,7 +579,7 @@ pub(crate) fn acquire_token(
     let request = plan.render(resolver, signer)?;
     let anchored = Instant::now();
     events.push(AuthEvent::TokenRequested);
-    let wire = match send.send(&request) {
+    let wire = match send.send(&request).await {
         Ok(wire) => wire,
         Err(failure) => {
             events.push(AuthEvent::TokenTransportFailed {
@@ -800,15 +837,21 @@ mod tests {
     }
 
     impl TokenSend for ScriptedSend {
-        fn send(&self, request: &TokenRequest) -> Result<TokenWire, TransportFailure> {
-            self.requests
-                .lock()
-                .expect("requests")
-                .push(request.url.clone());
-            Ok(TokenWire {
-                status: self.status,
-                media_type: self.media_type.map(str::to_owned),
-                body: self.body.as_bytes().to_vec(),
+        fn send<'a>(
+            &'a self,
+            request: &'a TokenRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.requests
+                    .lock()
+                    .expect("requests")
+                    .push(request.url.clone());
+                Ok(TokenWire {
+                    status: self.status,
+                    media_type: self.media_type.map(str::to_owned),
+                    body: self.body.as_bytes().to_vec(),
+                })
             })
         }
     }
@@ -1002,8 +1045,8 @@ mod tests {
 
     /// One acquisition, one cache hit: the second send under the same
     /// cache asks the endpoint nothing.
-    #[test]
-    fn the_cache_answers_the_second_send() {
+    #[tokio::test]
+    async fn the_cache_answers_the_second_send() {
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("CLIENT_SECRET", "csecret");
         let send = ScriptedSend::always(
@@ -1023,6 +1066,7 @@ mod tests {
             &FixedSigner,
             &mut events,
         )
+        .await
         .expect("the first acquisition issues");
         assert_eq!(first.as_bytes(), b"at");
         let second = acquire_token(
@@ -1034,6 +1078,7 @@ mod tests {
             &FixedSigner,
             &mut events,
         )
+        .await
         .expect("the cache answers");
         assert_eq!(second.as_bytes(), b"at");
         assert_eq!(send.token_request_count(), 1);
@@ -1042,8 +1087,8 @@ mod tests {
     }
 
     /// A zero cache ceiling never caches: every acquisition sends.
-    #[test]
-    fn a_zero_ceiling_never_caches() {
+    #[tokio::test]
+    async fn a_zero_ceiling_never_caches() {
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("CLIENT_SECRET", "csecret");
         let send = ScriptedSend::always(
@@ -1064,6 +1109,7 @@ mod tests {
             &FixedSigner,
             &mut events,
         )
+        .await
         .expect("the first acquisition issues");
         acquire_token(
             &plan,
@@ -1074,6 +1120,7 @@ mod tests {
             &FixedSigner,
             &mut events,
         )
+        .await
         .expect("the second acquisition sends again");
         assert_eq!(send.token_request_count(), 2);
     }
@@ -1081,8 +1128,8 @@ mod tests {
     /// A refused token endpoint surfaces the registered code name and
     /// nothing else; a redirect and a wrong media type are protocol
     /// failures that name only their status.
-    #[test]
-    fn refusals_surface_fixed_names() {
+    #[tokio::test]
+    async fn refusals_surface_fixed_names() {
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("CLIENT_SECRET", "csecret");
         let refused = ScriptedSend::always(
@@ -1100,6 +1147,7 @@ mod tests {
             &FixedSigner,
             &mut events,
         )
+        .await
         .unwrap_err();
         assert_eq!(
             error,
@@ -1128,6 +1176,7 @@ mod tests {
             &FixedSigner,
             &mut Vec::new(),
         )
+        .await
         .unwrap_err();
         assert_eq!(
             error,
@@ -1148,6 +1197,7 @@ mod tests {
             &FixedSigner,
             &mut Vec::new(),
         )
+        .await
         .unwrap_err();
         assert_eq!(
             error,
@@ -1157,8 +1207,8 @@ mod tests {
 
     /// Concurrent acquisitions over one cache make exactly one token
     /// request: the refresh is single-flight.
-    #[test]
-    fn acquisition_is_single_flight() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquisition_is_single_flight() {
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("CLIENT_SECRET", "csecret");
         struct SlowSend {
@@ -1167,51 +1217,105 @@ mod tests {
             requests: AtomicUsize,
         }
         impl TokenSend for SlowSend {
-            fn send(&self, _request: &TokenRequest) -> Result<TokenWire, TransportFailure> {
-                let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                self.peak.fetch_max(current, Ordering::SeqCst);
-                self.requests.fetch_add(1, Ordering::SeqCst);
-                std::thread::sleep(Duration::from_millis(60));
-                self.in_flight.fetch_sub(1, Ordering::SeqCst);
-                Ok(TokenWire {
-                    status: 200,
-                    media_type: Some("application/json".to_owned()),
-                    body: br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
-                        .to_vec(),
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    self.peak.fetch_max(current, Ordering::SeqCst);
+                    self.requests.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(60)).await;
+                    self.in_flight.fetch_sub(1, Ordering::SeqCst);
+                    Ok(TokenWire {
+                        status: 200,
+                        media_type: Some("application/json".to_owned()),
+                        body: br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
+                            .to_vec(),
+                    })
                 })
             }
         }
-        let send = SlowSend {
+        let send = std::sync::Arc::new(SlowSend {
             in_flight: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
-        };
-        let cache = TokenCache::new();
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..4)
-                .map(|_| {
-                    scope.spawn(|| {
-                        let mut budget = TokenBudget::new_exchange();
-                        let mut events = Vec::new();
-                        acquire_token(
-                            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
-                            &cache,
-                            &mut budget,
-                            &resolver(),
-                            &send,
-                            &FixedSigner,
-                            &mut events,
-                        )
-                        .expect("every waiter acquires")
-                    })
-                })
-                .collect();
-            for handle in handles {
-                handle.join().expect("joined");
-            }
         });
+        let cache = std::sync::Arc::new(TokenCache::new());
+        let mut tasks = Vec::new();
+        for _ in 0..4 {
+            let plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
+            let cache = std::sync::Arc::clone(&cache);
+            let send = std::sync::Arc::clone(&send);
+            tasks.push(tokio::spawn(async move {
+                let signer = FixedSigner;
+                let mut budget = TokenBudget::new_exchange();
+                let mut events = Vec::new();
+                acquire_token(
+                    &plan,
+                    &cache,
+                    &mut budget,
+                    &resolver(),
+                    send.as_ref(),
+                    &signer,
+                    &mut events,
+                )
+                .await
+                .expect("every waiter acquires")
+            }));
+        }
+        for task in tasks {
+            task.await.expect("joined");
+        }
         assert_eq!(send.requests.load(Ordering::SeqCst), 1, "one token request");
         assert_eq!(send.peak.load(Ordering::SeqCst), 1, "no concurrent sends");
+    }
+
+    /// A waiter queued behind a stalled refresh gives up at the
+    /// admission bound instead of parking its caller: the refusal is a
+    /// transport timeout, no request was sent, and no budget was spent.
+    #[tokio::test]
+    async fn waiters_give_up_at_the_admission_bound() {
+        std::env::set_var("CLIENT_ID", "cid");
+        std::env::set_var("CLIENT_SECRET", "csecret");
+        let send = ScriptedSend::always(
+            200,
+            Some("application/json"),
+            r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
+        );
+        let cache = TokenCache {
+            state: Mutex::new(None),
+            admission_timeout: Duration::from_millis(30),
+        };
+        // Hold the cache lock the way a stalled refresh would.
+        let held = cache.state.lock().await;
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let error = acquire_token(
+            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
+            &cache,
+            &mut budget,
+            &resolver(),
+            &send,
+            &FixedSigner,
+            &mut events,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            AuthError::Token(TokenFault::Transport {
+                kind: TransportKind::Timeout
+            })
+        );
+        assert_eq!(
+            events,
+            vec![AuthEvent::TokenTransportFailed { kind: "timeout" }]
+        );
+        assert_eq!(send.token_request_count(), 0);
+        assert_eq!(budget.remaining(), 2, "no budget was spent waiting");
+        drop(held);
     }
 
     /// The private-key-jwt request carries the assertion in the form

@@ -11,20 +11,22 @@
 //! prove the credential traveled exactly where the concept says and
 //! nowhere else; nothing outside this directory ever sees a record.
 //!
-//! [`LoopbackSend`] is the client side: a synchronous `TokenSend` over
+//! [`LoopbackSend`] is the client side: an async `TokenSend` over
 //! the same loopback transport. It copies credential bytes straight from
 //! the auth layer's zeroizing buffer to the socket and never formats
 //! them into an intermediate string, the way the engine's outbound
 //! client will.
 
 use registry_adapter::auth::{
-    TokenRequest, TokenSend, TokenWire, TransportFailure, TOKEN_REQUEST_ACCEPT,
-    TOKEN_REQUEST_CONTENT_TYPE,
+    AuthHeader, ProtectedText, TokenRequest, TokenSend, TokenWire, TransportFailure,
+    TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
 };
 use registry_platform_httputil::TransportKind;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -260,9 +262,11 @@ fn write_response(stream: &mut TcpStream, status: u16, media_type: &str, body: &
     let _ = stream.flush();
 }
 
-/// A synchronous token send over loopback TCP, the client the tests
-/// drive the token endpoint with. Credential bytes go from the auth
-/// layer's buffer straight to the socket.
+/// A token send over loopback TCP, the client the tests drive the token
+/// endpoint with. The socket work is blocking, so the send runs it on
+/// the blocking pool over owned copies of the request's parts; on the
+/// blocking thread, credential bytes go from the copied zeroizing
+/// buffer straight to the socket.
 pub struct LoopbackSend {
     /// How long to wait for the answer.
     pub timeout: Duration,
@@ -284,41 +288,65 @@ impl Default for LoopbackSend {
 }
 
 impl TokenSend for LoopbackSend {
-    fn send(&self, request: &TokenRequest) -> Result<TokenWire, TransportFailure> {
-        let (host, port, path) = split_http_url(&request.url).ok_or(TransportFailure {
-            kind: TransportKind::Connect,
-        })?;
-        let mut stream =
-            TcpStream::connect((host.as_str(), port)).map_err(|_| TransportFailure {
-                kind: TransportKind::Connect,
-            })?;
-        stream
-            .set_read_timeout(Some(self.timeout))
-            .map_err(|_| TransportFailure {
-                kind: TransportKind::Exchange,
-            })?;
-        let head = format!(
-            "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: {TOKEN_REQUEST_ACCEPT}\r\nContent-Type: {TOKEN_REQUEST_CONTENT_TYPE}\r\nContent-Length: {}\r\nConnection: close\r\n",
-            request.body.len()
-        );
-        stream
-            .write_all(head.as_bytes())
-            .and_then(|_| match &request.authorization {
-                None => Ok(()),
-                Some(authorization) => stream
-                    .write_all(authorization.name().as_bytes())
-                    .and_then(|_| stream.write_all(b": "))
-                    .and_then(|_| stream.write_all(authorization.value().as_bytes()))
-                    .and_then(|_| stream.write_all(b"\r\n")),
+    fn send<'a>(
+        &'a self,
+        request: &'a TokenRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>> {
+        let url = request.url.clone();
+        let authorization = request.authorization.clone();
+        let body = request.body.clone();
+        let timeout = self.timeout;
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                send_blocking(&url, authorization.as_ref(), &body, timeout)
             })
-            .and_then(|_| stream.write_all(b"\r\n"))
-            .and_then(|_| stream.write_all(request.body.as_bytes()))
-            .and_then(|_| stream.flush())
+            .await
             .map_err(|_| TransportFailure {
                 kind: TransportKind::Exchange,
-            })?;
-        read_token_wire(&mut stream)
+            })?
+        })
     }
+}
+
+/// The blocking half of one loopback send.
+fn send_blocking(
+    url: &str,
+    authorization: Option<&AuthHeader>,
+    body: &ProtectedText,
+    timeout: Duration,
+) -> Result<TokenWire, TransportFailure> {
+    let (host, port, path) = split_http_url(url).ok_or(TransportFailure {
+        kind: TransportKind::Connect,
+    })?;
+    let mut stream = TcpStream::connect((host.as_str(), port)).map_err(|_| TransportFailure {
+        kind: TransportKind::Connect,
+    })?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|_| TransportFailure {
+            kind: TransportKind::Exchange,
+        })?;
+    let head = format!(
+            "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: {TOKEN_REQUEST_ACCEPT}\r\nContent-Type: {TOKEN_REQUEST_CONTENT_TYPE}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+    stream
+        .write_all(head.as_bytes())
+        .and_then(|_| match authorization {
+            None => Ok(()),
+            Some(authorization) => stream
+                .write_all(authorization.name().as_bytes())
+                .and_then(|_| stream.write_all(b": "))
+                .and_then(|_| stream.write_all(authorization.value().as_bytes()))
+                .and_then(|_| stream.write_all(b"\r\n")),
+        })
+        .and_then(|_| stream.write_all(b"\r\n"))
+        .and_then(|_| stream.write_all(body.as_bytes()))
+        .and_then(|_| stream.flush())
+        .map_err(|_| TransportFailure {
+            kind: TransportKind::Exchange,
+        })?;
+    read_token_wire(&mut stream)
 }
 
 /// Split one absolute loopback `http` URL into host, port, and path.

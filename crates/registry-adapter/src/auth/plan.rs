@@ -372,8 +372,9 @@ impl AuthPlan {
     /// acquire a credential through the fixed token endpoint under the
     /// exchange's budget; the acquisition holds the endpoint's cache
     /// lock until it completes, which is the single-flight refresh of
-    /// section 10.2.
-    pub fn authorize(
+    /// section 10.2. The future is `Send`, so the engine may poll it on
+    /// any worker.
+    pub async fn authorize(
         &self,
         context: &mut AuthorizeContext<'_>,
     ) -> Result<Option<AuthHeader>, AuthError> {
@@ -395,7 +396,8 @@ impl AuthPlan {
             context.send,
             context.signer,
             context.events,
-        )?;
+        )
+        .await?;
         let value = scheme_value("Bearer", token.as_bytes()).map_err(|_| AuthError::Credential)?;
         Ok(Some(AuthHeader::new("authorization", value)))
     }
@@ -409,7 +411,7 @@ impl AuthPlan {
     /// kind, raises the uncatchable `credential.rejected`. A 403 stays
     /// the caller's `upstream.http`: it answers about the request, not
     /// the credential.
-    pub fn on_upstream_status(
+    pub async fn on_upstream_status(
         &self,
         status: u16,
         refresh_used: &mut bool,
@@ -424,7 +426,7 @@ impl AuthPlan {
         }
         if self.kind.is_oauth2() && !*refresh_used {
             *refresh_used = true;
-            cache.invalidate();
+            cache.invalidate().await;
             events.push(AuthEvent::TokenInvalidatedAfterUnauthorized);
             return UpstreamStatusAction::RetryWithFreshCredential;
         }
@@ -960,9 +962,11 @@ mod tests {
     /// the pair, the declared scheme with the token (defaulting to
     /// `Bearer`), the declared header with the key; `none` resolves
     /// nothing.
-    #[test]
-    fn authorize_shapes_each_static_kind() {
+    #[tokio::test]
+    async fn authorize_shapes_each_static_kind() {
         use crate::auth::{ProtectedText, TokenRequest, TokenWire};
+        use std::future::Future;
+        use std::pin::Pin;
 
         std::env::set_var("ADAPTER_TEST_AUTH_USER", "user");
         std::env::set_var("ADAPTER_TEST_AUTH_PASS", "pass");
@@ -972,8 +976,14 @@ mod tests {
         /// No static kind ever sends a token request; a call is a bug.
         struct NeverSend;
         impl TokenSend for NeverSend {
-            fn send(&self, _request: &TokenRequest) -> Result<TokenWire, TransportFailure> {
-                panic!("a static kind never sends a token request");
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    panic!("a static kind never sends a token request");
+                })
             }
         }
         /// No static kind ever signs an assertion; a call is a bug.
@@ -987,7 +997,7 @@ mod tests {
             }
         }
 
-        fn authorize(
+        async fn authorize(
             endpoint: &EndpointAuthentication,
             credential: Option<RuntimeCredential>,
             resolver: &SecretResolver,
@@ -1005,7 +1015,9 @@ mod tests {
                 signer: &NeverSigns,
                 events: &mut events,
             };
-            plan.authorize(&mut context).expect("a resolved credential")
+            plan.authorize(&mut context)
+                .await
+                .expect("a resolved credential")
         }
 
         let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
@@ -1017,6 +1029,7 @@ mod tests {
             }),
             &resolver,
         )
+        .await
         .expect("basic sends a header");
         assert_eq!(header.name(), "authorization");
         assert_eq!(header.value().as_bytes(), b"Basic dXNlcjpwYXNz");
@@ -1028,6 +1041,7 @@ mod tests {
             }),
             &resolver,
         )
+        .await
         .expect("static authorization sends a header");
         assert_eq!(header.name(), "authorization");
         assert_eq!(header.value().as_bytes(), b"Bearer tok");
@@ -1041,6 +1055,7 @@ mod tests {
             }),
             &resolver,
         )
+        .await
         .expect("a declared scheme is honored");
         assert_eq!(header.value().as_bytes(), b"ApiToken tok");
 
@@ -1053,6 +1068,7 @@ mod tests {
             }),
             &resolver,
         )
+        .await
         .expect("static api key sends a header");
         assert_eq!(header.name(), "X-Api-Key");
         assert_eq!(header.value().as_bytes(), b"key123");
@@ -1073,6 +1089,7 @@ mod tests {
         };
         assert!(plan
             .authorize(&mut context)
+            .await
             .expect("none resolves")
             .is_none());
     }
@@ -1080,9 +1097,11 @@ mod tests {
     /// The 401 rule: one refresh under an OAuth2 kind with the cache
     /// invalidated, `credential.rejected` after that or under a static
     /// kind, and 403 continuing as the caller's `upstream.http`.
-    #[test]
-    fn the_401_rule_decides_by_kind_and_refresh() {
+    #[tokio::test]
+    async fn the_401_rule_decides_by_kind_and_refresh() {
         use crate::auth::{TokenRequest, TokenWire};
+        use std::future::Future;
+        use std::pin::Pin;
 
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("CLIENT_SECRET", "csecret");
@@ -1091,12 +1110,18 @@ mod tests {
         /// credential the rule can be seen to invalidate.
         struct IssuesOne;
         impl TokenSend for IssuesOne {
-            fn send(&self, _request: &TokenRequest) -> Result<TokenWire, TransportFailure> {
-                Ok(TokenWire {
-                    status: 200,
-                    media_type: Some("application/json".to_owned()),
-                    body: br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
-                        .to_vec(),
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    Ok(TokenWire {
+                        status: 200,
+                        media_type: Some("application/json".to_owned()),
+                        body: br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
+                            .to_vec(),
+                    })
                 })
             }
         }
@@ -1135,31 +1160,35 @@ mod tests {
             events: &mut events,
         };
         plan.authorize(&mut context)
+            .await
             .expect("the cache is primed with one credential");
-        assert!(cache.remaining_lifetime().is_some());
+        assert!(cache.remaining_lifetime().await.is_some());
         // The priming's token events are not this rule's record.
         events.clear();
 
         let mut refresh_used = false;
         assert_eq!(
-            plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events),
+            plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+                .await,
             UpstreamStatusAction::RetryWithFreshCredential
         );
         assert!(refresh_used, "the single refresh is now spent");
         assert!(
-            cache.remaining_lifetime().is_none(),
+            cache.remaining_lifetime().await.is_none(),
             "the cached credential was discarded"
         );
         assert_eq!(events, vec![AuthEvent::TokenInvalidatedAfterUnauthorized]);
 
         assert_eq!(
-            plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events),
+            plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+                .await,
             UpstreamStatusAction::CredentialRejected
         );
         assert_eq!(events.last(), Some(&AuthEvent::CredentialRejected));
 
         assert_eq!(
-            plan.on_upstream_status(403, &mut refresh_used, &cache, &mut events),
+            plan.on_upstream_status(403, &mut refresh_used, &cache, &mut events)
+                .await,
             UpstreamStatusAction::Continue,
             "a 403 stays the caller's upstream.http"
         );
@@ -1175,12 +1204,16 @@ mod tests {
             AuthPlan::compile(&EndpointAuthentication::Basic {}, &basic_binding).expect("plan");
         let mut refresh_used = false;
         assert_eq!(
-            basic.on_upstream_status(401, &mut refresh_used, &cache, &mut events),
+            basic
+                .on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+                .await,
             UpstreamStatusAction::CredentialRejected,
             "a static kind holds nothing to refresh"
         );
         assert_eq!(
-            basic.on_upstream_status(403, &mut refresh_used, &cache, &mut events),
+            basic
+                .on_upstream_status(403, &mut refresh_used, &cache, &mut events)
+                .await,
             UpstreamStatusAction::Continue
         );
     }
