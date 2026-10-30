@@ -14,14 +14,15 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use axum::body::Body;
 use axum::extract::{Path, RawQuery};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use deadpool_postgres::Pool;
 use registry_adapter_core::{
-    AdapterProfile, AdapterProject, ErrorClass, Problem, SLOT_PROBLEM_CODE,
+    AdapterProfile, AdapterProject, ErrorClass, HttpMethod, Problem, SLOT_PROBLEM_CODE,
 };
 use serde_json::{json, Value};
 
@@ -34,6 +35,7 @@ use crate::exchange::{
 };
 use crate::journal::{self, JournalEvent};
 use crate::load::{Loaded, ServedOperation, ServedPagination};
+use crate::read_request::{parse_filter_text, ReadRefusal};
 use crate::route::{run_route, RouteContext, RouteFailure};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
 
@@ -47,25 +49,84 @@ pub struct FacadeState {
     pub codec: Option<ContinuationCodec>,
 }
 
-/// The router for every served operation.
+/// The router for every served operation: one handler per method and
+/// path. A path answered under another method refuses 405 with the methods
+/// it takes, and a path no operation serves refuses 404; both answer the
+/// profile's problem and journal nothing, since no caller was verified.
 pub fn router(state: Arc<FacadeState>) -> Router {
+    let mut by_path: Vec<(String, Vec<usize>)> = Vec::new();
+    for (index, operation) in state.loaded.served.iter().enumerate() {
+        match by_path
+            .iter_mut()
+            .find(|(path, _)| *path == operation.method_path)
+        {
+            Some((_, indexes)) => indexes.push(index),
+            None => by_path.push((operation.method_path.clone(), vec![index])),
+        }
+    }
     let mut router = Router::new();
-    for index in 0..state.loaded.served.len() {
+    for (path, indexes) in by_path {
+        let mut routes: Option<MethodRouter> = None;
+        let mut allowed = Vec::new();
+        for index in indexes {
+            let shared = Arc::clone(&state);
+            let handler = move |headers: HeaderMap,
+                                Path(params): Path<HashMap<String, String>>,
+                                RawQuery(query): RawQuery,
+                                body: Body| {
+                let shared = Arc::clone(&shared);
+                async move { handle(shared, index, headers, params, query, body).await }
+            };
+            let method = state.loaded.served[index].method;
+            allowed.push(if method == HttpMethod::Post {
+                "POST"
+            } else {
+                "GET"
+            });
+            routes = Some(match (routes.take(), method) {
+                (None, HttpMethod::Post) => post(handler),
+                (None, _) => get(handler),
+                (Some(existing), HttpMethod::Post) => existing.post(handler),
+                (Some(existing), _) => existing.get(handler),
+            });
+        }
+        let Some(routes) = routes else { continue };
         let shared = Arc::clone(&state);
-        let path = shared.loaded.served[index].method_path.clone();
+        let allow = allowed.join(", ");
         router = router.route(
             &path,
-            get(
-                move |headers: HeaderMap,
-                      Path(params): Path<HashMap<String, String>>,
-                      RawQuery(query): RawQuery| {
-                    let shared = Arc::clone(&shared);
-                    async move { handle(shared, index, headers, params, query).await }
-                },
-            ),
+            routes.fallback(move || {
+                let shared = Arc::clone(&shared);
+                let allow = allow.clone();
+                async move {
+                    let mut response = facade_problem(
+                        shared.loaded.problems(),
+                        ErrorClass::FacadeMethodNotAllowed,
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        "",
+                        &new_id(),
+                    );
+                    if let Ok(value) = HeaderValue::from_str(&allow) {
+                        response.headers_mut().insert(header::ALLOW, value);
+                    }
+                    response
+                }
+            }),
         );
     }
-    router
+    let unmatched = Arc::clone(&state);
+    router.fallback(move || {
+        let shared = Arc::clone(&unmatched);
+        async move {
+            facade_problem(
+                shared.loaded.problems(),
+                ErrorClass::FacadeNotFound,
+                StatusCode::NOT_FOUND,
+                "",
+                &new_id(),
+            )
+        }
+    })
 }
 
 /// Run one call to completion on its own task: a caller that disconnects
@@ -77,6 +138,7 @@ async fn handle(
     headers: HeaderMap,
     params: HashMap<String, String>,
     query: Option<String>,
+    body: Body,
 ) -> Response {
     let fallback = Arc::clone(&state);
     // The id is minted before the task starts, so the fallback answer
@@ -95,6 +157,7 @@ async fn handle(
             &headers,
             &params,
             query.as_deref(),
+            body,
         )
         .await
     });
@@ -120,6 +183,7 @@ async fn answer(
     headers: &HeaderMap,
     params: &HashMap<String, String>,
     query: Option<&str>,
+    body: Body,
 ) -> Response {
     let operation = &state.loaded.served[index];
     let profile = state.loaded.problems();
@@ -127,7 +191,7 @@ async fn answer(
         .get(&operation.record_type_parameter)
         .cloned()
         .unwrap_or_default();
-    let record_id = operation
+    let mut record_id = operation
         .record_id_parameter
         .as_ref()
         .and_then(|name| params.get(name))
@@ -138,6 +202,18 @@ async fn answer(
         Ok(caller) => caller,
         Err(refusal) => return refusal_response(profile, refusal, &request_id),
     };
+    if !accepts_json(headers) {
+        return refuse_call(
+            state,
+            operation,
+            &caller,
+            &record_type,
+            &request_id,
+            ErrorClass::FacadeNotAcceptable,
+            StatusCode::NOT_ACCEPTABLE,
+        )
+        .await;
+    }
     if record_type != operation.record_type {
         return refuse_call(
             state,
@@ -163,6 +239,108 @@ async fn answer(
         .await;
     }
 
+    let mut inputs = RequestInputs::default();
+    if operation.method == HttpMethod::Post {
+        if !has_json_content_type(headers) {
+            return refuse_call(
+                state,
+                operation,
+                &caller,
+                &record_type,
+                &request_id,
+                ErrorClass::FacadeUnsupportedMediaType,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            )
+            .await;
+        }
+        let bytes = match read_body(headers, body, operation.request_maximum_bytes).await {
+            Ok(bytes) => bytes,
+            Err(()) => {
+                return refuse_call(
+                    state,
+                    operation,
+                    &caller,
+                    &record_type,
+                    &request_id,
+                    ErrorClass::FacadePayloadTooLarge,
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                )
+                .await;
+            }
+        };
+        if query.is_some_and(|text| !text.is_empty()) {
+            return refuse_request(
+                state,
+                operation,
+                &caller,
+                &record_type,
+                &request_id,
+                Refusal::invalid_request("a read over POST takes no query parameters"),
+            )
+            .await;
+        }
+        let Ok(parsed) = serde_json::from_slice::<Value>(&bytes) else {
+            return refuse_request(
+                state,
+                operation,
+                &caller,
+                &record_type,
+                &request_id,
+                Refusal::invalid_request("the request body is not JSON"),
+            )
+            .await;
+        };
+        let Some(template) = &operation.request_template else {
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &record_type,
+                &request_id,
+            );
+        };
+        match template.capture(&parsed, &operation.filters) {
+            Ok(captured) => {
+                if let Some(id) = captured.record_id {
+                    record_id = id;
+                }
+                inputs.cursor = captured.cursor;
+                inputs.page_size = captured.page_size;
+                inputs.filters = captured.filters.unwrap_or_default();
+                inputs.from_body = true;
+            }
+            Err(refusal) => {
+                return refuse_request(
+                    state,
+                    operation,
+                    &caller,
+                    &record_type,
+                    &request_id,
+                    match refusal {
+                        ReadRefusal::Shape(reason) => Refusal::invalid_request(&reason),
+                        ReadRefusal::Field(reason) => Refusal::invalid_field(&reason),
+                    },
+                )
+                .await;
+            }
+        }
+    } else if operation.pagination.is_some() {
+        match query_inputs(operation, query) {
+            Ok(parsed) => inputs = parsed,
+            Err(refusal) => {
+                return refuse_request(
+                    state,
+                    operation,
+                    &caller,
+                    &record_type,
+                    &request_id,
+                    refusal,
+                )
+                .await;
+            }
+        }
+    }
+
     if !is_path_segment_value(&record_id) {
         return refuse_request(
             state,
@@ -170,7 +348,7 @@ async fn answer(
             &caller,
             &record_type,
             &request_id,
-            "the record identifier is not a usable path value",
+            Refusal::invalid_request("the record identifier is not a usable path value"),
         )
         .await;
     }
@@ -179,30 +357,32 @@ async fn answer(
     let mut search_binding: Option<SearchBinding> = None;
     let mut requested_page_size: Option<u64> = None;
     if let Some(pagination) = &operation.pagination {
-        match open_search(state, operation, pagination, &caller, &record_type, query) {
+        match open_search(state, operation, pagination, &caller, &record_type, inputs) {
             Ok(search) => {
                 exchange
                     .message
                     .set_header(PAGE_SIZE_HEADER, json!(search.page_size));
-                exchange.set_property(FILTERS_PROPERTY, json!({}));
+                exchange.set_property(FILTERS_PROPERTY, Value::Object(search.filters));
                 if let Some(continuation) = search.continuation {
                     exchange.set_property(CONTINUATION_PROPERTY, continuation);
                 }
                 requested_page_size = Some(search.page_size);
                 search_binding = Some(search.binding);
             }
-            Err(reason) => {
+            Err(refusal) => {
                 return refuse_request(
                     state,
                     operation,
                     &caller,
                     &record_type,
                     &request_id,
-                    &reason,
+                    refusal,
                 )
                 .await;
             }
         }
+    } else if !inputs.filters.is_empty() {
+        exchange.set_property(FILTERS_PROPERTY, Value::Object(inputs.filters));
     }
     exchange
         .message
@@ -256,11 +436,17 @@ async fn answer(
             &request_id,
         ) {
             Ok(slots) => {
-                match seal_next(state, operation, &caller, search_binding, &done).and_then(
-                    |next_cursor| {
-                        render_success(operation, slots, next_cursor, &record_type, &request_id)
-                    },
-                ) {
+                match seal_next(
+                    state,
+                    operation,
+                    &caller,
+                    search_binding,
+                    requested_page_size.unwrap_or_default(),
+                    &done,
+                )
+                .and_then(|next_cursor| {
+                    render_success(operation, slots, next_cursor, &record_type, &request_id)
+                }) {
                     Ok(body) => {
                         events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
                         Finished::Body(body)
@@ -541,10 +727,23 @@ fn is_path_segment_value(record_id: &str) -> bool {
     record_id != "." && record_id != ".."
 }
 
+/// The inputs of one read as the caller supplied them, from the query
+/// string of a GET or the body of a read over POST.
+#[derive(Default)]
+struct RequestInputs {
+    cursor: Option<String>,
+    page_size: Option<u64>,
+    filters: serde_json::Map<String, Value>,
+    /// Whether the inputs came from a request body, which decides the
+    /// status of an out-of-bounds page size.
+    from_body: bool,
+}
+
 /// What a search request carries once validated.
 struct SearchInputs {
     page_size: u64,
     continuation: Option<Value>,
+    filters: serde_json::Map<String, Value>,
     binding: SearchBinding,
 }
 
@@ -553,65 +752,212 @@ struct SearchBinding {
     filters: crate::component::rest::continuation::FilterDigest,
 }
 
-/// Validate a search's query against the operation's declared pagination
-/// and restore the continuation its cursor carries. Only the cursor and
-/// page-size parameters exist (the person-search binding declares no
-/// filters), so any other, a repeated one, or a missing or out-of-bounds
-/// page size is refused. The reason is value-free, for the journal.
+/// Why a request was refused: the class and status the caller sees, and a
+/// value-free reason for the journal.
+struct Refusal {
+    class: ErrorClass,
+    status: StatusCode,
+    reason: String,
+}
+
+impl Refusal {
+    fn invalid_request(reason: &str) -> Self {
+        Self {
+            class: ErrorClass::FacadeInvalidRequest,
+            status: StatusCode::BAD_REQUEST,
+            reason: reason.to_owned(),
+        }
+    }
+
+    fn invalid_field(reason: &str) -> Self {
+        Self {
+            class: ErrorClass::FacadeInvalidField,
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            reason: reason.to_owned(),
+        }
+    }
+
+    fn invalid_cursor(reason: &str) -> Self {
+        Self {
+            class: ErrorClass::FacadeInvalidCursor,
+            status: StatusCode::BAD_REQUEST,
+            reason: reason.to_owned(),
+        }
+    }
+}
+
+/// Read the cursor, page size, and declared filters from a GET's query
+/// string. Any other parameter, a repeated one, or a page size that is not
+/// an integer is refused; a filter whose text is not of its declared type
+/// is a field fault.
+fn query_inputs(
+    operation: &ServedOperation,
+    query: Option<&str>,
+) -> Result<RequestInputs, Refusal> {
+    let pagination = operation
+        .pagination
+        .as_ref()
+        .ok_or_else(|| Refusal::invalid_request("the operation takes no query parameters"))?;
+    let mut inputs = RequestInputs::default();
+    let mut seen: Vec<String> = Vec::new();
+    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        if seen.iter().any(|earlier| *earlier == name) {
+            return Err(Refusal::invalid_request("a repeated query parameter"));
+        }
+        seen.push(name.clone().into_owned());
+        if name == pagination.cursor_parameter {
+            inputs.cursor = Some(value.into_owned());
+        } else if name == pagination.page_size_parameter {
+            inputs.page_size = Some(
+                value
+                    .parse::<u64>()
+                    .map_err(|_| Refusal::invalid_request("the page size is not an integer"))?,
+            );
+        } else if let Some(filter) = operation.filters.iter().find(|filter| filter.name == name) {
+            let parsed = parse_filter_text(&value, filter.field_type).ok_or_else(|| {
+                Refusal::invalid_field("a filter value does not have its declared type")
+            })?;
+            inputs.filters.insert(filter.name.clone(), parsed);
+        } else {
+            return Err(Refusal::invalid_request("an undeclared query parameter"));
+        }
+    }
+    Ok(inputs)
+}
+
+/// Validate a search's inputs against the operation's declared pagination
+/// and restore the continuation its cursor carries. A cursor carries the
+/// page size of the call that minted it: a call that names no size reuses
+/// it, and one that names another is refused as an invalid cursor. A call
+/// with neither a cursor nor a size takes the profile's default size, and
+/// is refused when there is none.
 fn open_search(
     state: &FacadeState,
     operation: &ServedOperation,
     pagination: &ServedPagination,
     caller: &Caller,
     record_type: &str,
-    query: Option<&str>,
-) -> Result<SearchInputs, String> {
-    let mut cursor: Option<String> = None;
-    let mut limit: Option<String> = None;
-    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
-        let slot = if name == pagination.cursor_parameter {
-            &mut cursor
-        } else if name == pagination.page_size_parameter {
-            &mut limit
-        } else {
-            return Err("an undeclared query parameter".to_owned());
-        };
-        if slot.replace(value.into_owned()).is_some() {
-            return Err("a repeated query parameter".to_owned());
-        }
-    }
-    let page_size = limit
-        .ok_or("the page size is absent and the profile declares no default")?
-        .parse::<u64>()
-        .map_err(|_| "the page size is not an integer".to_owned())?;
-    if !(pagination.page_size_minimum..=pagination.page_size_maximum).contains(&page_size) {
-        return Err("the page size is outside the profile's bounds".to_owned());
-    }
+    inputs: RequestInputs,
+) -> Result<SearchInputs, Refusal> {
+    // The digest leaves the page size out: the cursor carries it, so a
+    // call may omit it, and a supplied size is compared to the carried one.
     let filters = filter_digest(
-        &json!({"recordType": record_type, "filters": {}}),
-        u32::try_from(page_size).map_err(|_| "the page size is too large".to_owned())?,
+        &json!({"recordType": record_type, "filters": inputs.filters}),
+        0,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| Refusal::invalid_request(&error.to_string()))?;
     let codec = state
         .codec
         .as_ref()
-        .ok_or("the runtime has no cursor key")?;
-    let continuation = match cursor {
+        .ok_or_else(|| Refusal::invalid_request("the runtime has no cursor key"))?;
+    let (continuation, carried_size) = match &inputs.cursor {
         Some(cursor) => {
             let binding = cursor_binding(state, operation, caller, filters);
-            Some(
-                codec
-                    .open(&cursor, &binding, SystemTime::now())
-                    .map_err(|refusal: CursorRefusal| refusal.reason().to_owned())?,
-            )
+            let sealed = codec
+                .open(cursor, &binding, SystemTime::now())
+                .map_err(|refusal: CursorRefusal| Refusal::invalid_cursor(refusal.reason()))?;
+            let (size, continuation) =
+                unwrap_continuation(sealed).ok_or_else(|| Refusal::invalid_cursor("malformed"))?;
+            (Some(continuation), Some(size))
         }
-        None => None,
+        None => (None, None),
+    };
+    if let Some(supplied) = inputs.page_size {
+        if !(pagination.page_size_minimum..=pagination.page_size_maximum).contains(&supplied) {
+            let reason = "the page size is outside the profile's bounds";
+            return Err(if inputs.from_body {
+                Refusal::invalid_field(reason)
+            } else {
+                Refusal::invalid_request(reason)
+            });
+        }
+    }
+    let page_size = match (inputs.page_size, carried_size) {
+        (Some(supplied), Some(carried)) if supplied != carried => {
+            return Err(Refusal::invalid_cursor(
+                "the page size differs from the cursor's",
+            ));
+        }
+        (Some(size), _) | (None, Some(size)) => size,
+        (None, None) => pagination.page_size_default.ok_or_else(|| {
+            Refusal::invalid_request("the page size is absent and the profile declares no default")
+        })?,
     };
     Ok(SearchInputs {
         page_size,
         continuation,
+        filters: inputs.filters,
         binding: SearchBinding { filters },
     })
+}
+
+/// The members a sealed cursor value carries: the continuation the route
+/// set and the page size of the call that minted it.
+const CURSOR_CONTINUATION_MEMBER: &str = "c";
+const CURSOR_PAGE_SIZE_MEMBER: &str = "s";
+
+fn wrap_continuation(continuation: &Value, page_size: u64) -> Value {
+    json!({CURSOR_CONTINUATION_MEMBER: continuation, CURSOR_PAGE_SIZE_MEMBER: page_size})
+}
+
+fn unwrap_continuation(sealed: Value) -> Option<(u64, Value)> {
+    let Value::Object(mut members) = sealed else {
+        return None;
+    };
+    let size = members.get(CURSOR_PAGE_SIZE_MEMBER)?.as_u64()?;
+    let continuation = members.remove(CURSOR_CONTINUATION_MEMBER)?;
+    Some((size, continuation))
+}
+
+/// Whether the `Accept` header admits a JSON reply: absent, or a range
+/// covering `application/json` with a non-zero quality.
+fn accepts_json(headers: &HeaderMap) -> bool {
+    let values: Vec<&str> = headers
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect();
+    if values.is_empty() {
+        return true;
+    }
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .any(|range| {
+            let mut parts = range.split(';');
+            let media = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
+            let refused = parts.any(|parameter| {
+                let parameter = parameter.trim().to_ascii_lowercase();
+                parameter
+                    .strip_prefix("q=")
+                    .is_some_and(|quality| quality.trim().parse::<f64>().is_ok_and(|q| q <= 0.0))
+            });
+            !refused && matches!(media.as_str(), "*/*" | "application/*" | "application/json")
+        })
+}
+
+/// Whether the request declares `application/json` as its body type.
+fn has_json_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+}
+
+/// Read a request body of at most `limit` bytes. A declared length past
+/// the bound, or a body that runs past it, is refused before it is held.
+/// A body that fails to read for another reason has no reader left to
+/// answer, so it is refused the same way.
+async fn read_body(headers: &HeaderMap, body: Body, limit: usize) -> Result<axum::body::Bytes, ()> {
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared.is_some_and(|length| length > limit) {
+        return Err(());
+    }
+    axum::body::to_bytes(body, limit).await.map_err(|_| ())
 }
 
 fn cursor_binding<'a>(
@@ -637,18 +983,19 @@ fn seal_next(
     operation: &ServedOperation,
     caller: &Caller,
     binding: Option<SearchBinding>,
+    page_size: u64,
     done: &Exchange,
 ) -> Result<Option<String>, String> {
     let (Some(binding), Some(codec)) = (binding, state.codec.as_ref()) else {
         return Ok(None);
     };
     let cursor_binding = cursor_binding(state, operation, caller, binding.filters);
+    let wrapped = done
+        .property(NEXT_CONTINUATION_PROPERTY)
+        .filter(|value| !value.is_null())
+        .map(|continuation| wrap_continuation(continuation, page_size));
     codec
-        .seal(
-            done.property(NEXT_CONTINUATION_PROPERTY),
-            &cursor_binding,
-            SystemTime::now(),
-        )
+        .seal(wrapped.as_ref(), &cursor_binding, SystemTime::now())
         .map_err(|error| error.to_string())
 }
 
@@ -692,15 +1039,15 @@ async fn refuse_call(
     facade_problem(profile, class, status, record_type, request_id)
 }
 
-/// Answer a refused request as `facade.invalid-request`, journaling the
-/// refusal first with its value-free reason.
+/// Answer a refused request as the class and status of its [`Refusal`],
+/// journaling the refusal first with its value-free reason.
 async fn refuse_request(
     state: &FacadeState,
     operation: &ServedOperation,
     caller: &Caller,
     record_type: &str,
     request_id: &str,
-    reason: &str,
+    refusal: Refusal,
 ) -> Response {
     let profile = state.loaded.problems();
     let event = |kind: &'static str, detail: Option<Value>| {
@@ -721,8 +1068,8 @@ async fn refuse_request(
         event(
             "exchangeFailed",
             Some(json!({
-                "class": ErrorClass::FacadeInvalidRequest.class(),
-                "reason": reason,
+                "class": refusal.class.class(),
+                "reason": refusal.reason,
             })),
         ),
     ];
@@ -738,8 +1085,8 @@ async fn refuse_request(
     }
     facade_problem(
         profile,
-        ErrorClass::FacadeInvalidRequest,
-        StatusCode::BAD_REQUEST,
+        refusal.class,
+        refusal.status,
         record_type,
         request_id,
     )
@@ -811,7 +1158,7 @@ fn problem_response(
     request_id: &str,
 ) -> Response {
     let Some(problem) = select_problem(problems.profile, class) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return no_store(StatusCode::INTERNAL_SERVER_ERROR.into_response());
     };
     let status = status_override.unwrap_or_else(|| {
         StatusCode::from_u16(u16::try_from(problem.status.get()).unwrap_or(500))
@@ -840,7 +1187,7 @@ fn problem_response(
         }
         Err(error) => {
             tracing::error!(%error, "the problem envelope could not be rendered");
-            status.into_response()
+            no_store(status.into_response())
         }
     }
 }
@@ -867,6 +1214,15 @@ fn json_response(status: StatusCode, body: &Value) -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
+    no_store(response)
+}
+
+/// Mark a reply as never to be stored: every reply the facade makes, a
+/// refusal included, discloses or concerns a protected read.
+fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 
@@ -912,6 +1268,10 @@ mod tests {
                 .expect("an empty envelope compiles"),
             record_schema: json!({}),
             pagination: None,
+            method: HttpMethod::Get,
+            request_template: None,
+            request_maximum_bytes: crate::load::DEFAULT_REQUEST_MAXIMUM_BYTES,
+            filters: Vec::new(),
         }
     }
 

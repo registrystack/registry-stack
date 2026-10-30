@@ -27,7 +27,7 @@
 //! `previousCursorKeyRef` keeping cursors valid across one key rotation.
 //! A cursor that fails authentication, has expired, or was minted for
 //! another operation, caller, or filter set raises
-//! `facade.invalid-request` before any route step runs.
+//! `facade.invalid-cursor` before any route step runs.
 //!
 //! [`continuation`] records the AEAD it seals with and the reason for
 //! that choice. The codec is security-sensitive (it carries source

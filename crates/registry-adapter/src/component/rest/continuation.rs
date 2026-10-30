@@ -35,7 +35,7 @@
 //!   `facade.unauthenticated`, never a cursor refusal;
 //! - open it before any route step runs, and answer every
 //!   [`CursorRefusal`] as the one problem [`CursorRefusal::error_class`]
-//!   names, `facade.invalid-request`, journaling only
+//!   names, `facade.invalid-cursor`, journaling only
 //!   [`CursorRefusal::reason`];
 //! - compute the [`FilterDigest`] once per request with
 //!   [`filter_digest`], over the same validated inputs on the request
@@ -364,7 +364,7 @@ impl fmt::Debug for CursorBinding<'_> {
 }
 
 /// Why a cursor was refused. Every reason is the one caller-facing
-/// `facade.invalid-request` ([`CursorRefusal::error_class`]); the
+/// `facade.invalid-cursor` ([`CursorRefusal::error_class`]); the
 /// reason itself is for the journal and tests, and none carries any
 /// cursor content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -393,7 +393,7 @@ impl CursorRefusal {
     /// The error class the `rest` consumer raises for every refusal.
     #[must_use]
     pub const fn error_class(self) -> ErrorClass {
-        ErrorClass::FacadeInvalidRequest
+        ErrorClass::FacadeInvalidCursor
     }
 
     /// The value-free reason, for the journal.
@@ -533,7 +533,7 @@ impl ContinuationCodec {
     /// # Errors
     ///
     /// A [`CursorRefusal`] naming why; every one is answered as
-    /// `facade.invalid-request`.
+    /// `facade.invalid-cursor`.
     pub fn open(
         &self,
         cursor: &str,

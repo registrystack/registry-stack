@@ -34,6 +34,7 @@ use crate::component::http::header_filter::HeaderFilter;
 use crate::component::http::uri::PinnedOrigin;
 use crate::envelope::CompiledEnvelope;
 use crate::interim_loopback::LoopbackSender;
+use crate::read_request::{ReadRequestTemplate, ServedFilter};
 use crate::route::{check_servable, is_served_auth, EndpointRuntime};
 use crate::scripts::ScriptSet;
 use registry_adapter_core::{Expression, RouteTemplate};
@@ -87,7 +88,14 @@ pub enum LoadError {
 /// One facade operation this runtime answers.
 pub struct ServedOperation {
     pub operation: String,
+    pub method: registry_adapter_core::HttpMethod,
     pub method_path: String,
+    /// The compiled request envelope of a read over POST.
+    pub request_template: Option<ReadRequestTemplate>,
+    /// The largest request body, in bytes, this operation reads.
+    pub request_maximum_bytes: usize,
+    /// The filters the binding declares, each with its record field's type.
+    pub filters: Vec<ServedFilter>,
     pub record_type_parameter: String,
     pub record_id_parameter: Option<String>,
     pub binding: String,
@@ -118,7 +126,13 @@ pub struct ServedPagination {
     pub page_size_parameter: String,
     pub page_size_minimum: u64,
     pub page_size_maximum: u64,
+    /// The page size a call that names none gets, when the profile
+    /// declares one.
+    pub page_size_default: Option<u64>,
 }
+
+/// The request body bound of a read that declares none: 16 KiB.
+pub const DEFAULT_REQUEST_MAXIMUM_BYTES: usize = 16 * 1024;
 
 /// Everything startup produced.
 pub struct Loaded {
@@ -149,11 +163,17 @@ impl Loaded {
     }
 }
 
-/// Whether a served operation already answers the facade path: the router
-/// takes one handler per path, so a second binding on it would never be
-/// reached.
-fn serves_path(served: &[ServedOperation], path: &str) -> bool {
-    served.iter().any(|operation| operation.method_path == path)
+/// Whether a served operation already answers the facade method and path:
+/// the router takes one handler per method and path, so a second binding on
+/// it would never be reached.
+fn serves_path(
+    served: &[ServedOperation],
+    method: registry_adapter_core::HttpMethod,
+    path: &str,
+) -> bool {
+    served
+        .iter()
+        .any(|operation| operation.method == method && operation.method_path == path)
 }
 
 fn format_spec(kind: &'static str, api_version: &'static str) -> FormatSpec<'static> {
@@ -391,7 +411,7 @@ pub fn load(
         );
         match outcome {
             Ok(operation) => {
-                if serves_path(&served, &operation.method_path) {
+                if serves_path(&served, operation.method, &operation.method_path) {
                     return Err(LoadError::Runtime(format!(
                         "binding {} was refused: another binding already serves the facade path {}",
                         binding.id.as_str(),
@@ -445,8 +465,57 @@ fn compile_binding(
         .operations
         .get(binding.operation.as_str())
         .ok_or("the binding names no profile operation")?;
-    if operation.method != registry_adapter_core::HttpMethod::Get {
-        return Err("a facade method other than GET is not served by this runtime yet".into());
+    let is_post_read =
+        operation.method == registry_adapter_core::HttpMethod::Post && operation.read_only;
+    if operation.method != registry_adapter_core::HttpMethod::Get && !is_post_read {
+        return Err(
+            "a facade method other than GET, or a readOnly POST, is not served by this runtime yet"
+                .into(),
+        );
+    }
+    if operation.method == registry_adapter_core::HttpMethod::Get
+        && operation.request_envelope.is_some()
+    {
+        return Err(
+            "a GET read carries no request body, so its request envelope is not served".into(),
+        );
+    }
+    let request_template = operation
+        .request_envelope
+        .as_ref()
+        .map(|envelope| ReadRequestTemplate::compile(envelope.text()))
+        .transpose()
+        .map_err(|reason| {
+            BindingRefusal::Fault(format!("the request envelope is unusable: {reason}"))
+        })?;
+    if is_post_read && request_template.is_none() {
+        return Err("a read over POST declares no request envelope".into());
+    }
+    if request_template
+        .as_ref()
+        .is_some_and(|template| template.names("pageSize") || template.names("cursor"))
+        && operation.pagination.is_none()
+    {
+        return Err(
+            "the request envelope names a pagination slot on an operation with no pagination"
+                .into(),
+        );
+    }
+    let record_type_declaration = project
+        .record_types
+        .get(binding.record_type.as_str())
+        .ok_or("the binding names no declared record type")?;
+    let mut filters = Vec::with_capacity(binding.filters.len());
+    for name in binding.filters.iter() {
+        let field = record_type_declaration
+            .fields
+            .iter()
+            .find(|field| field.name.as_str() == name.as_str())
+            .ok_or("the binding declares a filter no record field carries")?;
+        filters.push(ServedFilter {
+            name: name.as_str().to_owned(),
+            field_type: field.r#type,
+        });
     }
     if operation.success_status.get() != 200 {
         return Err("a served operation answers 200; a successStatus other than 200 is not served by this runtime yet".into());
@@ -498,7 +567,15 @@ fn compile_binding(
     }
     Ok(ServedOperation {
         operation: operation.id.as_str().to_owned(),
+        method: operation.method,
         method_path: operation.path.clone(),
+        request_template,
+        request_maximum_bytes: operation
+            .request_maximum_bytes
+            .map_or(DEFAULT_REQUEST_MAXIMUM_BYTES, |bound| {
+                usize::try_from(bound.get()).unwrap_or(DEFAULT_REQUEST_MAXIMUM_BYTES)
+            }),
+        filters,
         record_type_parameter: operation.record_type_parameter.as_str().to_owned(),
         record_id_parameter: operation
             .record_id_parameter
@@ -540,6 +617,7 @@ fn compile_binding(
                 page_size_parameter: pagination.page_size_parameter.as_str().to_owned(),
                 page_size_minimum: pagination.page_size_minimum.get(),
                 page_size_maximum: pagination.page_size_maximum.get(),
+                page_size_default: pagination.page_size_default.map(|default| default.get()),
             }),
     })
 }
@@ -667,6 +745,10 @@ mod tests {
     fn a_second_binding_on_a_served_path_is_found() {
         let operation = ServedOperation {
             operation: "records-get".to_owned(),
+            method: registry_adapter_core::HttpMethod::Get,
+            request_template: None,
+            request_maximum_bytes: DEFAULT_REQUEST_MAXIMUM_BYTES,
+            filters: Vec::new(),
             method_path: "/v1/records/{recordType}/{id}".to_owned(),
             record_type_parameter: "recordType".to_owned(),
             record_id_parameter: Some("id".to_owned()),
@@ -681,8 +763,11 @@ mod tests {
             pagination: None,
         };
         let served = [operation];
-        assert!(serves_path(&served, "/v1/records/{recordType}/{id}"));
-        assert!(!serves_path(&served, "/v1/records/{recordType}"));
+        let get = registry_adapter_core::HttpMethod::Get;
+        let post = registry_adapter_core::HttpMethod::Post;
+        assert!(serves_path(&served, get, "/v1/records/{recordType}/{id}"));
+        assert!(!serves_path(&served, post, "/v1/records/{recordType}/{id}"));
+        assert!(!serves_path(&served, get, "/v1/records/{recordType}"));
     }
 
     #[test]

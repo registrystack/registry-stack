@@ -5,7 +5,7 @@
 //! sealed as the opaque `nextCursor` and opened back, bound to the
 //! concrete operation, the binding id, the caller's issuer and `sub`,
 //! the deployment, the filter digest, and an expiry. Every refusal is the one
-//! caller-facing `facade.invalid-request`; the reason stays
+//! caller-facing `facade.invalid-cursor`; the reason stays
 //! distinguishable here and in the journal, and carries no cursor
 //! content (section 13.7).
 //!
@@ -468,6 +468,12 @@ fn a_continuation_at_the_bound_seals_and_one_byte_over_is_refused() {
     );
     let token = sealed(&codec, &at_bound);
     assert_eq!(token.len(), CURSOR_MAXIMUM_TOKEN_BYTES);
+    // The largest token stays within the 4096-character cursor bound of
+    // the GovStack Consultation draft and uses only URL-safe characters.
+    assert!(token.len() <= 4096, "{} characters", token.len());
+    assert!(token
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'));
     assert_eq!(open(&codec, &token), Ok(at_bound));
 
     let over = string_of_serialized_length(CONTINUATION_MAXIMUM_BYTES + 1);
@@ -704,8 +710,8 @@ fn every_refusal_is_the_one_caller_facing_invalid_request_with_a_distinct_reason
     ];
     let mut reasons = Vec::new();
     for refusal in refusals {
-        assert_eq!(refusal.error_class(), ErrorClass::FacadeInvalidRequest);
-        assert_eq!(refusal.error_class().class(), "facade.invalid-request");
+        assert_eq!(refusal.error_class(), ErrorClass::FacadeInvalidCursor);
+        assert_eq!(refusal.error_class().class(), "facade.invalid-cursor");
         reasons.push(refusal.reason());
     }
     let mut distinct = reasons.clone();
