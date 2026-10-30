@@ -236,6 +236,15 @@ pub(crate) fn is_header_value_bytes(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte >= 0x20 && *byte != 0x7f)
 }
 
+/// Whether the bytes are a credential that arrives exactly as declared:
+/// header-value bytes with no leading or trailing space or tab, which
+/// intermediaries strip and so would silently change the credential.
+pub(crate) fn is_credential_value_bytes(bytes: &[u8]) -> bool {
+    let leading = matches!(bytes.first(), Some(b' ' | b'\t'));
+    let trailing = matches!(bytes.last(), Some(b' ' | b'\t'));
+    is_header_value_bytes(bytes) && !leading && !trailing
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +358,22 @@ mod tests {
         assert!(!is_header_value_bytes(&[0x00]));
         assert!(!is_header_value_bytes(&[0x7f]));
         assert!(!is_header_value_bytes(&[0x1f]));
+    }
+
+    /// A credential value must arrive exactly as declared: leading or
+    /// trailing space or tab, which intermediaries strip, refuses, while
+    /// interior space stays.
+    #[test]
+    fn credential_values_refuse_edge_whitespace() {
+        assert!(is_credential_value_bytes(b"key123"));
+        assert!(is_credential_value_bytes(b"key 123"));
+        assert!(!is_credential_value_bytes(b" key123"));
+        assert!(!is_credential_value_bytes(b"key123 "));
+        assert!(!is_credential_value_bytes(b"\tkey123"));
+        assert!(!is_credential_value_bytes(b"key123\t"));
+        assert!(!is_credential_value_bytes(b" key "));
+        assert!(!is_credential_value_bytes(b" "));
+        assert!(!is_credential_value_bytes(b"\r\nkey"));
     }
 
     /// An injected header shows its name and never its value.

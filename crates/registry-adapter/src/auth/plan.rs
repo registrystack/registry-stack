@@ -15,7 +15,7 @@
 //! it compiles a source.
 
 use crate::auth::{
-    material::{basic_value, is_header_value_bytes, scheme_value, AuthHeader},
+    material::{basic_value, is_credential_value_bytes, scheme_value, AuthHeader},
     token::{
         acquire_token, resolve_protected, CacheBounds, ClientAssertionSigner, TokenBudget,
         TokenEndpointPlan, TokenRequestParameters, TokenSend, UpstreamStatusAction,
@@ -518,7 +518,7 @@ fn authorize_static(
             value_ref,
         } => {
             let key = resolve_protected(resolver, value_ref)?;
-            if !is_header_value_bytes(key.as_bytes()) {
+            if !is_credential_value_bytes(key.as_bytes()) {
                 return Err(AuthError::Credential);
             }
             Ok(AuthHeader::new(header_name, key))
@@ -1161,6 +1161,96 @@ mod tests {
             .await
             .expect("none resolves")
             .is_none());
+    }
+
+    /// An apiKey credential must arrive exactly as declared: leading or
+    /// trailing space or tab, which intermediaries strip, refuses, while
+    /// interior space stays.
+    #[tokio::test]
+    async fn an_api_key_with_edge_whitespace_refuses() {
+        use crate::auth::{TokenRequest, TokenWire, TransportKind};
+        use std::future::Future;
+        use std::pin::Pin;
+
+        /// A send a static kind must never make; a call is a bug.
+        struct NeverSend;
+        impl TokenSend for NeverSend {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    Err(TransportFailure {
+                        kind: TransportKind::Connect,
+                    })
+                })
+            }
+        }
+
+        /// A static kind never signs an assertion; a call is a bug.
+        struct NeverSigns;
+        impl ClientAssertionSigner for NeverSigns {
+            fn sign_client_assertion(
+                &self,
+                _request: crate::auth::ClientAssertion<'_>,
+            ) -> Result<crate::auth::ProtectedText, AuthError> {
+                panic!("a static kind never signs an assertion");
+            }
+        }
+
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let credential = || {
+            Some(RuntimeCredential::StaticApiKey {
+                value_ref: secret("ADAPTER_TEST_PADDED_KEY"),
+            })
+        };
+        for value in [" key123", "key123 ", "\tkey123", "key123\t", " key "] {
+            std::env::set_var("ADAPTER_TEST_PADDED_KEY", value);
+            let binding = binding("https://cases.example.invalid", credential());
+            let plan = AuthPlan::compile(
+                &EndpointAuthentication::StaticApiKey {
+                    header_name: "X-Api-Key".to_owned(),
+                },
+                &binding,
+            )
+            .expect("a usable plan");
+            let mut budget = TokenBudget::new_exchange();
+            let mut events = Vec::new();
+            let mut context = AuthorizeContext {
+                resolver: &resolver,
+                budget: &mut budget,
+                send: &NeverSend,
+                signer: &NeverSigns,
+                events: &mut events,
+            };
+            let error = plan.authorize(&mut context).await.unwrap_err();
+            assert_eq!(error, AuthError::Credential, "{value:?} must refuse");
+        }
+        std::env::set_var("ADAPTER_TEST_PADDED_KEY", "key 123");
+        let binding = binding("https://cases.example.invalid", credential());
+        let plan = AuthPlan::compile(
+            &EndpointAuthentication::StaticApiKey {
+                header_name: "X-Api-Key".to_owned(),
+            },
+            &binding,
+        )
+        .expect("a usable plan");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let mut context = AuthorizeContext {
+            resolver: &resolver,
+            budget: &mut budget,
+            send: &NeverSend,
+            signer: &NeverSigns,
+            events: &mut events,
+        };
+        let credential = plan
+            .authorize(&mut context)
+            .await
+            .expect("interior space is the credential")
+            .expect("a header is sent");
+        assert_eq!(credential.header.value().as_bytes(), b"key 123");
     }
 
     /// The 401 rule: one refresh under an OAuth2 kind with the cache
