@@ -299,6 +299,21 @@ pub enum ErrorClass {
     DisclosureViolation,
     EgressRefused,
     ScriptBudgetExceeded,
+    Outcome,
+    OutcomeNotFound,
+    OutcomeConflict,
+    OutcomeInvalidRequest,
+    OutcomeRejected,
+    Facade,
+    FacadeUnauthenticated,
+    FacadeForbidden,
+    FacadeInvalidRequest,
+    FacadeNotFound,
+    FacadeMethodNotAllowed,
+    FacadeUnsupportedMediaType,
+    FacadeNotAcceptable,
+    FacadeConflict,
+    FacadeIdempotencyMismatch,
 }
 
 impl ErrorClass {
@@ -323,6 +338,21 @@ impl ErrorClass {
         Self::UpstreamTimeout,
         Self::UpstreamTooLarge,
         Self::Validation,
+        Self::Outcome,
+        Self::OutcomeConflict,
+        Self::OutcomeInvalidRequest,
+        Self::OutcomeNotFound,
+        Self::OutcomeRejected,
+        Self::Facade,
+        Self::FacadeConflict,
+        Self::FacadeForbidden,
+        Self::FacadeIdempotencyMismatch,
+        Self::FacadeInvalidRequest,
+        Self::FacadeMethodNotAllowed,
+        Self::FacadeNotAcceptable,
+        Self::FacadeNotFound,
+        Self::FacadeUnauthenticated,
+        Self::FacadeUnsupportedMediaType,
     ];
 
     #[must_use]
@@ -347,6 +377,21 @@ impl ErrorClass {
             Self::DisclosureViolation => "disclosure.violation",
             Self::EgressRefused => "egress.refused",
             Self::ScriptBudgetExceeded => "script.budget-exceeded",
+            Self::Outcome => "outcome",
+            Self::OutcomeNotFound => "outcome.not-found",
+            Self::OutcomeConflict => "outcome.conflict",
+            Self::OutcomeInvalidRequest => "outcome.invalid-request",
+            Self::OutcomeRejected => "outcome.rejected",
+            Self::Facade => "facade",
+            Self::FacadeUnauthenticated => "facade.unauthenticated",
+            Self::FacadeForbidden => "facade.forbidden",
+            Self::FacadeInvalidRequest => "facade.invalid-request",
+            Self::FacadeNotFound => "facade.not-found",
+            Self::FacadeMethodNotAllowed => "facade.method-not-allowed",
+            Self::FacadeUnsupportedMediaType => "facade.unsupported-media-type",
+            Self::FacadeNotAcceptable => "facade.not-acceptable",
+            Self::FacadeConflict => "facade.conflict",
+            Self::FacadeIdempotencyMismatch => "facade.idempotency-mismatch",
         }
     }
 
@@ -372,6 +417,27 @@ impl ErrorClass {
                 | Self::DisclosureViolation
                 | Self::EgressRefused
                 | Self::ScriptBudgetExceeded
+        )
+    }
+
+    /// Whether this class is raised by the `rest` consumer outside any
+    /// route (`products/adapter/CONCEPT.md` section 8.7): neither a clause
+    /// may name it nor a pack raise it, and the profile maps it like every
+    /// other class.
+    #[must_use]
+    pub const fn is_facade(self) -> bool {
+        matches!(
+            self,
+            Self::Facade
+                | Self::FacadeUnauthenticated
+                | Self::FacadeForbidden
+                | Self::FacadeInvalidRequest
+                | Self::FacadeNotFound
+                | Self::FacadeMethodNotAllowed
+                | Self::FacadeUnsupportedMediaType
+                | Self::FacadeNotAcceptable
+                | Self::FacadeConflict
+                | Self::FacadeIdempotencyMismatch
         )
     }
 
@@ -779,6 +845,82 @@ mod tests {
         let class = ErrorClass::from_class("loop.maximum-iterations-reached");
         assert_eq!(class, Some(ErrorClass::LoopMaximumIterationsReached));
         assert!(!class.unwrap().is_uncatchable());
+    }
+
+    /// The outcome branch is a pack-raisable, catchable addition
+    /// (`products/adapter/CONCEPT.md` section 8.7): every outcome class
+    /// resolves under the `outcome` root, is neither uncatchable nor
+    /// facade, and a clause naming the root matches its leaves.
+    #[test]
+    fn outcome_branch_is_catchable_under_its_root() {
+        for name in [
+            "outcome.not-found",
+            "outcome.conflict",
+            "outcome.invalid-request",
+            "outcome.rejected",
+        ] {
+            let class = ErrorClass::from_class(name).expect("an outcome class resolves");
+            assert!(!class.is_uncatchable(), "{name} stays catchable");
+            assert!(!class.is_facade(), "{name} is not a facade class");
+            assert!(
+                class.is_within(ErrorClass::Outcome),
+                "{name} sits under outcome"
+            );
+            assert_eq!(
+                ErrorClass::closest_match(&[class], &[ErrorClass::Outcome]),
+                Some(ErrorClass::Outcome)
+            );
+        }
+        let root = ErrorClass::from_class("outcome").expect("the outcome root resolves");
+        assert!(!root.is_uncatchable());
+        assert!(!root.is_facade());
+    }
+
+    /// The facade branch is raised by the `rest` consumer outside any
+    /// route (`products/adapter/CONCEPT.md` section 8.7): every facade
+    /// class resolves under the `facade` root, is facade, catchable by no
+    /// clause rule, and the two media classes the profile maps to 415 and
+    /// 406 resolve.
+    #[test]
+    fn facade_branch_is_outside_any_route() {
+        for name in [
+            "facade.unauthenticated",
+            "facade.forbidden",
+            "facade.invalid-request",
+            "facade.not-found",
+            "facade.method-not-allowed",
+            "facade.unsupported-media-type",
+            "facade.not-acceptable",
+            "facade.conflict",
+            "facade.idempotency-mismatch",
+        ] {
+            let class = ErrorClass::from_class(name).expect("a facade class resolves");
+            assert!(class.is_facade(), "{name} is a facade class");
+            assert!(
+                !class.is_uncatchable(),
+                "{name} is not boundary-uncatchable"
+            );
+            assert!(
+                class.is_within(ErrorClass::Facade),
+                "{name} sits under facade"
+            );
+        }
+        assert_eq!(
+            ErrorClass::from_class("facade.unsupported-media-type"),
+            Some(ErrorClass::FacadeUnsupportedMediaType)
+        );
+        assert_eq!(
+            ErrorClass::from_class("facade.not-acceptable"),
+            Some(ErrorClass::FacadeNotAcceptable)
+        );
+        let facade_count = ErrorClass::ALL
+            .iter()
+            .filter(|class| class.is_facade())
+            .count();
+        assert_eq!(
+            facade_count, 10,
+            "the facade branch carries the root and nine leaves"
+        );
     }
 
     /// Every multi-word class segment is kebab-case; the old camelCase

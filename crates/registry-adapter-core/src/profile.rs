@@ -130,9 +130,36 @@ pub struct ParameterizedPart {
     pub description: String,
 }
 
+/// One problem a caller can receive: the profile's own answer shape for
+/// the error classes it maps (`products/adapter/CONCEPT.md` sections 7
+/// and 8.11.6). A pack raises error classes and never names a problem
+/// code or builds a problem body; the profile decides what the caller
+/// sees.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Problem {
+    /// The profile's own problem code a caller receives.
+    pub code: ExternalId,
+    /// The HTTP status the facade answers with.
+    pub status: registry_platform_yaml::BoundedU32<400, 599>,
+    /// The problem title the envelope's `problemTitle` slot fills from.
+    pub title: String,
+    /// The error classes this problem answers: a class resolves to the
+    /// entry whose declared class is closest to it, by the rule of
+    /// `products/adapter/CONCEPT.md` section 8.7.
+    pub classes: UniqueList<crate::model::ErrorClass>,
+}
+
+impl registry_platform_yaml::Identified for Problem {
+    fn id(&self) -> &str {
+        self.code.as_str()
+    }
+}
+
 /// The facade profile artifact (`AdapterProfile`): the operation set, the
-/// envelope templates, the pagination parameters, and the problem codes
-/// and problem envelope.
+/// envelope templates, the pagination parameters, and the problems and
+/// problem envelope.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -144,10 +171,12 @@ pub struct AdapterProfile {
     pub version: String,
     /// The operations the profile serves.
     pub operations: UniqueIdList<ProfileOperation>,
-    /// The facade problem codes, in the profile's own closed list. Route
-    /// clause bodies must carry one of these codes
-    /// (`products/adapter/CONCEPT.md` section 8.7).
-    pub problem_codes: registry_platform_yaml::UniqueList<ExternalId>,
+    /// The problems a caller can receive, each mapping error classes to a
+    /// code, status, and title. The totality check requires every class of
+    /// the closed hierarchy, uncatchable and facade classes included, to
+    /// resolve to exactly one entry
+    /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.6).
+    pub problems: UniqueIdList<Problem>,
     /// The problem envelope template; must carry the `problemCode` slot.
     pub problem_envelope: EnvelopeTemplate,
     /// The parts of the profile a deployment declares at bind time.
@@ -178,6 +207,17 @@ mod tests {
         }
     }
 
+    /// One problem entry covering the named classes with the code and
+    /// status under test.
+    fn problem(code: &str, status: u32, classes: &[crate::model::ErrorClass]) -> Problem {
+        Problem {
+            code: ExternalId::new(code).expect("code"),
+            status: registry_platform_yaml::BoundedU32::<400, 599>::new(status).expect("status"),
+            title: "the record could not be read".to_string(),
+            classes: UniqueList::new(classes.to_vec()).expect("unique"),
+        }
+    }
+
     /// The profile declares its own version (the artifact table:
     /// authored, versioned); the reader refuses a profile without one,
     /// since a project pin compares against it (CFG-ID-4).
@@ -187,8 +227,8 @@ mod tests {
     #[test]
     fn profile_refuses_a_numeric_version() {
         for json in [
-            r#"{"id":"case-api","version":1,"operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#,
-            r#"{"id":"case-api","version":1.0,"operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#,
+            r#"{"id":"case-api","version":1,"operations":[],"problems":[],"problemEnvelope":"{}"}"#,
+            r#"{"id":"case-api","version":1.0,"operations":[],"problems":[],"problemEnvelope":"{}"}"#,
         ] {
             assert!(
                 serde_json::from_str::<AdapterProfile>(json).is_err(),
@@ -199,14 +239,27 @@ mod tests {
 
     #[test]
     fn profile_reader_requires_a_version() {
-        let json = r#"{"id":"case-api","operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#;
+        let json = r#"{"id":"case-api","operations":[],"problems":[],"problemEnvelope":"{}"}"#;
         assert!(
             serde_json::from_str::<AdapterProfile>(json).is_err(),
             "a profile without a version is refused"
         );
-        let declared = r#"{"id":"case-api","version":"1.0.0","operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#;
+        let declared = r#"{"id":"case-api","version":"1.0.0","operations":[],"problems":[],"problemEnvelope":"{}"}"#;
         let profile = serde_json::from_str::<AdapterProfile>(declared).expect("parse");
         assert_eq!(profile.version, "1.0.0");
+    }
+
+    /// The retired flat `problemCodes` member is gone: the problems list
+    /// replaced it (`products/adapter/CONCEPT.md` sections 7 and
+    /// 8.11.6), and the reader refuses the old member outright rather
+    /// than reading half a contract.
+    #[test]
+    fn profile_refuses_the_retired_problem_codes_member() {
+        let json = r#"{"id":"case-api","version":"1.0.0","operations":[],"problemCodes":["cases.conflict"],"problemEnvelope":"{}"}"#;
+        assert!(
+            serde_json::from_str::<AdapterProfile>(json).is_err(),
+            "the retired problemCodes member is refused"
+        );
     }
 
     /// A facade path-parameter list is unique (CFG-ID-6): a repeated
@@ -215,7 +268,7 @@ mod tests {
     fn profile_refuses_duplicate_path_parameters() {
         let operation = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type","type"],"responseEnvelope":"{\"cases\": {{records}}}"}"#;
         let json = format!(
-            r#"{{"id":"case-api","version":"1.0.0","operations":[{operation}],"problemCodes":[],"problemEnvelope":"{{}}"}}"#
+            r#"{{"id":"case-api","version":"1.0.0","operations":[{operation}],"problems":[],"problemEnvelope":"{{}}"}}"#
         );
         assert!(
             serde_json::from_str::<AdapterProfile>(&json).is_err(),
@@ -223,14 +276,15 @@ mod tests {
         );
         let unique = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type"],"responseEnvelope":"{\"cases\": {{records}}}"}"#;
         let json = format!(
-            r#"{{"id":"case-api","version":"1.0.0","operations":[{unique}],"problemCodes":[],"problemEnvelope":"{{}}"}}"#
+            r#"{{"id":"case-api","version":"1.0.0","operations":[{unique}],"problems":[],"problemEnvelope":"{{}}"}}"#
         );
         let profile = serde_json::from_str::<AdapterProfile>(&json).expect("parse");
         assert_eq!(profile.operations[0].path_parameters.len(), 1);
     }
 
     /// The profile artifact round-trips with profile-declared operation
-    /// ids (`products/adapter/CONCEPT.md` section 7).
+    /// ids and the problems list (`products/adapter/CONCEPT.md` sections
+    /// 7 and 8.11.6).
     #[test]
     fn profile_round_trips_with_declared_operation_ids() {
         let profile = AdapterProfile {
@@ -241,10 +295,11 @@ mod tests {
                 operation("cases-get", crate::model::HttpMethod::Get),
             ])
             .expect("unique"),
-            problem_codes: registry_platform_yaml::UniqueList::new(vec![ExternalId::new(
+            problems: UniqueIdList::new(vec![problem(
                 "cases.conflict",
-            )
-            .expect("code")])
+                409,
+                &[crate::model::ErrorClass::OutcomeConflict],
+            )])
             .expect("unique"),
             problem_envelope: EnvelopeTemplate(
                 r#"{"code": "{{problemCode}}", "title": "{{problemTitle}}"}"#.to_string(),
@@ -252,9 +307,58 @@ mod tests {
             parameterized_parts: Default::default(),
         };
         let json = serde_json::to_string(&profile).expect("serialize");
+        assert!(json.contains("\"problems\""));
         assert_eq!(
             serde_json::from_str::<AdapterProfile>(&json).ok(),
             Some(profile)
+        );
+    }
+
+    /// A problem entry names only classes of the closed hierarchy: an
+    /// unknown class string refuses at the reader with the shared error
+    /// class text.
+    #[test]
+    fn a_problem_entry_refuses_an_unknown_class() {
+        let json = r#"{"id":"case-api","version":"1.0.0","operations":[],"problems":[{"code":"cases.gone","status":404,"title":"gone","classes":["upstream.exploded"]}],"problemEnvelope":"{}"}"#;
+        let error = serde_json::from_str::<AdapterProfile>(json)
+            .expect_err("an unknown error class is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("an error class from the closed Adapter hierarchy"),
+            "the refusal names the closed hierarchy: {error}"
+        );
+    }
+
+    /// A problem status sits inside 400 to 599 (CFG-QTY-4): the typed
+    /// bound refuses anything else at the reader.
+    #[test]
+    fn a_problem_status_outside_the_bound_refuses() {
+        for status in [399, 600] {
+            let json = format!(
+                r#"{{"id":"case-api","version":"1.0.0","operations":[],"problems":[{{"code":"cases.gone","status":{status},"title":"gone","classes":["outcome.not-found"]}}],"problemEnvelope":"{{}}"}}"#
+            );
+            assert!(
+                serde_json::from_str::<AdapterProfile>(&json).is_err(),
+                "status {status} sits outside 400 to 599"
+            );
+        }
+        let inside = r#"{"id":"case-api","version":"1.0.0","operations":[],"problems":[{"code":"cases.gone","status":404,"title":"gone","classes":["outcome.not-found"]}],"problemEnvelope":"{}"}"#;
+        let profile = serde_json::from_str::<AdapterProfile>(inside).expect("parse");
+        assert_eq!(profile.problems[0].status.get(), 404);
+    }
+
+    /// Problem codes are unique at the reader (CFG-ID-5): two entries
+    /// with one code refuse.
+    #[test]
+    fn duplicate_problem_codes_refuse_at_the_reader() {
+        let entries = r#""problems":[{"code":"cases.gone","status":404,"title":"gone","classes":["outcome.not-found"]},{"code":"cases.gone","status":409,"title":"again","classes":["outcome.conflict"]}]"#;
+        let json = format!(
+            r#"{{"id":"case-api","version":"1.0.0","operations":[],{entries},"problemEnvelope":"{{}}"}}"#
+        );
+        assert!(
+            serde_json::from_str::<AdapterProfile>(&json).is_err(),
+            "a repeated problem code refuses"
         );
     }
 

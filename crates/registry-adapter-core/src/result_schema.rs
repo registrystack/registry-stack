@@ -512,7 +512,14 @@ mod tests {
             version: "1.0.0".to_string(),
             id: local("case-api"),
             operations: UniqueIdList::new(vec![operation(envelope)]).expect("unique"),
-            problem_codes: UniqueList::new(vec![external("cases.conflict")]).expect("unique"),
+            problems: UniqueIdList::new(vec![crate::profile::Problem {
+                code: external("cases.conflict"),
+                status: registry_platform_yaml::BoundedU32::<400, 599>::new(409).expect("status"),
+                title: "the record was already there".to_string(),
+                classes: UniqueList::new(vec![crate::model::ErrorClass::OutcomeConflict])
+                    .expect("unique"),
+            }])
+            .expect("unique"),
             problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
             parameterized_parts: UniqueList::new(Vec::new()).expect("empty"),
         }

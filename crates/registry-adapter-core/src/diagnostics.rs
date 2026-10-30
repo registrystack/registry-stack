@@ -41,6 +41,8 @@ pub enum CheckCode {
     PackUnknownTemplateParameter,
     // adapter.profile.*
     ProfileInvalidPath,
+    ProfileProblemClassDuplicate,
+    ProfileProblemClassUnresolved,
     ProfileProblemEnvelopeMissingCodeSlot,
     ProfileProblemEnvelopeUncompilable,
     ProfileRequestEnvelopeMissingRecordSlot,
@@ -121,6 +123,8 @@ impl CheckCode {
         Self::PackUnknownScript,
         Self::PackUnknownTemplateParameter,
         Self::ProfileInvalidPath,
+        Self::ProfileProblemClassDuplicate,
+        Self::ProfileProblemClassUnresolved,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileProblemEnvelopeUncompilable,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
@@ -198,6 +202,8 @@ impl CheckCode {
             Self::PackUnknownScript => "adapter.pack.unknown-script",
             Self::PackUnknownTemplateParameter => "adapter.pack.unknown-template-parameter",
             Self::ProfileInvalidPath => "adapter.profile.invalid-path",
+            Self::ProfileProblemClassDuplicate => "adapter.profile.problem-class-duplicate",
+            Self::ProfileProblemClassUnresolved => "adapter.profile.problem-class-unresolved",
             Self::ProfileProblemEnvelopeMissingCodeSlot => {
                 "adapter.profile.problem-envelope-missing-code-slot"
             }
@@ -280,6 +286,8 @@ impl CheckCode {
             | Self::RuntimeUnknownEndpoint => crate::naming::ADAPTER_RUNTIME_KIND,
             Self::EnvelopeInvalidPlaceholder
             | Self::ProfileInvalidPath
+            | Self::ProfileProblemClassDuplicate
+            | Self::ProfileProblemClassUnresolved
             | Self::ProfileProblemEnvelopeMissingCodeSlot
             | Self::ProfileProblemEnvelopeUncompilable
             | Self::ProfileRequestEnvelopeMissingRecordSlot

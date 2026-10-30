@@ -277,6 +277,47 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
             "Place the problemCode slot in the problem envelope.",
         ));
     }
+    findings.extend(problems_faults(profile));
+    findings
+}
+
+/// The problems-list faults (`products/adapter/CONCEPT.md` sections 7 and
+/// 8.11.6): a class listed by two entries refuses at the later entry, and
+/// a class of the closed hierarchy resolving to no entry refuses at the
+/// list. Closest match resolves a class to the entry whose declared class
+/// is nearest, so declaring a root covers its whole branch, and a
+/// narrower entry overrides a declared parent; uncatchable and facade
+/// classes resolve like every other class.
+fn problems_faults(profile: &AdapterProfile) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    let mut listed: HashMap<&str, usize> = HashMap::new();
+    for (index, problem) in profile.problems.iter().enumerate() {
+        for class in problem.classes.iter() {
+            if listed.insert(class.class(), index).is_some() {
+                findings.push(finding(
+                    CheckCode::ProfileProblemClassDuplicate,
+                    &format!("/problems/{index}/classes"),
+                    "a problem lists a class another problem already answers",
+                    "Answer each error class with exactly one problem; a narrower class overrides a declared parent.",
+                ));
+            }
+        }
+    }
+    if crate::model::ErrorClass::ALL.iter().any(|class| {
+        !profile.problems.iter().any(|problem| {
+            problem
+                .classes
+                .iter()
+                .any(|declared| class.is_within(*declared))
+        })
+    }) {
+        findings.push(finding(
+            CheckCode::ProfileProblemClassUnresolved,
+            "/problems",
+            "an error class of the closed hierarchy resolves to no problem",
+            "Declare the class, or a parent of it, in exactly one problem's classes; uncatchable and facade classes map like every other class.",
+        ));
+    }
     findings
 }
 
@@ -1111,26 +1152,31 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 }
             }
             Step::OnException(clause)
-                if clause.exception.iter().any(|class| class.is_uncatchable()) =>
+                if clause
+                    .exception
+                    .iter()
+                    .any(|class| class.is_uncatchable() || class.is_facade()) =>
             {
                 route_findings.push(finding(
                     CheckCode::RouteUncatchableClause,
                     &format!("{prefix}/steps{path}"),
-                    "an onException clause names an uncatchable class",
-                    "Remove the clause; the boundary classes cannot be handled.",
+                    "an onException clause names a class no clause may name",
+                    "Remove the clause; the boundary and facade classes cannot be handled.",
                 ));
             }
             Step::DoTry(do_try)
-                if do_try
-                    .do_catch
-                    .iter()
-                    .any(|catch| catch.exception.iter().any(|class| class.is_uncatchable())) =>
+                if do_try.do_catch.iter().any(|catch| {
+                    catch
+                        .exception
+                        .iter()
+                        .any(|class| class.is_uncatchable() || class.is_facade())
+                }) =>
             {
                 route_findings.push(finding(
                     CheckCode::RouteUncatchableClause,
                     &format!("{prefix}/steps{path}"),
-                    "a doCatch clause names an uncatchable class",
-                    "Remove the clause; the boundary classes cannot be handled.",
+                    "a doCatch clause names a class no clause may name",
+                    "Remove the clause; the boundary and facade classes cannot be handled.",
                 ));
             }
             // A retryWhile only stops redelivery earlier; with no
@@ -3048,9 +3094,9 @@ fn problem_code_check(
         return Vec::new();
     };
     if profile
-        .problem_codes
+        .problems
         .iter()
-        .any(|declared| declared.as_str() == code)
+        .any(|declared| declared.code.as_str() == code)
     {
         Vec::new()
     } else {
@@ -3297,10 +3343,49 @@ mod tests {
             version: "1.0.0".to_string(),
             id: local("case-api"),
             operations: UniqueIdList::new(operations).expect("unique"),
-            problem_codes: UniqueList::new(vec![id("cases.conflict")]).expect("unique"),
+            problems: total_problems(),
             problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
             parameterized_parts: UniqueList::<ParameterizedPart>::new(Vec::new()).expect("empty"),
         }
+    }
+
+    /// The problems list every other test composes from: one entry per
+    /// root of the closed hierarchy, so every class resolves
+    /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.6).
+    fn total_problems() -> UniqueIdList<crate::profile::Problem> {
+        let class = |name: &str| {
+            crate::model::ErrorClass::from_class(name).expect("a class of the hierarchy")
+        };
+        let problem = |code: &str, status: u32, classes: &[crate::model::ErrorClass]| {
+            crate::profile::Problem {
+                code: id(code),
+                status: registry_platform_yaml::BoundedU32::<400, 599>::new(status)
+                    .expect("status"),
+                title: "the request could not be served".to_string(),
+                classes: UniqueList::new(classes.to_vec()).expect("unique"),
+            }
+        };
+        UniqueIdList::new(vec![
+            problem("cases.upstream", 502, &[class("upstream")]),
+            problem("cases.breaker", 503, &[class("breaker.open")]),
+            problem("cases.throttle", 429, &[class("throttle.rejected")]),
+            problem(
+                "cases.loop-bound",
+                500,
+                &[class("loop.maximum-iterations-reached")],
+            ),
+            problem("cases.validation", 422, &[class("validation")]),
+            problem("cases.conversion", 500, &[class("conversion.unmapped")]),
+            problem("cases.aggregation", 500, &[class("aggregation.duplicate")]),
+            problem("cases.script", 500, &[class("script")]),
+            problem("cases.budget", 500, &[class("budget.exhausted")]),
+            problem("cases.credential", 500, &[class("credential.rejected")]),
+            problem("cases.disclosure", 500, &[class("disclosure.violation")]),
+            problem("cases.egress", 500, &[class("egress.refused")]),
+            problem("cases.outcome", 422, &[class("outcome")]),
+            problem("cases.facade", 400, &[class("facade")]),
+        ])
+        .expect("unique")
     }
 
     fn operation(id_text: &str, method: HttpMethod) -> ProfileOperation {
@@ -3677,6 +3762,181 @@ mod tests {
             &check_profile(&profile),
             CheckCode::ProfileProblemEnvelopeMissingCodeSlot,
         );
+    }
+
+    /// The problems list covers the whole closed hierarchy
+    /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.6): one entry
+    /// per root resolves every class, uncatchable and facade classes
+    /// included, with no problem-class finding.
+    #[test]
+    fn profile_problems_cover_the_closed_hierarchy() {
+        let profile = profile_builder(vec![]);
+        let problem_findings: Vec<Diagnostic> = check_profile(&profile)
+            .into_iter()
+            .filter(|finding| {
+                finding.code == CheckCode::ProfileProblemClassDuplicate.code()
+                    || finding.code == CheckCode::ProfileProblemClassUnresolved.code()
+            })
+            .collect();
+        assert!(
+            problem_findings.is_empty(),
+            "the root entries resolve every class: {:?}",
+            problem_findings
+                .iter()
+                .map(|f| f.code.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A class no entry answers refuses at the list: dropping the entry
+    /// that answers the facade branch leaves facade.unauthenticated and
+    /// its siblings unmapped (`products/adapter/CONCEPT.md` section
+    /// 8.11.6).
+    #[test]
+    fn profile_refuses_a_class_no_problem_answers() {
+        let mut profile = profile_builder(vec![]);
+        profile.problems = UniqueIdList::new(
+            profile
+                .problems
+                .iter()
+                .filter(|problem| problem.code.as_str() != "cases.facade")
+                .cloned()
+                .collect(),
+        )
+        .expect("unique");
+        let findings = check_profile(&profile);
+        assert_has(&findings, CheckCode::ProfileProblemClassUnresolved);
+        let unresolved = findings
+            .iter()
+            .find(|finding| finding.code == CheckCode::ProfileProblemClassUnresolved.code())
+            .expect("the unresolved finding");
+        assert_eq!(unresolved.path, "/problems");
+        assert!(
+            !unresolved.message.contains("facade"),
+            "the message stays value-free about which class failed"
+        );
+        // The boundary classes resolve like every other class: dropping
+        // the budget entry refuses the same way.
+        let mut profile = profile_builder(vec![]);
+        profile.problems = UniqueIdList::new(
+            profile
+                .problems
+                .iter()
+                .filter(|problem| problem.code.as_str() != "cases.budget")
+                .cloned()
+                .collect(),
+        )
+        .expect("unique");
+        assert_has(
+            &check_profile(&profile),
+            CheckCode::ProfileProblemClassUnresolved,
+        );
+    }
+
+    /// A class two entries answer refuses at the later entry
+    /// (`products/adapter/CONCEPT.md` section 8.11.6: a class listed
+    /// twice), while a narrower entry overriding a declared parent stays
+    /// clean, the closest match winning.
+    #[test]
+    fn profile_refuses_a_class_listed_twice_but_a_narrower_override_passes() {
+        let class = |name: &str| crate::model::ErrorClass::from_class(name).expect("a known class");
+        let mut profile = profile_builder(vec![]);
+        let mut entries: Vec<crate::profile::Problem> = profile.problems.iter().cloned().collect();
+        entries.push(crate::profile::Problem {
+            code: id("cases.upstream-again"),
+            status: registry_platform_yaml::BoundedU32::<400, 599>::new(504).expect("status"),
+            title: "the upstream answered again".to_string(),
+            classes: UniqueList::new(vec![class("upstream")]).expect("unique"),
+        });
+        profile.problems = UniqueIdList::new(entries).expect("unique");
+        let findings = check_profile(&profile);
+        assert_has(&findings, CheckCode::ProfileProblemClassDuplicate);
+        let duplicate = findings
+            .iter()
+            .find(|finding| finding.code == CheckCode::ProfileProblemClassDuplicate.code())
+            .expect("the duplicate finding");
+        assert_eq!(duplicate.path, "/problems/14/classes");
+
+        // A narrower entry overriding a declared parent is the intended
+        // shape: outcome.not-found resolves to it, everything else to the
+        // outcome root.
+        let mut profile = profile_builder(vec![]);
+        let mut entries: Vec<crate::profile::Problem> = profile.problems.iter().cloned().collect();
+        entries.push(crate::profile::Problem {
+            code: id("cases.not-found"),
+            status: registry_platform_yaml::BoundedU32::<400, 599>::new(404).expect("status"),
+            title: "the record was not found".to_string(),
+            classes: UniqueList::new(vec![class("outcome.not-found")]).expect("unique"),
+        });
+        profile.problems = UniqueIdList::new(entries).expect("unique");
+        let problem_findings: Vec<Diagnostic> = check_profile(&profile)
+            .into_iter()
+            .filter(|finding| {
+                finding.code == CheckCode::ProfileProblemClassDuplicate.code()
+                    || finding.code == CheckCode::ProfileProblemClassUnresolved.code()
+            })
+            .collect();
+        assert!(
+            problem_findings.is_empty(),
+            "a narrower override is the closest match: {:?}",
+            problem_findings
+                .iter()
+                .map(|f| f.code.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A clause naming a facade class refuses under the uncatchable-clause
+    /// code: the facade classes are raised outside any route, so no clause
+    /// may name them (`products/adapter/CONCEPT.md` sections 8.7 and
+    /// 8.11.6). Every facade class refuses, in both clause forms.
+    #[test]
+    fn a_clause_naming_a_facade_class_refuses() {
+        for class in crate::model::ErrorClass::ALL
+            .iter()
+            .copied()
+            .filter(|class| class.is_facade())
+        {
+            let on_exception = RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![Step::OnException(OnExceptionStep {
+                    exception: UniqueList::new(vec![class]).expect("unique"),
+                    on_when: None,
+                    handled: Some(true),
+                    continued: None,
+                    redelivery_policy: None,
+                    steps: vec![],
+                })],
+            };
+            let pack = pack_builder(vec![], vec![on_exception]);
+            assert_has(
+                &check_routes(&pack, &project_builder(&pack)),
+                CheckCode::RouteUncatchableClause,
+            );
+            let do_try = RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![Step::DoTry(DoTryStep {
+                    steps: vec![],
+                    do_catch: vec![DoCatch {
+                        exception: UniqueList::new(vec![class]).expect("unique"),
+                        on_when: None,
+                        steps: vec![],
+                    }],
+                    do_finally: Some(DoFinally { steps: vec![] }),
+                })],
+            };
+            let pack = pack_builder(vec![], vec![do_try]);
+            assert_has(
+                &check_routes(&pack, &project_builder(&pack)),
+                CheckCode::RouteUncatchableClause,
+            );
+        }
     }
 
     #[test]
@@ -7252,7 +7512,7 @@ mod tests {
         assert_eq!(findings[0].path, "/fixtures/0/entries/0");
 
         // The declared code passes; a 2xx entry is not a problem body.
-        let declared = fixture(404, Some("cases.conflict"));
+        let declared = fixture(404, Some("cases.outcome"));
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&declared);
         assert_clean(check_fixtures(&ws));
