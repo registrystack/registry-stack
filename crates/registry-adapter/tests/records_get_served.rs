@@ -123,7 +123,7 @@ async fn a_dot_segment_record_identifier_never_reaches_the_upstream() {
     for spelling in ["..", "%2E%2E", "%2e%2e", ".", "%2E", ".%2e"] {
         let (status, _, body) = served.get(&format!("/v1/records/person/{spelling}"), Some(&token));
         assert_eq!(status, 400, "{spelling}: {body}");
-        assert_eq!(body["code"], "facade.invalid-request", "{spelling}");
+        assert_eq!(body["code"], "source.facade", "{spelling}");
     }
     assert_eq!(
         upstream.request_count(),
