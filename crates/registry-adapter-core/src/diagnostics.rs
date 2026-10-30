@@ -31,6 +31,8 @@ pub enum CheckCode {
     // adapter.pack.*
     PackDigestPinRequired,
     PackEndpointComponentInvalid,
+    PackGraphQlOperationUnknown,
+    PackGraphQlQueryInvalid,
     PackGraphQlQueryRequired,
     PackInvalidHeaderName,
     PackReservedHeaderName,
@@ -109,6 +111,8 @@ impl CheckCode {
         Self::FixtureUnknownProblemCode,
         Self::PackDigestPinRequired,
         Self::PackEndpointComponentInvalid,
+        Self::PackGraphQlOperationUnknown,
+        Self::PackGraphQlQueryInvalid,
         Self::PackGraphQlQueryRequired,
         Self::PackInvalidHeaderName,
         Self::PackReservedHeaderName,
@@ -183,6 +187,8 @@ impl CheckCode {
             Self::FixtureUnknownProblemCode => "adapter.fixture.unknown-problem-code",
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
+            Self::PackGraphQlOperationUnknown => "adapter.pack.graphql-operation-unknown",
+            Self::PackGraphQlQueryInvalid => "adapter.pack.graphql-query-invalid",
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
             Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
@@ -284,6 +290,8 @@ impl CheckCode {
             | Self::FixtureUnknownProblemCode => crate::naming::ADAPTER_FIXTURE_KIND,
             Self::PackDigestPinRequired
             | Self::PackEndpointComponentInvalid
+            | Self::PackGraphQlOperationUnknown
+            | Self::PackGraphQlQueryInvalid
             | Self::PackGraphQlQueryRequired
             | Self::PackInvalidHeaderName
             | Self::PackReservedHeaderName
@@ -367,6 +375,15 @@ mod tests {
             assert_eq!(CheckCode::from_code(code.code()), Some(*code));
         }
         assert_eq!(CheckCode::from_code("adapter.route.invented"), None);
+        // The graphql pack codes, spellings fixed for adopter tooling.
+        assert_eq!(
+            CheckCode::from_code("adapter.pack.graphql-query-invalid"),
+            Some(CheckCode::PackGraphQlQueryInvalid)
+        );
+        assert_eq!(
+            CheckCode::from_code("adapter.pack.graphql-operation-unknown"),
+            Some(CheckCode::PackGraphQlOperationUnknown)
+        );
     }
 
     #[test]
