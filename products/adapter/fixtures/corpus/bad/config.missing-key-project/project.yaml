@@ -10,11 +10,11 @@ kind: AdapterProject
 profile:
   id: case-api
   version: "1"
-  digest: sha256:781a7960575cb54acbfc7b1dd67a574a8e627f238f7a05279cc3feca4ace1d67
+  digest: sha256:96508552f7ec01f4b550c305c730879dd17f18b96139c07b72f2e9250157c907
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:cc0dcba99fbb7305c02859d204bbc4f01665ad63548e2a5f97606031a0eddf8b
+  digest: sha256:9866fcbb919279ba4766b82058613d1ef71b224793503a4f386f8a65280c41d6
 recordTypes:
   - name: case
     fields:

@@ -13,10 +13,15 @@ operations:
   - id: cases-get
     method: GET
     path: /v2/cases/{type}/{case_id}
+    pathParameters:
+      - type
+      - case_id
     responseEnvelope: '{"case": {{record}}, "fetchedAt": "{{requestId}}"}'
   - id: cases-file
     method: POST
     path: /v2/cases/{type}
+    pathParameters:
+      - type
     requestEnvelope: '{"case": {{record}}}'
     responseEnvelope: '{"created": {{record}}}'
 problemCodes:

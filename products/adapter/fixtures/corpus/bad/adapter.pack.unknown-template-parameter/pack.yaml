@@ -38,4 +38,9 @@ routeTemplates:
                 constant: welfare
               case_id:
                 header: recordId
+            query:
+              _format:
+                constant: json
+              filter[region]:
+                constant: west
 capabilities: {}

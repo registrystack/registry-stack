@@ -13,11 +13,11 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:32c2e4506ebe07147160564d88279b59f0cce2b04ce835c1f566d1c59122d166
+  digest: sha256:95527080de5954aa0d66d015273a02f2c61bbb529a4b2ca42c183988ca311719
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:21f9f4ac5b390397f1ebfc86a2fddbfc55454315b92ea8f3a5a2e9dceec9db67
+  digest: sha256:4a22976416a1ae8208410adcf0b425e20df817d06ebbb5967968c1ede63d0118
 recordTypes:
   - name: case
     fields:

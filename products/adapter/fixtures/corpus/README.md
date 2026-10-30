@@ -61,9 +61,10 @@ macOS, source `scripts/cargo-runtime-library-path.sh` first.
 Codes are grouped by the artifact that carries the defect. "Layer" is who
 refuses: reader (the platform YAML reader, before any check runs), checks
 (the core authoring checks), or tool (adapterctl's own verification, here
-the script digest pins). Members marked "per body" report the finding once
-per route body carrying the defect (pack template plus instantiated route),
-so the code appears twice; the refused code set is still exactly one.
+the script digest pins). Route findings report once at the authored
+position: `/routeTemplates/N` when the defect sits in a template body,
+`/routes/{id}` otherwise, so every member refuses with exactly one
+finding per code.
 
 ### Profile members
 
@@ -75,6 +76,7 @@ so the code appears twice; the refused code set is still exactly one.
 | `adapter.profile.request-envelope-missing-record-slot` | A write operation's request envelope names no `record` slot | `adapter.profile.request-envelope-missing-record-slot` | checks |
 | `adapter.profile.problem-envelope-missing-code-slot` | Problem envelope names no `problemCode` slot | `adapter.profile.problem-envelope-missing-code-slot` | checks |
 | `adapter.profile.invalid-path` | Operation path `v2/cases/...` carries no leading slash | `adapter.profile.invalid-path` | checks |
+| `adapter.profile.unresolved-path-parameter` | Facade path carries `{case_id}`, which the operation's `pathParameters` do not declare | `adapter.profile.unresolved-path-parameter` | checks |
 | `adapter.profile.problem-envelope-uncompilable` | Problem envelope carries a `{{record}}` slot, which the problem-envelope derivation refuses | `adapter.profile.problem-envelope-uncompilable` | checks |
 | `adapter.profile.response-envelope-uncompilable` | Response envelope is an array whose members derive different shapes | `adapter.profile.response-envelope-uncompilable` | checks |
 
@@ -95,9 +97,12 @@ so the code appears twice; the refused code set is still exactly one.
 the worst-case walk saturates past the reader's depth bound, and a YAML
 document nested that deep is refused by the reader first with
 `yaml.too-deep` (both bounds are the same 128-level constant), so no
-member can reach it from authored files. Every other code in the closed
-authoring vocabulary carries exactly one member, and the sweep over all of
-them must stay green before this corpus is relied on as a gate.
+member can reach it from authored files. `adapter.pack.graphql-query-invalid`
+and `adapter.pack.graphql-operation-unknown` are registered vocabulary but
+no check emits them yet; their members land with the emitting checks.
+Every code with an emitting check except `nesting-depth-exceeded` carries
+exactly one member, and the sweep over all of them must stay green before
+this corpus is relied on as a gate.
 
 One structural co-fire is accepted: `adapter.project.unknown-route`'s
 condition (a binding whose route id has no steps) is a strict subset of
@@ -138,36 +143,36 @@ derivation sees, and their sweep expectations list both codes.
 
 | Member | Defect | Expected code | Layer |
 |---|---|---|---|
-| `adapter.route.unknown-endpoint` | Send names endpoint `nope` | `adapter.route.unknown-endpoint` | checks, per body |
-| `adapter.route.unknown-direct-target` | Enrich names `direct:absent-route` | `adapter.route.unknown-direct-target` | checks, per body |
+| `adapter.route.unknown-endpoint` | Send names endpoint `nope` | `adapter.route.unknown-endpoint` | checks |
+| `adapter.route.unknown-direct-target` | Enrich names `direct:absent-route` | `adapter.route.unknown-direct-target` | checks |
 | `adapter.route.direct-cycle` | Internal routes `loop-a` and `loop-b` call each other | `adapter.route.direct-cycle` | checks |
 | `adapter.route.direct-depth-exceeded` | 18 chained direct routes exceed the 16-deep bound | `adapter.route.direct-depth-exceeded` | checks |
 | `adapter.route.from-not-direct` | A route consumes from `http:cases`, not `direct:` | `adapter.route.from-not-direct` | checks |
-| `adapter.route.maximum-items-required` | Split declares no `maximumItems` | `adapter.route.maximum-items-required` | checks, per body |
-| `adapter.route.non-safe-send-in-split` | POST inside a split with `stopOnException: false` | `adapter.route.non-safe-send-in-split` | checks, per body |
-| `adapter.route.maximum-iterations-required` | Loop declares no `maximumIterations` | `adapter.route.maximum-iterations-required` | checks, per body |
-| `adapter.route.loop-count-above-bound` | Loop count `5` exceeds `maximumIterations: 2` | `adapter.route.loop-count-above-bound` | checks, per body |
+| `adapter.route.maximum-items-required` | Split declares no `maximumItems` | `adapter.route.maximum-items-required` | checks |
+| `adapter.route.non-safe-send-in-split` | POST inside a split with `stopOnException: false` | `adapter.route.non-safe-send-in-split` | checks |
+| `adapter.route.maximum-iterations-required` | Loop declares no `maximumIterations` | `adapter.route.maximum-iterations-required` | checks |
+| `adapter.route.loop-count-above-bound` | Loop count `5` exceeds `maximumIterations: 2` | `adapter.route.loop-count-above-bound` | checks |
 | `adapter.route.multiple-non-safe-sends` | One `idempotentConsumer` guards two POST sends | `adapter.route.multiple-non-safe-sends` | checks |
 | `adapter.route.write-without-idempotency` | Write route's POST sits outside any `idempotentConsumer` | `adapter.route.write-without-idempotency` | checks |
-| `adapter.route.redelivery-over-non-safe-send` | Redelivery over a POST send whose endpoint operation claims no `idempotentUpstream` | `adapter.route.redelivery-over-non-safe-send` | checks, per body |
-| `adapter.route.uncatchable-clause` | onException names `budget.exhausted` | `adapter.route.uncatchable-clause` | checks, per body |
-| `adapter.route.redelivery-without-upstream-send` | Redelivery declared, no upstream send reachable | `adapter.route.redelivery-without-upstream-send` | checks, per body |
-| `adapter.route.retry-while-without-redeliveries` | `retryWhile` on a policy with `maximumRedeliveries` 0 | `adapter.route.retry-while-without-redeliveries` | checks, per body |
-| `adapter.route.predicate-ambiguous` | `when` clause carries `constant` and `jsonpath` | `adapter.route.predicate-ambiguous` | checks, per body |
-| `adapter.route.predicate-language-required` | `when` clause carries no language key | `adapter.route.predicate-language-required` | checks, per body |
-| `adapter.route.error-handler-shape` | `errorHandler` step carries no handler | `adapter.route.error-handler-shape` | checks, per body |
-| `adapter.route.empty-exception-list` | onException clause names no error class | `adapter.route.empty-exception-list` | checks, per body |
-| `adapter.route.handled-and-continued` | onException clause sets `handled: true` and `continued: true` | `adapter.route.handled-and-continued` | checks, per body |
-| `adapter.route.unknown-operation` | POST send names operation `nope`, which its endpoint does not declare | `adapter.route.unknown-operation` | checks, per body |
-| `adapter.route.reserved-header-name` | Route sets `Authorization`, a credential header no route may write | `adapter.route.reserved-header-name` | checks, per body |
-| `adapter.route.unknown-header` | Route reads `Etag`, which no facade input, engine placement, allowlist, or earlier step places | `adapter.route.unknown-header` | checks, per body |
-| `adapter.route.invalid-path` | Send path carries a scheme and authority instead of staying origin-relative | `adapter.route.invalid-path` | checks, per body |
-| `adapter.route.invalid-status-code-range` | `okStatusCodeRange: 200-100` runs backwards | `adapter.route.invalid-status-code-range` | checks, per body |
-| `adapter.route.path-parameter-mismatch` | Path carries `{{case_id}}`, which no `pathParameters` entry binds | `adapter.route.path-parameter-mismatch` | checks, per body |
-| `adapter.route.invalid-header-name` | Route writes the header name `bad=header`, not an RFC 9110 token | `adapter.route.invalid-header-name` | checks, per body |
-| `adapter.route.invalid-query-key` | Query key `bad=key` carries an unescaped `=` | `adapter.route.invalid-query-key` | checks, per body |
-| `adapter.route.graphql-send-members` | A graphql send carries `httpMethod`, an HTTP-send member | `adapter.route.graphql-send-members` | checks, per body |
-| `adapter.route.stop-on-exception-exclusive` | Split sets `stopOnException` beside `errorThreshold` failure accounting | `adapter.route.stop-on-exception-exclusive` | checks, per body |
+| `adapter.route.redelivery-over-non-safe-send` | Redelivery over a POST send whose endpoint operation claims no `idempotentUpstream` | `adapter.route.redelivery-over-non-safe-send` | checks |
+| `adapter.route.uncatchable-clause` | onException names `budget.exhausted` | `adapter.route.uncatchable-clause` | checks |
+| `adapter.route.redelivery-without-upstream-send` | Redelivery declared, no upstream send reachable | `adapter.route.redelivery-without-upstream-send` | checks |
+| `adapter.route.retry-while-without-redeliveries` | `retryWhile` on a policy with `maximumRedeliveries` 0 | `adapter.route.retry-while-without-redeliveries` | checks |
+| `adapter.route.predicate-ambiguous` | `when` clause carries `constant` and `jsonpath` | `adapter.route.predicate-ambiguous` | checks |
+| `adapter.route.predicate-language-required` | `when` clause carries no language key | `adapter.route.predicate-language-required` | checks |
+| `adapter.route.error-handler-shape` | `errorHandler` step carries no handler | `adapter.route.error-handler-shape` | checks |
+| `adapter.route.empty-exception-list` | onException clause names no error class | `adapter.route.empty-exception-list` | checks |
+| `adapter.route.handled-and-continued` | onException clause sets `handled: true` and `continued: true` | `adapter.route.handled-and-continued` | checks |
+| `adapter.route.unknown-operation` | POST send names operation `nope`, which its endpoint does not declare | `adapter.route.unknown-operation` | checks |
+| `adapter.route.reserved-header-name` | Route sets `Authorization`, a credential header no route may write | `adapter.route.reserved-header-name` | checks |
+| `adapter.route.unknown-header` | Route reads `Etag`, which no facade input, engine placement, allowlist, or earlier step places | `adapter.route.unknown-header` | checks |
+| `adapter.route.invalid-path` | Send path carries a scheme and authority instead of staying origin-relative | `adapter.route.invalid-path` | checks |
+| `adapter.route.invalid-status-code-range` | `okStatusCodeRange: 200-100` runs backwards | `adapter.route.invalid-status-code-range` | checks |
+| `adapter.route.path-parameter-mismatch` | Path carries `{{case_id}}`, which no `pathParameters` entry binds | `adapter.route.path-parameter-mismatch` | checks |
+| `adapter.route.invalid-header-name` | Route writes the header name `bad=header`, not an RFC 9110 token | `adapter.route.invalid-header-name` | checks |
+| `adapter.route.invalid-query-key` | Query key `bad=key` carries an unescaped `=` | `adapter.route.invalid-query-key` | checks |
+| `adapter.route.graphql-send-members` | A graphql send carries `httpMethod`, an HTTP-send member | `adapter.route.graphql-send-members` | checks |
+| `adapter.route.stop-on-exception-exclusive` | Split sets `stopOnException` beside `errorThreshold` failure accounting | `adapter.route.stop-on-exception-exclusive` | checks |
 
 ### Runtime and auth members
 
@@ -217,7 +222,15 @@ path, line, and column before any check runs.
   origins use the reserved `.example.invalid` names.
 - Send paths carry `{{name}}` placeholders bound in `pathParameters`, and a
   template whose send path names a placeholder declares it in its
-  `parameters` (required: false), the same name both places.
+  `parameters` (required: false), the same name both places. Facade
+  operation paths carry single-brace `{name}` templates, and every name is
+  declared in the operation's `pathParameters`.
+- Query keys are upstream wire names, so the baseline send carries
+  `_format` and `filter[region]` and passes (lead-reviewer C24 ruling).
+  The control-character clause of the query-key rule is reader-shadowed:
+  a control character in any YAML map key refuses at the reader as
+  `config.invalid-value` first, so the member carries the unescaped `=`
+  half of the rule.
 - The wrong pins are valid form, wrong value: the pack script digest pin is
   `sha256:1111…`, the project's profile digest pin is `sha256:2222…`; every
   other member pins real digests and the pinned versions are real.

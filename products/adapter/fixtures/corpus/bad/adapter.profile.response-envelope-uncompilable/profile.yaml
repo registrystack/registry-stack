@@ -13,6 +13,9 @@ operations:
   - id: cases-get
     method: GET
     path: /v2/cases/{type}/{case_id}
+    pathParameters:
+      - type
+      - case_id
     responseEnvelope: '[{{record}}, {"other": "shape"}]'
 problemCodes:
   - cases.missing
