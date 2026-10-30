@@ -113,6 +113,15 @@ done
   "${fixture_flags[@]}" >/dev/null
 printf 'Example check passed\n'
 
+# The same contract replays offline (CONCEPT 13.1: fixture replay for every
+# maintained pack and example; 13.3: until the route engine drives sends,
+# replay checks the fixture contracts and reports `drive: not-run`).
+"$adapterctl_bin" fixtures replay products/adapter/examples/dhis2-tracker/project.yaml \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack products/adapter/packs/dhis2-tracker/pack.yaml \
+  "${fixture_flags[@]}" >/dev/null
+printf 'Example fixture replay passed\n'
+
 # Each committed experiment holds the concrete contract its project compiles
 # to (`generated/openapi.json` beside the project). `compile --check` refuses
 # on drift, so an experiment cannot rot behind a reader, core, or document

@@ -43,7 +43,7 @@ codeMaps:
       female: F
 scripts:
   - path: scripts/map.rhai
-    digest: sha256:e414310e7f436c42f8461592fb7d98c02a61e97a15be5d13c14d452d5197525b
+    digest: sha256:15a047e0c80af3300451da34c59953fe2dbc953580a8e7dbdee2e788d99bc663
 queryFiles: []
 capabilities:
   components:

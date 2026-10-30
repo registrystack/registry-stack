@@ -219,7 +219,9 @@ fn an_altered_pinned_script_refuses_with_the_digest_pin_code() {
     let (_root, project) = mutated_project(|root| {
         let script = root.join("scripts/map.rhai");
         let contents = std::fs::read_to_string(&script).unwrap();
-        std::fs::write(&script, contents.replace("body", "renamed")).unwrap();
+        // The alteration keeps the script on the ABI, so the refusal stays
+        // the digest pin's: only the bytes moved.
+        std::fs::write(&script, format!("{contents}\n// altered\n")).unwrap();
     });
     let (exit, report, _) = run_json(&["check", &project]);
     assert_refused(exit, &report, "adapter.pack.digest-pin-required");
@@ -243,8 +245,8 @@ fn an_uncompilable_script_refuses_with_the_compile_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("scripts/map.rhai"),
-            "fn map(body) {\n    body\n}",
-            "fn map(body) {\n    body",
+            "fn map(exchange) {\n    exchange\n}",
+            "fn map(exchange) {\n    exchange",
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);
@@ -264,12 +266,35 @@ fn a_script_without_the_declared_entrypoint_refuses_with_the_compile_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("scripts/map.rhai"),
-            "fn map(body) {\n    body\n}",
+            "fn map(exchange) {\n    exchange\n}",
             "fn other(input) {\n    input\n}",
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);
     assert_refused(exit, &report, "adapter.pack.script-uncompilable");
+}
+
+/// A pinned script whose entrypoint takes a parameter by any other name
+/// refuses with the signature code beside the digest-pin code: the script
+/// ABI names the exchange slots' one parameter (`CONCEPT.md` section
+/// 8.11.3), and the refusal never quotes the author's spelling.
+#[test]
+fn an_entrypoint_whose_parameter_is_not_exchange_refuses_with_the_signature_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("scripts/map.rhai"),
+            "fn map(exchange) {\n    exchange\n}",
+            "fn map(record) {\n    record\n}",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.pack.entrypoint-parameter");
+    assert_refused(exit, &report, "adapter.pack.digest-pin-required");
+    let rendered = serde_json::to_string(&report).unwrap();
+    assert!(
+        !rendered.contains("fn map"),
+        "the refusal must stay value-free: {rendered}"
+    );
 }
 
 /// Assert `code` carries no diagnostic in the report.

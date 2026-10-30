@@ -307,6 +307,13 @@ routeTemplates:
           expression:
             header: Idempotency-Key
           steps:
+            # The send replaces the body with the import summary, so the
+            # submitted record rides the exchange through the send in this
+            # property; scripts/accepted-record.rhai returns it.
+            - setProperty:
+                name: dhis2SubmittedRecord
+                value:
+                  jsonpath: "$"
             - to:
                 uri: http:tracker
                 parameters:
@@ -382,23 +389,23 @@ codeMaps:
         httpStatus: 409
 scripts:
   - path: scripts/has-more-pages.rhai
-    digest: sha256:24d94491edd0560390ba818c53c1dc4f4faac9a9a529e55a00f634ef5380351c
+    digest: sha256:1fe96b2aeb6c87828fdab1248b5e3ba1ec40d8db29089e14f3e9d1d97bff8788
   - path: scripts/next-page.rhai
-    digest: sha256:90c9a587cc85b1955e8132b13e2ec039036854d4f5b188ed62f5df2e0f1a171d
+    digest: sha256:34bb99208bbc6457180d6a28bda8715db34344596795b84ee7347172aeda5b48
   - path: scripts/soft-deleted.rhai
-    digest: sha256:747885f0e440c1d5eec9e2ae94fe4b96a55dbb6b97e6399dd3fa6e6584715de7
+    digest: sha256:c5cb2eaf086c6b2a6156f17e5d50f6171ec95ecbd869e9b79d715b96fe0047a6
   - path: scripts/is-not-found.rhai
-    digest: sha256:8e47e278aa244e57be9815e89b78e81664ddd763bb74d216d201879b845f1967
+    digest: sha256:8f738dc51ecbd1641f8f512ff5d2edcc48408e438814179ea360cd4267dd34b0
   - path: scripts/to-record.rhai
-    digest: sha256:061f1f3202de34cebc29175bce58f49709addd9426b861ed33f87ffa3453e2c8
+    digest: sha256:2971163431db3510392b631edcf245baded3aa78ad2fcf187e9863b5c482cb30
   - path: scripts/shape-records.rhai
-    digest: sha256:a524b60f101ef0572e3a2105340cd576a91cf17e8735ab1a19c1ad8f6f37b857
+    digest: sha256:79b10588f18ab284ea7cae53c4312e45a1dc2e62bd5faa7330f0f97de89a4c62
   - path: scripts/to-bundle.rhai
-    digest: sha256:22d57870ac395d6a62587454da018dc0240e29f247185741498be04b35a956df
+    digest: sha256:d289269e36bf753e723a849f7cb192c070d925d4e991311d12dfb59f0a8e97bc
   - path: scripts/import-failed.rhai
-    digest: sha256:3c134059622ceda11bbcb2fbac36b5f96831abeffe2bb0bcfcb4acda36799afe
+    digest: sha256:2cf14b9227470f1e07944433a58fe06ba4c527a01af3e23e670049ca3eeeece3
   - path: scripts/accepted-record.rhai
-    digest: sha256:0bd66973a622f40baa62d58a8f68b96a1233607eb17dea02da62dc7058ca0a71
+    digest: sha256:951b0c03cd2771d1688f35661b1cf5f8e7a50dec6d0ac7b4283316fc8d5e1b7c
 capabilities:
   components:
     - http

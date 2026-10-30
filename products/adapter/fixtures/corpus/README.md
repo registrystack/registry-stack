@@ -66,7 +66,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 85 members.
+finding per code. The corpus holds 86 members.
 
 ### Profile members
 
@@ -97,6 +97,7 @@ finding per code. The corpus holds 85 members.
 | `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
 | `adapter.pack.script-uncompilable` | A pinned script does not parse (missing closing brace; its pin matches the broken bytes) | `adapter.pack.script-uncompilable` | tool |
+| `adapter.pack.entrypoint-parameter` | A pinned script's entrypoint takes `record`, not the `exchange` the slot passes (CONCEPT 8.11.3); the script parses and hashes to its pin | `adapter.pack.entrypoint-parameter` | tool |
 | `adapter.pack.graphql-query-invalid` | The pinned query file does not parse as a GraphQL document (its pin matches the broken bytes) | `adapter.pack.graphql-query-invalid` | tool |
 | `adapter.pack.graphql-operation-unknown` | The graphql endpoint names operation `FindCases`, which its pinned query file does not declare | `adapter.pack.graphql-operation-unknown` | tool |
 

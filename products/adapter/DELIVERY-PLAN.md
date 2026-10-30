@@ -577,7 +577,7 @@ Increment 1:
     `FINDINGS.md` carries the executed rerun with each command's output.
 11. Every conformance module for a row listed in rule 11 as source-bound
     cites at least one `camel-4.23.0:` path:
-    `rg -L 'camel-4\.23\.0:' crates/registry-adapter/tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle,split,loop,enrich,aggregation,direct,http,header_filter,testing}.rs`
+    `rg --files-without-match 'camel-4\.23\.0:' crates/registry-adapter/tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle,split,loop,enrich,aggregation,direct,http,header_filter,testing}.rs`
     prints nothing.
 12. Every normal dependency of `registry-adapter` is referenced by its code
     (no dependency added ahead of use survives the increment).

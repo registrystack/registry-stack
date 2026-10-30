@@ -35,6 +35,7 @@ pub enum CheckCode {
     PackDigestPinRequired,
     PackDuplicateHeaderName,
     PackEndpointComponentInvalid,
+    PackEntrypointParameter,
     PackGraphQlOperationUnknown,
     PackGraphQlQueryInvalid,
     PackGraphQlQueryRequired,
@@ -134,6 +135,7 @@ impl CheckCode {
         Self::PackDigestPinRequired,
         Self::PackDuplicateHeaderName,
         Self::PackEndpointComponentInvalid,
+        Self::PackEntrypointParameter,
         Self::PackGraphQlOperationUnknown,
         Self::PackGraphQlQueryInvalid,
         Self::PackGraphQlQueryRequired,
@@ -229,6 +231,7 @@ impl CheckCode {
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
             Self::PackDuplicateHeaderName => "adapter.pack.duplicate-header-name",
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
+            Self::PackEntrypointParameter => "adapter.pack.entrypoint-parameter",
             Self::PackGraphQlOperationUnknown => "adapter.pack.graphql-operation-unknown",
             Self::PackGraphQlQueryInvalid => "adapter.pack.graphql-query-invalid",
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
@@ -361,6 +364,7 @@ impl CheckCode {
             Self::PackDigestPinRequired
             | Self::PackDuplicateHeaderName
             | Self::PackEndpointComponentInvalid
+            | Self::PackEntrypointParameter
             | Self::PackGraphQlOperationUnknown
             | Self::PackGraphQlQueryInvalid
             | Self::PackGraphQlQueryRequired

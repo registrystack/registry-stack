@@ -38,7 +38,8 @@ use registry_platform_config::{
     sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_STAND_IN,
 };
 use registry_platform_script::rhai::{
-    compile_entrypoint, RhaiBaseEngine, RhaiCompileError, RhaiLimits, RhaiProfile,
+    compile_entrypoint, entrypoint_parameters, RhaiBaseEngine, RhaiCompileError, RhaiLimits,
+    RhaiProfile,
 };
 use registry_platform_yaml::{
     ApiVersion, Decoded, Diagnostic, Digest, EnvelopeRule, Expect, FormatSpec, Reader, Report,
@@ -551,7 +552,16 @@ fn verify_entrypoints(
             &site.entrypoint,
             &[site.role.arity()],
         ) {
-            Ok(_) => {}
+            Ok(ast) => {
+                // The exchange slots pass one read-only exchange map, and
+                // the ABI names its parameter (CONCEPT 8.11.3); the
+                // aggregation slots are positional and name nothing.
+                if site.role.arity() == 1
+                    && entrypoint_parameters(&ast, &site.entrypoint) != ["exchange"]
+                {
+                    report.push(entrypoint_parameter_finding(pack_path, &site));
+                }
+            }
             Err(RhaiCompileError::SourceBound) => {
                 report.push(uncompilable_finding(
                     pack_path,
@@ -726,6 +736,25 @@ fn uncompilable_finding(
     diagnostic
 }
 
+/// The signature finding for one compiled exchange-slot entrypoint. The
+/// message names the rule, never the author's own spelling (CFG-SEC-3):
+/// the parameter name the ABI requires is the contract, the one the
+/// script used is not quoted.
+fn entrypoint_parameter_finding(pack_path: &Path, site: &ScriptSite) -> Diagnostic {
+    let mut diagnostic = finding(
+        CheckCode::PackEntrypointParameter,
+        &site.path,
+        "the entrypoint's parameter is not the exchange the slot passes",
+        "Name the entrypoint's one parameter exchange: the slot passes one read-only exchange map carrying the body, the headers, and the properties (CONCEPT section 8.11.3).",
+    );
+    diagnostic.source = Some(registry_platform_yaml::Source {
+        file: format!("{} ({})", pack_path.display(), site.file),
+        line: None,
+        column: None,
+    });
+    diagnostic
+}
+
 /// The digest-pin finding for one inventory entry. The message names the
 /// rule and the inventory path, never a file's contents (CFG-SEC-3).
 fn pin_finding(pack_path: &Path, pointer: &str, message: &str, script_path: &str) -> Diagnostic {
@@ -831,6 +860,32 @@ pub(crate) fn check_fixture_bodies(
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    /// The exchange-slot signature finding names the ABI's rule and the
+    /// pack's own file at the site's document position, and carries a
+    /// suggested action; it quotes neither the author's parameter name nor
+    /// any other script content (CFG-SEC-3).
+    #[test]
+    fn the_signature_finding_names_the_rule_value_free() {
+        let site = ScriptSite {
+            path: "/routes/fetch-case/steps/0".to_owned(),
+            role: registry_adapter_core::ScriptRole::Expression,
+            file: "scripts/map.rhai".to_owned(),
+            entrypoint: "map".to_owned(),
+        };
+        let finding = entrypoint_parameter_finding(Path::new("/packs/case/pack.yaml"), &site);
+        assert_eq!(finding.code.as_str(), "adapter.pack.entrypoint-parameter");
+        assert_eq!(finding.path, "/routes/fetch-case/steps/0");
+        assert_eq!(
+            finding.message,
+            "the entrypoint's parameter is not the exchange the slot passes"
+        );
+        assert!(!finding.suggested_action.is_empty(), "{finding:?}");
+        let rendered = format!("{finding:?}");
+        assert!(!rendered.contains("map(record"), "{rendered}");
+        let source = finding.source.expect("the pack file location");
+        assert_eq!(source.file, "/packs/case/pack.yaml (scripts/map.rhai)");
+    }
 
     /// Reader agreement (CFG-YAML-1 in spirit): every authored artifact
     /// this crate's fixture corpus carries decodes through the platform
