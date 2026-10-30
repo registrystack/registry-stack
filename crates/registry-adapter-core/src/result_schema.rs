@@ -128,11 +128,24 @@ fn parse_envelope_template(text: &str) -> Result<Value, String> {
             rest = &rest[open + 2..];
             continue;
         }
+        // A placeholder inside a longer string never binds; refuse with
+        // the grammar rule rather than a confusing parse error.
+        let leading_quote = open > 0 && rest.as_bytes()[open - 1] == b'"';
+        let trailing_quote = rest[open + close + 2..].starts_with('"');
+        let consumed = text.len() - rest.len();
+        let inside_string = text.as_bytes()[..consumed + open]
+            .iter()
+            .filter(|byte| **byte == b'"')
+            .count()
+            % 2
+            == 1;
+        if inside_string && !(leading_quote && trailing_quote) {
+            return Err(ENVELOPE_GRAMMAR_RULE.to_string());
+        }
         // A quoted placeholder `"{{slot}}"` fills the whole string
         // member; drop the surrounding quote pair so the sentinel is the
         // member's whole value.
-        let trailing = rest[open + close + 2..].starts_with('"');
-        let quoted = open > 0 && rest.as_bytes()[open - 1] == b'"' && trailing;
+        let quoted = leading_quote && trailing_quote;
         if quoted {
             parsed.push_str(&rest[..open - 1]);
         } else {
@@ -177,6 +190,9 @@ fn derive_value(
             let mut properties = Map::new();
             let mut required = Vec::new();
             for (key, value) in members {
+                if key.contains(SLOT_MARK) {
+                    return Err(ENVELOPE_GRAMMAR_RULE.to_string());
+                }
                 let text = value.as_str();
                 let (schema, optional) = match text.and_then(decode_slot) {
                     Some(slot) => (slot_schema(slot.0, binding, project)?, slot.1),
@@ -213,11 +229,17 @@ fn derive_value(
                 "items": items_schema.unwrap_or_else(|| json!({"type": "null"})),
             }))
         }
-        Value::Number(_) => Ok(json!({"type": "number"})),
-        Value::Bool(_) => Ok(json!({"type": "boolean"})),
+        Value::Number(number) => Ok(json!({"type": "number", "const": number})),
+        Value::Bool(boolean) => Ok(json!({"type": "boolean", "const": boolean})),
         Value::Null => Ok(json!({"type": "null"})),
     }
 }
+
+/// The envelope grammar: a placeholder fills a whole member value or a
+/// whole string member, never a part of a string; inside a longer string
+/// it would never bind, so the derivation refuses.
+const ENVELOPE_GRAMMAR_RULE: &str =
+    "an envelope placeholder fills a whole member value or a whole string member, never a part of a string";
 
 /// One object member's schema and whether it may be absent: a whole-value
 /// optional slot (`{{?slot}}`) is optional, everything else is required.
@@ -228,7 +250,8 @@ fn derive_member(
 ) -> Result<(Value, bool), String> {
     match decode_slot(text) {
         Some((name, optional)) => Ok((slot_schema(name, binding, project)?, optional)),
-        None => Ok((json!({"type": "string"}), false)),
+        None if text.contains(SLOT_MARK) => Err(ENVELOPE_GRAMMAR_RULE.to_string()),
+        None => Ok((json!({"type": "string", "const": text}), false)),
     }
 }
 
@@ -307,6 +330,12 @@ pub fn validate_result_schema(value: &Value, schema: &Value) -> Vec<String> {
 }
 
 fn validate_at(value: &Value, schema: &Value, pointer: &str, violations: &mut Vec<String>) {
+    if let Some(fixed) = schema.get("const") {
+        if value != fixed {
+            violations.push(pointer.to_string());
+            return;
+        }
+    }
     let Some(expected) = schema.get("type").and_then(Value::as_str) else {
         return;
     };
@@ -536,6 +565,47 @@ mod tests {
             .expect("unique"),
             access_profiles: UniqueIdList::new(Vec::new()).expect("empty"),
         }
+    }
+
+    /// An envelope literal derives as a const: a body carrying a
+    /// different literal refuses at its pointer, the fixed literal
+    /// passes (`products/adapter/CONCEPT.md` section 7).
+    #[test]
+    fn envelope_literals_derive_as_const() {
+        let profile = profile(r#"{"resourceType": "Bundle", "entry": {{records}}}"#);
+        let schema =
+            derive_operation_result_schema(&profile, &project(true), "cases-find").expect("derive");
+        assert_eq!(
+            schema["properties"]["resourceType"],
+            json!({"type": "string", "const": "Bundle"})
+        );
+        let good = json!({"resourceType": "Bundle", "entry": [{"id": "c-1"}]});
+        assert!(validate_result_schema(&good, &schema).is_empty());
+        let other = json!({"resourceType": "Patient", "entry": []});
+        assert_eq!(
+            validate_result_schema(&other, &schema),
+            vec!["/resourceType"]
+        );
+    }
+
+    /// A placeholder inside a longer string never binds: the derivation
+    /// refuses with the envelope grammar rule, for the response envelope
+    /// and the problem envelope alike.
+    #[test]
+    fn a_mid_string_slot_refuses_with_the_envelope_grammar_rule() {
+        let response_profile = profile(r#"{"code": "CASE-{{recordId}}"}"#);
+        assert_eq!(
+            derive_operation_result_schema(&response_profile, &project(true), "cases-find")
+                .expect_err("mid-string slot"),
+            ENVELOPE_GRAMMAR_RULE
+        );
+        let mut problem_profile = profile(r#"{{record}}"#);
+        problem_profile.problem_envelope =
+            EnvelopeTemplate(r#"{"code": "CASE-{{problemCode}}"}"#.to_string());
+        assert_eq!(
+            derive_problem_envelope_schema(&problem_profile).expect_err("mid-string slot"),
+            ENVELOPE_GRAMMAR_RULE
+        );
     }
 
     /// The derivation expands the `record` and `records` slots from the
