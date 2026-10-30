@@ -12,6 +12,7 @@
 //! data send; this file proves the auth layer's half of it, the rule
 //! itself, in the unit suite.
 
+#[allow(dead_code)]
 #[path = "support/upstream/mod.rs"]
 mod upstream;
 

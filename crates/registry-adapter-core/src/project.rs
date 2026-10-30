@@ -169,6 +169,16 @@ pub struct AdapterProject {
     /// The access profiles.
     #[serde(default)]
     pub access_profiles: UniqueIdList<AccessProfile>,
+    /// The deployment's value for each of the profile's parameterized
+    /// parts, keyed by part name. The engine writes each value over the
+    /// response-envelope members of that name; every declared part needs
+    /// a value and no value names an undeclared part.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::external_id_map_schema::<String>")
+    )]
+    pub parameterized_parts: std::collections::BTreeMap<ExternalId, String>,
 }
 
 #[cfg(test)]
@@ -246,6 +256,7 @@ mod tests {
                     .expect("unique"),
             }])
             .expect("unique"),
+            parameterized_parts: Default::default(),
         };
         let json = serde_json::to_string(&project).expect("serialize");
         assert!(json.contains("maximumUpstreamCalls"));
@@ -304,6 +315,7 @@ mod tests {
             templated_routes: UniqueIdList::new(Vec::new()).expect("empty"),
             bindings: UniqueIdList::new(Vec::new()).expect("empty"),
             access_profiles: UniqueIdList::new(Vec::new()).expect("empty"),
+            parameterized_parts: Default::default(),
         };
         let json = serde_json::to_value(&project).expect("serialize");
 

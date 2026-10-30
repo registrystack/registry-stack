@@ -37,8 +37,8 @@ async fn a_found_record_comes_back_shaped_through_the_served_binary() {
                 "updated_at": "2017-05-26T11:46:22.372"
             },
             "meta": {
-                "registryIdentifier": "registryIdentifier",
-                "datasetIdentifier": "datasetIdentifier",
+                "registryIdentifier": "dhis2-tracker-registry",
+                "datasetIdentifier": "persons",
                 "entityTypeIdentifier": "person"
             }
         })

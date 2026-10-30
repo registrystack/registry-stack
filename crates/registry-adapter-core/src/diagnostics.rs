@@ -65,6 +65,7 @@ pub enum CheckCode {
     ProjectDuplicateRouteId,
     ProjectFilterParameterCollision,
     ProjectParameterTypeMismatch,
+    ProjectParameterizedPartUnbound,
     ProjectPinDigestMismatch,
     ProjectPinVersionMismatch,
     ProjectRequiredParameterUnbound,
@@ -167,6 +168,7 @@ impl CheckCode {
         Self::ProjectDuplicateRouteId,
         Self::ProjectFilterParameterCollision,
         Self::ProjectParameterTypeMismatch,
+        Self::ProjectParameterizedPartUnbound,
         Self::ProjectPinDigestMismatch,
         Self::ProjectPinVersionMismatch,
         Self::ProjectRequiredParameterUnbound,
@@ -279,6 +281,7 @@ impl CheckCode {
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
             Self::ProjectFilterParameterCollision => "adapter.project.filter-parameter-collision",
             Self::ProjectParameterTypeMismatch => "adapter.project.parameter-type-mismatch",
+            Self::ProjectParameterizedPartUnbound => "adapter.project.parameterized-part-unbound",
             Self::ProjectPinDigestMismatch => "adapter.project.pin-digest-mismatch",
             Self::ProjectPinVersionMismatch => "adapter.project.pin-version-mismatch",
             Self::ProjectRequiredParameterUnbound => "adapter.project.required-parameter-unbound",
@@ -428,6 +431,7 @@ impl CheckCode {
             | Self::ProjectDuplicateRouteId
             | Self::ProjectFilterParameterCollision
             | Self::ProjectParameterTypeMismatch
+            | Self::ProjectParameterizedPartUnbound
             | Self::ProjectPinDigestMismatch
             | Self::ProjectPinVersionMismatch
             | Self::ProjectRequiredParameterUnbound

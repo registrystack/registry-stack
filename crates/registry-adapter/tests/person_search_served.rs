@@ -66,7 +66,12 @@ async fn the_first_page_comes_back_shaped_with_a_sealed_cursor() {
 
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["items"], expected["items"]);
-    assert_eq!(body["meta"], expected["meta"]);
+    // The fixture records the profile's stand-in text; the deployment's
+    // own values replace it.
+    let mut meta = expected["meta"].clone();
+    meta["registryIdentifier"] = json!("dhis2-tracker-registry");
+    meta["datasetIdentifier"] = json!("persons");
+    assert_eq!(body["meta"], meta);
     let cursor = cursor_of(&body);
     assert!(cursor.len() > 20, "the cursor is sealed, not a page number");
     assert_ne!(cursor, "2");

@@ -32,6 +32,7 @@ use thiserror::Error;
 use crate::auth::AuthPlan;
 use crate::component::http::header_filter::HeaderFilter;
 use crate::component::http::uri::PinnedOrigin;
+use crate::facade::bind_parameterized_parts;
 use crate::interim_loopback::LoopbackSender;
 use crate::route::{check_servable, is_served_auth, EndpointRuntime};
 use crate::scripts::ScriptSet;
@@ -404,7 +405,10 @@ fn compile_binding(
         route_id: route_id.to_owned(),
         steps,
         maximum_upstream_calls: binding.maximum_upstream_calls.get(),
-        response_envelope: operation.response_envelope.text().to_owned(),
+        response_envelope: bind_parameterized_parts(
+            operation.response_envelope.text(),
+            &project.parameterized_parts,
+        ),
         record_schema: registry_adapter_core::binding_record_schema(project, binding)?,
         pagination: operation
             .pagination

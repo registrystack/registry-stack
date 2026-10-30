@@ -66,3 +66,6 @@ accessProfiles:
       - records-get
     recordTypes:
       - household
+parameterizedParts:
+  registryIdentifier: rest-offset-mtls-registry
+  datasetIdentifier: records

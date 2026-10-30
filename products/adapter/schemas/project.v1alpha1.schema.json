@@ -265,6 +265,16 @@
       "$ref": "#/$defs/PinnedRef",
       "description": "The pinned adapter pack."
     },
+    "parameterizedParts": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "The deployment's value for each of the profile's parameterized\nparts, keyed by part name. The engine writes each value over the\nresponse-envelope members of that name; every declared part needs\na value and no value names an undeclared part.",
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "type": "object"
+    },
     "profile": {
       "$ref": "#/$defs/PinnedRef",
       "description": "The pinned facade profile."

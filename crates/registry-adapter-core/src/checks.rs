@@ -3152,6 +3152,36 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
         }
     }
 
+    for part in workspace.profile.parameterized_parts.iter() {
+        if project
+            .parameterized_parts
+            .get(&part.name)
+            .is_none_or(|value| value.is_empty())
+        {
+            findings.push(finding(
+                CheckCode::ProjectParameterizedPartUnbound,
+                &format!("/parameterizedParts/{}", part.name.as_str()),
+                "the profile declares this parameterized part and the project gives it no value",
+                "Set a non-empty value for the part under parameterizedParts.",
+            ));
+        }
+    }
+    for name in project.parameterized_parts.keys() {
+        if !workspace
+            .profile
+            .parameterized_parts
+            .iter()
+            .any(|part| &part.name == name)
+        {
+            findings.push(finding(
+                CheckCode::ProjectParameterizedPartUnbound,
+                &format!("/parameterizedParts/{}", name.as_str()),
+                "the project gives a value to a part the profile does not declare",
+                "Remove the value, or declare the part in the profile's parameterizedParts.",
+            ));
+        }
+    }
+
     for (index, access) in project.access_profiles.iter().enumerate() {
         let prefix = format!("/accessProfiles/{index}");
         if access.scopes.is_empty() {
@@ -4249,6 +4279,7 @@ mod tests {
                 record_types: UniqueList::new(vec![local("case")]).expect("unique"),
             }])
             .expect("unique"),
+            parameterized_parts: Default::default(),
         }
     }
 
@@ -8021,6 +8052,36 @@ mod tests {
         .expect("unique");
         let findings = check_project(&workspace(&profile, &pack, &project));
         assert_has(&findings, CheckCode::ProjectAccessProfileScopesEmpty);
+    }
+
+    #[test]
+    fn project_refuses_a_parameterized_part_without_a_value() {
+        let mut profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        profile.parameterized_parts = UniqueList::new(vec![ParameterizedPart {
+            name: id("registryIdentifier"),
+            description: "the registry".to_string(),
+        }])
+        .expect("unique");
+        let pack = pack_builder(vec![], vec![]);
+        let mut project = project_builder(&pack);
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert_has(&findings, CheckCode::ProjectParameterizedPartUnbound);
+
+        project
+            .parameterized_parts
+            .insert(id("registryIdentifier"), "civil-registry".to_string());
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert!(
+            !codes(&findings).contains(&CheckCode::ProjectParameterizedPartUnbound.code()),
+            "{:?}",
+            codes(&findings)
+        );
+
+        project
+            .parameterized_parts
+            .insert(id("stray"), "x".to_string());
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert_has(&findings, CheckCode::ProjectParameterizedPartUnbound);
     }
 
     // ----- runtime checks -----

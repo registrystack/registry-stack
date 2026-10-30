@@ -794,6 +794,43 @@ fn new_id() -> String {
 /// dropped from the rendered envelope.
 const ABSENT: &str = "@@adapter-absent-slot@@";
 
+/// Writes the deployment's value over every string member of the envelope
+/// template named for a parameterized part. The template carries the part
+/// name as stand-in text at the binding point (`"name": "name"`); the value
+/// replaces that text. The pass reads the template, never a rendered
+/// record, so a record field of the same name is not touched.
+pub fn bind_parameterized_parts(
+    template: &str,
+    parts: &BTreeMap<registry_platform_yaml::ExternalId, String>,
+) -> String {
+    let mut bound = template.to_owned();
+    for (name, value) in parts {
+        let key = format!("\"{}\"", name.as_str());
+        let mut from = 0;
+        while let Some(found) = bound[from..].find(&key) {
+            let after_key = from + found + key.len();
+            let tail = &bound[after_key..];
+            let colon = tail.trim_start();
+            let Some(value_start) = colon
+                .strip_prefix(':')
+                .map(|rest| rest.trim_start())
+                .filter(|rest| rest.starts_with('"'))
+            else {
+                from = after_key;
+                continue;
+            };
+            let open = bound.len() - value_start.len();
+            let close = value_start[1..]
+                .find('"')
+                .map_or(bound.len(), |end| open + 1 + end + 1);
+            let quoted = Value::String(value.clone()).to_string();
+            bound.replace_range(open..close, &quoted);
+            from = open + quoted.len();
+        }
+    }
+    bound
+}
+
 /// Fill an envelope template. A `{{slot}}` or `{{?slot}}` standing alone
 /// takes the slot's JSON value; one inside a string takes its text. A
 /// missing required slot is a fault; a missing optional one drops the
@@ -903,6 +940,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(with, json!({"status": 404, "detail": "gone \"x\""}));
+    }
+
+    #[test]
+    fn parameterized_parts_replace_the_stand_in_text_of_their_name() {
+        let parts = BTreeMap::from([(
+            registry_platform_yaml::ExternalId::new("registryIdentifier").unwrap(),
+            "ci\"vil".to_owned(),
+        )]);
+        let template = r#"{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "other": "registryIdentifier"}}"#;
+        let bound = bind_parameterized_parts(template, &parts);
+        let slots = BTreeMap::from([("record", json!({"registryIdentifier": "from-the-record"}))]);
+        assert_eq!(
+            render_envelope(&bound, &slots).unwrap(),
+            json!({
+                "data": {"registryIdentifier": "from-the-record"},
+                "meta": {"registryIdentifier": "ci\"vil", "other": "registryIdentifier"}
+            })
+        );
     }
 
     #[test]

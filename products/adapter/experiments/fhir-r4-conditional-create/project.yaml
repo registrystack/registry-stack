@@ -57,3 +57,6 @@ accessProfiles:
       - records-create
     recordTypes:
       - patient
+parameterizedParts:
+  registryIdentifier: fhir-r4-conditional-create-registry
+  datasetIdentifier: records

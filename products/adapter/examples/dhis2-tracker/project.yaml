@@ -118,3 +118,6 @@ accessProfiles:
       - records-patch
     recordTypes:
       - person
+parameterizedParts:
+  registryIdentifier: dhis2-tracker-registry
+  datasetIdentifier: persons

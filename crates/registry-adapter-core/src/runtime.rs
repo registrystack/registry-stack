@@ -174,7 +174,10 @@ pub struct AdapterRuntimeConfig {
     /// against the token's client claim. At least one: a list that admits
     /// every client the issuer verifies is an omission, not a policy.
     #[serde(deserialize_with = "at_least_one_client")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "at_least_one_client_schema"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "at_least_one_client_schema")
+    )]
     pub allowed_clients: UniqueList<ExternalId>,
     /// The journal retention.
     pub audit: AuditRetention,

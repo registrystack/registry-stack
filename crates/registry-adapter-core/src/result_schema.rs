@@ -366,10 +366,7 @@ fn slot_schema(
 /// declared field typed, required where declared, and no other member. The
 /// runtime checks each record a route produces against it before the
 /// facade discloses the record.
-pub fn binding_record_schema(
-    project: &AdapterProject,
-    binding: &Binding,
-) -> Result<Value, String> {
+pub fn binding_record_schema(project: &AdapterProject, binding: &Binding) -> Result<Value, String> {
     record_schema(Some(binding), Some(project))
 }
 
@@ -681,6 +678,7 @@ mod tests {
             })
             .expect("unique"),
             access_profiles: UniqueIdList::new(Vec::new()).expect("empty"),
+            parameterized_parts: Default::default(),
         }
     }
 
