@@ -245,6 +245,11 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
                 "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
             ));
         }
+        findings.extend(facade_path_parameter_checks(
+            &prefix,
+            &operation.path,
+            &operation.path_parameters,
+        ));
         findings.extend(envelope_checks(&prefix, &operation.response_envelope));
         if !(operation.response_envelope.mentions(SLOT_RECORD)
             || operation.response_envelope.mentions(SLOT_RECORDS))
@@ -361,6 +366,93 @@ fn origin_relative_path_fault(path: &str) -> Option<&'static str> {
         return Some("the path escapes the origin with a `..` segment");
     }
     None
+}
+
+/// The single-brace `{name}` placeholders of a facade path template
+/// (Camel REST DSL / OpenAPI path templating), in order, duplicates
+/// included. Double-brace tokens are the pack layer's substitution
+/// syntax and never facade placeholders.
+fn facade_path_placeholders(path: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut rest = path;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        match after.find('}') {
+            Some(close) => {
+                let name = &after[..close];
+                if !name.starts_with('{') && !name.is_empty() {
+                    names.push(name);
+                }
+                rest = &after[close + 1..];
+            }
+            None => break,
+        }
+    }
+    names
+}
+
+/// Whether a facade path carries pack-layer `{{name}}` substitution
+/// syntax, which never resolves in a facade path template.
+fn carries_pack_layer_placeholder(path: &str) -> bool {
+    let mut rest = path;
+    while let Some(open) = rest.find('{') {
+        if rest[open..].starts_with("{{") {
+            return true;
+        }
+        let after = &rest[open + 1..];
+        match after.find('}') {
+            Some(close) => rest = &after[close + 1..],
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Every `{name}` in a facade operation path resolves against the
+/// operation's declared path parameters, and every declared parameter
+/// appears in the path (`products/adapter/CONCEPT.md` section 7).
+fn facade_path_parameter_checks(
+    prefix: &str,
+    path: &str,
+    declared: &[registry_platform_yaml::LocalId],
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    if carries_pack_layer_placeholder(path) {
+        findings.push(finding(
+            CheckCode::ProfileUnresolvedPathParameter,
+            &format!("{prefix}/path"),
+            "the facade path carries a pack-layer {{name}} placeholder; facade paths use single-brace {name} path templating",
+            "Write the placeholder as a single-brace {name} template and declare the parameter in pathParameters.",
+        ));
+        return findings;
+    }
+    let known: std::collections::HashSet<&str> = declared
+        .iter()
+        .map(|parameter| parameter.as_str())
+        .collect();
+    let mut refused: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for name in facade_path_placeholders(path) {
+        if !known.contains(name) && refused.insert(name) {
+            findings.push(finding(
+                CheckCode::ProfileUnresolvedPathParameter,
+                &format!("{prefix}/path"),
+                "the facade path carries a placeholder no declared path parameter provides",
+                "Declare the parameter in the operation's pathParameters, or remove the placeholder from the path.",
+            ));
+        }
+    }
+    for (index, parameter) in declared.iter().enumerate() {
+        let needle = format!("{{{}}}", parameter.as_str());
+        if !path.contains(&needle) {
+            findings.push(finding(
+                CheckCode::ProfileUnresolvedPathParameter,
+                &format!("{prefix}/pathParameters/{index}"),
+                "the declared path parameter appears nowhere in the operation path",
+                "Use the parameter in the path template, or drop it from pathParameters.",
+            ));
+        }
+    }
+    findings
 }
 
 fn request_envelope_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Diagnostic> {
@@ -3169,6 +3261,7 @@ mod tests {
             id: local(id_text),
             method,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -3446,11 +3539,69 @@ mod tests {
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{{mysterySlot}}"#.to_string()),
             pagination: None,
         }]);
         assert_has(&check_profile(&profile), CheckCode::ProfileUnknownSlot);
+    }
+
+    /// Every `{name}` in a facade operation path resolves against the
+    /// operation's declared path parameters, and every declared parameter
+    /// appears in the path (CONCEPT section 7); pack-layer `{{name}}`
+    /// placeholders refuse as the wrong syntax for a facade path.
+    #[test]
+    fn profile_resolves_facade_path_placeholders_against_declared_parameters() {
+        // Declared parameters resolve: the BReg read surface is clean.
+        let mut resolved = operation("records-get", HttpMethod::Get);
+        resolved.path = "/v1/records/{type}/{record_id}".to_string();
+        resolved.path_parameters = vec![local("type"), local("record_id")];
+        assert_clean(check_profile(&profile_builder(vec![resolved])));
+
+        // An undeclared placeholder refuses at the path member.
+        let mut undeclared = operation("records-get", HttpMethod::Get);
+        undeclared.path = "/v1/records/{type}/{record_id}".to_string();
+        undeclared.path_parameters = vec![local("type")];
+        let findings = check_profile(&profile_builder(vec![undeclared]));
+        assert_has(&findings, CheckCode::ProfileUnresolvedPathParameter);
+        assert_eq!(
+            findings
+                .iter()
+                .find(|f| f.code == CheckCode::ProfileUnresolvedPathParameter.code())
+                .map(|f| f.path.as_str()),
+            Some("/operations/0/path")
+        );
+
+        // A declared parameter the path never uses refuses too.
+        let mut unused = operation("records-get", HttpMethod::Get);
+        unused.path = "/v1/records".to_string();
+        unused.path_parameters = vec![local("type")];
+        let findings = check_profile(&profile_builder(vec![unused]));
+        assert_eq!(
+            findings
+                .iter()
+                .find(|f| f.code == CheckCode::ProfileUnresolvedPathParameter.code())
+                .map(|f| f.path.as_str()),
+            Some("/operations/0/pathParameters/0")
+        );
+
+        // Pack-layer substitution syntax is not facade path templating.
+        let mut pack_layer = operation("records-get", HttpMethod::Get);
+        pack_layer.path = "/v1/records/{{type}}".to_string();
+        pack_layer.path_parameters = vec![local("type")];
+        assert_has(
+            &check_profile(&profile_builder(vec![pack_layer])),
+            CheckCode::ProfileUnresolvedPathParameter,
+        );
+
+        // An empty placeholder name cannot resolve.
+        let mut empty = operation("records-get", HttpMethod::Get);
+        empty.path = "/v1/records/{}".to_string();
+        assert_has(
+            &check_profile(&profile_builder(vec![empty])),
+            CheckCode::ProfileUnresolvedPathParameter,
+        );
     }
 
     #[test]
@@ -3459,6 +3610,7 @@ mod tests {
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"empty": true}"#.to_string()),
             pagination: None,
@@ -3502,6 +3654,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: Some(EnvelopeTemplate(r#"{{records}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -3514,6 +3667,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -3542,6 +3696,7 @@ mod tests {
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: Some(PaginationParameters {
@@ -4411,6 +4566,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -4544,6 +4700,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -5954,6 +6111,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![local("type")],
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -6257,6 +6415,7 @@ mod tests {
         ] {
             let mut bad = operation("cases-find", HttpMethod::Get);
             bad.path = path.to_string();
+            bad.path_parameters = Vec::new();
             let profile = profile_builder(vec![bad]);
             let findings = check_profile(&profile);
             assert_eq!(findings.len(), 1, "at {path}");

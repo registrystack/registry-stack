@@ -47,6 +47,7 @@ pub enum CheckCode {
     ProfileResponseEnvelopeMissingResultSlot,
     ProfileResponseEnvelopeUncompilable,
     ProfileUnknownSlot,
+    ProfileUnresolvedPathParameter,
     // adapter.project.*
     ProjectDuplicateRouteId,
     ProjectParameterTypeMismatch,
@@ -126,6 +127,7 @@ impl CheckCode {
         Self::ProfileResponseEnvelopeMissingResultSlot,
         Self::ProfileResponseEnvelopeUncompilable,
         Self::ProfileUnknownSlot,
+        Self::ProfileUnresolvedPathParameter,
         Self::ProjectDuplicateRouteId,
         Self::ProjectParameterTypeMismatch,
         Self::ProjectPinDigestMismatch,
@@ -212,6 +214,7 @@ impl CheckCode {
                 "adapter.profile.response-envelope-uncompilable"
             }
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
+            Self::ProfileUnresolvedPathParameter => "adapter.profile.unresolved-path-parameter",
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
             Self::ProjectParameterTypeMismatch => "adapter.project.parameter-type-mismatch",
             Self::ProjectPinDigestMismatch => "adapter.project.pin-digest-mismatch",
@@ -282,7 +285,8 @@ impl CheckCode {
             | Self::ProfileRequestEnvelopeMissingRecordSlot
             | Self::ProfileResponseEnvelopeMissingResultSlot
             | Self::ProfileResponseEnvelopeUncompilable
-            | Self::ProfileUnknownSlot => crate::naming::ADAPTER_PROFILE_KIND,
+            | Self::ProfileUnknownSlot
+            | Self::ProfileUnresolvedPathParameter => crate::naming::ADAPTER_PROFILE_KIND,
             Self::FixtureResponseSchema
             | Self::FixtureUnknownEndpoint
             | Self::FixtureUnknownIntercept

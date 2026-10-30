@@ -73,8 +73,15 @@ pub struct ProfileOperation {
     pub id: LocalId,
     /// The facade method.
     pub method: crate::model::HttpMethod,
-    /// The facade path template, e.g. `/v2/cases/{type}`.
+    /// The facade path template, e.g. `/v2/cases/{type}`. Placeholders
+    /// are single-brace `{name}` templates, Camel REST DSL / OpenAPI path
+    /// templating; `{{name}}` is the pack layer's substitution syntax and
+    /// refuses here.
     pub path: String,
+    /// The path parameters the template names: every `{name}` in `path`
+    /// must resolve here, and every entry must appear in the path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_parameters: Vec<LocalId>,
     /// Where a writable record sits in an incoming body. A write
     /// operation's request envelope must name the `record` slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,6 +163,7 @@ mod tests {
             id: LocalId::new(id).expect("id"),
             method,
             path: "/v2/cases/{type}".to_string(),
+            path_parameters: vec![LocalId::new("type").expect("id")],
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
