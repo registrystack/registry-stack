@@ -113,6 +113,32 @@ done
   "${fixture_flags[@]}" >/dev/null
 printf 'Example check passed\n'
 
+# Each committed experiment holds the concrete contract its project compiles
+# to (`generated/openapi.json` beside the project). `compile --check` refuses
+# on drift, so an experiment cannot rot behind a reader, core, or document
+# change. An experiment that carries no `profile.yaml` beside its project
+# binds the maintained profile its project pins by id, under
+# `products/adapter/profiles/<id>/`, the same profile its documented check
+# command names; a project that pins no id, or one with no maintained
+# profile, refuses loudly here rather than skipping the experiment.
+experiments=0
+for project in products/adapter/experiments/*/project.yaml; do
+  directory="${project%/*}"
+  if [[ -f "${directory}/profile.yaml" ]]; then
+    profile="${directory}/profile.yaml"
+  else
+    profile_id="$(awk '/^profile:$/ { pinned = 1; next } pinned && /^  id:/ { sub(/^  id:[[:space:]]*/, ""); print; exit } pinned && /^[^ ]/ { exit }' "${project}")"
+    if [[ -z "${profile_id}" ]]; then
+      printf 'check-contracts: %s pins no profile id.\n' "${project}" >&2
+      exit 2
+    fi
+    profile="products/adapter/profiles/${profile_id}/profile.yaml"
+  fi
+  "$adapterctl_bin" compile --check "$project" --profile "$profile" >/dev/null
+  experiments=$((experiments + 1))
+done
+printf 'Experiment contracts hold (%d experiments)\n' "$experiments"
+
 # The bad-authoring corpus: every discovered bad/ member refuses with its
 # own code (plus, transitionally, a co-fired partner code that is another
 # member's expectation; see the runner and the corpus README), and the
