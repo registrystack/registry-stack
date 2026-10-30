@@ -190,7 +190,7 @@ fn every_maintained_coordinator_workflow_has_no_invented_missing_local_reference
         count += 1;
     }
     assert_eq!(
-        count, 10,
+        count, 11,
         "cover every maintained native and Review workflow"
     );
 }
