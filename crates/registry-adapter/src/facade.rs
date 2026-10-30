@@ -177,10 +177,27 @@ async fn handle(
     }
 
     let rendered = match outcome.result {
-        Ok(done) => {
-            events.push(journal_event("exchangeCompleted", None));
-            Ok(done)
-        }
+        Ok(done) => match disclosed_slots(operation, &done.message.body) {
+            Ok(slots) => {
+                events.push(journal_event("exchangeCompleted", None));
+                Ok((done, slots))
+            }
+            Err(violations) => {
+                tracing::error!(
+                    violations,
+                    "a route ended with a record its type does not declare"
+                );
+                let failure = RouteFailure {
+                    class: ErrorClass::DisclosureViolation,
+                    message: None,
+                };
+                events.push(journal_event(
+                    "exchangeFailed",
+                    Some(json!({ "class": failure.class.class() })),
+                ));
+                Err(failure)
+            }
+        },
         Err(failure) => {
             events.push(journal_event(
                 "exchangeFailed",
@@ -202,7 +219,7 @@ async fn handle(
         );
     }
     match rendered {
-        Ok(done) => {
+        Ok((done, slots)) => {
             let next_cursor = match seal_next(state, operation, &caller, search_binding, &done) {
                 Ok(cursor) => cursor,
                 Err(error) => {
@@ -219,7 +236,7 @@ async fn handle(
             success(
                 profile,
                 operation,
-                &done,
+                slots,
                 next_cursor,
                 &record_type,
                 &request_id,
@@ -294,17 +311,60 @@ fn refusal_response(
     response
 }
 
-/// A record as the facade serves it: a route may end with a record that
-/// wraps its domain fields under `domainData` beside the source's
-/// identifiers; the facade's record is the domain fields.
-fn record_of(body: &Value) -> Value {
-    match body {
-        Value::Object(map) if map.contains_key("recordIdentifier") => map
-            .get("domainData")
-            .cloned()
-            .unwrap_or_else(|| body.clone()),
-        other => other.clone(),
+/// The members of a record a route may wrap its domain fields in, beside the
+/// source's identifiers.
+const RECORD_WRAPPER_MEMBERS: [&str; 3] = ["recordIdentifier", "revisionIdentifier", "domainData"];
+
+/// A record as the facade serves it, checked against the closed schema of
+/// the bound record type. A route may end with a record that wraps its domain
+/// fields under `domainData` beside the source's identifiers (exactly those
+/// three members, `domainData` required); the facade's record is then the
+/// domain fields. Any other body is the record itself. A record carrying a
+/// field the record type does not declare, missing a declared one or typed
+/// differently is a disclosure violation, never served. The error is the
+/// count of violations: key names stay out of every log and journal.
+fn disclosed_record(body: &Value, schema: &Value) -> Result<Value, usize> {
+    let record = match body {
+        Value::Object(map) if map.contains_key("recordIdentifier") => {
+            let wrapper_shaped = map.len() <= RECORD_WRAPPER_MEMBERS.len()
+                && map
+                    .keys()
+                    .all(|key| RECORD_WRAPPER_MEMBERS.contains(&key.as_str()));
+            match map.get("domainData") {
+                Some(domain) if wrapper_shaped => domain,
+                _ => return Err(1),
+            }
+        }
+        other => other,
+    };
+    let violations = registry_adapter_core::validate_result_schema(record, schema);
+    if violations.is_empty() {
+        Ok(record.clone())
+    } else {
+        Err(violations.len())
     }
+}
+
+/// The slots the response envelope is filled from: one record, or every
+/// record of a page, each checked by [`disclosed_record`].
+fn disclosed_slots(
+    operation: &ServedOperation,
+    body: &Value,
+) -> Result<BTreeMap<&'static str, Value>, usize> {
+    let mut slots = BTreeMap::new();
+    if operation.pagination.is_some() {
+        let Value::Array(records) = body else {
+            return Err(1);
+        };
+        let disclosed = records
+            .iter()
+            .map(|record| disclosed_record(record, &operation.record_schema))
+            .collect::<Result<Vec<_>, _>>()?;
+        slots.insert("records", Value::Array(disclosed));
+    } else {
+        slots.insert("record", disclosed_record(body, &operation.record_schema)?);
+    }
+    Ok(slots)
 }
 
 /// Whether a caller-supplied identifier can stand as one path segment of the
@@ -477,33 +537,13 @@ async fn refuse_request(
 fn success(
     profile: &AdapterProfile,
     operation: &ServedOperation,
-    exchange: &Exchange,
+    mut slots: BTreeMap<&'static str, Value>,
     next_cursor: Option<String>,
     record_type: &str,
     request_id: &str,
 ) -> Response {
-    let body = &exchange.message.body;
-    let mut slots: BTreeMap<&str, Value> = BTreeMap::new();
-    if operation.pagination.is_some() {
-        let Value::Array(records) = body else {
-            tracing::error!("a search route did not end with an array of records");
-            return facade_problem(
-                profile,
-                ErrorClass::Facade,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                record_type,
-                request_id,
-            );
-        };
-        slots.insert(
-            "records",
-            Value::Array(records.iter().map(record_of).collect()),
-        );
-        if let Some(cursor) = next_cursor {
-            slots.insert("nextCursor", Value::String(cursor));
-        }
-    } else {
-        slots.insert("record", record_of(body));
+    if let Some(cursor) = next_cursor.filter(|_| operation.pagination.is_some()) {
+        slots.insert("nextCursor", Value::String(cursor));
     }
     slots.insert("recordType", Value::String(record_type.to_owned()));
     slots.insert("requestId", Value::String(request_id.to_owned()));
@@ -775,6 +815,7 @@ mod tests {
             steps: Vec::new(),
             maximum_upstream_calls: 1,
             response_envelope: String::new(),
+            record_schema: json!({}),
             pagination: None,
         }
     }
@@ -792,5 +833,47 @@ mod tests {
             &operation
         ));
         assert!(!admits(&example_project(json!([])), &caller, &operation));
+    }
+
+    fn person_schema() -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "type": "string" } }
+        })
+    }
+
+    #[test]
+    fn a_wrapped_record_discloses_only_its_declared_domain_fields() {
+        let wrapped = json!({
+            "recordIdentifier": "r1",
+            "revisionIdentifier": "v1",
+            "domainData": { "name": "A" }
+        });
+        assert_eq!(
+            disclosed_record(&wrapped, &person_schema()),
+            Ok(json!({ "name": "A" }))
+        );
+    }
+
+    #[test]
+    fn a_record_with_an_undeclared_or_missing_or_mistyped_field_is_refused() {
+        let schema = person_schema();
+        assert!(disclosed_record(&json!({ "name": "A", "ssn": "1" }), &schema).is_err());
+        assert!(disclosed_record(&json!({}), &schema).is_err());
+        assert!(disclosed_record(&json!({ "name": 3 }), &schema).is_err());
+        let leaking =
+            json!({ "recordIdentifier": "r1", "domainData": { "name": "A", "ssn": "1" } });
+        assert!(disclosed_record(&leaking, &schema).is_err());
+    }
+
+    #[test]
+    fn a_wrapper_with_an_extra_member_or_no_domain_data_is_refused() {
+        let schema = json!({ "type": "object" });
+        let extra = json!({ "recordIdentifier": "r1", "domainData": {}, "internal": "x" });
+        assert!(disclosed_record(&extra, &schema).is_err());
+        let bare = json!({ "recordIdentifier": "r1", "name": "A" });
+        assert!(disclosed_record(&bare, &schema).is_err());
     }
 }

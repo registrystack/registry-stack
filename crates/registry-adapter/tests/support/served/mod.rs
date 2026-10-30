@@ -102,7 +102,17 @@ async fn schema_url() -> String {
 }
 
 impl Served {
+    /// The committed DHIS2 Tracker example project.
+    pub fn example_project() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter/examples/dhis2-tracker")
+    }
+
     pub async fn start(upstream_url: &str) -> Self {
+        Self::start_with_project(upstream_url, &Self::example_project()).await
+    }
+
+    /// Start over the project directory at `project`.
+    pub async fn start_with_project(upstream_url: &str, project: &Path) -> Self {
         let database = schema_url().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
@@ -146,13 +156,11 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             ),
         )
         .expect("write the runtime config");
-        let project = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/adapter/examples/dhis2-tracker");
         let child = Command::new(env!("CARGO_BIN_EXE_adapter"))
             .args(["serve", "--runtime-config"])
             .arg(&runtime)
             .arg("--project")
-            .arg(&project)
+            .arg(project)
             .env("TEST_UPSTREAM_USERNAME", USERNAME)
             .env("TEST_UPSTREAM_PASSWORD", PASSWORD)
             .env("TEST_DB_URL", &database)

@@ -178,3 +178,76 @@ async fn a_subject_the_journal_cannot_hold_is_refused_at_authentication() {
     let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&ok));
     assert_eq!(status, 200, "{body}");
 }
+
+/// A copy of the example project whose fetch route has no shaping step, so
+/// the route ends with the source's own body; the pack digest pin in the
+/// copied project is re-pinned to the edited bytes.
+fn project_without_the_shaping_step(directory: &std::path::Path) {
+    use sha2::{Digest, Sha256};
+    fn digest_of(bytes: &[u8]) -> String {
+        let hex: String = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("sha256:{hex}")
+    }
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).expect("create the copy directory");
+        for entry in std::fs::read_dir(from).expect("read the example directory") {
+            let entry = entry.expect("a directory entry");
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("a file type").is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).expect("copy a file");
+            }
+        }
+    }
+    copy(&Served::example_project(), directory);
+    let pack_path = directory.join("pack.yaml");
+    let pack = std::fs::read_to_string(&pack_path).expect("the pack is readable");
+    let step = "      - setBody:\n          rhai:\n            file: scripts/to-record.rhai\n            entrypoint: to_record\n  - id: import-tracked-entity";
+    assert!(
+        pack.contains(step),
+        "the shaping step is where the test expects it"
+    );
+    let edited = pack.replacen(step, "  - id: import-tracked-entity", 1);
+    let project_path = directory.join("project.yaml");
+    let project = std::fs::read_to_string(&project_path).expect("the project is readable");
+    let pinned = digest_of(pack.as_bytes());
+    assert!(
+        project.contains(&pinned),
+        "the project pins the committed pack"
+    );
+    let repinned = digest_of(edited.as_bytes());
+    std::fs::write(&pack_path, edited).expect("write the edited pack");
+    std::fs::write(&project_path, project.replace(&pinned, &repinned))
+        .expect("write the re-pinned project");
+}
+
+#[tokio::test]
+async fn a_source_body_with_undeclared_fields_is_never_disclosed() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    project_without_the_shaping_step(directory.path());
+    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
+
+    let token = served.token("records.read");
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["code"], "source.disclosure", "{body}");
+    let text = body.to_string();
+    assert!(
+        !text.contains("slSrf7H9lMf") && !text.contains("cQWYtUfH6Vx"),
+        "no source value reaches the caller: {text}"
+    );
+    let kinds = served.journal_kinds().await;
+    assert!(
+        kinds.contains(&"exchangeFailed".to_owned())
+            && !kinds.contains(&"exchangeCompleted".to_owned()),
+        "{kinds:?}"
+    );
+}

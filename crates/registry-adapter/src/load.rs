@@ -67,6 +67,9 @@ pub struct ServedOperation {
     pub steps: Vec<Step>,
     pub maximum_upstream_calls: u64,
     pub response_envelope: String,
+    /// The closed schema of one record this operation may disclose: the
+    /// bound record type's declared fields and nothing else.
+    pub record_schema: Value,
     /// The cursor and page-size parameters of a search operation.
     pub pagination: Option<ServedPagination>,
 }
@@ -353,6 +356,7 @@ fn compile_binding(
         steps,
         maximum_upstream_calls: binding.maximum_upstream_calls.get(),
         response_envelope: operation.response_envelope.text().to_owned(),
+        record_schema: registry_adapter_core::binding_record_schema(project, binding)?,
         pagination: operation
             .pagination
             .as_ref()

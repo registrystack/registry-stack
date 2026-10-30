@@ -362,6 +362,17 @@ fn slot_schema(
     }
 }
 
+/// The closed schema of one record the bound record type declares: every
+/// declared field typed, required where declared, and no other member. The
+/// runtime checks each record a route produces against it before the
+/// facade discloses the record.
+pub fn binding_record_schema(
+    project: &AdapterProject,
+    binding: &Binding,
+) -> Result<Value, String> {
+    record_schema(Some(binding), Some(project))
+}
+
 fn record_schema(
     binding: Option<&Binding>,
     project: Option<&AdapterProject>,
