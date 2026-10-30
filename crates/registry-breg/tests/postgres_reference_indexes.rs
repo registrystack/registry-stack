@@ -5,7 +5,7 @@
 //! them, a successor package adds them to a database activated without them,
 //! and a reference filter reaches them.
 
-#![cfg(feature = "postgres-test")]
+#![cfg(all(feature = "postgres-test", feature = "tooling"))]
 
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]

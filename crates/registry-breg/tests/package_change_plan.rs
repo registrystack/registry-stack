@@ -43,7 +43,9 @@ use serde_json::json;
 #[cfg(feature = "tooling")]
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "tooling")]
 const INSTANCE: &str = "instance-under-test";
+#[cfg(feature = "tooling")]
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
