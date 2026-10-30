@@ -81,8 +81,13 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
             // into the stop arm.
             Ok(Flow::Stop | Flow::Handled) => {
                 processed += 1;
-                let merged =
-                    aggregation::fold(run.context.scripts, &strategy, &accumulated, &item)?;
+                let merged = aggregation::fold(
+                    run.context.scripts,
+                    &run.context.code_maps,
+                    &strategy,
+                    &accumulated,
+                    &item,
+                )?;
                 accumulated = merged.body;
                 apply_properties(run, merged.properties);
                 finish(run, accumulated, accounting, total, processed, failures);
@@ -117,7 +122,13 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
             }
         }
         processed += 1;
-        let merged = aggregation::fold(run.context.scripts, &strategy, &accumulated, &item)?;
+        let merged = aggregation::fold(
+            run.context.scripts,
+            &run.context.code_maps,
+            &strategy,
+            &accumulated,
+            &item,
+        )?;
         accumulated = merged.body;
         apply_properties(run, merged.properties);
     }

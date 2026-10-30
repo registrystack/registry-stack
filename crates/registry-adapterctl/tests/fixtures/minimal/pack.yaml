@@ -31,6 +31,8 @@ routes:
     from:
       uri: direct:shared-lookup
     steps:
+      - convertBodyTo:
+          type: codeMap:gender-codes
       - to:
           uri: http:case-api
           parameters:

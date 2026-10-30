@@ -1088,6 +1088,7 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
     }
     findings.extend(script_reference_checks(pack));
     findings.extend(template_parameter_checks(pack));
+    findings.extend(code_map_checks(pack));
     findings
 }
 
@@ -1247,6 +1248,9 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         .iter()
         .map(|endpoint| endpoint.id.as_str())
         .collect();
+    // The declared code maps a conversion step's `type` may name
+    // (`products/adapter/CONCEPT.md` section 8.6).
+    let code_map_ids: HashSet<&str> = pack.code_maps.iter().map(|map| map.id.as_str()).collect();
     // The endpoints an authentication kind protects: an ok range over
     // one of these may never cover 401 (`products/adapter/CONCEPT.md`
     // section 10.2).
@@ -1549,6 +1553,33 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         ));
                     }
                 }
+            }
+            Step::ConvertBodyTo(convert) => {
+                push_convert_findings(
+                    &mut route_findings,
+                    &format!("{prefix}/steps{path}"),
+                    "convertBodyTo",
+                    convert,
+                    &code_map_ids,
+                );
+            }
+            Step::ConvertHeaderTo(convert) => {
+                push_convert_findings(
+                    &mut route_findings,
+                    &format!("{prefix}/steps{path}"),
+                    "convertHeaderTo",
+                    convert,
+                    &code_map_ids,
+                );
+            }
+            Step::ConvertPropertyTo(convert) => {
+                push_convert_findings(
+                    &mut route_findings,
+                    &format!("{prefix}/steps{path}"),
+                    "convertPropertyTo",
+                    convert,
+                    &code_map_ids,
+                );
             }
             Step::Split(split) => {
                 if split.maximum_items.is_none() {
@@ -1997,6 +2028,107 @@ fn is_declared_graphql_query(
         declared.id.as_str() == operation.as_str()
             && declared.graphql == Some(GraphQlOperationKind::Query)
     })
+}
+
+/// The conversion-step findings (`products/adapter/CONCEPT.md` section
+/// 8.6): `type` names a declared code map, the body form carries no
+/// `name` or `toName` because the body is both source and target, the
+/// named forms require `name`, and `toName` never stands alone.
+fn push_convert_findings(
+    route_findings: &mut Vec<Diagnostic>,
+    pointer: &str,
+    form: &str,
+    convert: &crate::route::ConvertStep,
+    code_map_ids: &HashSet<&str>,
+) {
+    let body_form = form == "convertBodyTo";
+    if body_form && (convert.name.is_some() || convert.to_name.is_some()) {
+        route_findings.push(finding(
+            CheckCode::RouteConvertShape,
+            pointer,
+            "a convertBodyTo declares no name or toName; it converts the body",
+            "Drop name and toName; the body is both the source and the target.",
+        ));
+    }
+    if !body_form && convert.name.is_none() {
+        route_findings.push(finding(
+            CheckCode::RouteConvertShape,
+            &format!("{pointer}/name"),
+            &format!("a {form} names no header or property to convert"),
+            "Name the header or property the step converts.",
+        ));
+    }
+    if convert.name.is_none() && convert.to_name.is_some() {
+        route_findings.push(finding(
+            CheckCode::RouteConvertShape,
+            &format!("{pointer}/toName"),
+            "a conversion with toName and no name names no source",
+            "Name the source with name; toName only redirects the result.",
+        ));
+    }
+    match convert.code_map_id() {
+        Some(id) if code_map_ids.contains(id) => {}
+        _ => route_findings.push(finding(
+            CheckCode::RouteCodeMapUnknown,
+            &format!("{pointer}/type"),
+            "the conversion names no declared code map",
+            "Write type as codeMap:<id> naming a code map the pack declares.",
+        )),
+    }
+}
+
+/// The code-map checks (`products/adapter/CONCEPT.md` section 8.6): every
+/// entry is a JSON scalar, and every declared map is referenced by at
+/// least one conversion step in the pack's routes or route templates. A
+/// Rhai `code_map` call also references a map, but a script's references
+/// are not statically countable; this check counts authored steps only.
+fn code_map_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    let mut referenced: HashSet<&str> = HashSet::new();
+    let mut bodies: Vec<&[Step]> = pack
+        .routes
+        .iter()
+        .map(|route| route.steps.as_slice())
+        .collect();
+    bodies.extend(
+        pack.route_templates
+            .iter()
+            .map(|template| template.steps.as_slice()),
+    );
+    for steps in bodies {
+        walk_steps(steps, &mut |step, _| {
+            let convert = match step {
+                Step::ConvertBodyTo(convert)
+                | Step::ConvertHeaderTo(convert)
+                | Step::ConvertPropertyTo(convert) => convert,
+                _ => return,
+            };
+            if let Some(id) = convert.code_map_id() {
+                referenced.insert(id);
+            }
+        });
+    }
+    for (index, map) in pack.code_maps.iter().enumerate() {
+        for (key, value) in &map.entries {
+            if value.is_array() || value.is_object() {
+                findings.push(finding(
+                    CheckCode::PackCodeMapEntryNotScalar,
+                    &format!("/codeMaps/{index}/entries/{}", key.as_str()),
+                    "the code map entry is not a JSON scalar",
+                    "Map each key to a string, number, boolean, or null; a conversion writes the value whole.",
+                ));
+            }
+        }
+        if !referenced.contains(map.id.as_str()) {
+            findings.push(finding(
+                CheckCode::PackCodeMapUnreferenced,
+                &format!("/codeMaps/{index}"),
+                "no conversion step references the declared code map",
+                "Reference the map from a conversion step's type (codeMap:<id>), or remove it.",
+            ));
+        }
+    }
+    findings
 }
 
 /// The HTTP-send members a graphql send must not carry: the graphql shape
@@ -4265,15 +4397,15 @@ mod tests {
         RecordedExchange, RecordedHeaders, RecordedRequest, RecordedResponse,
     };
     use crate::model::{ComponentKind, HttpMethod, RhaiExpression, SendUri};
-    use crate::pack::{AdapterPack, Capabilities, Endpoint, EndpointOperation};
+    use crate::pack::{AdapterPack, Capabilities, CodeMap, Endpoint, EndpointOperation};
     use crate::profile::{PaginationParameters, ParameterizedPart, ProfileOperation};
     use crate::project::{
         AccessProfile, Binding, PinnedRef, ProjectIdentity, RecordField, RecordFieldType,
         RecordType,
     };
     use crate::route::{
-        ChoiceStep, CircuitBreakerStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep,
-        EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
+        ChoiceStep, CircuitBreakerStep, ConvertStep, DefaultErrorHandler, DoCatch, DoFinally,
+        DoTryStep, EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
         OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, RouteDefinition,
         RouteFrom, RouteTemplate, SetHeaderStep, SplitStep, TemplateParameter,
         TemplateParameterType, TemplatedRoute, ThrottleStep, ThrowExceptionStep, ToParameters,
@@ -4357,6 +4489,35 @@ mod tests {
             file: file.to_string(),
             entrypoint: "main".to_string(),
         })
+    }
+
+    fn code_map(map_id: &str, entries: &[(&str, serde_json::Value)]) -> CodeMap {
+        CodeMap {
+            id: local(map_id),
+            entries: entries
+                .iter()
+                .map(|(key, value)| (id(key), value.clone()))
+                .collect(),
+        }
+    }
+
+    fn convert_body(map_id: &str) -> Step {
+        Step::ConvertBodyTo(ConvertStep {
+            r#type: format!("codeMap:{map_id}"),
+            name: None,
+            to_name: None,
+            mandatory: None,
+        })
+    }
+
+    fn one_direct_route(steps: Vec<Step>) -> RouteDefinition {
+        RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps,
+        }
     }
 
     fn pack_builder(endpoints: Vec<Endpoint>, routes: Vec<RouteDefinition>) -> AdapterPack {
@@ -4585,6 +4746,14 @@ mod tests {
             code.code(),
             codes(findings)
         );
+    }
+
+    fn assert_count(findings: &[Diagnostic], code: CheckCode, expected: usize) {
+        let seen = findings
+            .iter()
+            .filter(|finding| finding.code == code.code())
+            .count();
+        assert_eq!(seen, expected, "the code {code:?} fires {seen} times");
     }
 
     fn assert_clean(findings: Vec<Diagnostic>) {
@@ -5492,6 +5661,146 @@ mod tests {
         };
         let pack = pack_builder(vec![oauth_endpoint()], vec![caller, shared]);
         assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
+    #[test]
+    fn routes_accept_a_well_formed_conversion() {
+        let route = one_direct_route(vec![convert_body("statuses")]);
+        let mut pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+        pack.code_maps = UniqueIdList::new(vec![code_map(
+            "statuses",
+            &[("active", serde_json::json!("ACTIVE"))],
+        )])
+        .expect("unique");
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+        assert_clean(check_pack(&pack));
+    }
+
+    #[test]
+    fn routes_refuse_a_conversion_naming_no_declared_code_map() {
+        // No map declared at all.
+        let pack = pack_builder(
+            vec![],
+            vec![one_direct_route(vec![convert_body("statuses")])],
+        );
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteCodeMapUnknown,
+        );
+        // A `type` that is not the codeMap form, and the empty form.
+        for spelling in ["string", "codeMap:"] {
+            let pack = pack_builder(
+                vec![],
+                vec![one_direct_route(vec![Step::ConvertBodyTo(ConvertStep {
+                    r#type: spelling.to_string(),
+                    name: None,
+                    to_name: None,
+                    mandatory: None,
+                })])],
+            );
+            let findings = check_routes(&pack, &project_builder(&pack));
+            assert_has(&findings, CheckCode::RouteCodeMapUnknown);
+        }
+        // A named form over an undeclared map is refused the same way.
+        let pack = pack_builder(
+            vec![],
+            vec![one_direct_route(vec![Step::ConvertHeaderTo(ConvertStep {
+                r#type: "codeMap:statuses".to_string(),
+                name: Some("state".to_string()),
+                to_name: None,
+                mandatory: None,
+            })])],
+        );
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteCodeMapUnknown,
+        );
+    }
+
+    #[test]
+    fn routes_refuse_the_conversion_shapes() {
+        // The body form carries no name or toName.
+        for (name, to_name) in [
+            (Some("state".to_owned()), None),
+            (None, Some("stateCode".to_owned())),
+        ] {
+            let pack = pack_builder(
+                vec![],
+                vec![one_direct_route(vec![Step::ConvertBodyTo(ConvertStep {
+                    r#type: "codeMap:statuses".to_string(),
+                    name,
+                    to_name,
+                    mandatory: None,
+                })])],
+            );
+            assert_has(
+                &check_routes(&pack, &project_builder(&pack)),
+                CheckCode::RouteConvertShape,
+            );
+        }
+        // The named forms require name; toName never stands alone.
+        for (name, to_name) in [(None, None), (None, Some("stateCode".to_owned()))] {
+            let pack = pack_builder(
+                vec![],
+                vec![one_direct_route(vec![Step::ConvertPropertyTo(
+                    ConvertStep {
+                        r#type: "codeMap:statuses".to_string(),
+                        name,
+                        to_name,
+                        mandatory: None,
+                    },
+                )])],
+            );
+            assert_has(
+                &check_routes(&pack, &project_builder(&pack)),
+                CheckCode::RouteConvertShape,
+            );
+        }
+    }
+
+    #[test]
+    fn pack_refuses_a_code_map_entry_that_is_not_a_scalar() {
+        let route = one_direct_route(vec![convert_body("statuses")]);
+        let mut pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+        pack.code_maps = UniqueIdList::new(vec![code_map(
+            "statuses",
+            &[
+                ("active", serde_json::json!("ACTIVE")),
+                ("nested", serde_json::json!({"inner": 1})),
+                ("listed", serde_json::json!([1, 2])),
+            ],
+        )])
+        .expect("unique");
+        let findings = check_pack(&pack);
+        assert_count(&findings, CheckCode::PackCodeMapEntryNotScalar, 2);
+    }
+
+    #[test]
+    fn pack_refuses_a_code_map_no_conversion_references() {
+        let mut pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        pack.code_maps = UniqueIdList::new(vec![code_map(
+            "statuses",
+            &[("active", serde_json::json!("ACTIVE"))],
+        )])
+        .expect("unique");
+        assert_has(&check_pack(&pack), CheckCode::PackCodeMapUnreferenced);
+
+        // A conversion in a route template references the map too: a
+        // Rhai `code_map` call is not statically countable and does not
+        // (section 8.6).
+        let mut pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            id: local("by-status"),
+            parameters: Vec::new(),
+            steps: vec![convert_body("statuses")],
+        }])
+        .expect("unique");
+        pack.code_maps = UniqueIdList::new(vec![code_map(
+            "statuses",
+            &[("active", serde_json::json!("ACTIVE"))],
+        )])
+        .expect("unique");
+        assert_clean(check_pack(&pack));
     }
 
     #[test]

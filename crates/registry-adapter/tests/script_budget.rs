@@ -5,9 +5,15 @@
 //! ends in a budget failure.
 
 use registry_adapter::scripts::{ScriptFailure, ScriptSet};
+
 use registry_adapter_core::AdapterPack;
 use registry_platform_config::sha256_uri;
 use serde_json::{json, Value};
+
+/// The empty code-map table: no test lane here converts.
+fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+    std::sync::Arc::new(std::collections::BTreeMap::new())
+}
 
 /// The runtime's reply cap (`MAXIMUM_RESPONSE_BYTES` in `load.rs`).
 const REPLY_CAP: usize = 1024 * 1024;
@@ -37,7 +43,12 @@ fn a_reply_at_the_cap_is_processed() {
     let set = set_with("fn probe(exchange) { exchange.body.len() }");
 
     let text = "x".repeat(REPLY_CAP);
-    let size = set.call("probe.rhai", "probe", &exchange(json!(text)));
+    let size = set.call(
+        &empty_code_maps(),
+        "probe.rhai",
+        "probe",
+        &exchange(json!(text)),
+    );
 
     assert_eq!(size.expect("processed"), json!(REPLY_CAP));
 }
@@ -54,6 +65,7 @@ fn a_reply_of_many_small_rows_is_walked_to_the_end() {
         .collect();
 
     let walked = set.call(
+        &empty_code_maps(),
         "probe.rhai",
         "probe",
         &exchange(json!({"rows": [json!(entries)], "dense": rows})),
@@ -66,7 +78,12 @@ fn a_reply_of_many_small_rows_is_walked_to_the_end() {
 fn a_loop_without_end_is_a_budget_failure() {
     let set = set_with("fn probe(exchange) { let n = 0; loop { n += 1; } }");
 
-    let failure = set.call("probe.rhai", "probe", &exchange(json!({})));
+    let failure = set.call(
+        &empty_code_maps(),
+        "probe.rhai",
+        "probe",
+        &exchange(json!({})),
+    );
 
     assert!(matches!(failure, Err(ScriptFailure::Budget)), "{failure:?}");
 }
@@ -75,7 +92,12 @@ fn a_loop_without_end_is_a_budget_failure() {
 fn a_string_that_doubles_without_end_is_a_budget_failure() {
     let set = set_with(r#"fn probe(exchange) { let s = "x"; loop { s += s; } }"#);
 
-    let failure = set.call("probe.rhai", "probe", &exchange(json!({})));
+    let failure = set.call(
+        &empty_code_maps(),
+        "probe.rhai",
+        "probe",
+        &exchange(json!({})),
+    );
 
     assert!(matches!(failure, Err(ScriptFailure::Budget)), "{failure:?}");
 }
@@ -84,7 +106,12 @@ fn a_string_that_doubles_without_end_is_a_budget_failure() {
 fn an_array_that_grows_without_end_is_a_budget_failure() {
     let set = set_with("fn probe(exchange) { let a = []; loop { a.push(1); } }");
 
-    let failure = set.call("probe.rhai", "probe", &exchange(json!({})));
+    let failure = set.call(
+        &empty_code_maps(),
+        "probe.rhai",
+        "probe",
+        &exchange(json!({})),
+    );
 
     assert!(matches!(failure, Err(ScriptFailure::Budget)), "{failure:?}");
 }

@@ -11,10 +11,11 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::load::MAXIMUM_RESPONSE_BYTES;
-use registry_adapter_core::{AdapterPack, ErrorClass};
+use registry_adapter_core::{AdapterPack, CodeMap, ErrorClass};
 use registry_platform_config::sha256_uri;
 use registry_platform_script::rhai::{
     build_engine, call_with_fresh_scope, classify_failure, compile_entrypoint,
@@ -58,6 +59,20 @@ pub const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
 /// How long one entrypoint call may run.
 const CALL_DEADLINE: Duration = Duration::from_secs(2);
 
+/// A deployment's declared code maps, keyed by id: the one table the
+/// conversion steps and the Rhai `code_map(id, key)` helper read
+/// (`products/adapter/CONCEPT.md` section 8.6). Shared because the Rhai
+/// native function cannot borrow the caller's stack: each call clones
+/// the handle, and the maps themselves are never copied per call.
+pub type CodeMaps = Arc<BTreeMap<String, CodeMap>>;
+
+/// The fixed marker a `code_map` miss raises through the engine: the
+/// class name and the map id, so the failure classification can name
+/// the map without carrying the key (section 8.6). A script that raises
+/// the same text itself is classified the same way: the marker is the
+/// contract, and pack scripts are reviewed content.
+const UNMAPPED_MARKER: &str = "conversion.unmapped:";
+
 /// Why a script could not be loaded. Every text is fixed and value-free
 /// apart from the script path the pack itself names.
 #[derive(Debug, Error)]
@@ -81,6 +96,8 @@ pub enum ScriptFailure {
     Budget,
     #[error("the script raised an error")]
     Failed,
+    #[error("code map {0} has no entry for the key")]
+    Unmapped(String),
 }
 
 impl ScriptFailure {
@@ -89,6 +106,7 @@ impl ScriptFailure {
         match self {
             Self::Budget => ErrorClass::ScriptBudgetExceeded,
             Self::Failed => ErrorClass::Script,
+            Self::Unmapped(_) => ErrorClass::ConversionUnmapped,
         }
     }
 }
@@ -187,6 +205,7 @@ impl ScriptSet {
     /// Run one entrypoint over `exchange` and return its JSON result.
     pub fn call(
         &self,
+        maps: &CodeMaps,
         file: &str,
         entrypoint: &str,
         exchange: &Value,
@@ -196,7 +215,7 @@ impl ScriptSet {
             .get(&(file.to_owned(), entrypoint.to_owned()))
             .ok_or(ScriptFailure::Failed)?;
         let argument = rhai::serde::to_dynamic(exchange).map_err(|_| ScriptFailure::Failed)?;
-        self.invoke(ast, entrypoint, (argument,))
+        self.invoke(maps, ast, entrypoint, (argument,))
     }
 
     /// Run one aggregation strategy entrypoint over the old and new
@@ -204,6 +223,7 @@ impl ScriptSet {
     /// which the entrypoint sees as `()`.
     pub fn aggregate(
         &self,
+        maps: &CodeMaps,
         file: &str,
         entrypoint: &str,
         old: &Value,
@@ -215,13 +235,14 @@ impl ScriptSet {
             .ok_or(ScriptFailure::Failed)?;
         let old_value = rhai::serde::to_dynamic(old).map_err(|_| ScriptFailure::Failed)?;
         let new_value = rhai::serde::to_dynamic(new).map_err(|_| ScriptFailure::Failed)?;
-        self.invoke(ast, entrypoint, (old_value, new_value))
+        self.invoke(maps, ast, entrypoint, (old_value, new_value))
     }
 
     /// Call a compiled entrypoint under the profile's limits and convert
     /// its result back to JSON.
     fn invoke<A: rhai::FuncArgs>(
         &self,
+        maps: &CodeMaps,
         ast: &rhai::AST,
         entrypoint: &str,
         args: A,
@@ -229,7 +250,9 @@ impl ScriptSet {
         let engine = build_engine(
             &SCRIPT_PROFILE,
             Some(Instant::now() + CALL_DEADLINE),
-            |_| {},
+            |engine| {
+                register_code_map(engine, maps);
+            },
         );
         let result = call_with_fresh_scope(&engine, ast, entrypoint, args)
             .map_err(|error| failure(&error))?;
@@ -240,23 +263,76 @@ impl ScriptSet {
     /// `script` (section 8.11.3).
     pub fn predicate(
         &self,
+        maps: &CodeMaps,
         file: &str,
         entrypoint: &str,
         exchange: &Value,
     ) -> Result<bool, ScriptFailure> {
-        match self.call(file, entrypoint, exchange)? {
+        match self.call(maps, file, entrypoint, exchange)? {
             Value::Bool(verdict) => Ok(verdict),
             _ => Err(ScriptFailure::Failed),
         }
     }
 }
 
+/// Register `code_map(id, key)` over the declared maps: the same single
+/// lookup a conversion step takes, with the miss raised as the marker
+/// text (`CONCEPT.md` section 8.6; there is no second key lookup in v1).
+/// An id no declared map carries answers the same miss naming that id:
+/// a script's references are not statically countable, so the run time
+/// is where they resolve.
+fn register_code_map(engine: &mut rhai::Engine, maps: &CodeMaps) {
+    let maps = Arc::clone(maps);
+    engine.register_fn(
+        "code_map",
+        move |id: &str, key: &str| -> Result<rhai::Dynamic, Box<EvalAltResult>> {
+            let map = maps.get(id).ok_or_else(|| unmapped(id))?;
+            let value = map.lookup(key).ok_or_else(|| unmapped(id))?;
+            // A JSON scalar always converts; the marker keeps the one
+            // failure path if a non-scalar ever reached the table.
+            rhai::serde::to_dynamic(value).map_err(|_| unmapped(id))
+        },
+    );
+}
+
+/// The runtime error a miss raises: the marker text in the payload the
+/// classification unwraps, never the key itself.
+fn unmapped(id: &str) -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(
+        rhai::Dynamic::from(format!("{UNMAPPED_MARKER}{id}")),
+        rhai::Position::NONE,
+    ))
+}
+
 fn failure(error: &EvalAltResult) -> ScriptFailure {
+    if let Some(map_id) = unmapped_map_id(error) {
+        return ScriptFailure::Unmapped(map_id);
+    }
     if matches!(error, EvalAltResult::ErrorTerminated(..))
         || classify_failure(error) == RhaiFailureCategory::ResourceExhausted
     {
         ScriptFailure::Budget
     } else {
         ScriptFailure::Failed
+    }
+}
+
+/// The map id the marker names, if the failure carries one. Rhai wraps
+/// a native function's runtime error in `ErrorInFunctionCall`; the
+/// marker sits in the innermost runtime payload.
+fn unmapped_map_id(error: &EvalAltResult) -> Option<String> {
+    let mut cursor = error;
+    loop {
+        if let EvalAltResult::ErrorRuntime(payload, _) = cursor {
+            if let Ok(text) = payload.as_immutable_string_ref() {
+                if let Some(id) = text.as_str().strip_prefix(UNMAPPED_MARKER) {
+                    return Some(id.to_owned());
+                }
+            }
+        }
+        cursor = match cursor {
+            EvalAltResult::ErrorInFunctionCall(_, _, err, _) => err.as_ref(),
+            _ => return None,
+        };
     }
 }

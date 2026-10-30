@@ -437,6 +437,7 @@ async fn answer(
         resolver: &state.loaded.resolver,
         resilience: &operation.resilience,
         routes: &state.loaded.routes,
+        code_maps: state.loaded.code_maps.clone(),
         maximum_upstream_calls: operation.maximum_upstream_calls,
     };
     let outcome = run_route(&context, &operation.steps, exchange).await;

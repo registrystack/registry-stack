@@ -32,6 +32,8 @@ pub enum CheckCode {
     FixtureUnknownOperation,
     FixtureUnknownProblemCode,
     // adapter.pack.*
+    PackCodeMapEntryNotScalar,
+    PackCodeMapUnreferenced,
     PackDigestPinRequired,
     PackDuplicateHeaderName,
     PackEndpointComponentInvalid,
@@ -81,6 +83,8 @@ pub enum CheckCode {
     ProjectUnknownTemplateParameter,
     ProjectUpstreamBudgetExceeded,
     // adapter.route.*
+    RouteCodeMapUnknown,
+    RouteConvertShape,
     RouteDirectCycle,
     RouteDirectDepthExceeded,
     RouteEmptyExceptionList,
@@ -140,6 +144,8 @@ impl CheckCode {
         Self::FixtureUnknownIntercept,
         Self::FixtureUnknownOperation,
         Self::FixtureUnknownProblemCode,
+        Self::PackCodeMapEntryNotScalar,
+        Self::PackCodeMapUnreferenced,
         Self::PackDigestPinRequired,
         Self::PackDuplicateHeaderName,
         Self::PackEndpointComponentInvalid,
@@ -186,6 +192,8 @@ impl CheckCode {
         Self::ProjectUnknownTemplate,
         Self::ProjectUnknownTemplateParameter,
         Self::ProjectUpstreamBudgetExceeded,
+        Self::RouteCodeMapUnknown,
+        Self::RouteConvertShape,
         Self::RouteDirectCycle,
         Self::RouteDirectDepthExceeded,
         Self::RouteEmptyExceptionList,
@@ -244,6 +252,8 @@ impl CheckCode {
             Self::FixtureUnknownIntercept => "adapter.fixture.unknown-intercept",
             Self::FixtureUnknownOperation => "adapter.fixture.unknown-operation",
             Self::FixtureUnknownProblemCode => "adapter.fixture.unknown-problem-code",
+            Self::PackCodeMapEntryNotScalar => "adapter.pack.code-map-entry-not-scalar",
+            Self::PackCodeMapUnreferenced => "adapter.pack.code-map-unreferenced",
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
             Self::PackDuplicateHeaderName => "adapter.pack.duplicate-header-name",
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
@@ -304,6 +314,8 @@ impl CheckCode {
             Self::ProjectUnknownTemplate => "adapter.project.unknown-template",
             Self::ProjectUnknownTemplateParameter => "adapter.project.unknown-template-parameter",
             Self::ProjectUpstreamBudgetExceeded => "adapter.project.upstream-budget-exceeded",
+            Self::RouteCodeMapUnknown => "adapter.route.code-map-unknown",
+            Self::RouteConvertShape => "adapter.route.convert-shape",
             Self::RouteDirectCycle => "adapter.route.direct-cycle",
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
             Self::RouteEmptyExceptionList => "adapter.route.empty-exception-list",
@@ -390,7 +402,9 @@ impl CheckCode {
             | Self::FixtureUnknownIntercept
             | Self::FixtureUnknownOperation
             | Self::FixtureUnknownProblemCode => crate::naming::ADAPTER_FIXTURE_KIND,
-            Self::PackDigestPinRequired
+            Self::PackCodeMapEntryNotScalar
+            | Self::PackCodeMapUnreferenced
+            | Self::PackDigestPinRequired
             | Self::PackDuplicateHeaderName
             | Self::PackEndpointComponentInvalid
             | Self::PackEntrypointParameter
@@ -405,6 +419,8 @@ impl CheckCode {
             | Self::PackTransportRefusedHeader
             | Self::PackUnknownScript
             | Self::PackUnknownTemplateParameter
+            | Self::RouteCodeMapUnknown
+            | Self::RouteConvertShape
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded
             | Self::RouteEmptyExceptionList

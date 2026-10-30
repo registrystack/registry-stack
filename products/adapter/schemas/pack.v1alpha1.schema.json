@@ -309,6 +309,32 @@
       ],
       "type": "string"
     },
+    "ConvertStep": {
+      "additionalProperties": false,
+      "description": "One conversion step: `convertBodyTo`, `convertHeaderTo`, and the\n`convertPropertyTo` addition (`products/adapter/CONCEPT.md`\nsection 8.6). Camel's `charset` option is not ported, and `type`\nnames a code map, never a Java type.",
+      "properties": {
+        "mandatory": {
+          "description": "Whether a miss fails the exchange; Camel's default true.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The header or property name the named forms convert; absent on\n`convertBodyTo`.",
+          "type": "string"
+        },
+        "toName": {
+          "description": "The name the converted value lands under, beside the original;\nmeaningful only with `name`.",
+          "type": "string"
+        },
+        "type": {
+          "description": "The conversion source, spelled `codeMap:<id>` for a code map the\npack declares.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
     "DefaultErrorHandler": {
       "additionalProperties": false,
       "description": "Camel's `defaultErrorHandler`: a redelivery policy nested under\n`redeliveryPolicy`, as Camel's YAML DSL writes it\n(`products/adapter/CONCEPT.md` section 8.7; CFG-NAME spelling inside).\n`delayPattern` is not ported. Redelivery is per failing endpoint send,\nas in Camel.",
@@ -398,6 +424,9 @@
       "enum": [
         "choice",
         "circuitBreaker",
+        "convertBodyTo",
+        "convertHeaderTo",
+        "convertPropertyTo",
         "doTry",
         "enrich",
         "errorHandler",
@@ -1389,6 +1418,45 @@
           },
           "required": [
             "script"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Convert the message body through a code map\n(`products/adapter/CONCEPT.md` section 8.6).",
+          "properties": {
+            "convertBodyTo": {
+              "$ref": "#/$defs/ConvertStep"
+            }
+          },
+          "required": [
+            "convertBodyTo"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Convert one message header through a code map.",
+          "properties": {
+            "convertHeaderTo": {
+              "$ref": "#/$defs/ConvertStep"
+            }
+          },
+          "required": [
+            "convertHeaderTo"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Convert one exchange property through a code map.",
+          "properties": {
+            "convertPropertyTo": {
+              "$ref": "#/$defs/ConvertStep"
+            }
+          },
+          "required": [
+            "convertPropertyTo"
           ],
           "type": "object"
         },

@@ -38,7 +38,7 @@ use crate::read_request::{ReadRequestTemplate, ServedFilter};
 use crate::route::{
     check_direct_targets, check_servable, is_served_auth, EndpointRuntime, RouteTable,
 };
-use crate::scripts::ScriptSet;
+use crate::scripts::{CodeMaps, ScriptSet};
 use registry_adapter_core::{Expression, RouteTemplate};
 use serde_json::Value;
 
@@ -152,6 +152,9 @@ pub struct Loaded {
     pub project: AdapterProject,
     pub runtime: AdapterRuntimeConfig,
     pub scripts: ScriptSet,
+    /// The deployment's declared code maps, shared by the conversion
+    /// steps and the Rhai `code_map` helper (section 8.6).
+    pub code_maps: CodeMaps,
     pub endpoints: BTreeMap<String, EndpointRuntime>,
     /// Every route the deployment declares, pack routes and templated
     /// instantiations alike: what the facade serves and what a
@@ -474,6 +477,41 @@ pub fn load(
             .map_err(|error| LoadError::Runtime(error.to_string()))?;
     }
 
+    // The deployment's code maps, keyed by id (section 8.6). Every
+    // conversion step's literal id resolves here, before any exchange;
+    // a Rhai `code_map` reference resolves at its call instead, because
+    // a script's references are not statically countable.
+    let code_maps: CodeMaps = Arc::new(
+        pack.code_maps
+            .iter()
+            .map(|map| (map.id.as_str().to_owned(), map.clone()))
+            .collect(),
+    );
+    let mut unknown_map_ids: Vec<String> = Vec::new();
+    for steps in routes.values() {
+        registry_adapter_core::walk_steps(steps, &mut |step, _pointer| {
+            let convert = match step {
+                Step::ConvertBodyTo(convert)
+                | Step::ConvertHeaderTo(convert)
+                | Step::ConvertPropertyTo(convert) => convert,
+                _ => return,
+            };
+            if let Some(id) = convert.code_map_id() {
+                if code_maps.get(id).is_none() {
+                    unknown_map_ids.push(id.to_owned());
+                }
+            }
+        });
+    }
+    if !unknown_map_ids.is_empty() {
+        unknown_map_ids.sort();
+        unknown_map_ids.dedup();
+        return Err(LoadError::Runtime(format!(
+            "route conversions name no declared code map: {}",
+            unknown_map_ids.join(", ")
+        )));
+    }
+
     let deployment = sha256_uri(
         &[project_bytes.as_slice(), &profile_bytes, &pack_bytes]
             .iter()
@@ -541,6 +579,7 @@ pub fn load(
         project,
         runtime,
         scripts,
+        code_maps,
         endpoints,
         routes,
         served,

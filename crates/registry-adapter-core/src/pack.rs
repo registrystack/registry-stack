@@ -144,6 +144,17 @@ impl registry_platform_yaml::Identified for CodeMap {
     }
 }
 
+impl CodeMap {
+    /// The entry one conversion looks up: exact and case-sensitive over
+    /// a string key (`products/adapter/CONCEPT.md` section 8.6). A key
+    /// that is not a valid external id matches no entry.
+    #[must_use]
+    pub fn lookup(&self, key: &str) -> Option<&serde_json::Value> {
+        let key = ExternalId::new(key).ok()?;
+        self.entries.get(&key)
+    }
+}
+
 /// The engine capabilities a pack requires: the components, languages, and
 /// EIPs its routes use. The ctl refuses a pack the binary cannot run
 /// (`products/adapter/CONCEPT.md` section 6).

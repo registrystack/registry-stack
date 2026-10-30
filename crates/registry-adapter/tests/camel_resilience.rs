@@ -31,6 +31,11 @@ use registry_platform_yaml::{
 };
 use serde_json::{json, Value};
 
+/// The empty code-map table: no test lane here converts.
+fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+    std::sync::Arc::new(std::collections::BTreeMap::new())
+}
+
 #[path = "support/upstream/mod.rs"]
 #[allow(dead_code)]
 mod upstream;
@@ -199,6 +204,7 @@ impl Lane {
             resolver: &self.resolver,
             resilience: &self.resilience,
             routes: &routes,
+            code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
         };
         run_route(
@@ -219,6 +225,7 @@ impl Lane {
             resolver: &self.resolver,
             resilience: &self.resilience,
             routes: &routes,
+            code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
         };
         run_route_within(

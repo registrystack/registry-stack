@@ -615,6 +615,24 @@ exceptions:
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/convertBodyTo
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/convertHeaderTo
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/convertPropertyTo
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
   location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/doTry
   class: protocol-constant
   reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary

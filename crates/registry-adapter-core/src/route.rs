@@ -80,6 +80,13 @@ pub enum Step {
     /// Run an expression for effect on properties without changing the
     /// body, as Camel's `script` EIP.
     Script(Expression),
+    /// Convert the message body through a code map
+    /// (`products/adapter/CONCEPT.md` section 8.6).
+    ConvertBodyTo(ConvertStep),
+    /// Convert one message header through a code map.
+    ConvertHeaderTo(ConvertStep),
+    /// Convert one exchange property through a code map.
+    ConvertPropertyTo(ConvertStep),
     /// Content-based router: the first matching `when` wins.
     Choice(ChoiceStep),
     /// Message filter: nested steps run only on match; the route continues
@@ -430,6 +437,44 @@ pub struct SetPropertyStep {
     pub name: String,
     /// The value expression.
     pub value: Expression,
+}
+
+/// One conversion step: `convertBodyTo`, `convertHeaderTo`, and the
+/// `convertPropertyTo` addition (`products/adapter/CONCEPT.md`
+/// section 8.6). Camel's `charset` option is not ported, and `type`
+/// names a code map, never a Java type.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConvertStep {
+    /// The conversion source, spelled `codeMap:<id>` for a code map the
+    /// pack declares.
+    pub r#type: String,
+    /// The header or property name the named forms convert; absent on
+    /// `convertBodyTo`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The name the converted value lands under, beside the original;
+    /// meaningful only with `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_name: Option<String>,
+    /// Whether a miss fails the exchange; Camel's default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mandatory: Option<bool>,
+}
+
+impl ConvertStep {
+    /// The declared code map this step converts through, when `type` is
+    /// spelled `codeMap:<id>` with a non-empty id.
+    #[must_use]
+    pub fn code_map_id(&self) -> Option<&str> {
+        let id = self.r#type.strip_prefix("codeMap:")?;
+        if id.is_empty() {
+            None
+        } else {
+            Some(id)
+        }
+    }
 }
 
 /// A `split` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).

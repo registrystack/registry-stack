@@ -23,8 +23,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use registry_adapter_core::{
-    is_route_unwritable_header_name, AdapterRuntimeConfig, AggregationStrategy, Endpoint,
-    EndpointBinding, EnrichStep, ErrorClass, Expression, HttpMethod, OnExceptionStep,
+    is_route_unwritable_header_name, AdapterRuntimeConfig, AggregationStrategy, ConvertStep,
+    Endpoint, EndpointBinding, EnrichStep, ErrorClass, Expression, HttpMethod, OnExceptionStep,
     RedeliveryOptions, SendComponent, SetPropertyStep, Step, ToParameters, ToStep,
 };
 use registry_platform_config::SecretResolver;
@@ -67,6 +67,9 @@ fn step_name(step: &Step) -> &'static str {
         Step::RemoveHeader(_) => "removeHeader",
         Step::RemoveProperty(_) => "removeProperty",
         Step::Script(_) => "script",
+        Step::ConvertBodyTo(_) => "convertBodyTo",
+        Step::ConvertHeaderTo(_) => "convertHeaderTo",
+        Step::ConvertPropertyTo(_) => "convertPropertyTo",
         Step::Choice(_) => "choice",
         Step::Filter(_) => "filter",
         Step::Validate(_) => "validate",
@@ -133,6 +136,9 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 }
             }
             Step::Script(expression) => check_expression("script", expression)?,
+            Step::ConvertBodyTo(convert) => check_convert("convertBodyTo", convert)?,
+            Step::ConvertHeaderTo(convert) => check_convert("convertHeaderTo", convert)?,
+            Step::ConvertPropertyTo(convert) => check_convert("convertPropertyTo", convert)?,
             Step::Choice(choice) => {
                 for clause in &choice.when {
                     check_predicate("choice", &clause.predicate())?;
@@ -334,6 +340,30 @@ fn check_predicate(site: &str, predicate: &Option<Expression>) -> Result<(), Str
 
 /// A route sets its own properties and the one reserved property the
 /// facade reads back; every other `Adapter` name belongs to the engine.
+/// The served shape of a conversion step (section 8.6). The authoring
+/// checks hold it first; the engine repeats it so a route assembled
+/// without them is refused by name, never silently misrun.
+fn check_convert(form: &str, convert: &ConvertStep) -> Result<(), String> {
+    let body_form = form == "convertBodyTo";
+    if body_form && (convert.name.is_some() || convert.to_name.is_some()) {
+        return Err(format!(
+            "a {form} declares no name or toName; it converts the body"
+        ));
+    }
+    if !body_form && convert.name.is_none() {
+        return Err(format!("a {form} names no header or property to convert"));
+    }
+    if convert.name.is_none() && convert.to_name.is_some() {
+        return Err("a conversion with toName and no name names no source".to_owned());
+    }
+    if convert.code_map_id().is_none() {
+        return Err(format!(
+            "a {form} names no code map; write type as codeMap:<id>"
+        ));
+    }
+    Ok(())
+}
+
 fn check_set_property(property: &SetPropertyStep) -> Result<(), String> {
     if property.name.starts_with(RESERVED_PROPERTY_PREFIX)
         && property.name != NEXT_CONTINUATION_PROPERTY
@@ -596,6 +626,9 @@ pub struct RouteContext<'a> {
     /// templated routes, keyed by route id: the table a `to: direct:`
     /// send resolves against (section 8.11.7).
     pub routes: &'a RouteTable,
+    /// The deployment's declared code maps (section 8.6): the one
+    /// table the conversion steps and the Rhai `code_map` helper read.
+    pub code_maps: crate::scripts::CodeMaps,
     /// The binding's `maximumUpstreamCalls`.
     pub maximum_upstream_calls: u64,
 }
@@ -774,6 +807,20 @@ pub async fn run_route_within(
     RouteOutcome {
         result: result.map(|_| exchange),
         events,
+    }
+}
+
+/// A script failure as a route failure: an unmapped lookup keeps its
+/// map id in the message (section 8.6); the class alone answers for
+/// the rest.
+pub(crate) fn script_failure(failure: crate::scripts::ScriptFailure) -> RouteFailure {
+    match failure {
+        crate::scripts::ScriptFailure::Unmapped(_) => RouteFailure {
+            class: failure.class(),
+            message: Some(failure.to_string()),
+            auth: None,
+        },
+        other => RouteFailure::of(other.class()),
     }
 }
 
@@ -1027,6 +1074,9 @@ impl Run<'_, '_> {
             Step::RemoveHeader(name) => processor::remove_header::run(self, name),
             Step::RemoveProperty(name) => processor::remove_property::run(self, name),
             Step::Script(expression) => processor::script::run(self, expression),
+            Step::ConvertBodyTo(convert) => processor::convert::body(self, convert),
+            Step::ConvertHeaderTo(convert) => processor::convert::header(self, convert),
+            Step::ConvertPropertyTo(convert) => processor::convert::property(self, convert),
             Step::Choice(choice) => processor::choice::run(self, choice).await,
             Step::Filter(filter) => processor::filter::run(self, filter).await,
             Step::Validate(validate) => processor::validate::run(self, validate),
@@ -1080,11 +1130,12 @@ impl Run<'_, '_> {
                 .context
                 .scripts
                 .call(
+                    &self.context.code_maps,
                     &script.file,
                     &script.entrypoint,
                     &self.exchange.as_script_value(),
                 )
-                .map_err(|failure| RouteFailure::of(failure.class())),
+                .map_err(script_failure),
             Expression::JsonPath(selector) => {
                 let compiled = compile_selector(selector)
                     .map_err(|_| RouteFailure::of(ErrorClass::Validation))?;
@@ -1699,6 +1750,12 @@ mod credential_order_tests {
     use registry_adapter_core::{AdapterRuntimeConfig, Endpoint};
     use registry_platform_yaml::SecretProvider;
 
+    /// The empty code-map table: the credential-order lanes convert
+    /// nothing.
+    fn empty_code_maps() -> crate::scripts::CodeMaps {
+        std::sync::Arc::new(BTreeMap::new())
+    }
+
     #[allow(clippy::disallowed_methods)]
     fn runtime_config(base_url: &str, key_env: &str) -> AdapterRuntimeConfig {
         serde_norway::from_str(&format!(
@@ -1800,6 +1857,7 @@ testedVersions: []
             resolver: &resolver,
             resilience: &resilience,
             routes: &routes,
+            code_maps: empty_code_maps(),
             maximum_upstream_calls: 4,
         };
         // The key resolved at compile time; it is gone when the send needs it.
@@ -1847,6 +1905,7 @@ testedVersions: []
             resolver: &resolver,
             resilience: &resilience,
             routes: &routes,
+            code_maps: empty_code_maps(),
             maximum_upstream_calls: 4,
         };
 

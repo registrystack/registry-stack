@@ -60,7 +60,13 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &EnrichStep) -> Result<Flow
         Err(_) => {}
     }
     let old_body = run.exchange.message.body.clone();
-    let merged = aggregation::fold(run.context.scripts, &strategy, &old_body, &resource)?;
+    let merged = aggregation::fold(
+        run.context.scripts,
+        &run.context.code_maps,
+        &strategy,
+        &old_body,
+        &resource,
+    )?;
     run.exchange.message.body = merged.body;
     for (name, value) in merged.properties {
         match value {

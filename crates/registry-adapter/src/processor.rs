@@ -20,6 +20,7 @@
 pub mod aggregation;
 pub mod choice;
 pub mod circuit_breaker;
+pub mod convert;
 pub mod do_try;
 pub mod enrich;
 pub mod filter;

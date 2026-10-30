@@ -8,8 +8,14 @@
 use std::path::{Path, PathBuf};
 
 use registry_adapter::scripts::ScriptSet;
+
 use registry_adapter_core::AdapterPack;
 use serde_json::{json, Value};
+
+/// The empty code-map table: no test lane here converts.
+fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+    std::sync::Arc::new(std::collections::BTreeMap::new())
+}
 
 fn pack_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -89,6 +95,7 @@ fn only_the_mapped_declaration_keys_reach_the_record_under_the_mapped_field() {
 
     let record = set
         .call(
+            &empty_code_maps(),
             "scripts/to-record.rhai",
             "to_record",
             &exchange(map.clone()),
@@ -99,6 +106,7 @@ fn only_the_mapped_declaration_keys_reach_the_record_under_the_mapped_field() {
 
     let page = set
         .call(
+            &empty_code_maps(),
             "scripts/shape-records.rhai",
             "shape_records",
             &exchange(map),
@@ -115,11 +123,17 @@ fn only_the_mapped_declaration_keys_reach_the_record_under_the_mapped_field() {
 fn an_empty_map_exposes_no_declaration_leaf() {
     let set = scripts();
     let record = set
-        .call("scripts/to-record.rhai", "to_record", &exchange(json!({})))
+        .call(
+            &empty_code_maps(),
+            "scripts/to-record.rhai",
+            "to_record",
+            &exchange(json!({})),
+        )
         .expect("to_record runs");
     assert_eq!(record["domainData"], expected_data(false));
     let page = set
         .call(
+            &empty_code_maps(),
             "scripts/shape-records.rhai",
             "shape_records",
             &exchange(json!({})),
@@ -133,6 +147,7 @@ fn a_mapped_key_the_event_does_not_carry_is_left_out() {
     let set = scripts();
     let record = set
         .call(
+            &empty_code_maps(),
             "scripts/to-record.rhai",
             "to_record",
             &exchange(json!({ "informant_reference": "informant.personReference" })),

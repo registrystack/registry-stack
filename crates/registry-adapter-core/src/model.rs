@@ -677,6 +677,9 @@ impl Language {
 pub enum Eip {
     Choice,
     CircuitBreaker,
+    ConvertBodyTo,
+    ConvertHeaderTo,
+    ConvertPropertyTo,
     DoTry,
     Enrich,
     ErrorHandler,
@@ -704,6 +707,9 @@ impl Eip {
     pub const ALL: &'static [Self] = &[
         Self::Choice,
         Self::CircuitBreaker,
+        Self::ConvertBodyTo,
+        Self::ConvertHeaderTo,
+        Self::ConvertPropertyTo,
         Self::DoTry,
         Self::Enrich,
         Self::ErrorHandler,
@@ -731,6 +737,9 @@ impl Eip {
         match self {
             Self::Choice => "choice",
             Self::CircuitBreaker => "circuitBreaker",
+            Self::ConvertBodyTo => "convertBodyTo",
+            Self::ConvertHeaderTo => "convertHeaderTo",
+            Self::ConvertPropertyTo => "convertPropertyTo",
             Self::DoTry => "doTry",
             Self::Enrich => "enrich",
             Self::ErrorHandler => "errorHandler",

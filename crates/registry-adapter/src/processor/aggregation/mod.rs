@@ -68,6 +68,7 @@ pub(crate) fn propagates(strategy: &AggregationStrategy) -> bool {
 /// or resource exchange whose body and properties the strategy reads.
 pub(crate) fn fold(
     scripts: &ScriptSet,
+    maps: &crate::scripts::CodeMaps,
     strategy: &AggregationStrategy,
     old: &Value,
     new: &Exchange,
@@ -153,12 +154,13 @@ pub(crate) fn fold(
         AggregationStrategy::Rhai { expression } => {
             let merged = scripts
                 .aggregate(
+                    maps,
                     &expression.file,
                     &expression.entrypoint,
                     old,
                     &new.message.body,
                 )
-                .map_err(|failure| RouteFailure::of(failure.class()))?;
+                .map_err(crate::route::script_failure)?;
             let Value::Object(merged) = merged else {
                 return Err(RouteFailure::of(ErrorClass::Script));
             };
@@ -258,12 +260,19 @@ mod tests {
         serde_json::from_value(value).expect("the strategy parses")
     }
 
+    /// The empty code-map table: the compiled-in strategies never look
+    /// one up.
+    fn empty_maps() -> crate::scripts::CodeMaps {
+        std::sync::Arc::new(std::collections::BTreeMap::new())
+    }
+
     #[test]
     fn use_latest_and_use_original_pick_their_bodies() {
         let old = json!({"q": 1});
         let new = exchange(json!({"answer": 42}), &[]);
         let latest = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy(json!({"type": "use-latest"})),
             &old,
             &new,
@@ -272,6 +281,7 @@ mod tests {
         assert_eq!(latest.body, json!({"answer": 42}));
         let original = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy(json!({"type": "use-original"})),
             &old,
             &new,
@@ -287,6 +297,7 @@ mod tests {
         for body in [json!("a"), json!(null), json!("b")] {
             let merged = fold(
                 &ScriptSet::default(),
+                &empty_maps(),
                 &strategy,
                 &accumulated,
                 &exchange(body, &[]),
@@ -309,6 +320,7 @@ mod tests {
         ] {
             let merged = fold(
                 &ScriptSet::default(),
+                &empty_maps(),
                 &strategy,
                 &accumulated,
                 &exchange(
@@ -326,6 +338,7 @@ mod tests {
 
         let duplicate = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy,
             &accumulated,
             &exchange(json!({}), &[("page", json!([{"id": "a"}]))]),
@@ -335,6 +348,7 @@ mod tests {
 
         let absent = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy,
             &json!({"records": []}),
             &exchange(json!({}), &[]),
@@ -350,6 +364,7 @@ mod tests {
         }));
         let merged = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy,
             &json!({}),
             &exchange(
@@ -371,6 +386,7 @@ mod tests {
         }));
         let merged = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy,
             &json!({"record": {"a": 1, "b": 2}}),
             &exchange(json!({}), &[("extra", json!({"b": 3, "c": 4}))]),
@@ -393,6 +409,7 @@ mod tests {
         );
         let merged = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy,
             &json!({"records": []}),
             &new,
@@ -411,6 +428,7 @@ mod tests {
         );
         let cleared = fold(
             &ScriptSet::default(),
+            &empty_maps(),
             &strategy,
             &json!({"records": []}),
             &exchange(
@@ -456,6 +474,7 @@ mod tests {
         }));
         let merged = fold(
             &scripts,
+            &empty_maps(),
             &strategy,
             &json!({"q": 1}),
             &exchange(json!({"answer": 42}), &[]),
@@ -469,6 +488,7 @@ mod tests {
 
         let first = fold(
             &scripts,
+            &empty_maps(),
             &strategy,
             &Value::Null,
             &exchange(json!({"answer": 42}), &[]),
@@ -499,8 +519,14 @@ mod tests {
         let strategy = strategy(json!({
             "type": "rhai", "expression": {"file": "props.rhai", "entrypoint": "merge"}
         }));
-        let failed = fold(&scripts, &strategy, &json!({}), &exchange(json!({}), &[]))
-            .expect_err("a strategy without a body member fails");
+        let failed = fold(
+            &scripts,
+            &empty_maps(),
+            &strategy,
+            &json!({}),
+            &exchange(json!({}), &[]),
+        )
+        .expect_err("a strategy without a body member fails");
         assert_eq!(failed.class, ErrorClass::Script);
     }
 }
