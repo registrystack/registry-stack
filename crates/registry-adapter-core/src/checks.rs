@@ -890,6 +890,12 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             ));
                         }
                     }
+                    push_http_uri_member_findings(
+                        &mut route_findings,
+                        &format!("{prefix}/steps{path}"),
+                        target.component,
+                        parameters,
+                    );
                 }
                 if target.component == SendComponent::GraphQl {
                     if let Some(parameters) = to.parameters.as_ref() {
@@ -970,6 +976,12 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             ));
                         }
                     }
+                    push_http_uri_member_findings(
+                        &mut route_findings,
+                        &format!("{prefix}/steps{path}"),
+                        enrich.uri.component,
+                        parameters,
+                    );
                 }
                 if enrich.uri.component == SendComponent::GraphQl {
                     if let Some(parameters) = enrich.parameters.as_ref() {
@@ -1003,6 +1015,29 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 "Name a route or template the pack declares or the project instantiates.",
                             ));
                         }
+                    }
+                }
+            }
+            Step::ThrowException(step) => {
+                if step.exception_type.is_uncatchable() || step.exception_type.is_facade() {
+                    route_findings.push(finding(
+                        CheckCode::RouteThrowExceptionClass,
+                        &format!("{prefix}/steps{path}/parameters/exceptionType"),
+                        "throwException names a class no route may raise",
+                        "Name a catchable class; the boundary and facade classes never enter a route.",
+                    ));
+                }
+                if let Some(message) = step.message.as_deref() {
+                    if message.len() > crate::route::THROW_EXCEPTION_MESSAGE_MAXIMUM_BYTES {
+                        route_findings.push(finding(
+                            CheckCode::RouteThrowExceptionMessage,
+                            &format!("{prefix}/steps{path}/parameters/message"),
+                            &format!(
+                                "the throwException message is longer than {} bytes",
+                                crate::route::THROW_EXCEPTION_MESSAGE_MAXIMUM_BYTES
+                            ),
+                            "Shorten the constant message; the profile's problemDetail slot carries it to the caller.",
+                        ));
                     }
                 }
             }
@@ -1430,9 +1465,71 @@ fn graphql_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'
     members
 }
 
+/// The `httpUri` member faults of a send or enrichment
+/// (`products/adapter/CONCEPT.md` section 8.11.5): an `http` send carries
+/// exactly one of `path` and `httpUri`, with no `query` beside an
+/// `httpUri` (the query string the source wrote travels in the link), and
+/// no other component carries the member at all. Each fault names the
+/// member to remove.
+fn http_uri_member_faults(
+    component: SendComponent,
+    parameters: &crate::route::ToParameters,
+) -> Vec<&'static str> {
+    if parameters.http_uri.is_none() {
+        return Vec::new();
+    }
+    match component {
+        SendComponent::Http => {
+            let mut members = Vec::new();
+            if parameters.path.is_some() {
+                members.push("path");
+            }
+            if !parameters.query.is_empty() {
+                members.push("query");
+            }
+            members
+        }
+        SendComponent::GraphQl | SendComponent::Direct => vec!["httpUri"],
+    }
+}
+
+/// The findings for one send's or enrichment's `httpUri` member faults,
+/// emitted at the pointers of the members that carry them.
+fn push_http_uri_member_findings(
+    route_findings: &mut Vec<Diagnostic>,
+    code_prefix: &str,
+    component: SendComponent,
+    parameters: &crate::route::ToParameters,
+) {
+    for member in http_uri_member_faults(component, parameters) {
+        let (message, action) = match member {
+            "path" => (
+                "the send carries path beside httpUri",
+                "Declare exactly one of path and httpUri; a send cannot carry both.",
+            ),
+            "query" => (
+                "the send carries a query beside httpUri",
+                "Move the query parameters into the link; the query string a source wrote is sent as written.",
+            ),
+            _ => (
+                "the send carries httpUri outside an http send",
+                "Declare httpUri on an http send only; it pins a link to the endpoint origin.",
+            ),
+        };
+        route_findings.push(finding(
+            CheckCode::RouteHttpUriMembers,
+            &format!("{code_prefix}/parameters/{member}"),
+            message,
+            action,
+        ));
+    }
+}
+
 /// Whether a header name is an RFC 9110 token: one or more `tchar`
-/// octets, compared without case.
-fn is_header_token(name: &str) -> bool {
+/// octets, compared without case. Public so the runtime header filter
+/// consumes the one shared predicate instead of forking it.
+#[must_use]
+pub fn is_header_token(name: &str) -> bool {
     !name.is_empty()
         && name.bytes().all(|byte| {
             matches!(
@@ -3202,8 +3299,8 @@ mod tests {
         EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
         OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, RouteDefinition,
         RouteFrom, RouteTemplate, SetHeaderStep, SplitStep, TemplateParameter,
-        TemplateParameterType, TemplatedRoute, ThrottleStep, ToParameters, ToStep, ValidateStep,
-        When,
+        TemplateParameterType, TemplatedRoute, ThrottleStep, ThrowExceptionStep, ToParameters,
+        ToStep, ValidateStep, When,
     };
     use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
     use registry_platform_yaml::Url;
@@ -3245,6 +3342,7 @@ mod tests {
                 operation: None,
                 throw_exception_on_failure: true,
                 ok_status_code_range: None,
+                http_uri: None,
                 resume_bindings: Vec::new(),
             }),
         })
@@ -3262,6 +3360,7 @@ mod tests {
                 operation: Some(id(operation)),
                 throw_exception_on_failure: true,
                 ok_status_code_range: None,
+                http_uri: None,
                 resume_bindings: Vec::new(),
             }),
         })
@@ -3590,6 +3689,7 @@ mod tests {
                         operation: None,
                         throw_exception_on_failure: false,
                         ok_status_code_range: None,
+                        http_uri: None,
                         resume_bindings: Vec::new(),
                     }),
                 }),
@@ -4423,6 +4523,7 @@ mod tests {
                 operation: None,
                 throw_exception_on_failure: false,
                 ok_status_code_range: None,
+                http_uri: None,
                 resume_bindings: Vec::new(),
             }),
         });
@@ -4480,6 +4581,7 @@ mod tests {
                 operation: None,
                 throw_exception_on_failure: true,
                 ok_status_code_range: None,
+                http_uri: None,
                 resume_bindings: Vec::new(),
             }),
         });
@@ -4529,6 +4631,7 @@ mod tests {
                     operation: None,
                     throw_exception_on_failure: true,
                     ok_status_code_range: None,
+                    http_uri: None,
                     resume_bindings: Vec::new(),
                 }),
             }),
@@ -4632,6 +4735,7 @@ mod tests {
                     operation: operation.map(id),
                     throw_exception_on_failure: true,
                     ok_status_code_range: None,
+                    http_uri: None,
                     resume_bindings: Vec::new(),
                 }),
             })
@@ -4700,6 +4804,7 @@ mod tests {
                     operation: None,
                     throw_exception_on_failure: true,
                     ok_status_code_range: None,
+                    http_uri: None,
                     resume_bindings: Vec::new(),
                 }),
             })],
@@ -4733,6 +4838,7 @@ mod tests {
                     operation: None,
                     throw_exception_on_failure: true,
                     ok_status_code_range: None,
+                    http_uri: None,
                     resume_bindings: Vec::new(),
                 }),
             })],
@@ -4843,6 +4949,7 @@ mod tests {
                     operation: operation.map(id),
                     throw_exception_on_failure: true,
                     ok_status_code_range: None,
+                    http_uri: None,
                     resume_bindings: Vec::new(),
                 }),
             });
@@ -6831,6 +6938,7 @@ mod tests {
                         operation: Some(id(operation)),
                         throw_exception_on_failure: true,
                         ok_status_code_range: None,
+                        http_uri: None,
                         resume_bindings: Vec::new(),
                     }),
                 }),
@@ -6903,6 +7011,7 @@ mod tests {
             operation: Some(id("person-find")),
             throw_exception_on_failure: true,
             ok_status_code_range: None,
+            http_uri: None,
             resume_bindings: Vec::new(),
         };
         let cases: Vec<(&str, ToParameters)> = vec![
@@ -6952,6 +7061,209 @@ mod tests {
         // Without the HTTP-send members, the graphql send passes.
         let pack = pack_builder(vec![graphql_endpoint()], vec![send_route(clean())]);
         assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
+    // ----- throwException (`products/adapter/CONCEPT.md` section 8.11.6) -----
+
+    /// `throwException` names a catchable class: a boundary class and a
+    /// facade class each refuse (`products/adapter/CONCEPT.md` sections
+    /// 8.7 and 8.11.6), and a catchable class passes.
+    #[test]
+    fn a_throw_exception_refuses_a_class_no_route_may_raise() {
+        let raise = |class| RouteDefinition {
+            id: local("raise-rejected"),
+            from: RouteFrom {
+                uri: direct("raise-rejected"),
+            },
+            steps: vec![Step::ThrowException(ThrowExceptionStep {
+                exception_type: class,
+                message: Some("the record is not admissible".to_string()),
+            })],
+        };
+        for class in crate::model::ErrorClass::ALL
+            .iter()
+            .copied()
+            .filter(|class| class.is_uncatchable() || class.is_facade())
+        {
+            let pack = pack_builder(vec![], vec![raise(class)]);
+            assert_has(
+                &check_routes(&pack, &project_builder(&pack)),
+                CheckCode::RouteThrowExceptionClass,
+            );
+        }
+        let pack = pack_builder(
+            vec![],
+            vec![raise(crate::model::ErrorClass::OutcomeRejected)],
+        );
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
+    /// The `throwException` message is a bounded constant: 512 bytes fit,
+    /// 513 refuse (`products/adapter/CONCEPT.md` section 8.11.6 names the
+    /// bound "bounded"; this is the number).
+    #[test]
+    fn a_throw_exception_message_over_the_bound_refuses() {
+        let raise = |message: String| RouteDefinition {
+            id: local("raise-rejected"),
+            from: RouteFrom {
+                uri: direct("raise-rejected"),
+            },
+            steps: vec![Step::ThrowException(ThrowExceptionStep {
+                exception_type: crate::model::ErrorClass::OutcomeRejected,
+                message: Some(message),
+            })],
+        };
+        let pack = pack_builder(vec![], vec![raise("x".repeat(512))]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+        let pack = pack_builder(vec![], vec![raise("x".repeat(513))]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteThrowExceptionMessage,
+        );
+    }
+
+    // ----- httpUri (`products/adapter/CONCEPT.md` section 8.11.5) -----
+
+    /// An `http` send carries exactly one of `path` and `httpUri`, with no
+    /// `query` beside an `httpUri`, and a graphql send carries no
+    /// `httpUri` at all (`products/adapter/CONCEPT.md` section 8.11.5).
+    #[test]
+    fn sends_refuse_the_http_uri_member_faults() {
+        let link = |mutate: fn(&mut ToParameters)| {
+            let mut step = to_get("case-api");
+            if let Step::To(to) = &mut step {
+                if let Some(parameters) = &mut to.parameters {
+                    parameters.path = None;
+                    parameters.http_uri =
+                        Some(Expression::ExchangeProperty("nextLink".to_string()));
+                    mutate(parameters);
+                }
+            }
+            RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![step],
+            }
+        };
+        // `path` beside `httpUri` refuses at the `path` member.
+        let pack = pack_builder(
+            vec![oauth_endpoint()],
+            vec![link(|parameters| {
+                parameters.path = Some("/v2/cases".to_string())
+            })],
+        );
+        let findings = check_routes(&pack, &project_builder(&pack));
+        assert_has(&findings, CheckCode::RouteHttpUriMembers);
+        assert!(
+            findings
+                .iter()
+                .any(|fault| fault.path == "/routes/fetch-case/steps/0/parameters/path"),
+            "the path fault points at the path member"
+        );
+        // A `query` beside `httpUri` refuses at the `query` member.
+        let pack = pack_builder(
+            vec![oauth_endpoint()],
+            vec![link(|parameters| {
+                parameters.query =
+                    BTreeMap::from([(id("limit"), Expression::Constant(serde_json::json!(10)))]);
+            })],
+        );
+        let findings = check_routes(&pack, &project_builder(&pack));
+        assert_has(&findings, CheckCode::RouteHttpUriMembers);
+        assert!(
+            findings
+                .iter()
+                .any(|fault| fault.path == "/routes/fetch-case/steps/0/parameters/query"),
+            "the query fault points at the query member"
+        );
+        // An `http` send with `httpUri` alone passes.
+        let pack = pack_builder(vec![oauth_endpoint()], vec![link(|_| {})]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+
+        // A graphql send carries no `httpUri` at all.
+        let graphql = || Endpoint {
+            id: local("graph-api"),
+            component: ComponentKind::GraphQl,
+            authentication: EndpointAuthentication::None {},
+            response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
+            operations: vec![EndpointOperation {
+                id: local("person-find"),
+                idempotent_upstream: false,
+                graphql: Some(GraphQlOperationKind::Query),
+            }],
+            tested_versions: vec!["1.0".to_string()],
+            query_file: Some("queries/person.graphql".to_string()),
+            operation_name: None,
+            variables: None,
+        };
+        let graphql_link = RouteDefinition {
+            id: local("fetch-person"),
+            from: RouteFrom {
+                uri: direct("fetch-person"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: SendUri::parse("graphql:graph-api").expect("uri"),
+                parameters: Some(ToParameters {
+                    http_uri: Some(Expression::ExchangeProperty("nextLink".to_string())),
+                    ..graphql_send_clean()
+                }),
+            })],
+        };
+        let pack = pack_builder(vec![graphql()], vec![graphql_link]);
+        let findings = check_routes(&pack, &project_builder(&pack));
+        assert_has(&findings, CheckCode::RouteHttpUriMembers);
+        assert!(
+            findings
+                .iter()
+                .any(|fault| fault.path == "/routes/fetch-person/steps/0/parameters/httpUri"),
+            "the graphql fault points at the httpUri member"
+        );
+
+        // A direct send carries no `httpUri` either: only an `http` send
+        // pins a link to an endpoint origin.
+        let direct_link = RouteDefinition {
+            id: local("fetch-person"),
+            from: RouteFrom {
+                uri: direct("fetch-person"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: direct("fetch-case"),
+                parameters: Some(ToParameters {
+                    http_uri: Some(Expression::ExchangeProperty("nextLink".to_string())),
+                    ..graphql_send_clean()
+                }),
+            })],
+        };
+        let pack = pack_builder(vec![], vec![direct_link]);
+        let findings = check_routes(&pack, &project_builder(&pack));
+        assert_has(&findings, CheckCode::RouteHttpUriMembers);
+        assert!(
+            findings
+                .iter()
+                .any(|fault| fault.path == "/routes/fetch-person/steps/0/parameters/httpUri"),
+            "the direct fault points at the httpUri member"
+        );
+        assert!(!codes(&findings).contains(&CheckCode::RouteUnknownOperation.code()));
+    }
+
+    /// The graphql send parameters with no HTTP-send member: the shape the
+    /// graphql member tests build.
+    fn graphql_send_clean() -> ToParameters {
+        ToParameters {
+            http_method: None,
+            path: None,
+            path_parameters: BTreeMap::new(),
+            query: BTreeMap::new(),
+            body: None,
+            operation: Some(id("person-find")),
+            throw_exception_on_failure: true,
+            ok_status_code_range: None,
+            http_uri: None,
+            resume_bindings: Vec::new(),
+        }
     }
 
     // ----- okStatusCodeRange (round 6 C2) -----

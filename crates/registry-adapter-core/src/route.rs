@@ -89,6 +89,9 @@ pub enum Step {
     Validate(ValidateStep),
     /// Stop routing the exchange.
     Stop(StopStep),
+    /// Raise a closed error class now; the route's clauses handle it like
+    /// any error (`products/adapter/CONCEPT.md` section 8.11.6).
+    ThrowException(ThrowExceptionStep),
     /// Split a message into pieces and aggregate them.
     Split(SplitStep),
     /// Repeat a block a bounded number of times.
@@ -145,6 +148,15 @@ pub struct ToParameters {
     /// The path template, e.g. `/v2/cases/{type}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// An origin-pinned link carried as an expression instead of `path`
+    /// (`products/adapter/CONCEPT.md` section 8.11.5): at send time the
+    /// engine parses the value as an absolute URL and refuses it with
+    /// `egress.refused` unless it stays inside the endpoint's origin and
+    /// base path, carries no userinfo or fragment, and fits the URL
+    /// length bound. The checks refuse a send carrying both members, a
+    /// query beside this one, and this member on a non-http send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_uri: Option<Expression>,
     /// Path-template segment name to expression; each key is a local
     /// identifier (CFG-ID-1).
     #[serde(
@@ -370,6 +382,27 @@ pub struct ValidateStep {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StopStep {}
+
+/// The longest constant message a `throwException` step may carry
+/// (`products/adapter/CONCEPT.md` section 8.11.6, "bounded"; this is the
+/// number). The profile's `problemDetail` slot carries it to the caller.
+pub const THROW_EXCEPTION_MESSAGE_MAXIMUM_BYTES: usize = 512;
+
+/// A `throwException` step: raise one closed error class, with an
+/// optional bounded constant message
+/// (`products/adapter/CONCEPT.md` section 8.11.6). The checks refuse a
+/// boundary or facade class, which never enters a route.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThrowExceptionStep {
+    /// The closed class to raise; a catchable class, typically an
+    /// `outcome.*` class.
+    pub exception_type: ErrorClass,
+    /// The optional constant message; no expression is ported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
 
 /// A `setHeader` step.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1256,6 +1289,39 @@ mod tests {
         );
     }
 
+    /// The `httpUri` parameter of an origin-pinned link
+    /// (`products/adapter/CONCEPT.md` section 8.11.5): an expression whose
+    /// value the engine pins to the endpoint origin at send time, instead
+    /// of `path`. Exactly one of `path` and `httpUri`, and no `query`
+    /// beside an `httpUri`, are authoring checks in `crate::checks` under
+    /// `adapter.route.http-uri-members`.
+    #[test]
+    fn to_parameters_carry_an_origin_pinned_http_uri() {
+        let step: Step = serde_json::from_str(
+            r#"{
+                "to": {
+                    "uri": "http:cases",
+                    "parameters": {
+                        "httpMethod": "GET",
+                        "httpUri": { "exchangeProperty": "nextLink" }
+                    }
+                }
+            }"#,
+        )
+        .expect("parse");
+        let Step::To(to) = &step else {
+            panic!("expected a to step");
+        };
+        let parameters = to.parameters.as_ref().expect("parameters");
+        assert_eq!(parameters.path, None);
+        assert_eq!(
+            parameters.http_uri,
+            Some(Expression::ExchangeProperty("nextLink".to_string()))
+        );
+        let back = serde_json::to_string(&step).expect("serialize");
+        assert_eq!(serde_json::from_str::<Step>(&back).ok(), Some(step));
+    }
+
     /// `setBody` and `transform`, ported from
     /// <https://camel.apache.org/components/next/eips/setBody-eip.html> and
     /// <https://camel.apache.org/components/next/eips/transform-eip.html>.
@@ -1421,6 +1487,39 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&step).expect("serialize"),
             r#"{"stop":{}}"#
+        );
+    }
+
+    /// Throw Exception, ported from
+    /// <https://camel.apache.org/components/next/eips/throwException-eip.html>;
+    /// `exceptionType` names a closed class, not a Java type, and
+    /// `message` is a bounded constant (`products/adapter/CONCEPT.md`
+    /// section 8.11.6). Which classes a step may name and how long the
+    /// message may be are authoring checks in `crate::checks` under
+    /// `adapter.route.throw-exception-*`.
+    #[test]
+    fn throw_exception_step_round_trips() {
+        let step: Step = serde_json::from_str(
+            r#"{ "throwException": { "exceptionType": "outcome.rejected", "message": "the record is not admissible" } }"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            step,
+            Step::ThrowException(ThrowExceptionStep {
+                exception_type: ErrorClass::OutcomeRejected,
+                message: Some("the record is not admissible".to_string()),
+            })
+        );
+        let back = serde_json::to_string(&step).expect("serialize");
+        assert_eq!(serde_json::from_str::<Step>(&back).ok(), Some(step));
+        // The closed hierarchy refuses any string outside it at the reader;
+        // a class the format may not name is the checks' refusal.
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "throwException": { "exceptionType": "java.lang.Exception" } }"#,
+            )
+            .is_err(),
+            "an exceptionType outside the closed hierarchy is refused"
         );
     }
 

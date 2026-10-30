@@ -71,6 +71,7 @@ pub enum CheckCode {
     RouteFromNotDirect,
     RouteGraphQlSendMembers,
     RouteHandledAndContinued,
+    RouteHttpUriMembers,
     RouteInvalidHeaderName,
     RouteInvalidPath,
     RouteInvalidQueryKey,
@@ -89,6 +90,8 @@ pub enum CheckCode {
     RouteReservedHeaderName,
     RouteRetryWhileWithoutRedeliveries,
     RouteStopOnExceptionExclusive,
+    RouteThrowExceptionClass,
+    RouteThrowExceptionMessage,
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
     RouteUnknownEndpoint,
@@ -151,6 +154,7 @@ impl CheckCode {
         Self::RouteFromNotDirect,
         Self::RouteGraphQlSendMembers,
         Self::RouteHandledAndContinued,
+        Self::RouteHttpUriMembers,
         Self::RouteInvalidHeaderName,
         Self::RouteInvalidPath,
         Self::RouteInvalidQueryKey,
@@ -169,6 +173,8 @@ impl CheckCode {
         Self::RouteReservedHeaderName,
         Self::RouteRetryWhileWithoutRedeliveries,
         Self::RouteStopOnExceptionExclusive,
+        Self::RouteThrowExceptionClass,
+        Self::RouteThrowExceptionMessage,
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
         Self::RouteUnknownEndpoint,
@@ -241,6 +247,7 @@ impl CheckCode {
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
             Self::RouteGraphQlSendMembers => "adapter.route.graphql-send-members",
             Self::RouteHandledAndContinued => "adapter.route.handled-and-continued",
+            Self::RouteHttpUriMembers => "adapter.route.http-uri-members",
             Self::RouteInvalidHeaderName => "adapter.route.invalid-header-name",
             Self::RouteInvalidPath => "adapter.route.invalid-path",
             Self::RouteInvalidQueryKey => "adapter.route.invalid-query-key",
@@ -262,6 +269,8 @@ impl CheckCode {
                 "adapter.route.retry-while-without-redeliveries"
             }
             Self::RouteStopOnExceptionExclusive => "adapter.route.stop-on-exception-exclusive",
+            Self::RouteThrowExceptionClass => "adapter.route.throw-exception-class",
+            Self::RouteThrowExceptionMessage => "adapter.route.throw-exception-message",
             Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
             Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
             Self::RouteUnknownEndpoint => "adapter.route.unknown-endpoint",
@@ -320,6 +329,7 @@ impl CheckCode {
             | Self::RouteInvalidQueryKey
             | Self::RoutePathParameterMismatch
             | Self::RouteHandledAndContinued
+            | Self::RouteHttpUriMembers
             | Self::RouteInvalidPath
             | Self::RouteInvalidStatusCodeRange
             | Self::RouteLoopCountAboveBound
@@ -335,6 +345,8 @@ impl CheckCode {
             | Self::RouteReservedHeaderName
             | Self::RouteRetryWhileWithoutRedeliveries
             | Self::RouteStopOnExceptionExclusive
+            | Self::RouteThrowExceptionClass
+            | Self::RouteThrowExceptionMessage
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget
             | Self::RouteUnknownEndpoint

@@ -15,6 +15,16 @@
 //! interpreter, security surface, and journal on top of this model, and
 //! `registry-adapterctl` drives its checks. The dependency runs one way:
 //! this crate depends on no other Adapter crate.
+//!
+//! The header predicates the runtime's request-header filter applies are
+//! the crate's own, exported so the runtime consumes the one shared
+//! definition rather than forking it:
+//!
+//! ```
+//! // An RFC 9110 token is allowed; a reserved engine name is not.
+//! assert!(registry_adapter_core::is_header_token("accept"));
+//! assert!(registry_adapter_core::is_reserved_header_name("authorization"));
+//! ```
 
 mod auth;
 mod checks;
