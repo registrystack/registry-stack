@@ -19,8 +19,9 @@ file is its manifest.
   name starts with (the last one because the plain code's directory is
   taken by the binding-origin member).
 - Each member carries `profile.yaml`, `pack.yaml`, and `project.yaml`
-  (plus `scripts/` or `fixtures/` where the defect needs them, and
-  `runtime.yaml` where the expected code is a runtime or auth code).
+  (plus `scripts/`, `queries/`, or `fixtures/` where the defect needs
+  them, and `runtime.yaml` where the expected code is a runtime or auth
+  code).
 - Every file's header comment names the expected code, the defect, and the
   exact `adapterctl check` invocation.
 - Every `profile.yaml` and `pack.yaml` declares `version: "1"`; every
