@@ -2,7 +2,8 @@
 
 //! `adapterctl check`: the offline authoring check over one adapter
 //! project, the profile and pack it pins, its fixture suites, and with
-//! `--runtime` the operator runtime configuration too
+//! `--runtime` the operator runtime configuration too, whose `${NAME}`
+//! expressions `--environment` fills from the process environment
 //! (`products/adapter/CONCEPT.md` sections 6, 8.1, and 13.3).
 //!
 //! The command reads every file, verifies the digest pins of the pack's
@@ -17,9 +18,12 @@
 //! offline: no network, no database, no execution of a checked route or
 //! script.
 //!
-//! The command runs one reader, `registry-platform-yaml`; the generated
-//! schemas are held to it by this crate's tests, never by a second
-//! validation beside the authoring check.
+//! The command reads the authored artifacts through one reader,
+//! `registry-platform-yaml`, refusing environment expressions where they
+//! are written (CFG-SEC-2), and the runtime configuration through the
+//! shared loader, `registry-platform-config`, the way the served runtime
+//! reads it; the generated schemas are held to these by this crate's
+//! tests, never by a second validation beside the authoring check.
 
 use clap::Args;
 use registry_adapter_core::{
@@ -30,7 +34,9 @@ use registry_adapter_core::{
     ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION,
     ADAPTER_RUNTIME_KIND,
 };
-use registry_platform_config::sha256_uri;
+use registry_platform_config::{
+    sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_STAND_IN,
+};
 use registry_platform_script::rhai::{
     compile_entrypoint, RhaiBaseEngine, RhaiCompileError, RhaiLimits, RhaiProfile,
 };
@@ -73,7 +79,7 @@ pub(crate) const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The authored profile format.
-pub(crate) const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
+const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PROFILE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PROFILE_API_VERSION)],
@@ -83,7 +89,7 @@ pub(crate) const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The authored pack format.
-pub(crate) const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
+const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PACK_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PACK_API_VERSION)],
@@ -97,16 +103,6 @@ const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_FIXTURE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_FIXTURE_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[],
-};
-
-/// The operator runtime configuration format.
-const RUNTIME_FORMAT: FormatSpec<'static> = FormatSpec {
-    kind: ADAPTER_RUNTIME_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(ADAPTER_RUNTIME_API_VERSION)],
         retired_api_versions: &[],
     },
     removed_keys: &[],
@@ -127,6 +123,13 @@ pub struct CheckArgs {
     /// Operator runtime configuration file checked with the project.
     #[arg(long, value_name = "FILE")]
     pub runtime: Option<PathBuf>,
+
+    /// Read the environment when checking the runtime configuration:
+    /// `${NAME}` expressions are filled from the process environment and
+    /// every value is checked. Without it, each expression is checked by
+    /// syntax and position only.
+    #[arg(long, requires = "runtime")]
+    pub environment: bool,
 
     /// Profile file read instead of the `profile.yaml` beside the project.
     #[arg(long, value_name = "FILE")]
@@ -212,13 +215,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     }
 
     let runtime = match &args.runtime {
-        Some(path) => read::<registry_adapter_core::AdapterRuntimeConfig>(
-            path,
-            &RUNTIME_FORMAT,
-            &mut report,
-            &mut files,
-        )?
-        .map(|(decoded, _)| decoded.value),
+        Some(path) => read_runtime(path, args.environment, &mut report, &mut files)?,
         None => None,
     };
 
@@ -293,7 +290,7 @@ pub(crate) fn resolve_project(project: &Path) -> (PathBuf, PathBuf) {
 /// read, not a second read of it.
 /// One read's outcome: the decoded document with the bytes it was read
 /// from, or `None` when the reader refused the document.
-pub(crate) type DecodedFile<T> = Option<(Decoded<T>, Vec<u8>)>;
+type DecodedFile<T> = Option<(Decoded<T>, Vec<u8>)>;
 
 pub(crate) fn read<T: serde::de::DeserializeOwned>(
     path: &Path,
@@ -307,7 +304,14 @@ pub(crate) fn read<T: serde::de::DeserializeOwned>(
         source,
     })?;
     *files += 1;
-    let decoded = Reader::new(shown).decode::<T>(&bytes, &Expect::one(format));
+    // Authored files are reviewed and packaged as written: an environment
+    // expression in one is refused where it is written, never filled
+    // (CFG-SEC-2). Substitution belongs to the operator runtime, which this
+    // command reads through the shared loader instead.
+    let mut hook = AuthoredExpressions;
+    let decoded = Reader::new(shown)
+        .with_hook(&mut hook)
+        .decode::<T>(&bytes, &Expect::one(format));
     match decoded {
         Ok(decoded) => {
             for warning in decoded.document.warnings().into_diagnostics() {
@@ -320,6 +324,77 @@ pub(crate) fn read<T: serde::de::DeserializeOwned>(
             Ok(None)
         }
     }
+}
+
+/// Read and decode the operator runtime configuration the way the runtime
+/// reads it: through the shared loader, whose envelope, byte, and path rules
+/// the served runtime also enforces (CFG-CHECK-1). With `substitute`,
+/// `${NAME}` expressions are filled from the process environment and every
+/// value is checked; without it, each expression is checked by syntax and
+/// position only, and a value it would fill is replaced whole by a stand-in
+/// so the members around it still decode. A file the loader cannot read is
+/// an environment failure; one it refuses is reported.
+fn read_runtime(
+    path: &Path,
+    substitute: bool,
+    report: &mut Report,
+    files: &mut usize,
+) -> Result<Option<registry_adapter_core::AdapterRuntimeConfig>, CheckFailure> {
+    let shown = path.display().to_string();
+    // The loader reads absolute paths whose components are no symbolic
+    // link; the canonical form of the path as given satisfies that rule on
+    // aliased directories and keeps every reported position on the file the
+    // caller named.
+    let absolute = std::fs::canonicalize(path).map_err(|source| CheckFailure::Io {
+        path: shown.clone(),
+        source,
+    })?;
+    let loader = RuntimeConfigLoader::new(RuntimeEnvelope {
+        api_version: ADAPTER_RUNTIME_API_VERSION,
+        kind: ADAPTER_RUNTIME_KIND,
+    });
+    let check = loader.check_offline::<registry_adapter_core::AdapterRuntimeConfig>(
+        &absolute,
+        substitute,
+        |_| DEFAULT_STAND_IN,
+    );
+    *files += 1;
+    // Every finding names the file as the loader read it; the report names
+    // files the way the caller gave them, so the path is rewritten back.
+    let named = absolute.display().to_string();
+    let rewrite = |diagnostic: &Diagnostic| {
+        let mut diagnostic = diagnostic.clone();
+        if let Some(source) = &mut diagnostic.source {
+            if source.file == named {
+                source.file.clone_from(&shown);
+            }
+        }
+        for related in &mut diagnostic.related {
+            if related.file == named {
+                related.file.clone_from(&shown);
+            }
+        }
+        diagnostic
+    };
+    if check.unavailable {
+        // The loader's own finding names what refused the read; the command
+        // reports it as the environment failure every other unreadable file
+        // takes.
+        let reason = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == registry_platform_config::UNAVAILABLE_CODE)
+            .map(|diagnostic| diagnostic.message.clone())
+            .unwrap_or_else(|| "the runtime configuration could not be read".to_owned());
+        return Err(CheckFailure::Io {
+            path: shown,
+            source: io::Error::other(reason),
+        });
+    }
+    for diagnostic in &check.diagnostics {
+        report.push(rewrite(diagnostic));
+    }
+    Ok(check.loaded.map(|loaded| loaded.config))
 }
 
 /// The fixture files of a project directory, in file-name order. A missing
@@ -450,60 +525,54 @@ fn verify_entrypoints(
         Some(directory) => directory.join(file),
         None => PathBuf::from(file),
     };
-    let bodies = pack
-        .routes
-        .iter()
-        .map(|route| route.steps.as_slice())
-        .chain(
-            pack.route_templates
-                .iter()
-                .map(|template| template.steps.as_slice()),
-        );
-    for body in bodies {
-        for site in script_references(body) {
-            let bytes = match pinned.get(&resolve(&site.file)) {
-                Some(bytes) => bytes,
-                None => continue,
-            };
-            let source = match std::str::from_utf8(bytes) {
-                Ok(source) => source,
-                Err(_) => {
-                    report.push(uncompilable_finding(
-                        pack_path,
-                        &site,
-                        "the pinned script is not UTF-8 text",
-                        None,
-                    ));
-                    continue;
-                }
-            };
-            match compile_entrypoint(&SCRIPT_PROFILE, source, &site.entrypoint, &[1]) {
-                Ok(_) => {}
-                Err(RhaiCompileError::SourceBound) => {
-                    report.push(uncompilable_finding(
-                        pack_path,
-                        &site,
-                        "the script exceeds the compile source bound",
-                        None,
-                    ));
-                }
-                Err(RhaiCompileError::Parse(position)) => {
-                    let position = (position.line(), position.position());
-                    report.push(uncompilable_finding(
-                        pack_path,
-                        &site,
-                        "the script does not parse",
-                        Some(position),
-                    ));
-                }
-                Err(RhaiCompileError::Entrypoint) => {
-                    report.push(uncompilable_finding(
-                        pack_path,
-                        &site,
-                        "the script does not declare exactly one public function under the entrypoint name at one parameter",
-                        None,
-                    ));
-                }
+    for site in script_references(pack) {
+        let bytes = match pinned.get(&resolve(&site.file)) {
+            Some(bytes) => bytes,
+            None => continue,
+        };
+        let source = match std::str::from_utf8(bytes) {
+            Ok(source) => source,
+            Err(_) => {
+                report.push(uncompilable_finding(
+                    pack_path,
+                    &site,
+                    "the pinned script is not UTF-8 text",
+                    None,
+                ));
+                continue;
+            }
+        };
+        match compile_entrypoint(
+            &SCRIPT_PROFILE,
+            source,
+            &site.entrypoint,
+            &[site.role.arity()],
+        ) {
+            Ok(_) => {}
+            Err(RhaiCompileError::SourceBound) => {
+                report.push(uncompilable_finding(
+                    pack_path,
+                    &site,
+                    "the script exceeds the compile source bound",
+                    None,
+                ));
+            }
+            Err(RhaiCompileError::Parse(position)) => {
+                let position = (position.line(), position.position());
+                report.push(uncompilable_finding(
+                    pack_path,
+                    &site,
+                    "the script does not parse",
+                    Some(position),
+                ));
+            }
+            Err(RhaiCompileError::Entrypoint) => {
+                report.push(uncompilable_finding(
+                    pack_path,
+                    &site,
+                    "the script does not declare exactly one public function under the entrypoint name at the parameter count the slot calls it with",
+                    None,
+                ));
             }
         }
     }
@@ -519,9 +588,9 @@ fn uncompilable_finding(
 ) -> Diagnostic {
     let mut diagnostic = finding(
         CheckCode::PackScriptUncompilable,
-        &format!("/steps{}/rhai", site.path),
+        &site.path,
         message,
-        "Repair the script beside the pack so it parses and declares exactly one public entrypoint function with one parameter.",
+        "Repair the script beside the pack so it parses and declares exactly one public entrypoint function at the parameter count the slot calls it with.",
     );
     diagnostic.source = Some(registry_platform_yaml::Source {
         file: format!("{} ({})", pack_path.display(), site.file),

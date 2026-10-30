@@ -734,6 +734,41 @@ fn project_lock_of_a_fresh_project_writes_nothing() {
     );
 }
 
+/// A pin is a byte digest: the lock pins whatever bytes the artifact
+/// carries, even bytes the reader would refuse, because deciding whether
+/// an artifact is a good one is `check`'s business. The repinned project
+/// then refuses with the reader's code alone, no pin diagnostic beside it.
+#[test]
+fn project_lock_pins_bytes_a_reader_would_refuse() {
+    let profile = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal/profile.yaml");
+    let stale = format!("  digest: {}", pinned_digest(&profile));
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("profile.yaml"),
+            "problemCodes:",
+            "conformanceUnknown: x\nproblemCodes:",
+        );
+        edit(
+            &root.join("project.yaml"),
+            &stale,
+            "  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+    });
+    let directory = directory_of(&project);
+    let (exit, report, _) = lock_directory(&directory);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["profile"], "updated");
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "config.unknown-key");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the pin must not add a diagnostic beside the reader's: {report}"
+    );
+}
+
 /// The lock accepts the `project.yaml` file form as well as the directory
 /// form.
 #[test]
@@ -875,4 +910,207 @@ fn project_lock_pins_the_artifacts_given_by_flag() {
         pack_file.to_str().unwrap(),
     ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+}
+
+/// A full runtime configuration for the minimal project's operation, with
+/// one `${NAME}` expression at `oidc.audience` (a plain text member) and
+/// another at `audit.retentionDays` when `retention` says so.
+fn runtime_with_expressions(retention: &str) -> String {
+    format!(
+        "apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: case-deployment
+endpoints:
+  - endpoint: case-api
+    baseUrl: https://cases.example.invalid
+    credential:
+      type: oauth2-client-credentials
+      tokenEndpoint: https://token.example.invalid/token
+      clientIdRef: secret:env/CASE_API_CLIENT_ID
+      clientSecretRef: secret:env/CASE_API_CLIENT_SECRET
+      credentialPlacement: basic-header
+      maximumCacheSeconds: 3600
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/CASE_DB_RUNTIME
+  migrationUrlRef: secret:env/CASE_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: ${{ADAPTERCTL_TEST_AUDIENCE:-case-api}}
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+audit:
+  retentionDays: {retention}
+"
+    )
+}
+
+/// Write the runtime file beside the copied project and return its path.
+fn write_runtime(root: &Path, retention: &str) -> String {
+    let path = root.join("runtime.yaml");
+    std::fs::write(&path, runtime_with_expressions(retention)).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
+/// Without `--environment` the runtime file is checked the way the runtime
+/// reads it before the environment exists: an expression is checked by
+/// syntax and position only, and the text member it fills accepts the
+/// stand-in (CFG-CHECK-1). No variable is read, so no diagnostic names one.
+#[test]
+fn the_runtime_file_without_environment_accepts_a_deferred_expression() {
+    let (_root, project) = mutated_project(|root| {
+        write_runtime(root, "90");
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["diagnostics"], json!([]), "{report}");
+    assert_eq!(report["filesChecked"], 6);
+}
+
+/// Without `--environment` an expression in a non-text member is still
+/// refused: substitution fills text values only, and the refusal's fix is
+/// to write the value or template the whole file (CFG-SEC-2).
+#[test]
+fn the_runtime_file_without_environment_refuses_an_expression_in_an_integer_member() {
+    let (_root, project) = mutated_project(|root| {
+        write_runtime(root, "\"${ADAPTERCTL_TEST_RETENTION}\"");
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_refused(exit, &report, "config.expected-integer");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    let integer = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.expected-integer")
+        .unwrap();
+    assert_eq!(integer["path"], "/audit/retentionDays", "{report}");
+    assert_eq!(
+        integer["suggestedAction"],
+        "Write the value, or template the whole file."
+    );
+}
+
+/// A member ending in `Ref` carries a secret reference, so an expression
+/// there is refused by position before any variable is read, with or
+/// without `--environment` (CFG-SEC-2).
+#[test]
+fn the_runtime_file_refuses_an_expression_in_a_reference_member() {
+    let (_root, project) = mutated_project(|root| {
+        let runtime = runtime_with_expressions("90").replace(
+            "    baseUrl: https://cases.example.invalid\n",
+            "    baseUrl: https://cases.example.invalid\n    caBundleRef: \"${ADAPTERCTL_TEST_CA}\"\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_refused(exit, &report, "config.substitution-not-allowed");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    let reference = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.substitution-not-allowed")
+        .unwrap();
+    assert_eq!(reference["path"], "/endpoints/0/caBundleRef", "{report}");
+}
+
+/// With `--environment` an expression naming an unset variable is refused
+/// at the member, naming the variable and never its value (CFG-SEC-2,
+/// CFG-SEC-3).
+#[test]
+fn the_runtime_file_with_environment_refuses_an_unset_variable() {
+    let (_root, project) = mutated_project(|root| {
+        let runtime = runtime_with_expressions("90").replace(
+            "${ADAPTERCTL_TEST_AUDIENCE:-case-api}",
+            "${ADAPTERCTL_TEST_UNSET}",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    let (exit, report, _) = run_json(&[
+        "check",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+        "--environment",
+    ]);
+    assert_refused(exit, &report, "config.substitution");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    let substitution = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.substitution")
+        .unwrap();
+    assert_eq!(substitution["path"], "/oidc/audience", "{report}");
+    assert_eq!(
+        substitution["message"],
+        "the environment variable ADAPTERCTL_TEST_UNSET is unset or empty"
+    );
+    assert_eq!(
+        substitution["suggestedAction"],
+        "Set ADAPTERCTL_TEST_UNSET in the runtime's environment, or write a fallback as ${ADAPTERCTL_TEST_UNSET:-fallback}."
+    );
+}
+
+/// With `--environment` a set variable fills the member and the check
+/// reads every value (CFG-CHECK-1); the value itself is never printed.
+#[test]
+fn the_runtime_file_with_environment_fills_a_set_variable() {
+    let (_root, project) = mutated_project(|root| {
+        write_runtime(root, "90");
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    std::env::set_var("ADAPTERCTL_TEST_AUDIENCE", "resolved-audience");
+    let (exit, report, stderr) = run_json(&[
+        "check",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+        "--environment",
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["diagnostics"], json!([]), "{report}");
+    let stderr = String::from_utf8_lossy(&stderr);
+    assert!(!stderr.contains("resolved-audience"), "{stderr}");
+}
+
+/// `--environment` without a runtime file to read is a usage error: there
+/// is nothing to fill.
+#[test]
+fn environment_without_a_runtime_file_is_a_usage_error() {
+    let (exit, report, _) = run_json(&["check", &minimal_project(), "--environment"]);
+    assert_eq!(exit, ExitCode::from(2));
+    assert_eq!(report["status"], "usage-error");
+}
+
+/// An environment expression in an authored file is refused where it is
+/// written (CFG-SEC-2): the pin the project carries for the profile adds
+/// no diagnostic beside the reader's refusal, and the lock still pins the
+/// refused bytes, so the repair is the value, not the pin.
+#[test]
+fn an_expression_in_an_authored_file_is_refused_where_it_is_written() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("profile.yaml"),
+            "version: ",
+            "version: \"${ADAPTERCTL_TEST_VERSION}\" # ",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "config.substitution-not-allowed");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the pin must not add a diagnostic beside the reader's: {report}"
+    );
+    assert_eq!(diagnostics[0]["path"], "/version", "{report}");
+    assert_eq!(
+        diagnostics[0]["suggestedAction"],
+        "Write the value in the authored file directly."
+    );
+    let directory = directory_of(&project);
+    let (exit, report, _) = lock_directory(&directory);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["profile"], "updated");
 }

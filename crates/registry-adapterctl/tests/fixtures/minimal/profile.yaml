@@ -6,6 +6,8 @@ operations:
   - id: cases-get
     method: GET
     path: /v2/cases/{type}
+    pathParameters:
+      - type
     responseEnvelope: '{"record": {{record}}}'
 problemCodes:
   - cases.conflict

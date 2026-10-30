@@ -9,13 +9,11 @@
 
 use clap::{Args, Subcommand};
 use registry_adapter_core::AdapterProject;
-use registry_platform_yaml::{Diagnostic, Digest, FormatSpec, Report};
+use registry_platform_yaml::{Diagnostic, Digest, Report};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::check::{
-    digest_of, read, resolve_project, CheckFailure, PACK_FORMAT, PROFILE_FORMAT, PROJECT_FORMAT,
-};
+use crate::check::{digest_of, read, resolve_project, CheckFailure, PROJECT_FORMAT};
 
 #[derive(Debug, Args)]
 pub struct ProjectArgs {
@@ -96,11 +94,13 @@ impl PinnedBlock {
     }
 }
 
-/// Lock one project. Reads the project, profile, and pack with the same
-/// formats and reader as `check`; a workspace the reader refuses is
-/// reported and nothing is written. Both pins are computed from the bytes
-/// as read before the project text is rewritten, so a refusal leaves the
-/// project byte-for-byte as it was.
+/// Lock one project. Reads the project with the same format and reader as
+/// `check`: a project the reader refuses is reported and nothing is
+/// written. The pins are byte digests, so the profile and pack contribute
+/// their bytes only; whether either artifact is a good one is `check`'s
+/// business. Both pins are computed from the bytes as read before the
+/// project text is rewritten, so a refusal leaves the project
+/// byte-for-byte as it was.
 pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
     let mut report = Report::new(Vec::new());
     let mut files = 0usize;
@@ -112,31 +112,12 @@ pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
         .profile
         .clone()
         .unwrap_or_else(|| directory.join("profile.yaml"));
-    let profile = read_artifact::<registry_adapter_core::AdapterProfile>(
-        &profile_path,
-        &PROFILE_FORMAT,
-        &mut report,
-        &mut files,
-    )?;
+    let profile_bytes = read_pinned(&profile_path, &mut files)?;
     let pack_path = args
         .pack
         .clone()
         .unwrap_or_else(|| directory.join("pack.yaml"));
-    let pack = read_artifact::<registry_adapter_core::AdapterPack>(
-        &pack_path,
-        &PACK_FORMAT,
-        &mut report,
-        &mut files,
-    )?;
-    let (Some((_, profile_bytes)), Some((_, pack_bytes))) = (profile, pack) else {
-        return Ok(LockRun {
-            diagnostics: report.into_diagnostics(),
-            files_checked: files,
-            profile: PinStatus::Unchanged,
-            pack: PinStatus::Unchanged,
-            project: args.project.display().to_string(),
-        });
-    };
+    let pack_bytes = read_pinned(&pack_path, &mut files)?;
     let Some((_, project_bytes)) = project else {
         return Ok(LockRun {
             diagnostics: report.into_diagnostics(),
@@ -182,16 +163,15 @@ pub(crate) fn run_lock(args: &ProjectLockArgs) -> Result<LockRun, LockFailure> {
     })
 }
 
-/// Read one pinned artifact beside the project. A missing or unreadable
-/// file is an environment failure; a refused document folds into the
-/// report and leaves nothing to pin.
-fn read_artifact<T: serde::de::DeserializeOwned>(
-    path: &Path,
-    format: &FormatSpec<'static>,
-    report: &mut Report,
-    files: &mut usize,
-) -> Result<crate::check::DecodedFile<T>, LockFailure> {
-    read(path, format, report, files).map_err(io_failure)
+/// Read one pinned artifact's bytes. A missing or unreadable file is an
+/// environment failure. The content is never decoded or judged here.
+fn read_pinned(path: &Path, files: &mut usize) -> Result<Vec<u8>, LockFailure> {
+    let bytes = std::fs::read(path).map_err(|source| LockFailure::Io {
+        path: path.display().to_string(),
+        source,
+    })?;
+    *files += 1;
+    Ok(bytes)
 }
 
 /// The environment failure of the check command, restated as the lock's.
