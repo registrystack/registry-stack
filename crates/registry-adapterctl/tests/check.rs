@@ -235,6 +235,13 @@ fn an_altered_pinned_script_refuses_with_the_digest_pin_code() {
         diagnostic["message"], "the file does not hash to its digest pin",
         "{diagnostic}"
     );
+    // The common case is an edit on purpose, so the remedy leads with the
+    // command that repins the inventory from the files on disk.
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Run adapterctl project lock to repin the inventory digest pins from the files beside the pack document, or restore the file as pinned.",
+        "{diagnostic}"
+    );
 }
 
 /// A pinned script that no longer parses refuses with the compile code
@@ -612,6 +619,55 @@ fn the_human_success_prints_the_verdict_on_stdout() {
     assert!(text.starts_with("Authoring check passed."), "{text}");
 }
 
+/// A passing check says what its fixture pass covered: the contracts
+/// only, never a send-by-send replay, so a green pass is not read as a
+/// route test (CONCEPT 13.3).
+#[test]
+fn the_check_pass_names_the_fixture_scope() {
+    let (_root, project) = mutated_project(|_| {});
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(
+        report["fixtures"],
+        json!("contracts only, replay not run"),
+        "{report}"
+    );
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let exit = registry_adapterctl::main_entry_from(
+        ["adapterctl", "check", project.as_str()],
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_eq!(exit, ExitCode::SUCCESS);
+    let text = String::from_utf8_lossy(&stdout);
+    assert!(
+        text.contains("fixtures: contracts only, replay not run"),
+        "{text}"
+    );
+}
+
+/// A fixture path given by `--fixtures` that does not exist refuses: a
+/// silently empty fixture set would read as a clean pass.
+#[test]
+fn check_refuses_a_missing_explicit_fixture_path() {
+    let (_root, project) = mutated_project(|_| {});
+    let missing = _root.path().join("nope/fixtures.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--fixtures", missing.to_str().unwrap()]);
+    assert_refused(exit, &report, "adapterctl.fixture-path-missing");
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "adapterctl.fixture-path-missing")
+        .unwrap();
+    assert_eq!(diagnostic["path"], missing.to_str().unwrap(), "{report}");
+    assert_eq!(
+        diagnostic["message"], "the fixture file does not exist",
+        "{diagnostic}"
+    );
+}
+
 /// `schemas` writes the five generated files into any directory it is
 /// given.
 #[test]
@@ -935,6 +991,152 @@ fn project_lock_pins_the_artifacts_given_by_flag() {
         pack_file.to_str().unwrap(),
     ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+}
+
+/// An edited script is repinned by `project lock`: the pack's inventory
+/// digest line is rewritten from the file beside the pack, the project's
+/// pack pin follows the rewritten pack bytes, and the project then checks
+/// green. One edit, one command, no hand-pasted digests.
+#[test]
+fn project_lock_repins_an_edited_script_and_the_project_then_checks_green() {
+    let fixture_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal/scripts/map.rhai");
+    let old_line = format!("    digest: {}", pinned_digest(&fixture_script));
+    let mut edited_digest = String::new();
+    let (_root, project) = mutated_project(|root| {
+        let script = root.join("scripts/map.rhai");
+        let contents = std::fs::read_to_string(&script).unwrap();
+        std::fs::write(&script, format!("{contents}\n// edited after pinning\n")).unwrap();
+        edited_digest = registry_platform_config::sha256_uri(&std::fs::read(&script).unwrap());
+    });
+    let copy = Path::new(&project).parent().unwrap().to_path_buf();
+    let directory = directory_of(&project);
+    let (exit, report, stderr) = lock_directory(&directory);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(report["profile"], "unchanged", "{report}");
+    assert_eq!(report["inventory"], "updated", "{report}");
+    assert_eq!(report["pack"], "updated", "{report}");
+    let rewritten = std::fs::read_to_string(copy.join("pack.yaml")).unwrap();
+    assert!(
+        rewritten.contains(&format!("    digest: {edited_digest}")),
+        "the lock must repin the script: {rewritten}"
+    );
+    assert!(
+        !rewritten.contains(&old_line),
+        "the stale script pin must be gone: {rewritten}"
+    );
+    // The project's pack pin follows the pack bytes as they now sit, so
+    // the check after the lock is green.
+    let pin = format!("  digest: {}", pinned_digest(&copy.join("pack.yaml")));
+    let rewritten = std::fs::read_to_string(&project).unwrap();
+    assert!(
+        rewritten.contains(&pin),
+        "the pack pin must follow the rewritten pack: {rewritten}"
+    );
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["filesChecked"], 5);
+}
+
+/// A lock whose pack pins a file that is missing refuses with the pack's
+/// digest-pin code at the inventory entry and writes nothing: there is
+/// nothing to hash, so no pin can follow.
+#[test]
+fn project_lock_with_a_missing_script_file_refuses_and_writes_nothing() {
+    let (_root, project) = mutated_project(|root| {
+        std::fs::remove_file(root.join("scripts/map.rhai")).unwrap();
+    });
+    let copy = Path::new(&project).parent().unwrap().to_path_buf();
+    let directory = directory_of(&project);
+    let before_project = std::fs::read(&project).unwrap();
+    let before_pack = std::fs::read(copy.join("pack.yaml")).unwrap();
+    let (exit, report, _) = lock_directory(&directory);
+    assert_refused(exit, &report, "adapter.pack.digest-pin-required");
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "adapter.pack.digest-pin-required")
+        .unwrap();
+    assert_eq!(diagnostic["path"], "/scripts/0", "{report}");
+    assert_eq!(
+        diagnostic["message"], "the pinned file is missing",
+        "{diagnostic}"
+    );
+    assert_eq!(std::fs::read(&project).unwrap(), before_project);
+    assert_eq!(std::fs::read(copy.join("pack.yaml")).unwrap(), before_pack);
+}
+
+/// An inventory whose digest pins are not in the block form the lock
+/// rewrites refuses at the section and writes nothing, even though the
+/// project's own pins could be rewritten: a run is all-or-nothing.
+#[test]
+fn project_lock_refuses_an_inventory_it_cannot_rewrite() {
+    let fixture_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal/scripts/map.rhai");
+    let pinned = pinned_digest(&fixture_script);
+    let (_root, project) = mutated_project(|root| {
+        let script = root.join("scripts/map.rhai");
+        let contents = std::fs::read_to_string(&script).unwrap();
+        std::fs::write(&script, format!("{contents}\n// edited after pinning\n")).unwrap();
+        let flow = format!("  - {{path: scripts/map.rhai, digest: {pinned}}}");
+        edit(
+            &root.join("pack.yaml"),
+            &format!("  - path: scripts/map.rhai\n    digest: {pinned}"),
+            &flow,
+        );
+    });
+    let copy = Path::new(&project).parent().unwrap().to_path_buf();
+    let directory = directory_of(&project);
+    let before_project = std::fs::read(&project).unwrap();
+    let before_pack = std::fs::read(copy.join("pack.yaml")).unwrap();
+    let (exit, report, _) = lock_directory(&directory);
+    assert_refused(exit, &report, "adapterctl.project-lock-layout");
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "adapterctl.project-lock-layout")
+        .unwrap();
+    assert_eq!(diagnostic["path"], "/scripts", "{report}");
+    assert_eq!(std::fs::read(&project).unwrap(), before_project);
+    assert_eq!(std::fs::read(copy.join("pack.yaml")).unwrap(), before_pack);
+}
+
+/// A pack that does not decode cannot name its inventory, so the lock
+/// warns that the inventory pins were not rewritten and still pins the
+/// pack bytes the project names: judging the pack is `check`'s business,
+/// and the pins stay honest about the bytes on disk.
+#[test]
+fn project_lock_warns_when_the_pack_does_not_decode_and_still_pins_the_bytes() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("pack.yaml"),
+            "kind: AdapterPack",
+            "kind: AdapterPack\nconformanceUnknown: x",
+        );
+    });
+    let copy = Path::new(&project).parent().unwrap().to_path_buf();
+    let directory = directory_of(&project);
+    let (exit, report, _) = lock_directory(&directory);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["inventory"], "unchanged", "{report}");
+    assert_eq!(report["pack"], "updated", "{report}");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "adapterctl.pack-not-decoded"
+                && diagnostic["severity"] == "warning"
+        }),
+        "{report}"
+    );
+    let pin = format!("  digest: {}", pinned_digest(&copy.join("pack.yaml")));
+    let rewritten = std::fs::read_to_string(&project).unwrap();
+    assert!(
+        rewritten.contains(&pin),
+        "the pack bytes must be pinned as they sit: {rewritten}"
+    );
 }
 
 /// A full runtime configuration for the minimal project's operation, with

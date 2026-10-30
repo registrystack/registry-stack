@@ -227,7 +227,7 @@ fn check_command(
     }
     let mut checked = Report::new(run.diagnostics);
     checked.set_files_checked(run.files_checked);
-    let envelope = json!({
+    let mut envelope = json!({
         "ok": true,
         "command": command_name,
         "status": "complete",
@@ -235,6 +235,12 @@ fn check_command(
         "filesChecked": run.files_checked,
         "diagnostics": checked.to_json_value(),
     });
+    if run.fixtures_checked > 0 {
+        // The fixture pass checked the contracts only; the send-by-send
+        // replay activates with the route engine (CONCEPT 13.3). The
+        // field says so, so a green pass is not read as a route test.
+        envelope["fixtures"] = json!("contracts only, replay not run");
+    }
     write_success(&envelope, &checked, format, stdout)
 }
 
@@ -299,6 +305,7 @@ fn project_command(
         "diagnostics": checked.to_json_value(),
         "profile": run.profile.as_str(),
         "pack": run.pack.as_str(),
+        "inventory": run.inventory.as_str(),
     });
     write_success(&envelope, &checked, format, stdout)
 }

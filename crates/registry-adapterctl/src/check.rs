@@ -154,10 +154,12 @@ pub(crate) enum CheckFailure {
 }
 
 /// One run's verdict: the findings collected over every file read, how many
-/// files were read, and the project path as given.
+/// files were read, how many fixture suites were contract-checked, and the
+/// project path as given.
 pub(crate) struct CheckRun {
     pub diagnostics: Vec<Diagnostic>,
     pub files_checked: usize,
+    pub fixtures_checked: usize,
     pub project: String,
 }
 
@@ -201,7 +203,32 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     let fixture_paths = if args.fixtures.is_empty() {
         discovered_fixtures(&directory)?
     } else {
-        args.fixtures.clone()
+        // A path given by hand must exist: a silently skipped file would
+        // read as a clean pass over fixtures that were never seen. A
+        // missing file is a refusal; its finding joins the report and the
+        // file is not read. Any other unreadable file stays an
+        // environment failure.
+        let mut given = Vec::new();
+        for path in &args.fixtures {
+            match std::fs::metadata(path) {
+                Ok(_) => given.push(path.clone()),
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                    report.push(Diagnostic::error(
+                        "adapterctl.fixture-path-missing",
+                        path.display().to_string(),
+                        "the fixture file does not exist",
+                        "Name an existing fixture file, or drop --fixtures to read the fixtures/ directory beside the project.",
+                    ));
+                }
+                Err(source) => {
+                    return Err(CheckFailure::Io {
+                        path: path.display().to_string(),
+                        source,
+                    })
+                }
+            }
+        }
+        given
     };
     let mut fixtures = Vec::new();
     for path in &fixture_paths {
@@ -226,6 +253,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         return Ok(CheckRun {
             diagnostics: report.into_diagnostics(),
             files_checked: files,
+            fixtures_checked: fixtures.len(),
             project: project_string(&args.project),
         });
     }
@@ -266,6 +294,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     Ok(CheckRun {
         diagnostics: report.into_diagnostics(),
         files_checked: files,
+        fixtures_checked: fixtures.len(),
         project: project_string(&args.project),
     })
 }
@@ -493,6 +522,7 @@ fn verify_inventory(
                     pack_path,
                     &pointer,
                     "the pinned file is missing",
+                    "Restore the file beside the pack document, or update its sha256 digest pin.",
                     &script.path,
                 ));
                 continue;
@@ -506,6 +536,7 @@ fn verify_inventory(
                 pack_path,
                 &pointer,
                 "the file does not hash to its digest pin",
+                "Run adapterctl project lock to repin the inventory digest pins from the files beside the pack document, or restore the file as pinned.",
                 &script.path,
             ));
         }
@@ -756,14 +787,17 @@ fn entrypoint_parameter_finding(pack_path: &Path, site: &ScriptSite) -> Diagnost
 }
 
 /// The digest-pin finding for one inventory entry. The message names the
-/// rule and the inventory path, never a file's contents (CFG-SEC-3).
-fn pin_finding(pack_path: &Path, pointer: &str, message: &str, script_path: &str) -> Diagnostic {
-    let mut diagnostic = finding(
-        CheckCode::PackDigestPinRequired,
-        pointer,
-        message,
-        "Restore the file beside the pack document, or update its sha256 digest pin.",
-    );
+/// rule and the inventory path, never a file's contents (CFG-SEC-3); the
+/// remedy is the caller's, because a missing file can only be restored
+/// while a stale pin is what `project lock` exists to rewrite.
+pub(crate) fn pin_finding(
+    pack_path: &Path,
+    pointer: &str,
+    message: &str,
+    action: &str,
+    script_path: &str,
+) -> Diagnostic {
+    let mut diagnostic = finding(CheckCode::PackDigestPinRequired, pointer, message, action);
     diagnostic.source = Some(registry_platform_yaml::Source {
         file: format!("{} ({script_path})", pack_path.display()),
         line: None,
