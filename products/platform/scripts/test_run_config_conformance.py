@@ -481,6 +481,44 @@ class MutationTest(unittest.TestCase):
             "named": {"type": "object", "additionalProperties": {"$ref": "#/$defs/item"}},
             "prefixed": {"type": "object", "additionalProperties": False, "patternProperties": {"^conformance": {}}},
             "free": {"type": "object", "unevaluatedProperties": False, "additionalProperties": {"type": "string"}},
+            "tagged": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "required": ["setBody"],
+                            "additionalProperties": False,
+                            "properties": {"setBody": {"type": "object"}},
+                        },
+                        {
+                            "type": "object",
+                            "required": ["script"],
+                            "additionalProperties": False,
+                            "properties": {"script": {"type": "object"}},
+                        },
+                    ]
+                },
+            },
+            "stamped": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "required": ["type"],
+                            "additionalProperties": False,
+                            "properties": {"type": {"const": "one"}},
+                        },
+                        {
+                            "type": "object",
+                            "required": ["type"],
+                            "additionalProperties": False,
+                            "properties": {"type": {"const": "two"}},
+                        },
+                    ]
+                },
+            },
         },
         "$defs": {
             "project": {"type": "object", "additionalProperties": False, "properties": {"id": {"type": "string"}}},
@@ -508,6 +546,10 @@ prefixed: {}
 free: {}
 undescribed:
   id: fifth
+tagged:
+  - setBody: {size: one}
+stamped:
+  - type: one
 """
 
     def test_cfg_schema_8_unknown_key_goes_into_each_closed_mapping_below_the_root(self) -> None:
@@ -526,6 +568,7 @@ undescribed:
                 ("/items/0", "/items/0/conformanceUnknown", (6, 5)),
                 ("/spread", "/spread/conformanceUnknown", (11, 3)),
                 ("/named/entry", "/named/entry/conformanceUnknown", (16, 5)),
+                ("/stamped/0", "/stamped/0/conformanceUnknown", (24, 5)),
             ],
         )
         self.assertEqual(
@@ -540,6 +583,20 @@ undescribed:
         for variant in variants:
             self.assertEqual(len(variant.sites), 1)
             self.assertEqual(variant.text.count("conformanceUnknown"), 1)
+
+    def test_cfg_schema_8_skips_the_payload_of_a_member_set_union(self) -> None:
+        """A mapping whose schema picks a union branch by member set alone is
+        no cell: any extra key leaves no branch to match, and the reader
+        refuses the value, not the key. A union whose branches share a
+        discriminator, and one the reader matches by shape, keep their
+        cells."""
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, self.CLOSED)
+            variants = runner.mutate(self.NESTED, self.UNKNOWN_KEY, fmt)
+        planted = [variant.sites[0].values["mapping"] for variant in variants]
+        self.assertNotIn("/tagged/0", planted)
+        self.assertIn("/stamped/0", planted)
+        self.assertIn("/items/0", planted)
 
     def test_unknown_key_in_one_mapping_plants_there_only(self) -> None:
         mutation = {"unknownKey": dict(self.UNKNOWN_KEY["unknownKey"], **{"in": "/spread"})}

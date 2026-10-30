@@ -66,7 +66,13 @@ A case file (`cases/<id>.yaml`) has these members:
                                           member of a mapping below the
                                           example's root that its schema (the
                                           registry's `schema.path`) closes.
-                                          The case is one cell per such
+                                          A mapping whose schema picks a union
+                                          branch by member set alone is no
+                                          cell: any extra key leaves no branch
+                                          to match, and the reader refuses
+                                          the value, never the key. The case
+                                          is one cell per
+                                          such
                                           mapping, named `<case>#<pointer of
                                           the mapping>`; the root is left to
                                           a case that appends to the file
@@ -1018,12 +1024,40 @@ def refuses(schema: Any, node: Any, key: str, depth: int = 0) -> bool:
     return False
 
 
+def union_dispatch(schema: Any, node: Any) -> bool:
+    """Whether a schema node dispatches a union the member set alone picks:
+    a union whose branches require members with no one member common to
+    every branch, so adding any other key leaves no branch for the value to
+    match and the reader refuses the value, never the key. A union whose
+    branches share a discriminator (a `type` member each requires) keeps
+    matching its branch under an extra key, and that branch refuses the key
+    as a member."""
+    lint = lint_module()
+    for part in lint.expand(schema, node):
+        for keyword in ("anyOf", "oneOf"):
+            branches = part.get(keyword) or []
+            if (
+                branches
+                and all(isinstance(branch, dict) and branch.get("required") for branch in branches)
+            ):
+                required = [set(branch["required"]) for branch in branches]
+                if not set.intersection(*required):
+                    return True
+    return False
+
+
 def closed_mappings(schema: Any, root: yaml.Node | None, key: str) -> list[str]:
-    """The pointer of each mapping below the root that every schema node describing it closes against `key`."""
+    """The pointer of each mapping below the root that every schema node
+    describing it closes against `key`, and that no schema node describing
+    it dispatches as a tagged union."""
     found = []
     for pointer in mappings(root):
         candidates = lint_module().resolve_member(schema, pointer) if pointer else None
-        if candidates and all(refuses(schema, node, key) for node, _ in candidates):
+        if (
+            candidates
+            and all(refuses(schema, node, key) for node, _ in candidates)
+            and not any(union_dispatch(schema, node) for node, _ in candidates)
+        ):
             found.append(pointer)
     return found
 
