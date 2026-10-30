@@ -19,7 +19,6 @@ mod upstream;
 use registry_adapter::auth::{
     AuthError, AuthEvent, AuthPlan, AuthorizeContext, AuthorizedCredential, ClientAssertion,
     ClientAssertionSigner, ProtectedText, TokenBudget, CREDENTIAL_REJECTED_CLASS,
-    UNREGISTERED_ERROR_CODE,
 };
 use registry_adapter_core::{
     CredentialPlacement, EndpointAuthentication, EndpointBinding, RuntimeCredential,
@@ -573,7 +572,7 @@ mod oauth2_client_credentials {
         assert_eq!(
             error,
             AuthError::Token(registry_adapter::auth::TokenFault::Refused {
-                code: UNREGISTERED_ERROR_CODE
+                code: "unregistered-error-code"
             })
         );
         assert_eq!(error.class(), CREDENTIAL_REJECTED_CLASS);

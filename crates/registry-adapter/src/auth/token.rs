@@ -23,16 +23,20 @@
 //! `assumedLifetimeSeconds` and fails as a credential error without one;
 //! the lifetime is anchored when the request is sent, not when the reply
 //! arrives; the cache is clamped to `maximumCacheSeconds`; unknown
-//! members are ignored; scope narrowing is refused.
+//! members are ignored; scope narrowing is refused. The body decode
+//! itself is the platform's open-member RFC 6749 decoder, which this
+//! layer maps onto its own fault vocabulary.
 
 use crate::auth::{
-    json::{parse_object, JsonMember},
     material::{basic_value, form_body, AuthHeader, ProtectedText},
     AuthError, AuthEvent,
 };
 use registry_adapter_core::CredentialPlacement;
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::client::DEFAULT_REQUEST_TIMEOUT;
+use registry_platform_httputil::destination::oauth::{
+    decode_rfc6749_error_code, decode_rfc6749_token_response, Rfc6749TokenDecodeError,
+};
 use registry_platform_httputil::{
     TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
@@ -63,10 +67,6 @@ pub(crate) const MAXIMUM_CREDENTIAL_BYTES: usize = 8 * 1024;
 /// The longest scope member a token response may state, Evidence's
 /// bound; a stated scope must equal the requested scope exactly.
 pub(crate) const MAXIMUM_RESPONSE_SCOPE_BYTES: usize = 512;
-/// The fixed name for an OAuth 2.0 error code outside the RFC 6749 and
-/// RFC 8707 registered sets; the server's own spelling never crosses
-/// into a diagnostic.
-pub const UNREGISTERED_ERROR_CODE: &str = "unregistered-error-code";
 /// How long one waiter may queue for the endpoint's cache lock behind an
 /// in-flight refresh before its own acquisition refuses, the admission
 /// bound of the single-flight refresh: a stalled authorization server
@@ -80,27 +80,6 @@ pub(crate) const TOKEN_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
 /// window never depends on a `TokenSend` implementation's own timeout
 /// discipline.
 pub(crate) const TOKEN_SEND_CEILING: Duration = DEFAULT_REQUEST_TIMEOUT;
-
-/// The registered RFC 6749 and RFC 8707 code names.
-const REGISTERED_ERROR_CODES: &[&str] = &[
-    "invalid_request",
-    "invalid_client",
-    "invalid_grant",
-    "unauthorized_client",
-    "unsupported_grant_type",
-    "invalid_scope",
-    "invalid_target",
-];
-
-/// The fixed code name for one wire spelling: the registered name, or
-/// [`UNREGISTERED_ERROR_CODE`] for anything else.
-fn error_code_name(wire: &str) -> &'static str {
-    REGISTERED_ERROR_CODES
-        .iter()
-        .find(|code| **code == wire)
-        .copied()
-        .unwrap_or(UNREGISTERED_ERROR_CODE)
-}
 
 /// Why the token endpoint did not yield a credential. Every rendering is
 /// fixed text; the registered code names are the RFC spellings, and an
@@ -915,7 +894,8 @@ fn fault_event(fault: &TokenFault) -> AuthEvent {
 }
 
 /// Read one answer: the status decides the fault class before any body
-/// is read, then the media type, then the body as Evidence reads it.
+/// is read, then the media type, then the body through the platform's
+/// open-member RFC 6749 decode, mapped onto this layer's faults.
 fn read_answer(
     wire: TokenWire,
     expected_scope: Option<&str>,
@@ -925,18 +905,10 @@ fn read_answer(
         return Err(TokenFault::Redirect);
     }
     if wire.status == 400 || wire.status == 401 {
-        let code = parse_object(&wire.body, MAXIMUM_TOKEN_RESPONSE_BYTES as usize)
-            .ok()
-            .and_then(|members| {
-                members
-                    .iter()
-                    .find_map(|(name, member)| match (name.as_str(), member) {
-                        ("error", JsonMember::Text(code)) => Some(error_code_name(code)),
-                        _ => None,
-                    })
-            })
-            .unwrap_or(UNREGISTERED_ERROR_CODE);
-        return Err(TokenFault::Refused { code });
+        let code = decode_rfc6749_error_code(&wire.body, MAXIMUM_TOKEN_RESPONSE_BYTES as usize);
+        return Err(TokenFault::Refused {
+            code: code.as_str(),
+        });
     }
     if wire.status == 429 || (500..=599).contains(&wire.status) {
         return Err(TokenFault::Unavailable {
@@ -946,9 +918,10 @@ fn read_answer(
     if !(200..300).contains(&wire.status) {
         // Any other status (403, 404, 405, 1xx, ...) says the token
         // endpoint is misconfigured for this deployment, which is a
-        // deployment credential fault, so it is uncatchable.
+        // deployment credential fault, so it is uncatchable. The refused
+        // code is the fixed name for a code outside the registered sets.
         return Err(TokenFault::Refused {
-            code: UNREGISTERED_ERROR_CODE,
+            code: registry_platform_httputil::OAuthErrorCode::Other.as_str(),
         });
     }
     let media_is_json = wire
@@ -963,70 +936,37 @@ fn read_answer(
         // cannot mask the refused issuance (CONCEPT 10.2).
         return Err(TokenFault::Invalid);
     }
-    parse_token_response(&wire.body, expected_scope, assumed_lifetime)
+    let (token, lifetime) = decode_rfc6749_token_response(
+        &wire.body,
+        MAXIMUM_TOKEN_RESPONSE_BYTES as usize,
+        MAXIMUM_CREDENTIAL_BYTES,
+        MAXIMUM_RESPONSE_SCOPE_BYTES,
+        expected_scope,
+        assumed_lifetime,
+    )
+    .map_err(credential_fault)?;
+    // The decoded credential moves once, from the platform's zeroizing
+    // buffer into this layer's.
+    Ok((
+        ProtectedText::from_bytes(token.credential_bytes()),
+        lifetime,
+    ))
 }
 
-/// Read one token response body as Evidence reads it.
-pub(crate) fn parse_token_response(
-    bytes: &[u8],
-    expected_scope: Option<&str>,
-    assumed_lifetime: Option<Duration>,
-) -> Result<(ProtectedText, Duration), TokenFault> {
-    // A 2xx body that is not a JSON object this layer can read carries
-    // no credential: the same credential fault as any other unusable
-    // 2xx, uncatchable so a fallback cannot mask the refused issuance
-    // (CONCEPT 10.2).
-    let members = parse_object(bytes, MAXIMUM_TOKEN_RESPONSE_BYTES as usize)
-        .map_err(|_| TokenFault::Invalid)?;
-    let token = member_text(&members, "access_token")?.ok_or(TokenFault::Invalid)?;
-    if token.is_empty()
-        || token.len() > MAXIMUM_CREDENTIAL_BYTES
-        || !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-    {
-        return Err(TokenFault::Invalid);
-    }
-    let token_type = member_text(&members, "token_type")?.ok_or(TokenFault::Invalid)?;
-    if !token_type.eq_ignore_ascii_case("bearer") {
-        return Err(TokenFault::Invalid);
-    }
-    let lifetime = match member_unsigned(&members, "expires_in")? {
-        Some(seconds) if seconds > 0 => Duration::from_secs(seconds),
-        Some(_) => return Err(TokenFault::Invalid),
-        None => assumed_lifetime.ok_or(TokenFault::NoLifetime)?,
-    };
-    if let Some(scope) = member_text(&members, "scope")? {
-        if scope.is_empty() || scope.len() > MAXIMUM_RESPONSE_SCOPE_BYTES {
-            return Err(TokenFault::Invalid);
-        }
-        if expected_scope.is_some_and(|expected| scope != expected) {
-            return Err(TokenFault::ScopeNarrowed);
-        }
-    }
-    Ok((ProtectedText::from_str_value(token), lifetime))
-}
-
-/// One member read as text: absent is `None`, present but not a string is
-/// [`TokenFault::Invalid`].
-fn member_text<'a>(
-    members: &'a [(Zeroizing<String>, JsonMember)],
-    name: &str,
-) -> Result<Option<&'a str>, TokenFault> {
-    match members.iter().find(|(member, _)| member.as_str() == name) {
-        Some((_, JsonMember::Text(value))) => Ok(Some(value.as_str())),
-        Some((_, _)) => Err(TokenFault::Invalid),
-        None => Ok(None),
-    }
-}
-
-/// One member read as an unsigned count, the same way.
-fn member_unsigned(
-    members: &[(Zeroizing<String>, JsonMember)],
-    name: &str,
-) -> Result<Option<u64>, TokenFault> {
-    match members.iter().find(|(member, _)| member.as_str() == name) {
-        Some((_, JsonMember::Unsigned(value))) => Ok(Some(*value)),
-        Some((_, _)) => Err(TokenFault::Invalid),
-        None => Ok(None),
+/// The one total mapping from the platform decode's faults onto this
+/// layer's: an unusable 2xx is always the one credential fault, so no
+/// fallback can mask a refused issuance as a catchable protocol hiccup
+/// (CONCEPT 10.2); only the narrowed scope and the unstated lifetime
+/// carry their own names.
+fn credential_fault(fault: Rfc6749TokenDecodeError) -> TokenFault {
+    match fault {
+        Rfc6749TokenDecodeError::ScopeNarrowed => TokenFault::ScopeNarrowed,
+        Rfc6749TokenDecodeError::LifetimeUnstated => TokenFault::NoLifetime,
+        Rfc6749TokenDecodeError::Unreadable
+        | Rfc6749TokenDecodeError::CredentialUnusable
+        | Rfc6749TokenDecodeError::TokenTypeUnusable
+        | Rfc6749TokenDecodeError::StatedLifetimeUnusable
+        | Rfc6749TokenDecodeError::ScopeUnusable => TokenFault::Invalid,
     }
 }
 
@@ -1177,12 +1117,12 @@ mod tests {
         }
     }
 
-    /// One token response reads exactly as Evidence reads one: bearer in
-    /// any case, a positive integer `expires_in`, unknown members
-    /// ignored, scope matching when configured.
+    /// One 2xx answer read the way the layer reads it: bearer in any
+    /// case, a positive integer `expires_in`, unknown members ignored,
+    /// scope matching when configured.
     #[test]
     fn token_responses_read_as_evidence_reads_them() {
-        let (token, lifetime) = parse_token_response(
+        let (token, lifetime) = read_body(
             br#"{"access_token":"at","token_type":"bEaReR","expires_in":600,"ext":"ignored"}"#,
             None,
             None,
@@ -1191,14 +1131,8 @@ mod tests {
         assert_eq!(token.as_bytes(), b"at");
         assert_eq!(lifetime, Duration::from_secs(600));
 
-        parse_token_response(
-            br#"{"access_token":"at","token_type":"BEARER"}"#,
-            None,
-            None,
-        )
-        .expect_err("missing expires_in without an assumed lifetime refuses");
         assert_eq!(
-            parse_token_response(
+            read_body(
                 br#"{"access_token":"at","token_type":"Bearer"}"#,
                 None,
                 None
@@ -1207,13 +1141,55 @@ mod tests {
             TokenFault::NoLifetime,
             "the missing lifetime is a credential error, not a protocol one"
         );
-        let (_, lifetime) = parse_token_response(
+        let (_, lifetime) = read_body(
             br#"{"access_token":"at","token_type":"Bearer"}"#,
             None,
             Some(Duration::from_secs(60)),
         )
         .expect("the assumed lifetime stands in");
         assert_eq!(lifetime, Duration::from_secs(60));
+    }
+
+    /// Read one 2xx JSON answer through the layer's own read path.
+    fn read_body(
+        body: &[u8],
+        expected_scope: Option<&str>,
+        assumed_lifetime: Option<Duration>,
+    ) -> Result<(ProtectedText, Duration), TokenFault> {
+        read_answer(
+            TokenWire {
+                status: 200,
+                media_type: Some("application/json".to_owned()),
+                body: Zeroizing::new(body.to_vec()),
+            },
+            expected_scope,
+            assumed_lifetime,
+        )
+    }
+
+    /// The platform decode's faults map in exactly one way onto this
+    /// layer's: only the narrowed scope and the unstated lifetime keep
+    /// their own names; every other unusable answer is the one
+    /// credential fault, which no fallback may mask.
+    #[test]
+    fn platform_decode_faults_map_onto_layer_faults() {
+        assert_eq!(
+            credential_fault(Rfc6749TokenDecodeError::ScopeNarrowed),
+            TokenFault::ScopeNarrowed
+        );
+        assert_eq!(
+            credential_fault(Rfc6749TokenDecodeError::LifetimeUnstated),
+            TokenFault::NoLifetime
+        );
+        for fault in [
+            Rfc6749TokenDecodeError::Unreadable,
+            Rfc6749TokenDecodeError::CredentialUnusable,
+            Rfc6749TokenDecodeError::TokenTypeUnusable,
+            Rfc6749TokenDecodeError::StatedLifetimeUnusable,
+            Rfc6749TokenDecodeError::ScopeUnusable,
+        ] {
+            assert_eq!(credential_fault(fault), TokenFault::Invalid, "{fault:?}");
+        }
     }
 
     /// A present but unusable `expires_in` is never rescued by the
@@ -1230,7 +1206,7 @@ mod tests {
         ];
         for body in bodies {
             assert_eq!(
-                parse_token_response(body, None, Some(Duration::from_secs(60))).unwrap_err(),
+                read_body(body, None, Some(Duration::from_secs(60))).unwrap_err(),
                 TokenFault::Invalid,
                 "{} must refuse",
                 String::from_utf8_lossy(body)
@@ -1253,7 +1229,7 @@ mod tests {
         ];
         for body in bodies {
             assert_eq!(
-                parse_token_response(body, None, None).unwrap_err(),
+                read_body(body, None, None).unwrap_err(),
                 TokenFault::Invalid,
                 "{} must refuse",
                 String::from_utf8_lossy(body)
@@ -1264,7 +1240,7 @@ mod tests {
             "a".repeat(MAXIMUM_CREDENTIAL_BYTES + 1)
         );
         assert_eq!(
-            parse_token_response(long.as_bytes(), None, None).unwrap_err(),
+            read_body(long.as_bytes(), None, None).unwrap_err(),
             TokenFault::Invalid
         );
     }
@@ -1275,7 +1251,7 @@ mod tests {
     #[test]
     fn scope_narrowing_refuses() {
         assert_eq!(
-            parse_token_response(
+            read_body(
                 br#"{"access_token":"at","token_type":"Bearer","expires_in":60,"scope":"read"}"#,
                 Some("read write"),
                 None,
@@ -1283,14 +1259,14 @@ mod tests {
             .unwrap_err(),
             TokenFault::ScopeNarrowed
         );
-        parse_token_response(
+        read_body(
             br#"{"access_token":"at","token_type":"Bearer","expires_in":60,"scope":"read write"}"#,
             Some("read write"),
             None,
         )
         .expect("an equal scope is fine");
         assert_eq!(
-            parse_token_response(
+            read_body(
                 br#"{"access_token":"at","token_type":"Bearer","expires_in":60,"scope":""}"#,
                 None,
                 None,
@@ -1303,7 +1279,7 @@ mod tests {
             "s".repeat(513)
         );
         assert_eq!(
-            parse_token_response(long.as_bytes(), None, None).unwrap_err(),
+            read_body(long.as_bytes(), None, None).unwrap_err(),
             TokenFault::Invalid
         );
     }
@@ -1315,27 +1291,42 @@ mod tests {
     fn unreadable_bodies_refuse() {
         let oversized = vec![b' '; MAXIMUM_TOKEN_RESPONSE_BYTES as usize + 1];
         assert_eq!(
-            parse_token_response(&oversized, None, None).unwrap_err(),
+            read_body(&oversized, None, None).unwrap_err(),
             TokenFault::Invalid
         );
         assert_eq!(
-            parse_token_response(b"[]", None, None).unwrap_err(),
+            read_body(b"[]", None, None).unwrap_err(),
             TokenFault::Invalid
         );
         assert_eq!(
-            parse_token_response(br#"{"a":1,"a":2}"#, None, None).unwrap_err(),
+            read_body(br#"{"a":1,"a":2}"#, None, None).unwrap_err(),
             TokenFault::Invalid
         );
     }
 
-    /// Registered error codes keep their spelling and unregistered
-    /// spellings collapse to the one fixed name.
+    /// A 400 refusal keeps the registered code name it states, and an
+    /// unregistered spelling collapses to the one fixed name.
     #[test]
-    fn error_codes_map_to_fixed_names() {
-        assert_eq!(error_code_name("invalid_client"), "invalid_client");
-        assert_eq!(error_code_name("invalid_target"), "invalid_target");
-        assert_eq!(error_code_name("canary_extension"), UNREGISTERED_ERROR_CODE);
-        assert_eq!(error_code_name(""), UNREGISTERED_ERROR_CODE);
+    fn refused_codes_keep_their_registered_names() {
+        let refused = |body: &'static str| match read_answer(
+            TokenWire {
+                status: 400,
+                media_type: Some("application/json".to_owned()),
+                body: Zeroizing::new(body.as_bytes().to_vec()),
+            },
+            None,
+            None,
+        ) {
+            Err(TokenFault::Refused { code }) => code,
+            other => panic!("a 400 refusal is the refused fault: {other:?}"),
+        };
+        assert_eq!(refused(r#"{"error":"invalid_client"}"#), "invalid_client");
+        assert_eq!(refused(r#"{"error":"invalid_target"}"#), "invalid_target");
+        assert_eq!(
+            refused(r#"{"error":"canary_extension"}"#),
+            "unregistered-error-code"
+        );
+        assert_eq!(refused(""), "unregistered-error-code");
     }
 
     /// The cache lifetime a response earns is the response's own,
@@ -1779,7 +1770,7 @@ mod tests {
                 Some("application/json"),
                 "",
                 TokenFault::Refused {
-                    code: UNREGISTERED_ERROR_CODE,
+                    code: "unregistered-error-code",
                 },
                 CREDENTIAL_REJECTED_CLASS,
             ),
@@ -1789,7 +1780,7 @@ mod tests {
                 Some("text/html"),
                 "<html>bad gateway</html>",
                 TokenFault::Refused {
-                    code: UNREGISTERED_ERROR_CODE,
+                    code: "unregistered-error-code",
                 },
                 CREDENTIAL_REJECTED_CLASS,
             ),
@@ -1842,7 +1833,7 @@ mod tests {
                 Some("application/json"),
                 "",
                 TokenFault::Refused {
-                    code: UNREGISTERED_ERROR_CODE,
+                    code: "unregistered-error-code",
                 },
                 CREDENTIAL_REJECTED_CLASS,
             ),

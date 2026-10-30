@@ -35,7 +35,6 @@
 //! [`AuthEvent`] records the endpoint's kind and token-request outcomes
 //! in value-free form, which is all the journal may keep.
 
-mod json;
 mod material;
 mod plan;
 mod tls;
@@ -49,7 +48,7 @@ pub use tls::{EndpointMaterials, EndpointTls, TlsFault};
 pub use token::{
     ClientAssertion, ClientAssertionSigner, TokenBudget, TokenCache, TokenEndpointPlan, TokenFault,
     TokenRequest, TokenSend, TokenWire, TransportFailure, UpstreamStatusAction,
-    TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE, UNREGISTERED_ERROR_CODE,
+    TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
 };
 
 use registry_platform_httputil::TransportKind;

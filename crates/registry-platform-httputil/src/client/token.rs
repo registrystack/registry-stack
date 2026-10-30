@@ -15,7 +15,7 @@ use super::TransportKind;
 
 /// Longest accepted credential. Access tokens are bounded well below this; the
 /// limit keeps a hostile provider from handing over an unbounded header.
-const MAXIMUM_TOKEN_BYTES: usize = 8 * 1024;
+pub(crate) const MAXIMUM_TOKEN_BYTES: usize = 8 * 1024;
 
 /// One bearer credential for one outbound request.
 pub struct BearerToken(Zeroizing<String>);
