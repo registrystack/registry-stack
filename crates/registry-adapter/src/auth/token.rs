@@ -702,6 +702,19 @@ pub struct TokenCache {
     send_ceiling: Duration,
 }
 
+impl fmt::Debug for TokenCache {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The guarded state holds an issued credential, so it renders
+        // as the fixed note; only the two bounds are named.
+        formatter
+            .debug_struct("TokenCache")
+            .field("admission_bound", &self.admission_timeout)
+            .field("send_ceiling", &self.send_ceiling)
+            .field("state", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl TokenCache {
     /// An empty cache.
     #[must_use]
@@ -2330,6 +2343,71 @@ mod tests {
             body.contains("client_id=cid-body&client_secret=csecret-body"),
             "the form placement names the client beside its secret: {body}"
         );
+    }
+
+    /// The Debug renderings of the request, the plan, and the cache
+    /// carry no credential value: a marker as the client secret never
+    /// reaches the request's rendering, and a marker as the issued
+    /// token never reaches the plan's or the cache's.
+    #[tokio::test]
+    async fn debug_renderings_carry_no_marker() {
+        const MARKER: &str = "c4a-debug-marker-9d2f61";
+        std::env::set_var("ADAPTER_TEST_DEBUG_ID", "cid-debug");
+        std::env::set_var("ADAPTER_TEST_DEBUG_SECRET", MARKER);
+        let plan = client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+            "ADAPTER_TEST_DEBUG_ID",
+            "ADAPTER_TEST_DEBUG_SECRET",
+        );
+        let rendered = format!("{plan:?}");
+        assert!(
+            !rendered.contains(MARKER),
+            "the plan renders references, never the resolved secret: {rendered}"
+        );
+        let request = plan.render(&resolver(), &FixedSigner).expect("renders");
+        let rendered = format!("{request:?}");
+        assert!(
+            !rendered.contains(MARKER),
+            "the request's rendering never carries the body or header values: {rendered}"
+        );
+
+        // The issued token is the marker itself, stored in the cache the
+        // plan owns; neither rendering may name it.
+        std::env::set_var("ADAPTER_TEST_DEBUG2_ID", "cid-debug2");
+        std::env::set_var("ADAPTER_TEST_DEBUG2_SECRET", "csecret-debug2");
+        let plan = client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+            "ADAPTER_TEST_DEBUG2_ID",
+            "ADAPTER_TEST_DEBUG2_SECRET",
+        );
+        let body: &'static str = Box::leak(
+            format!(r#"{{"access_token":"{MARKER}","token_type":"Bearer","expires_in":600}}"#)
+                .into_boxed_str(),
+        );
+        let send = ScriptedSend::always(200, Some("application/json"), body);
+        acquire_token(
+            &plan,
+            &mut TokenBudget::new_exchange(),
+            &resolver(),
+            &send,
+            &FixedSigner,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("the marker token issues");
+        for (rendered, what) in [
+            (format!("{plan:?}"), "the plan"),
+            (format!("{:?}", plan.cache()), "the cache"),
+        ] {
+            assert!(
+                !rendered.contains(MARKER),
+                "the marker leaked into {what}: {rendered}"
+            );
+        }
     }
 
     /// A rendered body beyond the bound refuses rather than sends.
