@@ -50,7 +50,7 @@ pub fn derive_operation_result_schema(
 /// The derived schema of one binding's response body: the bound
 /// operation's response envelope with every slot replaced by the closed
 /// schema of what fills it, and the `record` and `records` slots expanded
-/// from the record type this binding names — the per-binding resolution
+/// from the record type this binding names: the per-binding resolution
 /// the compiled contract needs, where one operation serves several bound
 /// record types (`products/adapter/CONCEPT.md` sections 6 and 7). A
 /// parameterized part derives as a plain string, never as its stand-in

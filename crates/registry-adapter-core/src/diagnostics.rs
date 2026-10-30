@@ -61,6 +61,7 @@ pub enum CheckCode {
     ProfileUnresolvedPathParameter,
     // adapter.project.*
     ProjectDuplicateRouteId,
+    ProjectFilterParameterCollision,
     ProjectParameterTypeMismatch,
     ProjectPinDigestMismatch,
     ProjectPinVersionMismatch,
@@ -155,6 +156,7 @@ impl CheckCode {
         Self::ProfileUnknownSlot,
         Self::ProfileUnresolvedPathParameter,
         Self::ProjectDuplicateRouteId,
+        Self::ProjectFilterParameterCollision,
         Self::ProjectParameterTypeMismatch,
         Self::ProjectPinDigestMismatch,
         Self::ProjectPinVersionMismatch,
@@ -259,6 +261,7 @@ impl CheckCode {
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
             Self::ProfileUnresolvedPathParameter => "adapter.profile.unresolved-path-parameter",
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
+            Self::ProjectFilterParameterCollision => "adapter.project.filter-parameter-collision",
             Self::ProjectParameterTypeMismatch => "adapter.project.parameter-type-mismatch",
             Self::ProjectPinDigestMismatch => "adapter.project.pin-digest-mismatch",
             Self::ProjectPinVersionMismatch => "adapter.project.pin-version-mismatch",
@@ -395,6 +398,7 @@ impl CheckCode {
             | Self::RouteUnknownOperation
             | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
             Self::ProjectDuplicateRouteId
+            | Self::ProjectFilterParameterCollision
             | Self::ProjectParameterTypeMismatch
             | Self::ProjectPinDigestMismatch
             | Self::ProjectPinVersionMismatch

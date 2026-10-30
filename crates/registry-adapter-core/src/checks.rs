@@ -516,13 +516,13 @@ fn facade_path_parameter_checks(
 /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.1): the record-type
 /// parameter must name a declared path parameter, a declared
 /// `recordIdParameter` must name one too, and an operation whose declared
-/// path parameters include a record identifier — a parameter beyond the
-/// record type, the get, update, and patch of the concept — must name its
-/// `recordIdParameter`. A search or create whose only declared parameter
-/// is the record type fills none. The check keys on the declared
-/// pathParameters member, never the raw template or the method; the
-/// requiredness arm stays off while the record-type parameter itself is
-/// unknown, so one fault reports at a time.
+/// path parameters include a record identifier, meaning a parameter
+/// beyond the record type that the get, update, and patch of the concept
+/// fill, must name its `recordIdParameter`. A search or create whose only
+/// declared parameter is the record type fills none. The check keys on
+/// the declared pathParameters member, never the raw template or the
+/// method; the requiredness arm stays off while the record-type parameter
+/// itself is unknown, so one fault reports at a time.
 fn record_parameter_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     let declared: std::collections::HashSet<&str> = operation
@@ -2754,6 +2754,36 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                         &format!("{prefix}/filters/{filter_index}"),
                         "the filter names no field the bound record type declares",
                         "Name a declared field of the binding's record type, or drop the filter.",
+                    ));
+                }
+            }
+        }
+        // A filter never reuses a caller-facing parameter name the bound
+        // operation already fills (`products/adapter/CONCEPT.md` section
+        // 8.11.1): the cursor, the page size, and the declared path
+        // parameters are taken, and one name must not mean two things at
+        // the facade, a filter beside a same-named pagination or path
+        // parameter. The check stays off while the operation itself is
+        // unknown.
+        if let Some(operation) = operation {
+            let taken: Vec<&str> = operation
+                .pagination
+                .iter()
+                .flat_map(|pagination| {
+                    [
+                        pagination.cursor_parameter.as_str(),
+                        pagination.page_size_parameter.as_str(),
+                    ]
+                })
+                .chain(operation.path_parameters.iter().map(|name| name.as_str()))
+                .collect();
+            for (filter_index, filter) in binding.filters.iter().enumerate() {
+                if taken.contains(&filter.as_str()) {
+                    findings.push(finding(
+                        CheckCode::ProjectFilterParameterCollision,
+                        &format!("{prefix}/filters/{filter_index}"),
+                        "the filter reuses a parameter name the operation already fills",
+                        "Rename the filter or the operation's parameter, so one caller-facing name means one thing.",
                     ));
                 }
             }
@@ -6707,6 +6737,85 @@ mod tests {
         );
         assert_eq!(findings[0].path, "/bindings/0/filters/0");
         assert_eq!(findings[1].path, "/bindings/0/filters/1");
+    }
+
+    /// A filter never reuses a caller-facing parameter name the operation
+    /// already fills (`products/adapter/CONCEPT.md` section 8.11.1): the
+    /// cursor, the page size, and the declared path parameters are taken,
+    /// so one caller-facing name never means two things at the facade. A
+    /// filter equal to any of them refuses at its own list entry.
+    #[test]
+    fn a_filter_never_reuses_a_parameter_name_the_operation_fills() {
+        let mut search = operation("cases-find", HttpMethod::Get);
+        search.pagination = Some(PaginationParameters {
+            cursor_parameter: id("cursor"),
+            page_size_parameter: id("limit"),
+            page_size_minimum: BoundedU64::<1, 10_000>::new(1).expect("minimum"),
+            page_size_maximum: BoundedU64::<1, 100_000>::new(100).expect("maximum"),
+        });
+        let profile = profile_builder(vec![search]);
+        let route = RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps: vec![to_get("case-api")],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let mut project = project_builder(&pack);
+        // Every colliding name is also a declared field, so the collision
+        // refuses alone and the unknown-field check stays out of the way.
+        project.record_types = UniqueIdList::new(vec![RecordType {
+            name: local("case"),
+            fields: UniqueList::new(vec![
+                RecordField {
+                    name: local("national_id"),
+                    r#type: RecordFieldType::String,
+                    required: true,
+                },
+                RecordField {
+                    name: local("limit"),
+                    r#type: RecordFieldType::Integer,
+                    required: false,
+                },
+                RecordField {
+                    name: local("cursor"),
+                    r#type: RecordFieldType::String,
+                    required: false,
+                },
+                RecordField {
+                    name: local("type"),
+                    r#type: RecordFieldType::String,
+                    required: false,
+                },
+            ])
+            .expect("unique"),
+        }])
+        .expect("unique");
+        let binding = |filters: Vec<LocalId>| Binding {
+            id: local("find-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("fetch-case"),
+            filters: UniqueList::new(filters).expect("unique"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+        };
+
+        for filter in ["limit", "cursor", "type"] {
+            project.bindings =
+                UniqueIdList::new(vec![binding(vec![local(filter)])]).expect("unique");
+            let findings = check_project(&workspace(&profile, &pack, &project));
+            assert_eq!(findings.len(), 1, "filter {filter}");
+            assert_eq!(
+                findings[0].code,
+                CheckCode::ProjectFilterParameterCollision.code()
+            );
+            assert_eq!(findings[0].path, "/bindings/0/filters/0");
+        }
+
+        project.bindings =
+            UniqueIdList::new(vec![binding(vec![local("national_id")])]).expect("unique");
+        assert_clean(check_project(&workspace(&profile, &pack, &project)));
     }
 
     /// Redelivery never applies to a `to: direct:` send, so a

@@ -247,8 +247,8 @@ fn concrete_path(path: &str, parameter: Option<&str>, record_type: &str) -> Stri
 }
 
 /// The operation's OpenAPI parameters: the remaining declared path
-/// parameters in their declared order, then the query parameters — the
-/// binding's declared filters beside the profile's pagination — sorted by
+/// parameters in their declared order, then the query parameters, the
+/// binding's declared filters beside the profile's pagination, sorted by
 /// name. The record-type parameter is substituted into the path, so it
 /// emits no parameter.
 fn operation_parameters(
