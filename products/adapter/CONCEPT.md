@@ -845,7 +845,7 @@ pack never learns a profile's path or parameter names:
 | Record type | header `recordType` | every operation |
 | Record identifier | header `recordId` | get, update, patch |
 | Page size | header `pageSize`, an integer inside the profile's bounds, the profile's default when absent | search |
-| Filters | property `AdapterFilters`, an object from declared field name to typed value, holding only the filters the caller sent; a search binding declares the fields it filters on (`filters`), the contract offers exactly those as typed equality query parameters, and any other query parameter is refused by request validation, so a route never silently ignores a filter | search |
+| Filters | property `AdapterFilters`, an object from declared field name to typed value, holding only the filters the caller sent; a search binding declares the fields it filters on (`filters`), the contract offers exactly those as typed equality query parameters, and any other query parameter is refused by request validation, so a route never silently ignores a filter; a filter never reuses the bound operation's cursor, page-size, or path parameter name (`adapter.project.filter-parameter-collision`), so one caller-facing name means one thing | search |
 | Continuation | property `AdapterContinuation`, absent on the first page (8.11.2) | search |
 | Request record | the body, extracted through the profile's request envelope and validated against the declared model | create, update, patch |
 | Idempotency key | header `Idempotency-Key`, the one caller header that enters | write operations, read by `idempotentConsumer` |
