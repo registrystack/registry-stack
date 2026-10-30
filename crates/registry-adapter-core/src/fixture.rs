@@ -377,15 +377,58 @@ pub fn intercepts_send(intercepts: &[Intercept], send: &Send<'_>) -> bool {
     })
 }
 
-/// The canonical bytes a body digest is taken over: the value's own JSON
-/// serialization, whose object keys sort (serde_json's map order), so two
-/// bodies equal as JSON canonicalize equal whatever order they were built
-/// in. An absent body canonicalizes to its own stand-in, so it never
-/// equals the null body.
+/// The canonical bytes a body digest is taken over: every object's members
+/// in key order, whatever order the JSON was parsed or built in. An absent
+/// body canonicalizes to its own stand-in, so it never equals the null
+/// body.
+///
+/// Key order is sorted here, explicitly, never left to serde_json's map
+/// order: the runtime's dependency closure enables serde_json's
+/// `preserve_order` feature, and under it `Value::to_string` serializes
+/// insertion order, which would make the digest depend on member order.
+/// The platform's RFC 8785 helper is not used because it refuses integers
+/// beyond binary64, and this digest compares two in-process values and
+/// must total over every legal body.
 fn canonical_body(body: Option<&serde_json::Value>) -> String {
     match body {
         None => "<absent>".to_owned(),
-        Some(value) => value.to_string(),
+        Some(value) => {
+            let mut out = String::new();
+            write_canonical(value, &mut out);
+            out
+        }
+    }
+}
+
+/// Write one value in canonical form: scalars and arrays as JSON writes
+/// them, objects with their members sorted by key.
+fn write_canonical(value: &serde_json::Value, out: &mut String) {
+    match value {
+        serde_json::Value::Object(members) => {
+            let mut sorted: Vec<(&String, &serde_json::Value)> = members.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+            out.push('{');
+            for (index, (key, member)) in sorted.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(key).expect("a string always serializes"));
+                out.push(':');
+                write_canonical(member, out);
+            }
+            out.push('}');
+        }
+        serde_json::Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&scalar.to_string()),
     }
 }
 
@@ -993,5 +1036,23 @@ mod tests {
         let mut cursor = 0usize;
         answer_send(&intercepts, &[recording], &mut cursor, &send)
             .expect("the token send answers by endpoint, method, and path alone");
+    }
+
+    /// Two bodies with the same members in a different order canonicalize
+    /// equal, at the top level and nested, to the same sorted-key bytes:
+    /// `canonical_body` sorts keys itself because serde_json's own map
+    /// order depends on the `preserve_order` feature, and the runtime's
+    /// dependency closure enables it. This test turns red if the
+    /// canonicalization ever starts trusting that map order again.
+    #[test]
+    fn bodies_with_the_same_members_in_a_different_order_canonicalize_equal() {
+        let first = serde_json::from_str::<serde_json::Value>(r#"{"b": 1, "a": {"y": 2, "x": 3}}"#)
+            .expect("json");
+        let second =
+            serde_json::from_str::<serde_json::Value>(r#"{"a": {"x": 3, "y": 2}, "b": 1}"#)
+                .expect("json");
+        let canonical = r#"{"a":{"x":3,"y":2},"b":1}"#;
+        assert_eq!(canonical_body(Some(&first)), canonical);
+        assert_eq!(canonical_body(Some(&second)), canonical);
     }
 }
