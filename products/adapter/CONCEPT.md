@@ -995,7 +995,7 @@ code; it raises error classes and the profile decides what the caller sees.
 
 - `throwException` (Camel's Throw Exception EIP): `exceptionType` names a
   catchable class of section 8.7, typically an `outcome.*` class;
-  `message` is an optional constant, bounded, which fills the profile's
+  `message` is an optional constant of at most 512 UTF-8 bytes, which fills the profile's
   `problemDetail` slot when the problem's envelope has one. Raised inside a
   route it is handled by the route's clauses like any error; raised inside
   an `onException` clause it is the exchange's final failure.
