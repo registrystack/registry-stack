@@ -107,7 +107,6 @@ def record() -> dict:
             "recordIdentifier": RECORD_ID,
             "revisionIdentifier": "1",
             "domainData": {"legalName": "Created Ltd"},
-            "snapshot": f"breg1_{RECORD_ID}",
         },
         "meta": {
             "registryIdentifier": "business-registry",
