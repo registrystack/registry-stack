@@ -27,6 +27,7 @@
 //! journal's PostgreSQL store and migration, `notifier` the
 //! journal, and `idempotent` the idempotency store.
 
+pub mod auth;
 pub mod component;
 pub mod errorhandler;
 pub mod exchange;
