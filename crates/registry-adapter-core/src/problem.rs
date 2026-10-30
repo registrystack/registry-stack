@@ -163,7 +163,7 @@ mod tests {
         for problem in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(problem.code()), Some(*problem));
         }
-        assert_eq!(ProblemCode::from_code("cases.find"), None);
+        assert_eq!(ProblemCode::from_code("cases-find"), None);
     }
 
     #[test]

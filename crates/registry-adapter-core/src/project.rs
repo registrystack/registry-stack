@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PinnedRef {
     /// The referenced artifact's identifier.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The referenced artifact's version.
     pub version: String,
     /// The digest the artifact's bytes must hash to.
@@ -77,7 +77,7 @@ impl registry_platform_yaml::Identified for RecordType {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Binding {
     /// The binding identifier.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The profile operation this binding serves.
     pub operation: ExternalId,
     /// The record type the concrete operation serves.
@@ -103,7 +103,7 @@ impl registry_platform_yaml::Identified for Binding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessProfile {
     /// The access profile name a caller identity is granted.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The OIDC scopes the profile admits, unique (CFG-ID-6).
     pub scopes: UniqueList<ExternalId>,
     /// The profile operation ids the profile may call, unique (CFG-ID-6).
@@ -164,7 +164,7 @@ mod tests {
 
     fn pin(id: &str) -> PinnedRef {
         PinnedRef {
-            id: ExternalId::new(id).expect("id"),
+            id: LocalId::new(id).expect("id"),
             version: "1.0.0".to_string(),
             digest: Digest::new(
                 "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9",
@@ -205,8 +205,8 @@ mod tests {
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
             templated_routes: UniqueIdList::new(vec![crate::route::TemplatedRoute {
-                route_template: ExternalId::new("pagedFetch").expect("id"),
-                route_id: ExternalId::new("fetchCases").expect("id"),
+                route_template: ExternalId::new("paged-fetch").expect("id"),
+                route_id: ExternalId::new("fetch-cases").expect("id"),
                 parameters: std::collections::BTreeMap::from([(
                     "program".to_string(),
                     serde_json::json!("salsa"),
@@ -214,19 +214,19 @@ mod tests {
             }])
             .expect("unique"),
             bindings: UniqueIdList::new(vec![Binding {
-                id: ExternalId::new("find-cases").expect("id"),
-                operation: ExternalId::new("cases.find").expect("op"),
+                id: LocalId::new("find-cases").expect("id"),
+                operation: ExternalId::new("cases-find").expect("op"),
                 record_type: LocalId::new("case").expect("type"),
-                route: ExternalId::new("fetchCases").expect("route"),
+                route: ExternalId::new("fetch-cases").expect("route"),
                 maximum_upstream_calls: registry_platform_yaml::BoundedU64::<1, 100_000>::new(30)
                     .expect("budget"),
             }])
             .expect("unique"),
             access_profiles: UniqueIdList::new(vec![AccessProfile {
-                id: ExternalId::new("registry-clerk").expect("id"),
+                id: LocalId::new("registry-clerk").expect("id"),
                 scopes: UniqueList::new(vec![ExternalId::new("records:read").expect("scope")])
                     .expect("unique"),
-                operations: UniqueList::new(vec![ExternalId::new("cases.find").expect("op")])
+                operations: UniqueList::new(vec![ExternalId::new("cases-find").expect("op")])
                     .expect("unique"),
                 record_types: UniqueList::new(vec![LocalId::new("case").expect("type")])
                     .expect("unique"),
@@ -312,17 +312,17 @@ mod tests {
                 "recordTypes": record_types,
             }))
         };
-        assert!(read(&["cases:read"], &["cases.find"], &["case"]).is_ok());
+        assert!(read(&["cases:read"], &["cases-find"], &["case"]).is_ok());
         assert!(
-            read(&["cases:read", "cases:read"], &["cases.find"], &["case"]).is_err(),
+            read(&["cases:read", "cases:read"], &["cases-find"], &["case"]).is_err(),
             "a repeated scope is refused"
         );
         assert!(
-            read(&["cases:read"], &["cases.find", "cases.find"], &["case"]).is_err(),
+            read(&["cases:read"], &["cases-find", "cases-find"], &["case"]).is_err(),
             "a repeated operation is refused"
         );
         assert!(
-            read(&["cases:read"], &["cases.find"], &["case", "case"]).is_err(),
+            read(&["cases:read"], &["cases-find"], &["case", "case"]).is_err(),
             "a repeated record type is refused"
         );
     }

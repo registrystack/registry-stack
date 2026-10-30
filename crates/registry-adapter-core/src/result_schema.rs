@@ -457,7 +457,7 @@ mod tests {
 
     fn pin(id: &str) -> PinnedRef {
         PinnedRef {
-            id: external(id),
+            id: local(id),
             version: "1.0.0".to_string(),
             digest: Digest::new(
                 "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9",
@@ -468,7 +468,7 @@ mod tests {
 
     fn operation(envelope: &str) -> ProfileOperation {
         ProfileOperation {
-            id: external("cases.find"),
+            id: local("cases-find"),
             method: crate::model::HttpMethod::Get,
             path: "/v2/cases".to_string(),
             request_envelope: None,
@@ -480,7 +480,7 @@ mod tests {
     fn profile(envelope: &str) -> AdapterProfile {
         AdapterProfile {
             version: "1.0.0".to_string(),
-            id: external("case-api"),
+            id: local("case-api"),
             operations: UniqueIdList::new(vec![operation(envelope)]).expect("unique"),
             problem_codes: UniqueList::new(vec![external("cases.conflict")]).expect("unique"),
             problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
@@ -524,10 +524,10 @@ mod tests {
             templated_routes: UniqueIdList::<TemplatedRoute>::new(Vec::new()).expect("empty"),
             bindings: UniqueIdList::new(if bound {
                 vec![Binding {
-                    id: external("find-cases"),
-                    operation: external("cases.find"),
+                    id: local("find-cases"),
+                    operation: external("cases-find"),
                     record_type: local("case"),
-                    route: external("fetchCases"),
+                    route: external("fetch-cases"),
                     maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
                 }]
             } else {
@@ -548,7 +548,7 @@ mod tests {
         );
         let deployment = project(true);
         let schema =
-            derive_operation_result_schema(&profile, &deployment, "cases.find").expect("derive");
+            derive_operation_result_schema(&profile, &deployment, "cases-find").expect("derive");
         // serde_json objects are sorted, so member order follows.
         assert_eq!(schema["required"], json!(["cases", "record", "recordType"]));
         assert_eq!(schema["additionalProperties"], json!(false));
@@ -578,15 +578,15 @@ mod tests {
     fn derive_accepts_a_whole_body_record_slot_and_refuses_an_unbound_one() {
         let profile = profile(r#"{{record}}"#);
         let schema =
-            derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
+            derive_operation_result_schema(&profile, &project(true), "cases-find").expect("derive");
         assert_eq!(schema["type"], json!("object"));
         assert_eq!(schema["required"], json!(["id"]));
         assert!(
-            derive_operation_result_schema(&profile, &project(false), "cases.find").is_err(),
+            derive_operation_result_schema(&profile, &project(false), "cases-find").is_err(),
             "a result slot without a binding is refused"
         );
         assert!(
-            derive_operation_result_schema(&profile, &project(true), "cases.missing").is_err(),
+            derive_operation_result_schema(&profile, &project(true), "cases-missing").is_err(),
             "an unknown operation is refused"
         );
     }
@@ -598,7 +598,7 @@ mod tests {
     fn validate_refuses_extra_wrong_and_missing_members() {
         let profile = profile(r#"{"record": {{record}}}"#);
         let schema =
-            derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
+            derive_operation_result_schema(&profile, &project(true), "cases-find").expect("derive");
 
         let good = json!({"record": {"id": "c-1", "region": "north", "opened-on": "2026-01-01"}});
         assert!(validate_result_schema(&good, &schema).is_empty());
@@ -629,7 +629,7 @@ mod tests {
     fn fixture_check_refuses_with_the_response_schema_code() {
         let profile = profile(r#"{"record": {{record}}}"#);
         let schema =
-            derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
+            derive_operation_result_schema(&profile, &project(true), "cases-find").expect("derive");
         let problem = derive_problem_envelope_schema(&profile).expect("derive");
         let expected = |status: u32, body: Option<Value>| Expected {
             status: crate::fixture::HttpStatus::new(status).expect("a status"),
@@ -729,10 +729,10 @@ mod tests {
         // the binding, not the envelope.
         let mut ghost_binding = project(true);
         ghost_binding.bindings = UniqueIdList::new(vec![Binding {
-            id: external("find-cases"),
-            operation: external("cases.find"),
+            id: local("find-cases"),
+            operation: external("cases-find"),
             record_type: local("ghost"),
-            route: external("fetchCases"),
+            route: external("fetch-cases"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
         }])
         .expect("unique");
@@ -764,7 +764,7 @@ mod tests {
     #[test]
     fn the_expected_status_selects_the_schema() {
         let with_record = profile(r#"{"record": {{record}}}"#);
-        let schema = derive_operation_result_schema(&with_record, &project(true), "cases.find")
+        let schema = derive_operation_result_schema(&with_record, &project(true), "cases-find")
             .expect("derive");
         let problem_code_only = profile(r#"{"code": "{{problemCode}}"}"#);
         let problem = derive_problem_envelope_schema(&problem_code_only).expect("derive");

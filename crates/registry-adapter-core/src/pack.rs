@@ -8,7 +8,7 @@
 use crate::auth::EndpointAuthentication;
 use crate::model::{ComponentKind, Eip, Language};
 use crate::route::{RouteDefinition, RouteTemplate};
-use registry_platform_yaml::{Digest, ExternalId, UniqueIdList, UniqueList};
+use registry_platform_yaml::{Digest, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
 
 /// One endpoint a route may send to: the component, the authentication
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Endpoint {
     /// The endpoint identifier `http:` and `graphql:` URIs name.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The producer component: `http` or `graphql`.
     pub component: ComponentKind,
     /// The upstream authentication kind, with its non-secret parameters.
@@ -69,7 +69,7 @@ impl registry_platform_yaml::Identified for Endpoint {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EndpointOperation {
     /// The operation identifier a `to` step's `operation` member names.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The reviewed claim that repeating this operation's send is safe,
     /// for example an upstream create with client-supplied UIDs.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -86,7 +86,7 @@ pub struct EndpointOperation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeMap {
     /// The map identifier.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The conversion entries.
     pub entries: std::collections::BTreeMap<String, serde_json::Value>,
 }
@@ -124,7 +124,7 @@ pub struct Capabilities {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterPack {
     /// The pack identifier a project pins.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The pack's own version; a project pin names it next to the digest
     /// (CFG-ID-4).
     pub version: String,
@@ -172,13 +172,13 @@ mod tests {
 
     fn endpoint() -> Endpoint {
         Endpoint {
-            id: ExternalId::new("case-api").expect("id"),
+            id: LocalId::new("case-api").expect("id"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
             response_headers: UniqueList::new(vec![ExternalId::new("etag").expect("header")])
                 .expect("unique"),
             operations: vec![EndpointOperation {
-                id: ExternalId::new("cases.upsert").expect("op"),
+                id: LocalId::new("cases-upsert").expect("op"),
                 idempotent_upstream: true,
             }],
             tested_versions: vec!["2.7".to_string()],
@@ -225,18 +225,18 @@ mod tests {
     #[test]
     fn pack_round_trips() {
         let pack = AdapterPack {
-            id: ExternalId::new("case-api-pack").expect("id"),
+            id: LocalId::new("case-api-pack").expect("id"),
             version: "1.0.0".to_string(),
             tested_versions: vec!["2.7".to_string()],
             endpoints: UniqueIdList::new(vec![endpoint()]).expect("unique"),
             route_templates: UniqueIdList::new(vec![RouteTemplate {
-                id: ExternalId::new("pagedFetch").expect("id"),
+                id: LocalId::new("paged-fetch").expect("id"),
                 parameters: Vec::new(),
                 steps: Vec::new(),
             }])
             .expect("unique"),
             routes: UniqueIdList::new(vec![RouteDefinition {
-                id: ExternalId::new("sharedLookup").expect("id"),
+                id: LocalId::new("shared-lookup").expect("id"),
                 from: crate::route::RouteFrom {
                     uri: SendUri::parse("direct:sharedLookup").expect("uri"),
                 },
@@ -244,7 +244,7 @@ mod tests {
             }])
             .expect("unique"),
             code_maps: UniqueIdList::new(vec![CodeMap {
-                id: ExternalId::new("genderCodes").expect("id"),
+                id: LocalId::new("gender-codes").expect("id"),
                 entries: std::collections::BTreeMap::from([(
                     "female".to_string(),
                     serde_json::json!("F"),
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn pinned_file_lookup() {
         let pack = AdapterPack {
-            id: ExternalId::new("case-api-pack").expect("id"),
+            id: LocalId::new("case-api-pack").expect("id"),
             version: "1.0.0".to_string(),
             tested_versions: Vec::new(),
             endpoints: UniqueIdList::new(Vec::new()).expect("empty"),

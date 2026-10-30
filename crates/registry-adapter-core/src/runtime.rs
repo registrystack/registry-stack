@@ -9,7 +9,7 @@
 
 use crate::auth::{MtlsIdentity, RuntimeCredential};
 use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig};
-use registry_platform_yaml::{ExternalId, SecretReference, UniqueIdList, UniqueList, Url};
+use registry_platform_yaml::{ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -110,7 +110,7 @@ pub struct AuditRetention {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterRuntimeConfig {
     /// The deployment this config binds.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// One binding per configured endpoint.
     pub endpoints: UniqueIdList<EndpointBinding>,
     /// The private ranges egress may reach, at least one and at most the
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn runtime_config_round_trips() {
         let config = AdapterRuntimeConfig {
-            id: ExternalId::new("case-deployment").expect("id"),
+            id: LocalId::new("case-deployment").expect("id"),
             endpoints: UniqueIdList::new(vec![binding()]).expect("unique"),
             allowed_private_cidrs: UniqueList::new(vec![
                 Cidr::new("10.0.0.0/8").expect("cidr"),

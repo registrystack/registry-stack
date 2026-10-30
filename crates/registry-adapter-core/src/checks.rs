@@ -2527,7 +2527,7 @@ mod tests {
     fn pack_builder(endpoints: Vec<Endpoint>, routes: Vec<RouteDefinition>) -> AdapterPack {
         AdapterPack {
             version: "1.0.0".to_string(),
-            id: id("case-api-pack"),
+            id: local("case-api-pack"),
             tested_versions: vec!["2.7".to_string()],
             endpoints: UniqueIdList::new(endpoints).expect("unique"),
             route_templates: UniqueIdList::<RouteTemplate>::new(Vec::new()).expect("empty"),
@@ -2545,12 +2545,12 @@ mod tests {
 
     fn oauth_endpoint() -> Endpoint {
         Endpoint {
-            id: id("case-api"),
+            id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             operations: vec![EndpointOperation {
-                id: id("cases.create"),
+                id: local("cases-create"),
                 idempotent_upstream: true,
             }],
             tested_versions: vec!["2.7".to_string()],
@@ -2562,12 +2562,12 @@ mod tests {
 
     fn basic_endpoint() -> Endpoint {
         Endpoint {
-            id: id("case-api"),
+            id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Basic {},
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             operations: vec![EndpointOperation {
-                id: id("cases.find"),
+                id: local("cases-find"),
                 idempotent_upstream: true,
             }],
             tested_versions: vec!["2.7".to_string()],
@@ -2580,7 +2580,7 @@ mod tests {
     fn profile_builder(operations: Vec<ProfileOperation>) -> AdapterProfile {
         AdapterProfile {
             version: "1.0.0".to_string(),
-            id: id("case-api"),
+            id: local("case-api"),
             operations: UniqueIdList::new(operations).expect("unique"),
             problem_codes: UniqueList::new(vec![id("cases.conflict")]).expect("unique"),
             problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
@@ -2590,7 +2590,7 @@ mod tests {
 
     fn operation(id_text: &str, method: HttpMethod) -> ProfileOperation {
         ProfileOperation {
-            id: id(id_text),
+            id: local(id_text),
             method,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: None,
@@ -2606,7 +2606,7 @@ mod tests {
                 version: "1.0.0".to_string(),
             },
             profile: PinnedRef {
-                id: id("case-api"),
+                id: local("case-api"),
                 version: "1.0.0".to_string(),
                 digest: digest(),
             },
@@ -2628,9 +2628,9 @@ mod tests {
             templated_routes: UniqueIdList::<TemplatedRoute>::new(Vec::new()).expect("empty"),
             bindings: UniqueIdList::<Binding>::new(Vec::new()).expect("empty"),
             access_profiles: UniqueIdList::new(vec![AccessProfile {
-                id: id("registry-clerk"),
+                id: local("registry-clerk"),
                 scopes: UniqueList::new(vec![id("cases:read")]).expect("unique"),
-                operations: UniqueList::new(vec![id("cases.find")]).expect("unique"),
+                operations: UniqueList::new(vec![id("cases-find")]).expect("unique"),
                 record_types: UniqueList::new(vec![local("case")]).expect("unique"),
             }])
             .expect("unique"),
@@ -2711,14 +2711,14 @@ mod tests {
 
     #[test]
     fn profile_accepts_a_closed_envelope_set() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         assert_clean(check_profile(&profile));
     }
 
     #[test]
     fn profile_refuses_an_unknown_slot() {
         let profile = profile_builder(vec![ProfileOperation {
-            id: id("cases.find"),
+            id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: None,
@@ -2731,7 +2731,7 @@ mod tests {
     #[test]
     fn profile_refuses_a_response_envelope_without_its_result_slot() {
         let profile = profile_builder(vec![ProfileOperation {
-            id: id("cases.find"),
+            id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: None,
@@ -2768,13 +2768,13 @@ mod tests {
     /// a read operation needs none.
     #[test]
     fn profile_refuses_a_write_operation_without_a_record_request_envelope() {
-        let without_envelope = profile_builder(vec![operation("cases.create", HttpMethod::Post)]);
+        let without_envelope = profile_builder(vec![operation("cases-create", HttpMethod::Post)]);
         assert_has(
             &check_profile(&without_envelope),
             CheckCode::ProfileRequestEnvelopeMissingRecordSlot,
         );
         let wrong_slot = profile_builder(vec![ProfileOperation {
-            id: id("cases.create"),
+            id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: Some(EnvelopeTemplate(r#"{{records}}"#.to_string())),
@@ -2786,7 +2786,7 @@ mod tests {
             CheckCode::ProfileRequestEnvelopeMissingRecordSlot,
         );
         let good = profile_builder(vec![ProfileOperation {
-            id: id("cases.create"),
+            id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
@@ -2814,7 +2814,7 @@ mod tests {
     #[test]
     fn pagination_parameters_are_accepted() {
         let profile = profile_builder(vec![ProfileOperation {
-            id: id("cases.find"),
+            id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: None,
@@ -2877,18 +2877,18 @@ mod tests {
     #[test]
     fn pack_refuses_an_unpinned_rhai_reference() {
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::SetBody(rhai("scripts/unpinned.rhai"))],
         };
         let pack = pack_builder(vec![], vec![route]);
         assert_has(&check_pack(&pack), CheckCode::PackUnknownScript);
         let pinned_route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::SetBody(rhai("scripts/map.rhai"))],
         };
@@ -2901,21 +2901,21 @@ mod tests {
     #[test]
     fn routes_accept_a_well_formed_direct_call() {
         let caller = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::Enrich(EnrichStep {
-                uri: direct("sharedLookup"),
+                uri: direct("shared-lookup"),
                 aggregation_strategy: None,
                 aggregate_on_exception: false,
                 parameters: None,
             })],
         };
         let shared = RouteDefinition {
-            id: id("sharedLookup"),
+            id: local("shared-lookup"),
             from: RouteFrom {
-                uri: direct("sharedLookup"),
+                uri: direct("shared-lookup"),
             },
             steps: vec![to_get("case-api")],
         };
@@ -2926,7 +2926,7 @@ mod tests {
     #[test]
     fn routes_refuse_a_direct_cycle() {
         let first = RouteDefinition {
-            id: id("first"),
+            id: local("first"),
             from: RouteFrom {
                 uri: direct("first"),
             },
@@ -2938,7 +2938,7 @@ mod tests {
             })],
         };
         let second = RouteDefinition {
-            id: id("second"),
+            id: local("second"),
             from: RouteFrom {
                 uri: direct("second"),
             },
@@ -2959,9 +2959,9 @@ mod tests {
     #[test]
     fn routes_refuse_an_unknown_direct_target_and_endpoint() {
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::Enrich(EnrichStep {
@@ -2982,7 +2982,7 @@ mod tests {
     #[test]
     fn routes_refuse_a_from_outside_direct() {
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
                 uri: send("case-api"),
             },
@@ -2998,9 +2998,9 @@ mod tests {
     #[test]
     fn routes_refuse_split_and_loop_without_their_mandatory_bounds() {
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::Split(SplitStep {
@@ -3030,9 +3030,9 @@ mod tests {
         assert_has(&findings, CheckCode::RouteMaximumItemsRequired);
         assert_has(&findings, CheckCode::RouteMaximumIterationsRequired);
         let bounded = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::Split(SplitStep {
@@ -3068,14 +3068,14 @@ mod tests {
     #[test]
     fn direct_sends_resolve_by_the_from_uri() {
         let target = || RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCases"),
+                uri: direct("fetch-cases"),
             },
             steps: vec![to_get("case-api")],
         };
         let caller = |target_name: &str| RouteDefinition {
-            id: id("other"),
+            id: local("other"),
             from: RouteFrom {
                 uri: direct("other"),
             },
@@ -3084,10 +3084,10 @@ mod tests {
                 parameters: None,
             })],
         };
-        let pack = pack_builder(vec![], vec![target(), caller("fetchCases")]);
+        let pack = pack_builder(vec![], vec![target(), caller("fetch-cases")]);
         assert!(!codes(&check_routes(&pack, &project_builder(&pack)))
             .contains(&CheckCode::RouteUnknownDirectTarget.code()));
-        let pack = pack_builder(vec![], vec![target(), caller("fetchCase")]);
+        let pack = pack_builder(vec![], vec![target(), caller("fetch-case")]);
         assert_has(
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteUnknownDirectTarget,
@@ -3099,9 +3099,9 @@ mod tests {
     #[test]
     fn routes_refuse_an_error_handler_without_exactly_one_handler() {
         let route = |handler: ErrorHandlerStep| RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::ErrorHandler(handler)],
         };
@@ -3147,17 +3147,17 @@ mod tests {
     /// P1-5).
     #[test]
     fn project_refuses_a_binding_of_a_never_instantiated_template() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = RouteTemplate {
-            id: id("pager"),
+            id: local("pager"),
             parameters: Vec::new(),
             steps: vec![to_get("case-api")],
         };
         let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
         pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
         let binding = |route: registry_platform_yaml::ExternalId| Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
             route,
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
@@ -3204,9 +3204,9 @@ mod tests {
             }),
         });
         let route = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
@@ -3311,9 +3311,9 @@ mod tests {
     #[test]
     fn aggregation_rhai_scripts_resolve_to_the_inventory() {
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::Split(SplitStep {
                 expression: rhai("scripts/pieces.rhai"),
@@ -3356,9 +3356,9 @@ mod tests {
             })
         };
         let route = |step: Step| RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
@@ -3374,7 +3374,7 @@ mod tests {
             ],
         };
         // A GET enrichment is not a write; redelivery over it stays clean.
-        let read = route(enrich(HttpMethod::Get, Some("cases.find")));
+        let read = route(enrich(HttpMethod::Get, Some("cases-find")));
         let pack = pack_builder(vec![oauth_endpoint()], vec![read]);
         assert_clean(check_routes(&pack, &project_builder(&pack)));
         // A POST enrichment needs the idempotentUpstream claim; the
@@ -3395,9 +3395,9 @@ mod tests {
         );
         // Query scripts of an enrichment join the script inventory.
         let unscripted = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::Enrich(EnrichStep {
                 uri: send("case-api"),
@@ -3432,7 +3432,7 @@ mod tests {
     #[test]
     fn template_paths_reference_declared_parameters() {
         let template = |path: Option<String>| RouteTemplate {
-            id: id("pager"),
+            id: local("pager"),
             parameters: vec![TemplateParameter {
                 name: local("cursor"),
                 r#type: TemplateParameterType::String,
@@ -3501,15 +3501,15 @@ mod tests {
             })];
             route_steps.extend(steps);
             RouteDefinition {
-                id: id("createCase"),
+                id: local("create-case"),
                 from: RouteFrom {
-                    uri: direct("createCase"),
+                    uri: direct("create-case"),
                 },
                 steps: route_steps,
             }
         };
         let writer = RouteDefinition {
-            id: id("writer"),
+            id: local("writer"),
             from: RouteFrom {
                 uri: direct("writer"),
             },
@@ -3565,9 +3565,9 @@ mod tests {
                 }),
             });
             let route = RouteDefinition {
-                id: id("createCase"),
+                id: local("create-case"),
                 from: RouteFrom {
-                    uri: direct("createCase"),
+                    uri: direct("create-case"),
                 },
                 steps: vec![post],
             };
@@ -3579,8 +3579,8 @@ mod tests {
         );
         // The declared operation passes.
         assert!(!codes(&check_routes(
-            &pack(Some("cases.create")),
-            &project_builder(&pack(Some("cases.create")))
+            &pack(Some("cases-create")),
+            &project_builder(&pack(Some("cases-create")))
         ))
         .contains(&CheckCode::RouteUnknownOperation.code()));
     }
@@ -3591,7 +3591,7 @@ mod tests {
     #[test]
     fn write_refuses_two_posts_through_direct() {
         let profile = profile_builder(vec![ProfileOperation {
-            id: id("cases.create"),
+            id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
@@ -3599,7 +3599,7 @@ mod tests {
             pagination: None,
         }]);
         let writer = RouteDefinition {
-            id: id("writer"),
+            id: local("writer"),
             from: RouteFrom {
                 uri: direct("writer"),
             },
@@ -3609,15 +3609,15 @@ mod tests {
                 remove_on_failure: true,
                 completion_eager: false,
                 steps: vec![
-                    to_post("case-api", "cases.create"),
-                    to_post("case-api", "cases.create"),
+                    to_post("case-api", "cases-create"),
+                    to_post("case-api", "cases-create"),
                 ],
             })],
         };
         let caller = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: vec![Step::To(ToStep {
                 uri: direct("writer"),
@@ -3628,10 +3628,10 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("create-cases"),
-            operation: id("cases.create"),
+            id: local("create-cases"),
+            operation: id("cases-create"),
             record_type: local("case"),
-            route: id("createCase"),
+            route: id("create-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -3647,7 +3647,7 @@ mod tests {
     #[test]
     fn write_refuses_caller_redelivery_over_a_post_inside_direct() {
         let writer = RouteDefinition {
-            id: id("writer"),
+            id: local("writer"),
             from: RouteFrom {
                 uri: direct("writer"),
             },
@@ -3656,13 +3656,13 @@ mod tests {
                 eager: true,
                 remove_on_failure: true,
                 completion_eager: false,
-                steps: vec![to_post("case-api", "cases.create")],
+                steps: vec![to_post("case-api", "cases-create")],
             })],
         };
         let caller = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
@@ -3682,7 +3682,7 @@ mod tests {
         };
         let mut unclaimed = oauth_endpoint();
         unclaimed.operations = vec![EndpointOperation {
-            id: id("cases.create"),
+            id: local("cases-create"),
             idempotent_upstream: false,
         }];
         let pack = pack_builder(vec![unclaimed], vec![writer.clone(), caller.clone()]);
@@ -3702,9 +3702,9 @@ mod tests {
     #[test]
     fn write_refuses_a_split_of_posts() {
         let route = |inner: Vec<Step>| RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
                 expression: rhai("scripts/key.rhai"),
@@ -3723,7 +3723,7 @@ mod tests {
             })],
         };
         let profile = profile_builder(vec![ProfileOperation {
-            id: id("cases.create"),
+            id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
@@ -3732,15 +3732,15 @@ mod tests {
         }]);
         let pack = pack_builder(
             vec![oauth_endpoint()],
-            vec![route(vec![to_post("case-api", "cases.create")])],
+            vec![route(vec![to_post("case-api", "cases-create")])],
         );
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("create-cases"),
-            operation: id("cases.create"),
+            id: local("create-cases"),
+            operation: id("cases-create"),
             record_type: local("case"),
-            route: id("createCase"),
+            route: id("create-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10_000).expect("budget"),
         }])
         .expect("unique");
@@ -3758,7 +3758,7 @@ mod tests {
     fn findings_come_out_in_a_deterministic_order() {
         let routes: Vec<RouteDefinition> = (0..24)
             .map(|index| RouteDefinition {
-                id: id(&format!("route-{index:02}")),
+                id: local(&format!("route-{index:02}")),
                 from: RouteFrom {
                     uri: direct(&format!("route-{index:02}")),
                 },
@@ -3785,9 +3785,9 @@ mod tests {
     fn loop_requires_exactly_one_language_key() {
         let loop_step =
             |constant: Option<serde_json::Value>, rhai: Option<Expression>| RouteDefinition {
-                id: id("fetchCase"),
+                id: local("fetch-case"),
                 from: RouteFrom {
-                    uri: direct("fetchCase"),
+                    uri: direct("fetch-case"),
                 },
                 steps: vec![Step::Loop(LoopStep {
                     constant,
@@ -3834,9 +3834,9 @@ mod tests {
     #[test]
     fn loop_refuses_a_constant_count_above_its_bound() {
         let loop_step = |constant: serde_json::Value, do_while: bool| RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::Loop(LoopStep {
                 constant: Some(constant),
@@ -3875,13 +3875,13 @@ mod tests {
                 stop_on_exception: stop,
                 error_threshold: None,
                 maximum_failed_records: None,
-                steps: vec![to_post("case-api", "cases.create")],
+                steps: vec![to_post("case-api", "cases-create")],
             })]
         };
         let without = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: split_steps(false),
         };
@@ -3891,9 +3891,9 @@ mod tests {
             CheckCode::RouteNonSafeSendInSplit,
         );
         let with = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: split_steps(true),
         };
@@ -3912,9 +3912,9 @@ mod tests {
             .filter(|class| class.is_uncatchable())
         {
             let on_exception = RouteDefinition {
-                id: id("fetchCase"),
+                id: local("fetch-case"),
                 from: RouteFrom {
-                    uri: direct("fetchCase"),
+                    uri: direct("fetch-case"),
                 },
                 steps: vec![Step::OnException(OnExceptionStep {
                     exception: UniqueList::new(vec![class]).expect("unique"),
@@ -3931,9 +3931,9 @@ mod tests {
                 CheckCode::RouteUncatchableClause,
             );
             let do_try = RouteDefinition {
-                id: id("fetchCase"),
+                id: local("fetch-case"),
                 from: RouteFrom {
-                    uri: direct("fetchCase"),
+                    uri: direct("fetch-case"),
                 },
                 steps: vec![Step::DoTry(DoTryStep {
                     steps: vec![],
@@ -3952,9 +3952,9 @@ mod tests {
             );
         }
         let catchable = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamHttp])
@@ -3978,9 +3978,9 @@ mod tests {
     #[test]
     fn credential_rejected_is_refused_in_a_clause() {
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![crate::model::ErrorClass::CredentialRejected])
@@ -4006,9 +4006,9 @@ mod tests {
     #[test]
     fn routes_refuse_predicates_without_exactly_one_language_key() {
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::Choice(ChoiceStep {
@@ -4055,9 +4055,9 @@ mod tests {
     #[test]
     fn routes_refuse_a_retry_while_without_redeliveries() {
         let clause = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
@@ -4078,9 +4078,9 @@ mod tests {
             CheckCode::RouteRetryWhileWithoutRedeliveries,
         );
         let handler = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::ErrorHandler(ErrorHandlerStep {
                 default_error_handler: Some(DefaultErrorHandler {
@@ -4100,9 +4100,9 @@ mod tests {
         // With redeliveries behind it and an upstream send to act on, the
         // predicate is admitted.
         let admitted = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::OnException(OnExceptionStep {
@@ -4133,9 +4133,9 @@ mod tests {
                      error_threshold: Option<f64>,
                      maximum_failed_records: Option<u64>| {
             RouteDefinition {
-                id: id("fetchCase"),
+                id: local("fetch-case"),
                 from: RouteFrom {
-                    uri: direct("fetchCase"),
+                    uri: direct("fetch-case"),
                 },
                 steps: vec![Step::Split(SplitStep {
                     expression: rhai("scripts/pieces.rhai"),
@@ -4172,9 +4172,9 @@ mod tests {
     #[test]
     fn routes_refuse_an_exception_clause_without_classes_or_with_both_outcomes() {
         let classless = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![]).expect("unique"),
@@ -4191,9 +4191,9 @@ mod tests {
             CheckCode::RouteEmptyExceptionList,
         );
         let contradictory = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
@@ -4211,9 +4211,9 @@ mod tests {
             CheckCode::RouteHandledAndContinued,
         );
         let unanchored = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::DoTry(crate::route::DoTryStep {
                 steps: vec![],
@@ -4232,9 +4232,9 @@ mod tests {
         );
         // One class and one outcome stays clean.
         let admitted = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
@@ -4253,9 +4253,9 @@ mod tests {
     #[test]
     fn routes_refuse_redelivery_over_a_non_safe_send_without_the_claim() {
         let route = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
@@ -4267,12 +4267,12 @@ mod tests {
                     }),
                     no_error_handler: None,
                 }),
-                to_post("case-api", "cases.create"),
+                to_post("case-api", "cases-create"),
             ],
         };
         let mut unclaimed = oauth_endpoint();
         unclaimed.operations = vec![EndpointOperation {
-            id: id("cases.create"),
+            id: local("cases-create"),
             idempotent_upstream: false,
         }];
         let pack = pack_builder(vec![unclaimed], vec![route.clone()]);
@@ -4295,11 +4295,11 @@ mod tests {
     /// test: every addition and multiplication in the walk must show up
     /// in the binding's budget judgment.
     fn budgeted(steps: Vec<Step>, budget: u64) -> Vec<Diagnostic> {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps,
         };
@@ -4307,10 +4307,10 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(budget).expect("budget"),
         }])
         .expect("unique");
@@ -4570,28 +4570,28 @@ mod tests {
 
     #[test]
     fn project_accepts_resolved_references_within_budget() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![to_get("case-api")],
         };
         let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(vec![AccessProfile {
-            id: id("registry-clerk"),
+            id: local("registry-clerk"),
             scopes: UniqueList::new(vec![id("cases:read")]).expect("unique"),
-            operations: UniqueList::new(vec![id("cases.find")]).expect("unique"),
+            operations: UniqueList::new(vec![id("cases-find")]).expect("unique"),
             record_types: UniqueList::new(vec![local("case")]).expect("unique"),
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
         }])
         .expect("unique");
@@ -4600,18 +4600,18 @@ mod tests {
 
     #[test]
     fn project_refuses_unknown_operation_record_type_route_and_template() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
             route_template: id("no-such-template"),
-            route_id: id("freshRoute"),
+            route_id: id("fresh-route"),
             parameters: BTreeMap::new(),
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("binding"),
-            operation: id("cases.missing"),
+            id: local("binding"),
+            operation: id("cases-missing"),
             record_type: local("ghost"),
             route: id("nowhere"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
@@ -4629,9 +4629,9 @@ mod tests {
     /// valid instantiation was refused as a duplicate of itself.
     #[test]
     fn project_admits_a_resolved_instantiation_within_budget() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = RouteTemplate {
-            id: id("fetchPage"),
+            id: local("fetch-page"),
             parameters: Vec::new(),
             steps: vec![to_get("case-api")],
         };
@@ -4640,16 +4640,16 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-            route_template: id("fetchPage"),
-            route_id: id("fetchCases"),
+            route_template: id("fetch-page"),
+            route_id: id("fetch-cases"),
             parameters: BTreeMap::new(),
         }])
         .expect("unique");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCases"),
+            route: id("fetch-cases"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -4662,13 +4662,13 @@ mod tests {
     #[test]
     fn project_reader_refuses_two_instantiations_with_one_route_id() {
         let a = TemplatedRoute {
-            route_template: id("fetchPage"),
-            route_id: id("fetchCases"),
+            route_template: id("fetch-page"),
+            route_id: id("fetch-cases"),
             parameters: BTreeMap::new(),
         };
         let b = TemplatedRoute {
-            route_template: id("fetchPage"),
-            route_id: id("fetchCases"),
+            route_template: id("fetch-page"),
+            route_id: id("fetch-cases"),
             parameters: BTreeMap::new(),
         };
         assert!(
@@ -4689,7 +4689,7 @@ mod tests {
         };
         let mut pack = pack_builder(vec![], vec![]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
-            id: id("fetchPage"),
+            id: local("fetch-page"),
             parameters: Vec::new(),
             steps: vec![body()],
         }])
@@ -4697,7 +4697,7 @@ mod tests {
         assert_has(&check_pack(&pack), CheckCode::PackUnknownTemplateParameter);
 
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
-            id: id("fetchPage"),
+            id: local("fetch-page"),
             parameters: vec![TemplateParameter {
                 name: local("region"),
                 r#type: TemplateParameterType::String,
@@ -4717,9 +4717,9 @@ mod tests {
     /// instantiation is admitted.
     #[test]
     fn project_checks_templated_parameter_names_types_and_bindings() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let template = || RouteTemplate {
-            id: id("fetchPage"),
+            id: local("fetch-page"),
             parameters: vec![
                 TemplateParameter {
                     name: local("page"),
@@ -4744,8 +4744,8 @@ mod tests {
             let mut project = project_builder(&pack);
             project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
             project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-                route_template: id("fetchPage"),
-                route_id: id("fetchCases"),
+                route_template: id("fetch-page"),
+                route_id: id("fetch-cases"),
                 parameters,
             }])
             .expect("unique");
@@ -4844,7 +4844,7 @@ mod tests {
     fn project_refuses_an_instantiated_route_id_that_collides() {
         let profile = profile_builder(vec![]);
         let template_route = RouteTemplate {
-            id: id("pagedFetch"),
+            id: local("paged-fetch"),
             parameters: Vec::new(),
             steps: vec![],
         };
@@ -4852,8 +4852,8 @@ mod tests {
         pack.route_templates = UniqueIdList::new(vec![template_route]).expect("unique");
         let mut project = project_builder(&pack);
         project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-            route_template: id("pagedFetch"),
-            route_id: id("pagedFetch"),
+            route_template: id("paged-fetch"),
+            route_id: id("paged-fetch"),
             parameters: BTreeMap::new(),
         }])
         .expect("unique");
@@ -4865,12 +4865,12 @@ mod tests {
 
     #[test]
     fn project_refuses_a_budget_the_route_cannot_meet() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         // A loop of 10 iterations, each fetching one endpoint: worst case 10.
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::Loop(LoopStep {
                 maximum_iterations: Some(BoundedU64::<1, 100_000>::new(10).expect("bound")),
@@ -4891,20 +4891,20 @@ mod tests {
         // for the one OAuth endpoint (CONCEPT 10.2): eleven; token
         // requests sit outside the budget.
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(3).expect("budget"),
         }])
         .expect("unique");
         let findings = check_project(&workspace(&profile, &pack, &project));
         assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(11).expect("budget"),
         }])
         .expect("unique");
@@ -4923,9 +4923,9 @@ mod tests {
             })
         };
         let dead = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
@@ -4937,13 +4937,13 @@ mod tests {
                     }),
                     no_error_handler: None,
                 }),
-                to_direct("loadCase"),
+                to_direct("load-case"),
             ],
         };
         let leaf = RouteDefinition {
-            id: id("loadCase"),
+            id: local("load-case"),
             from: RouteFrom {
-                uri: direct("loadCase"),
+                uri: direct("load-case"),
             },
             steps: vec![Step::SetBody(Expression::Constant(serde_json::Value::Null))],
         };
@@ -4955,9 +4955,9 @@ mod tests {
         // The same declaration over a body that itself sends upstream is
         // the ordinary shape.
         let ordinary = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
@@ -4977,9 +4977,9 @@ mod tests {
         // Expansion counts: the declaration reaches an http: send through
         // the direct target.
         let expanding = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
@@ -4991,13 +4991,13 @@ mod tests {
                     }),
                     no_error_handler: None,
                 }),
-                to_direct("loadCase"),
+                to_direct("load-case"),
             ],
         };
         let live_leaf = RouteDefinition {
-            id: id("loadCase"),
+            id: local("load-case"),
             from: RouteFrom {
-                uri: direct("loadCase"),
+                uri: direct("load-case"),
             },
             steps: vec![to_get("case-api")],
         };
@@ -5012,7 +5012,7 @@ mod tests {
     /// an adequate budget. A clause that does not continue counts once.
     #[test]
     fn project_counts_a_continued_clause_once_per_route_body_send() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let clause = |continued: bool| {
             Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
@@ -5025,9 +5025,9 @@ mod tests {
             })
         };
         let route = |continued: bool| RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![
                 clause(continued),
@@ -5042,20 +5042,20 @@ mod tests {
         // Three body sends plus the continued-clause send standalone and
         // once per body send: 3 + 1 * (1 + 3) = 7.
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(6).expect("budget"),
         }])
         .expect("unique");
         let findings = check_project(&workspace(&profile, &pack, &project));
         assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(7).expect("budget"),
         }])
         .expect("unique");
@@ -5065,10 +5065,10 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(4).expect("budget"),
         }])
         .expect("unique");
@@ -5081,13 +5081,13 @@ mod tests {
     /// way.
     #[test]
     fn project_refuses_a_budget_exceeded_by_an_exception_clause_body() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         // The route body sends nothing; the clause body sends three times,
         // each with two redeliveries: 3 * (1 + 2) = 9 upstream calls.
         let route = RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps: vec![Step::OnException(OnExceptionStep {
                 exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
@@ -5106,10 +5106,10 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(8).expect("budget"),
         }])
         .expect("unique");
@@ -5117,10 +5117,10 @@ mod tests {
         assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
         // The exact worst case fits: 9 sends + 1 resend.
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -5132,7 +5132,7 @@ mod tests {
     #[test]
     fn project_refuses_a_write_route_without_idempotency_and_two_non_safe_sends() {
         let profile = profile_builder(vec![ProfileOperation {
-            id: id("cases.create"),
+            id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
@@ -5140,20 +5140,20 @@ mod tests {
             pagination: None,
         }]);
         let bare = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
-            steps: vec![to_post("case-api", "cases.create")],
+            steps: vec![to_post("case-api", "cases-create")],
         };
         let pack = pack_builder(vec![oauth_endpoint()], vec![bare]);
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("create-cases"),
-            operation: id("cases.create"),
+            id: local("create-cases"),
+            operation: id("cases-create"),
             record_type: local("case"),
-            route: id("createCase"),
+            route: id("create-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -5161,26 +5161,26 @@ mod tests {
         assert_has(&findings, CheckCode::RouteWriteWithoutIdempotency);
 
         let wrapped = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
                 expression: Expression::Header("Idempotency-Key".to_string()),
                 eager: true,
                 remove_on_failure: true,
                 completion_eager: false,
-                steps: vec![to_post("case-api", "cases.create")],
+                steps: vec![to_post("case-api", "cases-create")],
             })],
         };
         let wrapped_pack = pack_builder(vec![oauth_endpoint()], vec![wrapped]);
         let mut wrapped_project = project_builder(&wrapped_pack);
         wrapped_project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         wrapped_project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("create-cases"),
-            operation: id("cases.create"),
+            id: local("create-cases"),
+            operation: id("cases-create"),
             record_type: local("case"),
-            route: id("createCase"),
+            route: id("create-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -5191,9 +5191,9 @@ mod tests {
         );
 
         let doubled = RouteDefinition {
-            id: id("createCase"),
+            id: local("create-case"),
             from: RouteFrom {
-                uri: direct("createCase"),
+                uri: direct("create-case"),
             },
             steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
                 expression: Expression::Header("Idempotency-Key".to_string()),
@@ -5201,8 +5201,8 @@ mod tests {
                 remove_on_failure: true,
                 completion_eager: false,
                 steps: vec![
-                    to_post("case-api", "cases.create"),
-                    to_post("case-api", "cases.create"),
+                    to_post("case-api", "cases-create"),
+                    to_post("case-api", "cases-create"),
                 ],
             })],
         };
@@ -5210,10 +5210,10 @@ mod tests {
         let mut doubled_project = project_builder(&doubled_pack);
         doubled_project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         doubled_project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("create-cases"),
-            operation: id("cases.create"),
+            id: local("create-cases"),
+            operation: id("cases-create"),
             record_type: local("case"),
-            route: id("createCase"),
+            route: id("create-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
@@ -5225,13 +5225,13 @@ mod tests {
 
     #[test]
     fn project_refuses_access_profiles_beyond_the_declared_model() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![], vec![]);
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(vec![AccessProfile {
-            id: id("registry-clerk"),
+            id: local("registry-clerk"),
             scopes: UniqueList::new(vec![]).expect("unique"),
-            operations: UniqueList::new(vec![id("cases.missing")]).expect("unique"),
+            operations: UniqueList::new(vec![id("cases-missing")]).expect("unique"),
             record_types: UniqueList::new(vec![local("ghost")]).expect("unique"),
         }])
         .expect("unique");
@@ -5244,7 +5244,7 @@ mod tests {
 
     fn runtime_builder(endpoints: Vec<EndpointBinding>) -> AdapterRuntimeConfig {
         AdapterRuntimeConfig {
-            id: id("case-deployment"),
+            id: local("case-deployment"),
             endpoints: UniqueIdList::new(endpoints).expect("unique"),
             allowed_private_cidrs: UniqueList::new(Vec::new()).expect("empty"),
             listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
@@ -5434,9 +5434,9 @@ mod tests {
     #[test]
     fn header_writes_and_reads_stay_bounded() {
         let route = |steps: Vec<Step>| RouteDefinition {
-            id: id("fetchCase"),
+            id: local("fetch-case"),
             from: RouteFrom {
-                uri: direct("fetchCase"),
+                uri: direct("fetch-case"),
             },
             steps,
         };
@@ -5504,7 +5504,7 @@ mod tests {
         let findings = check(vec![set("scratch", read("ghost"))], &[]);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, CheckCode::RouteUnknownHeader.code());
-        assert_eq!(findings[0].path, "/routes/fetchCase/steps/0");
+        assert_eq!(findings[0].path, "/routes/fetch-case/steps/0");
 
         let findings = check(
             vec![
@@ -5521,19 +5521,19 @@ mod tests {
 
     #[test]
     fn fixtures_accept_declared_intercepts_and_entries() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
         let fixture = AdapterFixture {
-            id: id("case-api-fixtures"),
+            id: local("case-api-fixtures"),
             pack: id("case-api-pack"),
             upstream_version: "2.7".to_string(),
             provenance: FixtureProvenance::Captured {
@@ -5543,7 +5543,7 @@ mod tests {
                 endpoint: id("case-api"),
             }],
             entries: vec![FixtureEntry {
-                operation: id("cases.find"),
+                operation: id("cases-find"),
                 given: RecordedRequest {
                     endpoint: id("case-api"),
                     method: HttpMethod::Get,
@@ -5572,7 +5572,7 @@ mod tests {
     /// value-free messages under one code.
     #[test]
     fn fixtures_refuse_entries_whose_operation_the_deployment_cannot_exercise() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         let entry = |op: &str| FixtureEntry {
@@ -5594,7 +5594,7 @@ mod tests {
             },
         };
         let fixture = |op: &str| AdapterFixture {
-            id: id("case-api-fixtures"),
+            id: local("case-api-fixtures"),
             pack: id("case-api-pack"),
             upstream_version: "2.7".to_string(),
             provenance: FixtureProvenance::Captured {
@@ -5605,7 +5605,7 @@ mod tests {
         };
 
         // Known to the profile but bound by no route: refused.
-        let unbound = fixture("cases.find");
+        let unbound = fixture("cases-find");
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&unbound);
         let findings = check_fixtures(&ws);
@@ -5614,7 +5614,7 @@ mod tests {
         assert_eq!(findings[0].path, "/fixtures/0/entries/0/operation");
 
         // Unknown to the profile: refused with the same code.
-        let unknown = fixture("cases.missing");
+        let unknown = fixture("cases-missing");
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&unknown);
         let findings = check_fixtures(&ws);
@@ -5623,14 +5623,14 @@ mod tests {
 
         // A binding to a route makes the operation exercisable: passes.
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
-        let bound = fixture("cases.find");
+        let bound = fixture("cases-find");
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&bound);
         assert_clean(check_fixtures(&ws));
@@ -5641,19 +5641,19 @@ mod tests {
     /// the check stays out of 2xx entries (addendum C).
     #[test]
     fn fixtures_resolve_the_expected_problem_code_against_the_profile() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
-            route: id("fetchCase"),
+            route: id("fetch-case"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
         let entry = |status: u32, code: Option<&str>| FixtureEntry {
-            operation: id("cases.find"),
+            operation: id("cases-find"),
             given: RecordedRequest {
                 endpoint: id("case-api"),
                 method: HttpMethod::Get,
@@ -5671,7 +5671,7 @@ mod tests {
             },
         };
         let fixture = |status: u32, code: Option<&str>| AdapterFixture {
-            id: id("case-api-fixtures"),
+            id: local("case-api-fixtures"),
             pack: id("case-api-pack"),
             upstream_version: "2.7".to_string(),
             provenance: FixtureProvenance::Captured {
@@ -5710,11 +5710,11 @@ mod tests {
     /// well-formed one adds no derivation finding.
     #[test]
     fn the_workspace_check_derives_envelopes_without_fixtures() {
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let project = project_builder(&pack);
 
-        let mut broken = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let mut broken = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         broken.problem_envelope = EnvelopeTemplate(r#"{"code": "{{problemCode}}""#.to_string());
         let ws = workspace(&broken, &pack, &project);
         let findings = check_workspace(&ws);
@@ -5739,7 +5739,7 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let project = project_builder(&pack);
         let fixture = AdapterFixture {
-            id: id("case-api-fixtures"),
+            id: local("case-api-fixtures"),
             pack: id("case-api-pack"),
             upstream_version: "2.7".to_string(),
             provenance: FixtureProvenance::Documented {
@@ -5754,7 +5754,7 @@ mod tests {
                 },
             ],
             entries: vec![FixtureEntry {
-                operation: id("cases.find"),
+                operation: id("cases-find"),
                 given: RecordedRequest {
                     endpoint: id("also-missing"),
                     method: HttpMethod::Get,
@@ -5806,7 +5806,7 @@ mod tests {
                 vec![]
             };
             routes.push(RouteDefinition {
-                id: id(&id_text),
+                id: local(&id_text),
                 from: RouteFrom {
                     uri: direct(&id_text),
                 },
@@ -5839,20 +5839,20 @@ mod tests {
                 vec![to_get("case-api")]
             };
             routes.push(RouteDefinition {
-                id: id(&id_text),
+                id: local(&id_text),
                 from: RouteFrom {
                     uri: direct(&id_text),
                 },
                 steps,
             });
         }
-        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], routes);
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.bindings = UniqueIdList::new(vec![Binding {
-            id: id("find-cases"),
-            operation: id("cases.find"),
+            id: local("find-cases"),
+            operation: id("cases-find"),
             record_type: local("case"),
             route: id("hop2"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),

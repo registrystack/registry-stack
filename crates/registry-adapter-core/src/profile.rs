@@ -10,7 +10,7 @@
 //! slots, encoding cursors, setting the status); the profile owns every
 //! name and shape a caller sees.
 
-use registry_platform_yaml::{BoundedU64, ExternalId, UniqueIdList};
+use registry_platform_yaml::{BoundedU64, ExternalId, LocalId, UniqueIdList};
 use serde::{Deserialize, Serialize};
 
 /// The closed envelope slot vocabulary the engine fills
@@ -70,7 +70,7 @@ impl EnvelopeTemplate {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileOperation {
     /// The profile-declared operation id a binding names.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The facade method.
     pub method: crate::model::HttpMethod,
     /// The facade path template, e.g. `/v2/cases/{type}`.
@@ -130,7 +130,7 @@ pub struct ParameterizedPart {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterProfile {
     /// The profile identifier a project pins.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The profile's own version; a project pin names it next to the
     /// digest (CFG-ID-4).
     pub version: String,
@@ -153,7 +153,7 @@ mod tests {
 
     fn operation(id: &str, method: crate::model::HttpMethod) -> ProfileOperation {
         ProfileOperation {
-            id: ExternalId::new(id).expect("id"),
+            id: LocalId::new(id).expect("id"),
             method,
             path: "/v2/cases/{type}".to_string(),
             request_envelope: None,
@@ -198,11 +198,11 @@ mod tests {
     #[test]
     fn profile_round_trips_with_declared_operation_ids() {
         let profile = AdapterProfile {
-            id: ExternalId::new("case-api").expect("id"),
+            id: LocalId::new("case-api").expect("id"),
             version: "1.0.0".to_string(),
             operations: UniqueIdList::new(vec![
-                operation("cases.find", crate::model::HttpMethod::Post),
-                operation("cases.get", crate::model::HttpMethod::Get),
+                operation("cases-find", crate::model::HttpMethod::Post),
+                operation("cases-get", crate::model::HttpMethod::Get),
             ])
             .expect("unique"),
             problem_codes: registry_platform_yaml::UniqueList::new(vec![ExternalId::new(
@@ -227,8 +227,8 @@ mod tests {
     fn duplicate_operation_ids_are_refused() {
         assert!(
             UniqueIdList::new(vec![
-                operation("cases.find", crate::model::HttpMethod::Post),
-                operation("cases.find", crate::model::HttpMethod::Get),
+                operation("cases-find", crate::model::HttpMethod::Post),
+                operation("cases-find", crate::model::HttpMethod::Get),
             ])
             .is_err(),
             "duplicate operation id refused"

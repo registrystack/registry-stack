@@ -14,7 +14,7 @@
 use crate::model::{
     AggregationStrategy, ErrorClass, Expression, HttpMethod, RhaiExpression, SendUri,
 };
-use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId, UniqueList};
+use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId, LocalId, UniqueList};
 use serde::{Deserialize, Serialize};
 
 /// A percentage the reader bounds to 1 through 100 (CFG-QTY-4).
@@ -32,7 +32,7 @@ pub(crate) type PositiveU32 = BoundedU32<1, { u32::MAX }>;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RouteDefinition {
     /// The route identifier `direct:` targets and bindings name.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The route consumer; `direct:` only.
     pub from: RouteFrom,
     /// The ordered steps.
@@ -894,7 +894,7 @@ pub enum TemplateParameterType {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RouteTemplate {
     /// The template identifier `templatedRoutes` reference.
-    pub id: ExternalId,
+    pub id: LocalId,
     /// The typed parameters the template body references.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<TemplateParameter>,
@@ -1170,7 +1170,7 @@ mod tests {
     fn route_definition_round_trips_with_direct_from() {
         let route: RouteDefinition = serde_json::from_str(
             r#"{
-                "id": "fetchCase",
+                "id": "fetch-case",
                 "from": { "uri": "direct:fetchCase" },
                 "steps": [
                     { "setBody": { "constant": null } }
@@ -1808,7 +1808,7 @@ mod tests {
     fn route_template_and_templated_route_round_trip() {
         let template: RouteTemplate = serde_json::from_str(
             r#"{
-                "id": "pagedFetch",
+                "id": "paged-fetch",
                 "parameters": [
                     { "name": "program", "type": "string", "required": true },
                     { "name": "page-size", "type": "integer", "defaultValue": 50, "description": "page size" }
@@ -1821,7 +1821,7 @@ mod tests {
         assert!(template.parameters[0].required);
         let templated: TemplatedRoute = serde_json::from_str(
             r#"{
-                "routeTemplate": "pagedFetch",
+                "routeTemplate": "paged-fetch",
                 "routeId": "listCases",
                 "parameters": { "program": "salsa" }
             }"#,
@@ -2026,7 +2026,7 @@ mod tests {
                 "parameters": {
                     "httpMethod": "GET",
                     "query": { "type": { "constant": "case" } },
-                    "operation": "cases.find"
+                    "operation": "cases-find"
                 }
             }"#,
         )
@@ -2039,10 +2039,10 @@ mod tests {
                 .operation
                 .as_ref()
                 .map(|operation| operation.as_str()),
-            Some("cases.find")
+            Some("cases-find")
         );
         let json = serde_json::to_value(&enrich).expect("serialize");
         assert_eq!(json["parameters"]["httpMethod"], "GET");
-        assert_eq!(json["parameters"]["operation"], "cases.find");
+        assert_eq!(json["parameters"]["operation"], "cases-find");
     }
 }
