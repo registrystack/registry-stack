@@ -27,8 +27,15 @@ pub struct Endpoint {
     pub authentication: EndpointAuthentication,
     /// The response headers the engine copies onto the exchange, Camel's
     /// `HeaderFilterStrategy` as an allowlist, unique (CFG-ID-6).
-    #[serde(default, skip_serializing_if = "response_headers_empty")]
+    #[serde(default, skip_serializing_if = "headers_empty")]
     pub response_headers: UniqueList<ExternalId>,
+    /// The request headers the engine sends upstream on every send to
+    /// this endpoint, Camel's `HeaderFilterStrategy` as an allowlist,
+    /// unique (CFG-ID-6). Never allowlistable: the reserved header names
+    /// of `products/adapter/CONCEPT.md` section 8.11.4 and this
+    /// endpoint's own api-key header name.
+    #[serde(default, skip_serializing_if = "headers_empty")]
+    pub request_headers: UniqueList<ExternalId>,
     /// The operations this endpoint serves, each with its
     /// `idempotentUpstream` claim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -48,9 +55,9 @@ pub struct Endpoint {
     pub variables: Option<crate::model::Expression>,
 }
 
-/// The endpoint's response-header allowlist is omitted from the wire when
-/// empty, the shape `Vec`'s `skip_serializing_if = "Vec::is_empty"` gave.
-fn response_headers_empty(headers: &UniqueList<ExternalId>) -> bool {
+/// An endpoint header allowlist is omitted from the wire when empty, the
+/// shape `Vec`'s `skip_serializing_if = "Vec::is_empty"` gave.
+fn headers_empty(headers: &UniqueList<ExternalId>) -> bool {
     headers.is_empty()
 }
 
@@ -195,6 +202,7 @@ mod tests {
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
             response_headers: UniqueList::new(vec![ExternalId::new("etag").expect("header")])
                 .expect("unique"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
                 id: LocalId::new("cases-upsert").expect("op"),
                 idempotent_upstream: true,

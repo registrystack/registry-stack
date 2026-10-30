@@ -18,7 +18,7 @@ use crate::profile::{
 use crate::project::AdapterProject;
 use crate::route::{Step, TemplateParameterType};
 use crate::runtime::AdapterRuntimeConfig;
-use registry_platform_yaml::{Diagnostic, Digest, ExternalId};
+use registry_platform_yaml::{Diagnostic, Digest, ExternalId, UniqueList};
 use std::collections::{HashMap, HashSet};
 
 /// The deepest `direct:` call chain the graph may form
@@ -455,6 +455,43 @@ fn facade_path_parameter_checks(
     findings
 }
 
+/// The 8.11.4 allowlist checks over one endpoint header allowlist: every
+/// name is an RFC 9110 token, and the never-allowlistable set refuses,
+/// which is the reserved header names plus this endpoint's own api-key
+/// header name (`products/adapter/CONCEPT.md` section 8.11.4).
+fn header_allowlist_checks(
+    prefix: &str,
+    member: &str,
+    headers: &UniqueList<ExternalId>,
+    api_key_header: Option<&str>,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for (index, header) in headers.iter().enumerate() {
+        let name = header.as_str();
+        let pointer = &format!("{prefix}/{member}/{index}");
+        if !is_header_token(name) {
+            findings.push(finding(
+                CheckCode::PackInvalidHeaderName,
+                pointer,
+                "the header name is not an RFC 9110 header-name token",
+                "Write the header name as an RFC 9110 token.",
+            ));
+            continue;
+        }
+        if is_reserved_header_name(name)
+            || api_key_header.is_some_and(|key| key == name.to_ascii_lowercase())
+        {
+            findings.push(finding(
+                CheckCode::PackReservedHeaderName,
+                pointer,
+                "the header name is reserved by the engine",
+                "Declare a header the engine does not own.",
+            ));
+        }
+    }
+    findings
+}
+
 fn request_envelope_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Diagnostic> {
     let Some(request_envelope) = &operation.request_envelope else {
         return vec![finding(
@@ -553,16 +590,24 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
                 ));
             }
         }
-        for (header_index, header) in endpoint.response_headers.iter().enumerate() {
-            if !is_header_token(header.as_str()) {
-                findings.push(finding(
-                    CheckCode::PackInvalidHeaderName,
-                    &format!("{prefix}/responseHeaders/{header_index}"),
-                    "the response header name is not an RFC 9110 header-name token",
-                    "Write the header name as an RFC 9110 token.",
-                ));
+        let api_key_header = match &endpoint.authentication {
+            EndpointAuthentication::StaticApiKey { header_name } => {
+                Some(header_name.to_ascii_lowercase())
             }
-        }
+            _ => None,
+        };
+        findings.extend(header_allowlist_checks(
+            &prefix,
+            "responseHeaders",
+            &endpoint.response_headers,
+            api_key_header.as_deref(),
+        ));
+        findings.extend(header_allowlist_checks(
+            &prefix,
+            "requestHeaders",
+            &endpoint.request_headers,
+            api_key_header.as_deref(),
+        ));
         if let Some(crate::model::Expression::Rhai(rhai)) = &endpoint.variables {
             if pack.pinned_file(&rhai.file).is_none() {
                 findings.push(finding(
@@ -3215,6 +3260,7 @@ mod tests {
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
                 id: local("cases-create"),
                 idempotent_upstream: true,
@@ -3233,6 +3279,7 @@ mod tests {
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Basic {},
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
                 id: local("cases-find"),
                 idempotent_upstream: true,
@@ -6478,6 +6525,7 @@ mod tests {
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
                 id: local("person-find"),
                 idempotent_upstream: false,
@@ -6556,6 +6604,7 @@ mod tests {
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
                 id: local("person-find"),
                 idempotent_upstream: false,
@@ -6903,6 +6952,60 @@ mod tests {
         assert_has(&check("not a token"), CheckCode::PackInvalidHeaderName);
         // A custom Authorization-like name passes cleanly.
         assert_clean(check("X-Authorization"));
+    }
+
+    /// The `requestHeaders` allowlist follows the same 8.11.4 rules as the
+    /// response list: RFC 9110 token names, the never-allowlistable
+    /// reserved set, and the endpoint's own api-key header name refused
+    /// in either list (`products/adapter/CONCEPT.md` section 8.11.4).
+    #[test]
+    fn request_header_allowlists_follow_the_header_rules() {
+        // Ordinary request headers a send may want upstream.
+        let mut endpoint = oauth_endpoint();
+        endpoint.request_headers =
+            UniqueList::new(vec![id("Accept"), id("Prefer"), id("If-None-Exist")]).expect("unique");
+        assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
+
+        // A non-token name refuses at the requestHeaders member.
+        let mut endpoint = oauth_endpoint();
+        endpoint.request_headers = UniqueList::new(vec![id("not a token")]).expect("unique");
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_eq!(findings[0].code, CheckCode::PackInvalidHeaderName.code());
+        assert_eq!(findings[0].path, "/endpoints/0/requestHeaders/0");
+
+        // Reserved names, including the hop-by-hop Proxy-* prefix,
+        // refuse at the requestHeaders member.
+        for name in ["Cookie", "Set-Cookie", "Host", "Proxy-Session"] {
+            let mut endpoint = oauth_endpoint();
+            endpoint.request_headers = UniqueList::new(vec![id(name)]).expect("unique");
+            let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+            assert_eq!(findings[0].code, CheckCode::PackReservedHeaderName.code());
+            assert_eq!(findings[0].path, "/endpoints/0/requestHeaders/0");
+        }
+
+        // The endpoint's own api-key header name is never allowlistable,
+        // compared without case, in either list.
+        let api_key_endpoint = || {
+            let mut endpoint = oauth_endpoint();
+            endpoint.authentication = EndpointAuthentication::StaticApiKey {
+                header_name: "X-Api-Key".to_string(),
+            };
+            endpoint
+        };
+        let mut endpoint = api_key_endpoint();
+        endpoint.request_headers = UniqueList::new(vec![id("x-api-key")]).expect("unique");
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_eq!(findings[0].code, CheckCode::PackReservedHeaderName.code());
+        assert_eq!(findings[0].path, "/endpoints/0/requestHeaders/0");
+        let mut endpoint = api_key_endpoint();
+        endpoint.response_headers = UniqueList::new(vec![id("X-Api-Key")]).expect("unique");
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_eq!(findings[0].code, CheckCode::PackReservedHeaderName.code());
+        assert_eq!(findings[0].path, "/endpoints/0/responseHeaders/0");
+        // A different endpoint listing the same name is fine.
+        let mut endpoint = oauth_endpoint();
+        endpoint.request_headers = UniqueList::new(vec![id("X-Api-Key")]).expect("unique");
+        assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
     }
 
     /// A query key is the upstream's wire name: `_format` and
