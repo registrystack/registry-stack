@@ -17,12 +17,10 @@ use crate::auth::token::resolve_binary;
 use crate::auth::{AuthError, ProtectedText};
 use registry_adapter_core::{AdapterRuntimeConfig, EndpointBinding};
 use registry_platform_config::SecretResolver;
-use registry_platform_httputil::destination::DestinationTlsMaterial;
+use registry_platform_httputil::destination::{
+    DestinationTlsMaterial, MAX_DESTINATION_CA_BUNDLE_BYTES,
+};
 use std::fmt;
-
-/// The most bytes a CA bundle file may hold, the shared bound Evidence
-/// puts on its own private CA bundles.
-const CA_BUNDLE_MAXIMUM_BYTES: usize = 1024 * 1024;
 
 /// Why a binding's outbound TLS material could not be resolved or
 /// built. Every rendering is fixed text; none carries a reference name,
@@ -128,13 +126,21 @@ impl EndpointTls {
 }
 
 /// Read the CA bundle of one named trust profile. Every failure is the
-/// one [`TlsFault::CaBundle`]: an undeclared profile, an unreadable or
-/// oversized file all refuse value-free, without naming the profile, the
-/// path, or the file's content.
+/// one [`TlsFault::CaBundle`]: an undeclared profile, an unreadable,
+/// non-regular, or oversized file all refuse value-free, without naming
+/// the profile, the path, or the file's content.
+///
+/// The path is required to be a regular file before it is opened (a
+/// FIFO with no writer would block inside `open(2)` before any check on
+/// the handle could run) and required again on the opened handle (the
+/// path may have been swapped between the two), then read through the
+/// platform bound plus one byte: the bound bounds the read even when
+/// the file's own size lies.
 fn resolve_ca_bundle(
     runtime: &AdapterRuntimeConfig,
     profile: &str,
 ) -> Result<ProtectedText, AuthError> {
+    use std::io::Read;
     let refuse = || AuthError::Tls(TlsFault::CaBundle);
     let path = runtime
         .outbound_tls
@@ -142,8 +148,18 @@ fn resolve_ca_bundle(
         .and_then(|tls| tls.trust_profiles.get(profile))
         .map(|declared| declared.ca_bundle_file.as_str())
         .ok_or_else(refuse)?;
-    let bytes = std::fs::read(path).map_err(|_| refuse())?;
-    if bytes.len() > CA_BUNDLE_MAXIMUM_BYTES {
+    if !std::fs::metadata(path).map_err(|_| refuse())?.is_file() {
+        return Err(refuse());
+    }
+    let file = std::fs::File::open(path).map_err(|_| refuse())?;
+    if !file.metadata().map_err(|_| refuse())?.is_file() {
+        return Err(refuse());
+    }
+    let mut bytes = Vec::new();
+    file.take((MAX_DESTINATION_CA_BUNDLE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| refuse())?;
+    if bytes.len() > MAX_DESTINATION_CA_BUNDLE_BYTES {
         return Err(refuse());
     }
     Ok(ProtectedText::from_owned(bytes))
@@ -331,9 +347,9 @@ mod tests {
         );
     }
 
-    /// Undeclared profiles and unreadable or oversized bundle files
-    /// refuse value-free: the rendering names neither the profile, the
-    /// path, nor the content.
+    /// Undeclared profiles and unreadable, non-regular, or oversized
+    /// bundle paths refuse value-free: the rendering names neither the
+    /// profile, the path, nor the content.
     #[test]
     fn unusable_profiles_refuse_value_free() {
         let fault = EndpointTls::resolve(
@@ -353,7 +369,8 @@ mod tests {
         assert!(!fault.to_string().contains("missing"), "{fault}");
 
         let oversized = bundle_path("oversized");
-        std::fs::write(&oversized, vec![b'p'; CA_BUNDLE_MAXIMUM_BYTES + 1]).expect("write bundle");
+        std::fs::write(&oversized, vec![b'p'; MAX_DESTINATION_CA_BUNDLE_BYTES + 1])
+            .expect("write bundle");
         let runtime = runtime_config(Some(oversized.to_str().expect("utf-8 path")));
         let fault = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
             .unwrap_err();
@@ -373,5 +390,59 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(fault, AuthError::Tls(TlsFault::ClientIdentity));
+    }
+
+    /// A bundle path that is not a regular file refuses: a directory (or
+    /// any device or FIFO an operator mistyped) cannot block startup.
+    #[test]
+    fn a_non_regular_bundle_path_refuses() {
+        let directory = std::env::temp_dir().join(format!(
+            "registry-adapter-tls-dir-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).expect("create directory");
+        let runtime = runtime_config(Some(directory.to_str().expect("utf-8 path")));
+        let fault = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
+            .unwrap_err();
+        std::fs::remove_dir(&directory).expect("remove directory");
+        assert_eq!(fault, AuthError::Tls(TlsFault::CaBundle));
+        assert!(
+            !fault.to_string().contains("registry-adapter-tls-dir"),
+            "{fault}"
+        );
+    }
+
+    /// On Unix, a bundle path that is a FIFO with no writer refuses
+    /// instead of blocking: the regular-file check runs before
+    /// `open(2)`, which would otherwise wait for a writer forever. The
+    /// resolve runs on a thread and the test waits bounded, so a
+    /// regression fails by timeout rather than hanging the suite.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_bundle_path_refuses_without_blocking() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let fifo = std::env::temp_dir().join(format!("registry-adapter-tls-fifo-{unique}"));
+        let created = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(created.success(), "mkfifo created the fifo");
+        let runtime = runtime_config(Some(fifo.to_str().expect("utf-8 path")));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let resolved =
+                EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver());
+            let _ = sender.send(resolved);
+        });
+        let outcome = receiver.recv_timeout(std::time::Duration::from_secs(10));
+        std::fs::remove_file(&fifo).expect("remove fifo");
+        let resolved = outcome.expect("the fifo path refused instead of blocking on open(2)");
+        assert_eq!(resolved.unwrap_err(), AuthError::Tls(TlsFault::CaBundle));
     }
 }
