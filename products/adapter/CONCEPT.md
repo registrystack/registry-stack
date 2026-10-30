@@ -326,11 +326,16 @@ the profile, not before.
 The upstream transport is `registry-platform-httputil`'s
 `FixedDestinationPolicy` (opaque templated requests, DNS pinning, mTLS and
 private CAs, the explicit private-CIDR allowlist); the facade's server side is
-`registry-platform-httpsec`, as Evidence does. The EIP processors
-(redelivery, circuit breaker, throttle) are adapter-local: under the
-two-system rule they have one consumer, and they move into a platform crate
-only when a second product needs them. This program changes no Evidence
-crate and no platform crate other than `products/platform` registration.
+`registry-platform-httpsec`, as Evidence does. The generic
+mechanisms under the resilience processors are built in platform crates from
+the start (D13): the rolling-window limiter in `registry-platform-ratelimit`,
+and the circuit breaker state machine and redelivery delay computation in
+`registry-platform-resilience`. Neither knows an exchange, a route, or an
+error class. The `throttle` and `circuitBreaker` processors and the redelivery
+loop stay in the adapter with their Camel semantics and written divergences.
+This program changes no Evidence crate; its platform changes are these
+primitives, additive constructors accepted in review, and `products/platform`
+registration.
 
 ### 8.2 Exchange and Message
 
@@ -1496,6 +1501,12 @@ one that decides a row.
   source; only the profile decides what the caller sees.
 - P4, the engine owns sensitive state: it stays in the engine, bounded by time
   and purpose, with a security review note.
+- P5, shared mechanism early, features on need: a generic mechanism with no
+  product semantics goes straight into a shared crate when that costs little;
+  the two-system rule still decides what the engine compiles in, and a feature
+  waits for a real source that needs it.
+- P6, real proof before more breadth: prefer one route proven end to end over
+  wider coverage; only captured source behaviour counts as proof.
 
 | ID | Decision | Date, status |
 |---|---|---|
@@ -1511,9 +1522,9 @@ one that decides a row.
 | D10 | Expression languages are `constant`, `header`, `exchangeProperty`, `jsonpath` (RFC 9535, inline, via a CFG-EMBED-1 amendment), and `rhai` (files only), which replaces Simple | 2026-10-30, accepted by Jeremi |
 | D11 | Camel semantics, platform spelling: CFG-NAME wins on key spelling, Camel names are kept where they conform, exchange property names stay verbatim | 2026-10-30, accepted by Jeremi (P1) |
 | D12 | The idempotency store retains the exact facade response for a deployment-configured retention window, separate from the value-free audit journal (BReg precedent); security review note required | 2026-10-30, accepted by Jeremi |
-| D13 | Redelivery, circuit breaker, and throttle processors are adapter-local under the two-system rule; the earlier Increment 1 platform stream that would have added them to `registry-platform-httputil` is dropped | 2026-10-30, under delegation, pending Jeremi |
-| D14 | Write resume is an addition, deferred to Increment 3 where OpenCRVS needs it; until then a write route with more than one non-safe send is refused | 2026-10-30, under delegation, pending Jeremi |
-| D15 | Fixture provenance distinguishes `captured` from `documented`; overnight fixtures are `documented` unless a real instance was run | 2026-10-30, under delegation, pending Jeremi |
+| D13 | The generic mechanisms under redelivery, circuit breaker, and throttle are built in platform crates from the start: the rolling-window limiter in `registry-platform-ratelimit`, the breaker state machine and redelivery delay computation in `registry-platform-resilience`. The processors and the redelivery loop stay in the adapter | 2026-10-30, accepted by Jeremi (P5) |
+| D14 | Write resume is an addition, deferred to Increment 3 where OpenCRVS needs it; until then a write route with more than one non-safe send is refused | 2026-10-30, accepted by Jeremi (P5) |
+| D15 | Fixture provenance distinguishes `captured` from `documented`; overnight fixtures are `documented` unless a real instance was run | 2026-10-30, accepted by Jeremi (P6) |
 | D16 | A write the source accepted but has not completed answers a 202 with a status link or a bounded wait, chosen by configuration; the keys and the bound's expiry are settled in Increment 2 | 2026-10-30, accepted by Jeremi |
 | D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted by Jeremi |
 | D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, accepted by Jeremi (P2) |
@@ -1527,3 +1538,7 @@ one that decides a row.
 | D26 | A `POST` counts as safe only under a reviewed `safeUpstream: true` operation claim; a GraphQL send's safety comes from its parsed operation type | 2026-10-30, accepted by Jeremi (P2) |
 | D27 | Exception matching is Camel's closest match across the error and its causes, ties to the most nested cause, never rising the hierarchy; any uncatchable class in the chain fires no clause | 2026-10-30, accepted by Jeremi (P1) |
 | D28 | `AdapterProject` carries a `project` block (`id`, `version`) as CFG-ENV-6 requires, rather than a top-level `id` | 2026-10-30, accepted by Jeremi (P1) |
+| D29 | Increment 1's parallel leaf streams pause once C4a and C4c land; the `records-get` route is built end to end first, then the leaves resume over it | 2026-10-30, accepted by Jeremi (P6) |
+| D30 | Increment 1's gate requires `captured` DHIS2 fixtures for get, missing, and search page, taken from a real server | 2026-10-30, accepted by Jeremi (P6) |
+| D31 | Circuit breaker and throttle stay in Increment 1 as its last slice | 2026-10-30, accepted by Jeremi (P6) |
+| D32 | No declarative field map until a real source needs one; field mapping stays in routes and scripts | 2026-10-30, accepted by Jeremi (P5) |

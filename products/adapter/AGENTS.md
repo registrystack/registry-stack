@@ -29,11 +29,12 @@ changing the product or any `registry-adapter*` crate.
 `registry-platform-script`, `-oidc`, `-httputil`, `-httpsec`,
 `-ratelimit`, `-audit`, `-config`, and `-yaml`, and never another
 product's runtime, tooling, or protocol types. Product logic (routes, EIP
-processors, mapping, disclosure) never moves into a platform crate; the
-redelivery, circuit breaker, and throttle processors stay adapter-local
-under the two-system rule (D13). This program changes no Evidence crate
-and no platform crate; its only platform edits are format registration in
-`products/platform/`.
+processors, mapping, disclosure) never moves into a platform crate. The
+generic primitives under `throttle`, `circuitBreaker`, and redelivery live in
+`registry-platform-ratelimit` and `registry-platform-resilience` (D13); the
+processors and the redelivery loop stay here. This program changes no
+Evidence crate; its other platform edits are format registration in
+`products/platform/` and additive constructors accepted in review.
 
 ## Gates
 

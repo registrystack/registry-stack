@@ -378,6 +378,12 @@ closed inside Wave 0b rather than as a separate Increment 0 round:
 
 ### Wave 1 (parallel, disjoint modules)
 
+Order (D29, D31): the streams below pause once C4a and C4c land. `records-get`
+is built end to end first, over the real exchange, route interpreter, egress,
+and facade, so seams surface before the leaves multiply. The leaves then
+resume over that route. C6's `circuitBreaker` and `throttle` are the last
+slice of the increment, on the platform primitives of D13.
+
 - **C1, exchange and core EIPs**, owns `src/{exchange,route,language}/**`,
   `src/processor/{to,set_body,transform,set_header,set_property,remove_header,remove_property,script,choice,filter,validate,stop,throw_exception}.rs`,
   and `tests/camel_{exchange,message,routes,languages,to,set_body,transform,headers_properties,script,choice,filter,validate,stop,throw_exception}.rs`:
@@ -446,6 +452,12 @@ A gap that still needs Rust, or an experiment that passes `check` but
 fails to execute, is a finding against this increment, and Increment 1 is
 not done while one is open.
 
+Captured proof (D30): the increment's gate requires `kind: captured` DHIS2
+fixtures for get, missing, and search page, taken from a real server by the
+lead, scrubbed of hostnames, credentials, and personal data before they reach
+a stream or the repository. `records-get` also runs once against that server,
+from a local run that holds the credentials and commits nothing.
+
 P1 gaps from the first experiments not owned above, with their
 disposition: G-IDEMCLAIM (an `idempotentUpstream` or `safeUpstream` claim
 needs a comment citing its source documentation, enforced by review, not
@@ -499,11 +511,14 @@ the lead reviewer before launching.
 
 ## Platform rules
 
-- Mechanism moves into platform crates only under the two-system rule; this
-  program adds none. The redelivery, breaker, and throttle processors are
-  adapter-local (D13).
-- The only platform edits are A2's registration and amendment in
-  `products/platform/**`. No Evidence crate changes.
+- Generic mechanism with no product semantics goes into a platform crate from
+  the start when that costs little (D13): the rolling-window limiter in
+  `registry-platform-ratelimit`, the breaker state machine and redelivery delay
+  computation in `registry-platform-resilience`. The processors and the
+  redelivery loop stay in the adapter.
+- Every other platform edit is A2's registration and amendment in
+  `products/platform/**` or an additive constructor accepted in review. No
+  Evidence crate changes.
 
 ## Brief template
 
@@ -603,7 +618,7 @@ Increment 3:
 Global definition of done: `CONCEPT.md` section 14, items 1 to 9, each
 verified by the commands above. The final report to Jeremi states the count
 of `captured` and `documented` fixtures, every open finding, every
-contradiction rule 11 surfaced, and the decisions still pending (D13 to D15).
+contradiction rule 11 surfaced, and the decisions still pending.
 
 ## Increment checklist
 
