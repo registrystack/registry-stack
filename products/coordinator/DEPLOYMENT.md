@@ -368,7 +368,8 @@ connections:
 
 `resultCheckSeconds`, from 60 to 86,400 and 900 by default, spaces the Proposal reads of a
 waiting run; each read is one request to BReg per waiting run. `requestLink` is an `https`
-template with exactly one `{proposalId}`; inspection shows it as "Open the request". Neither is
+template with exactly one `{proposalId}`, or `http` on a loopback IP address such as
+`127.0.0.1` for a local staff app; inspection shows it as "Open the request". Neither is
 part of a live run's binding, so you can change both while runs wait. A missing `get` grant
 shows on the waiting run as the hold `proposal-unreadable`; a missing `start` or `submit` grant
 shows as BReg's refusal of that step.

@@ -263,7 +263,8 @@ task-authority connection.
 A `breg` connection gains two optional members. `resultCheckSeconds` spaces Proposal reads, with
 the Casework bounds and default. `requestLink` is an `https` URL template with exactly one
 `{proposalId}` placeholder, usually the BReg staff page for `/v1/proposals/{id}`; inspection then
-offers "Open the request" for each Proposal wait. Neither is part of a live run's binding, so both
+offers "Open the request" for each Proposal wait. Like a connection endpoint, it may use `http`
+only on a loopback IP address, for a staff app on the operator's own machine. Neither is part of a live run's binding, so both
 can change while runs wait. The link carries only the opaque id, which grants nothing without
 BReg's own grant.
 

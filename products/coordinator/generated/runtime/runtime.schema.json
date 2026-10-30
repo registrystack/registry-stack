@@ -222,9 +222,9 @@
               "$ref": "#/$defs/ExternalId"
             },
             "requestLink": {
-              "description": "An `https` URL template with exactly one `{proposalId}` placeholder,\nafter the host. Inspection offers it as \"Open the request\".",
+              "description": "An `https` URL template, or `http` on a loopback address, with exactly\none `{proposalId}` placeholder after the host. Inspection offers it as\n\"Open the request\".",
               "maxLength": 2048,
-              "pattern": "^https://[^{}]+/[^{}]*\\{proposalId\\}[^{}]*$",
+              "pattern": "^(https://[^{}]+|http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)/[^{}]*\\{proposalId\\}[^{}]*$",
               "type": "string"
             },
             "resultCheckSeconds": {

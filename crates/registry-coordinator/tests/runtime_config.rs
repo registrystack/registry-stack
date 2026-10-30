@@ -2051,6 +2051,23 @@ fn breg_proposal_follow_settings_are_bounded_and_outside_the_binding_digest() {
     document["connections"]["applications"]["resultCheckSeconds"] = json!(86_400);
     assert!(load(&document.to_string()).is_ok());
 
+    // A staff app on the operator's own machine may use plain http, as a
+    // loopback endpoint may.
+    for link in [
+        "http://127.0.0.1:18090/proposals/{proposalId}",
+        "http://[::1]/proposals/{proposalId}",
+    ] {
+        let mut document = original.clone();
+        document["connections"]["applications"]["requestLink"] = json!(link);
+        let loaded = load(&document.to_string()).unwrap();
+        assert_eq!(
+            loaded.connections["applications"]
+                .request_link(VALID_ID)
+                .as_deref(),
+            Some(link.replace("{proposalId}", VALID_ID).as_str())
+        );
+    }
+
     for (member, value) in [
         ("resultCheckSeconds", json!(59)),
         ("resultCheckSeconds", json!(86_401)),
@@ -2058,6 +2075,9 @@ fn breg_proposal_follow_settings_are_bounded_and_outside_the_binding_digest() {
             "requestLink",
             json!("http://breg.example.test/{proposalId}"),
         ),
+        ("requestLink", json!("http://localhost:18090/{proposalId}")),
+        ("requestLink", json!("http://10.0.0.5/{proposalId}")),
+        ("requestLink", json!("ftp://127.0.0.1/{proposalId}")),
         ("requestLink", json!("https://breg.example.test/proposals")),
         (
             "requestLink",
