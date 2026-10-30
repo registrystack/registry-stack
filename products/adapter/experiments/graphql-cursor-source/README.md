@@ -110,7 +110,7 @@ case system behind a static API key:
 - **HTTP parameters on a graphql send.** `path`, `pathParameters`, and
   `query` on a `graphql:` `to` pass (probe `e3-graphql-http-parameters`).
   (Landed 2026-10-30 as `adapter.route.graphql-send-members`; the pack now
-  declares `graphql: Query` on its endpoint operations and names the
+  declares `graphql: query` on its endpoint operations and names the
   operation on each send, which also makes the queries count as safe
   upstream.)
 

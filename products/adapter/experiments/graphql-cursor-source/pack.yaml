@@ -31,7 +31,7 @@ endpoints:
         entrypoint: find_variables
     operations:
       - id: cases-query
-        graphql: Query
+        graphql: query
     testedVersions:
       - "2024-01"
   - id: case-node
@@ -47,7 +47,7 @@ endpoints:
         entrypoint: get_variables
     operations:
       - id: cases-node
-        graphql: Query
+        graphql: query
     testedVersions:
       - "2024-01"
 routeTemplates:

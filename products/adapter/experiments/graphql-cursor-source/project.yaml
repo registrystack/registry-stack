@@ -22,7 +22,7 @@ profile:
 pack:
   id: graphql-cases
   version: "1"
-  digest: sha256:3fcff3c9c73b3ebefdc8ba5f5b449b831bae2f6f14d9ce05c4c934b3e87f566d
+  digest: sha256:e694aa244bdff1345c1c20702bb24b7fe5e5f3f4ce960b6eb32cf44dda084078
 recordTypes:
   - name: benefit_case
     fields:
