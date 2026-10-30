@@ -729,7 +729,10 @@ impl Default for TokenCache {
 /// for at most the cache's admission bound before refusing with a
 /// transport timeout. The lifetime anchor is taken just before the send,
 /// the earliest moment the issuer could have issued, so a cached
-/// credential can never outlive its real expiry.
+/// credential can never outlive its real expiry. An issuance that earns
+/// no cache lifetime is never stored, Evidence's rule, so the returned
+/// generation is `None` for it and a 401 about that send invalidates
+/// nothing.
 pub(crate) async fn acquire_token(
     plan: &TokenEndpointPlan,
     budget: &mut TokenBudget,
@@ -737,7 +740,7 @@ pub(crate) async fn acquire_token(
     send: &dyn TokenSend,
     signer: &dyn ClientAssertionSigner,
     events: &mut Vec<AuthEvent>,
-) -> Result<(ProtectedText, u64), AuthError> {
+) -> Result<(ProtectedText, Option<u64>), AuthError> {
     let cache = plan.cache.as_ref();
     let mut guard = match timeout(cache.admission_timeout, cache.state.lock()).await {
         Ok(guard) => guard,
@@ -753,7 +756,7 @@ pub(crate) async fn acquire_token(
     if let Some(cached) = guard.cached.as_ref() {
         if Instant::now() < cached.expires_at {
             events.push(AuthEvent::TokenCacheHit);
-            return Ok((cached.token.clone(), cached.generation));
+            return Ok((cached.token.clone(), Some(cached.generation)));
         }
     }
     // The allowance is spent only once the request actually renders: a
@@ -781,8 +784,16 @@ pub(crate) async fn acquire_token(
         plan.assumed_lifetime,
     ) {
         Ok((token, lifetime)) => {
-            let expires_at = anchored + clamped_lifetime(lifetime, plan.maximum_cache);
-            let generation = guard.store_next(token.clone(), expires_at);
+            let cache_lifetime = clamped_lifetime(lifetime, plan.maximum_cache);
+            // Evidence's rule: an issuance that earns no cache lifetime
+            // is never stored, so an already-expired credential does not
+            // linger in memory for nothing.
+            let generation = if cache_lifetime.is_zero() {
+                None
+            } else {
+                let expires_at = anchored + cache_lifetime;
+                Some(guard.store_next(token.clone(), expires_at))
+            };
             events.push(AuthEvent::TokenIssued);
             Ok((token, generation))
         }
@@ -1315,7 +1326,8 @@ mod tests {
         assert!(events.contains(&AuthEvent::TokenIssued));
     }
 
-    /// A zero cache ceiling never caches: every acquisition sends.
+    /// A zero cache ceiling never caches: every acquisition sends, and
+    /// no issuance is stored to linger already expired.
     #[tokio::test]
     async fn a_zero_ceiling_never_caches() {
         std::env::set_var("CLIENT_ID", "cid");
@@ -1328,7 +1340,7 @@ mod tests {
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let plan = client_secret_plan(CredentialPlacement::FormBody, 0, None);
-        acquire_token(
+        let (_, generation) = acquire_token(
             &plan,
             &mut budget,
             &resolver(),
@@ -1338,6 +1350,11 @@ mod tests {
         )
         .await
         .expect("the first acquisition issues");
+        assert!(
+            generation.is_none(),
+            "an issuance with no cache lifetime stores nothing"
+        );
+        assert!(plan.cache().remaining_lifetime().await.is_none());
         acquire_token(
             &plan,
             &mut budget,

@@ -210,7 +210,8 @@ pub struct AuthorizedCredential {
     /// The header to append to the send.
     pub header: AuthHeader,
     /// The cached issuance the header carries; `None` when the kind
-    /// holds no cache to invalidate (the static kinds).
+    /// holds no cache to invalidate (the static kinds), or when the
+    /// issuance earned no cache lifetime and nothing was stored.
     pub generation: Option<u64>,
 }
 
@@ -445,7 +446,7 @@ impl AuthPlan {
         let value = scheme_value("Bearer", token.as_bytes()).map_err(|_| AuthError::Credential)?;
         Ok(Some(AuthorizedCredential {
             header: AuthHeader::new("authorization", value),
-            generation: Some(generation),
+            generation,
         }))
     }
 
