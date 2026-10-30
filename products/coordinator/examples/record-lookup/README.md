@@ -25,12 +25,13 @@ cannot tell them apart and the workflow must not either. The adapter passes
 that on as the declared refusal `unresolved`, and `onDeclaredRefusal` routes it
 to the `not-registered` finish.
 
-Route `unresolved` to a finish or to another read, never straight to a step
-that creates or changes a record. `coordinatorctl check` refuses the direct route
-with `definition.unresolved-route`, because "not found, so create" makes a
-duplicate when two records match or one is hidden. A mutation can still follow
-once a person or another read has decided; that costs one extra step before a
-create.
+Route `unresolved` to a finish, another read or a Casework review request,
+never straight to a step that creates or changes a record.
+`coordinatorctl check` refuses the direct route with
+`definition.unresolved-route`, because "not found, so create" makes a
+duplicate when two records match or one is hidden. A mutation can still
+follow once a person or another read has decided; that costs one extra step
+before a create.
 
 The `read` step takes the identifier the lookup returned and calls
 `breg.read-record/v2`. Its input is the same as `breg.read-record/v1`, and its
