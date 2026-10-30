@@ -1314,9 +1314,14 @@ jobs:
     needs: [changes, rust-policy]
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.adapter_contracts == 'true' }}
     runs-on: ubuntu-24.04
-    # The script formats, lints, and tests the adapter crates, then holds the
+    # The script formats, lints, and tests the adapter crates, holds the
     # generated schemas and the configuration conventions against their
-    # generators; all of it compiles cold.
+    # generators, holds the Camel port table against the code, and checks
+    # the example, its fixture replay, the committed experiments, and the
+    # bad-authoring corpus against the adapterctl binary it builds. All
+    # of it compiles cold: CARGO_TARGET_DIR is set because the script
+    # builds its own adapterctl there and refuses to guess a binary
+    # without it.
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -1338,6 +1343,8 @@ jobs:
           version: "0.11.16"
 
       - name: Registry Adapter contract consistency
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: products/adapter/scripts/check-contracts.sh
 
   coordinator-postgres:
