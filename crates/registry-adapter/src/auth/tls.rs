@@ -190,7 +190,7 @@ fn resolve_ca_bundle(
     if !file.metadata().map_err(|_| refuse())?.is_file() {
         return Err(refuse());
     }
-    let mut bytes = Vec::new();
+    let mut bytes = Zeroizing::new(Vec::new());
     file.take((MAX_DESTINATION_CA_BUNDLE_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| refuse())?;
