@@ -18,6 +18,7 @@
 //! value's bytes are never copied into an error, a diagnostic, or a
 //! `Debug` rendering.
 
+use std::fmt;
 use zeroize::Zeroizing;
 
 /// Why a document is not one readable JSON object.
@@ -39,7 +40,12 @@ pub(crate) enum JsonFault {
 /// Numbers keep the distinction a token response depends on: RFC 8259
 /// allows `3600.0` and `1e3`, and a caller that needs a count must be able
 /// to refuse both rather than round them.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// There is no `Clone`: an unbudgeted copy of a text member would
+/// duplicate a value that may be a credential. `Debug` is written by
+/// hand and redacts text values, so a failing assertion or a stray
+/// `{:?}` can never print one.
+#[derive(PartialEq)]
 pub(crate) enum JsonMember {
     /// A decoded JSON string, in a zeroizing buffer: a text value can
     /// carry a credential, as `access_token` does.
@@ -49,6 +55,16 @@ pub(crate) enum JsonMember {
     /// Any other value: a signed or fractional number, a boolean, null,
     /// or a nested object or array. The value was validated and skipped.
     Other,
+}
+
+impl fmt::Debug for JsonMember {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text(_) => formatter.write_str("Text([REDACTED])"),
+            Self::Unsigned(value) => formatter.debug_tuple("Unsigned").field(value).finish(),
+            Self::Other => formatter.write_str("Other"),
+        }
+    }
 }
 
 /// Maximum nesting the reader accepts. A token response is flat; the
@@ -590,5 +606,24 @@ mod tests {
                 "{document:?}"
             );
         }
+    }
+
+    /// The `Debug` of a parsed member redacts text values: a recognizable
+    /// string read from a body never surfaces through a failing
+    /// assertion or a stray `{:?}`.
+    #[test]
+    fn debug_redacts_text_members() {
+        const MARKER: &str = "c4a-json-member-marker-9d2f61b4";
+        let members = parse_object(
+            format!(r#"{{"access_token":"{MARKER}","expires_in":60}}"#).as_bytes(),
+            1024,
+        )
+        .expect("a readable object");
+        let rendered = format!("{members:?}");
+        assert!(
+            !rendered.contains(MARKER),
+            "the Debug rendering carries the text value: {rendered}"
+        );
+        assert!(rendered.contains("Text([REDACTED])"), "{rendered}");
     }
 }
