@@ -127,6 +127,8 @@ fn workspace(base_url: &str, user_var: &str, pass_var: &str) -> (tempfile::TempD
                type: basic\n      \
                usernameRef: secret:env/{user}\n      \
                passwordRef: secret:env/{pass}\n\
+         allowedClients:\n  \
+           - verify-client\n\
          allowedPrivateCidrs:\n  \
            - 10.0.0.0/8\n\
          listener:\n  \
