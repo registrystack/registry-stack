@@ -434,6 +434,14 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
             ));
         }
         if let EndpointAuthentication::StaticApiKey { header_name } = &endpoint.authentication {
+            if !is_header_token(header_name) {
+                findings.push(finding(
+                    CheckCode::PackInvalidHeaderName,
+                    &format!("{prefix}/authentication/headerName"),
+                    "the api-key header name is not an RFC 9110 header-name token",
+                    "Write the header name as an RFC 9110 token.",
+                ));
+            }
             if is_reserved_header_name(header_name) {
                 findings.push(finding(
                     CheckCode::PackReservedHeaderName,
@@ -6263,6 +6271,27 @@ mod tests {
         let mut endpoint = oauth_endpoint();
         endpoint.response_headers = UniqueList::new(vec![id("ETag")]).expect("unique");
         assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
+    }
+
+    /// A `static-api-key` endpoint keeps custom Authorization-like header
+    /// names but refuses the reserved names, Cookie and Host among them,
+    /// and its header name is an RFC 9110 token
+    /// (`products/adapter/CONCEPT.md` sections 8.11.4 and 10.2).
+    #[test]
+    fn api_key_header_names_refuse_the_reserved_names() {
+        let check = |header_name: &str| {
+            let mut endpoint = oauth_endpoint();
+            endpoint.authentication = EndpointAuthentication::StaticApiKey {
+                header_name: header_name.to_string(),
+            };
+            check_pack(&pack_builder(vec![endpoint], vec![]))
+        };
+        for name in ["Cookie", "Host", "Authorization", "Proxy-Session"] {
+            assert_has(&check(name), CheckCode::PackReservedHeaderName);
+        }
+        assert_has(&check("not a token"), CheckCode::PackInvalidHeaderName);
+        // A custom Authorization-like name passes cleanly.
+        assert_clean(check("X-Authorization"));
     }
 
     /// A query key is the upstream's wire name: `_format` and

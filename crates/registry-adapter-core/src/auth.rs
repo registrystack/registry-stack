@@ -254,24 +254,36 @@ pub struct MtlsIdentity {
 }
 
 /// Header names the engine owns; a `static-api-key` endpoint may not
-/// declare one of them as its `headerName`
-/// (`products/adapter/CONCEPT.md` section 10.2). Sorted for the
-/// membership test.
+/// declare one of them as its `headerName`: the names never
+/// allowlistable on the wire (`products/adapter/CONCEPT.md` section
+/// 8.11.4), plus `expect` the engine writes itself. Sorted for the
+/// membership test; the hop-by-hop `Proxy-*` headers are matched by
+/// prefix.
 pub const RESERVED_HEADER_NAMES: &[&str] = &[
     "authorization",
     "connection",
     "content-length",
+    "cookie",
     "expect",
     "host",
+    "keep-alive",
+    "proxy-authorization",
+    "set-cookie",
+    "te",
+    "trailer",
     "transfer-encoding",
+    "upgrade",
 ];
 
-/// Whether a `static-api-key` header name is reserved by the engine.
+/// Whether a `static-api-key` header name is reserved by the engine,
+/// compared without case.
 #[must_use]
 pub fn is_reserved_header_name(name: &str) -> bool {
+    let lowered = name.to_ascii_lowercase();
     RESERVED_HEADER_NAMES
-        .binary_search(&name.to_ascii_lowercase().as_str())
+        .binary_search(&lowered.as_str())
         .is_ok()
+        || lowered.starts_with("proxy-")
 }
 
 #[cfg(test)]
@@ -422,8 +434,9 @@ mod tests {
         }
     }
 
-    /// Reserved header names are refused, case-insensitively; ordinary
-    /// names pass.
+    /// Reserved header names are refused, case-insensitively, including
+    /// the hop-by-hop `Proxy-*` names; ordinary and custom
+    /// Authorization-like names pass.
     #[test]
     fn reserved_header_names() {
         for name in RESERVED_HEADER_NAMES {
@@ -431,7 +444,10 @@ mod tests {
         }
         assert!(is_reserved_header_name("Authorization"));
         assert!(is_reserved_header_name("HOST"));
+        assert!(is_reserved_header_name("Proxy-Session"));
+        assert!(is_reserved_header_name("Set-Cookie"));
         assert!(!is_reserved_header_name("X-Api-Key"));
+        assert!(!is_reserved_header_name("X-Authorization"));
         assert!(!is_reserved_header_name("x-correlation-id"));
     }
 
