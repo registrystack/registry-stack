@@ -278,10 +278,10 @@ fn unresolved_routed_straight_to_a_step_that_writes_a_record_is_refused() {
         diagnostic["message"],
         "A lookup is unresolved when no record matches, but also when two records match or a record is hidden from this profile, so creating a record from this route can make a duplicate."
     );
-    let suggestion = diagnostic["suggestedAction"].as_str().unwrap();
-    assert!(suggestion.contains("create"), "{suggestion}");
-    assert!(suggestion.contains("breg.invoke-action/v1"), "{suggestion}");
-    assert!(suggestion.contains("to another read"), "{suggestion}");
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Route unresolved to a finish, another read or a Casework review request, and create the record from a later step. Step create (breg.invoke-action/v1) can create or change a record."
+    );
 }
 
 #[test]

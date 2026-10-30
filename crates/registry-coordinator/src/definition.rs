@@ -1743,7 +1743,7 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                                 &format!("steps.{name}.onDeclaredRefusal"),
                                 "A lookup is unresolved when no record matches, but also when two records match or a record is hidden from this profile, so creating a record from this route can make a duplicate.",
                                 &format!(
-                                    "Route unresolved to a finish or to another read, and change data from a later step. Step {} ({}) creates or changes a record; a later step costs one extra step before a create.",
+                                    "Route unresolved to a finish, another read or a Casework review request, and create the record from a later step. Step {} ({}) can create or change a record.",
                                     on_declared_refusal.as_deref().unwrap_or_default(),
                                     target.operation.as_str()
                                 ),
