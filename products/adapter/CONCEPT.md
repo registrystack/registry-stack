@@ -417,6 +417,18 @@ otherwise. Section 8.10 is the authoritative list.
   `setProperty`, `removeHeader`, `removeProperty`, `script` (runs an
   expression for effect on properties without changing the body, as Camel's
   `script` EIP).
+- Conversion: `convertBodyTo` and `convertHeaderTo` with Camel's options
+  (`type`, `name`, `toName`, `mandatory` default true; `charset` not
+  ported), plus `convertPropertyTo` with `convertHeaderTo`'s options, an
+  addition because routes carry intermediate values in properties where
+  Camel 4 uses variables, which are not ported. Divergence: `type` names a
+  code map, `codeMap:<id>`, never a Java type. A code map maps an
+  `ExternalId` key to one JSON scalar; lookup is exact and case-sensitive
+  over a string input; a miss or a non-string input raises
+  `conversion.unmapped`, and with `mandatory: false` a miss leaves the
+  target absent. Rhai scripts reach the same lookup through
+  `code_map(id, key)`. Every reference is a literal id that resolves, and
+  `check` refuses a declared map nothing references.
 - Routing: `to` (send to an endpoint; static URI, no `toD`; an `http` send
   may follow an origin-pinned link through `httpUri`, section 8.11.5),
   `choice` with `when` and `otherwise` (first matching predicate wins),
@@ -540,17 +552,25 @@ is in the profile's shape.
   `useExponentialBackOff` (default false), `backOffMultiplier` (default 2),
   `maximumRetryDelaySeconds` (Camel `maximumRedeliveryDelay`, default 60 s),
   `useCollisionAvoidance` (default false), `collisionAvoidanceFactor`
-  (default 0.15), `retryWhile`. `delayPattern` is not ported. Redelivery is
+  (default 0.15). The defaults and the delay computation are
+  `RedeliveryPolicy` at the pinned tag: the multiplier applies only with
+  `useExponentialBackOff` and a multiplier above 1, and collision avoidance
+  varies the delay by plus or minus the factor
+  (`RedeliveryPolicy.calculateRedeliveryDelay`). `delayPattern` is not
+  ported. Redelivery is
   per failing endpoint send, as in Camel, but reaches only upstream
   component sends (`http`, `graphql`; token requests sit outside it per
   section 10.2), never a `to: direct:` send; that scope is a declared
   divergence from Camel, which retries from the point of failure with no
   endpoint-type restriction (camel.apache.org/manual/error-handler.html,
-  camel.apache.org/manual/exception-redelivery.html). `retryWhile` only
-  stops redelivery earlier: `maximumRedeliveries` remains the hard cap, and
-  `check` refuses `retryWhile` with `maximumRedeliveries` 0; divergence
-  from Camel, where `retryWhile` replaces the maximum
-  (camel.apache.org/components/4.22.x/eips/dead-letter-channel.html).
+  camel.apache.org/manual/exception-redelivery.html).
+- `retryWhile`, as in Camel an option of an `onException` clause
+  (`OnExceptionDefinition`) and of the default error handler
+  (`DefaultErrorHandlerDefinition`), not of the redelivery policy:
+  redelivery continues while the predicate is true. Divergence:
+  `maximumRedeliveries` remains the hard cap, where Camel lets `retryWhile`
+  replace it, so `maximumUpstreamCalls` stays a check-time guarantee; `check`
+  refuses `retryWhile` with `maximumRedeliveries` 0.
   Divergence for writes: `check`
   refuses `maximumRedeliveries > 0` over a `to` whose `httpMethod` is not
   safe, unless that endpoint operation declares `idempotentUpstream: true`
@@ -564,13 +584,21 @@ is in the profile's shape.
   output (an empty search page, a fallback record). To translate an error
   instead, the clause ends with `throwException`: as in Camel, an error
   raised inside an exception clause is not handled again and becomes the
-  exchange's failure, which the profile maps to a problem (section 8.11.6).
+  exchange's failure, which the profile maps to a problem (section 8.11.6;
+  Camel wraps clause steps in `FatalFallbackErrorHandler` to stop the
+  recursion).
   A clause never builds a problem body or sets `CamelHttpResponseCode`.
   `continued: true` resumes the route at the step after the failure. An
   unhandled error surfaces as the profile's problem for its class, with no
   upstream content; the profile's mapping for the `upstream` root is the
   catch-all for source failures.
-- `doTry`, `doCatch` (with `onWhen`), `doFinally`: ported as in Camel.
+- `doTry`, `doCatch` (with `onWhen`), `doFinally`: ported as in Camel
+  (`doTry-eip.adoc`, `TryProcessor`). Inside a `doTry` block the route error
+  handler is not in use: no `onException` clause and no redelivery applies
+  to the block's steps. An error no `doCatch` matches, or one raised in a
+  `doCatch` or `doFinally`, leaves the `doTry` and fails the exchange; an
+  error raised in `doFinally` while another is pending is kept as
+  suppressed, and the original wins.
 - `circuitBreaker`: resilience4j semantics and defaults, per EIP node,
   process-local state (as in Camel; replicas have independent breakers):
   `failureRateThreshold` 50, `slidingWindowType` count-based,
@@ -587,7 +615,13 @@ is in the profile's shape.
   `breaker.open` (Camel's `throwExceptionWhenHalfOpenOrOpenState: false`
   default lets the message continue unchanged, which would answer with the
   request echoed); `onFallback` runs on failure and on rejection, and its
-  output is validated like any route output.
+  output is validated like any route output. `inheritErrorHandler` (default
+  false, `resilience4j-eip.adoc`): with true, the route error handler
+  redelivers the whole breaker block; `check` refuses true over a block
+  holding a non-safe send without `idempotentUpstream`, as for
+  `maximumRedeliveries`. Whether an error escaping a breaker without
+  `onFallback` reaches the route's `onException` clauses is decided from
+  `ResilienceProcessor` by the conformance stream and recorded here.
 
 ### 8.8 Components
 
@@ -624,7 +658,10 @@ is in the profile's shape.
   at send time, after the header allowlist has been applied. A send's
   safety comes from its method; a `POST` whose endpoint operation declares
   `safeUpstream: true` (a reviewed claim, as for FHIR `POST _search`)
-  counts as safe for the write-safety rules.
+  counts as safe for the write-safety rules. A read operation (a facade
+  `get` or `search` binding) reaches only safe sends: `check` refuses a
+  non-safe `http` send, or a GraphQL mutation, anywhere in its route
+  closure.
   Each `http` and `graphql` endpoint declares `attemptTimeoutMilliseconds`
   (1 to 30000, the whole outbound attempt) and `maximumResponseBytes` (1 to
   1048576), required and without default, spelled as CFG-NAME-5 and
@@ -708,12 +745,12 @@ delivers the row.
 | Aggregation strategies | `components/next/eips/aggregate-eip.html` (strategies section) | `use-latest`, `use-original`, `grouped-body`, `rhai` | Additions: `json-array-append`, `json-merge` | 1 |
 | Default error handler | `manual/defaulterrorhandler.html`, `manual/error-handler.html` | `errorHandler: defaultErrorHandler`, `noErrorHandler` | Dead letter is always the journal | 1 |
 | Redelivery policy | `manual/error-handler.html` (redelivery) | Options in 8.7 | CFG-NAME spelling; write-safety refusal | 1 |
-| Exception clause | `manual/exception-clause.html` | `onException` | Closed class hierarchy; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile; `handled` and `continued` are booleans where Camel takes predicates | 1 |
+| Exception clause | `manual/exception-clause.html` (hub) with `exception-redelivery.html`, `exception-handling-patterns.html`, `exception-advanced.html` | `onException` | Closed class hierarchy; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile; `handled` and `continued` are booleans where Camel takes predicates | 1 |
 | Try, catch, finally | `manual/try-catch-finally.html` | `doTry`, `doCatch`, `doFinally` | Uncatchable boundary errors | 1 |
-| Circuit Breaker | `components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html` | `circuitBreaker`, `onFallback` | Rejection always raises; fallback on rejection | 1 |
+| Circuit Breaker | `components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html`, `resilience4jConfiguration-eip.html` | `circuitBreaker`, `onFallback`, `inheritErrorHandler` | Rejection always raises; fallback on rejection; options flattened, `slidingWindowCalls` for `slidingWindowSize` (CFG-NAME-4) | 1 |
 | Throttler | `components/next/eips/throttle-eip.html` | `throttle` | Waits bounded by the deadline | 1 |
 | Idempotent Consumer | `components/next/eips/idempotentConsumer-eip.html` | `idempotentConsumer` over the PostgreSQL store | Duplicates replay the recorded response | 2 |
-| Type Converter | `manual/type-converter.html` | Code maps; `conversion.unmapped` on a miss | Explicit tables, no converter chains | 1 |
+| Type Converter | `manual/type-converter.html`, `components/next/eips/convertBodyTo-eip.html`, `convertHeaderTo-eip.html` | `convertBodyTo`, `convertHeaderTo`, `convertPropertyTo` (addition) with `type: codeMap:<id>`; Rhai `code_map`; `conversion.unmapped` on a miss | Explicit tables of scalar values, no converter chains, no `charset` | 1 |
 | Event Notifier | `manual/event-notifier.html` | The audit journal's event kinds (section 11) | Synchronous, value-free, before the response | 1 |
 | Testing: mock, intercept | `components/next/mock-component.html`, `manual/advice-with.html`, `components/next/eips/intercept.html` | Fixture replay intercepts `http` and `graphql` sends | Test harness only | 0 |
 
@@ -1066,8 +1103,9 @@ kinds follow Camel's: `exchangeCreated`, `exchangeSending` and
 `exchangeSent` (endpoint id, method, path template, status, duration,
 response size and digest), `exchangeRedelivery`, `exchangeFailureHandled`,
 `exchangeCompleted`, `exchangeFailed` (error class, problem code). Each row
-carries the exchange id, the concrete operation, the caller identity, and the
-route id. It records no bodies: no request payloads, no response payloads,
+carries the exchange id, the concrete operation, the caller identity, the
+route id, and `occurred_at` (`timestamptz NOT NULL`, from the runtime clock
+at the event, indexed for retention deletes). It records no bodies: no request payloads, no response payloads,
 no field values, no filled query strings. Retention follows the shared
 `audit.retentionDays` block. The idempotency store (section 9) is the one
 retained body and has its own retention. Diagnostics are value-free

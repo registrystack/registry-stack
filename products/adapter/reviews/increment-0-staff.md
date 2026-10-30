@@ -151,3 +151,109 @@ Reviewed at the last core commit `0c4adaea5` (branch base `d1fd2781e`).
 - **P2-6** folds into the P0-2 fix (multiply by `maximumItems`).
 - Everything else as the reviewer suggests. All P0 and P1 close in Increment 0;
   P2 items go into the orchestrator's ledger with an owning increment.
+
+## Part 2: tooling, authored artifacts, and integration
+
+Reviewed at `efe56d4eb` by an independent Opus reviewer; probe scripts stayed
+in the reviewer's scratch.
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check`, clippy (default and all features), `cargo deny check`, tests | pass |
+| DCO over the branch | pass |
+| Config conformance | 5463 cells: 4068 pass, 0 fail, 1395 n/a |
+| `test_ci_changes.py` | pass, 183 tests |
+| Part 1 P0-1 to P0-3, P1-1 to P1-9, P1-13 | fixed; P1-10 to P1-12 not probed |
+| Adapter `check-contracts.sh` in CI | absent (F3) |
+
+### P1
+
+- **F1. The AggregationStrategy wire form is wrong in the pack schema.** The
+  model reads it internally tagged (`model.rs` 230-274) and
+  `apply_manual_wire_forms` (`schemas.rs` ~243) never rewrites it, so the
+  maintained `dhis2-tracker` pack and the `fhir-r4-patient-source`
+  experiment are invalid against their own schema. The only schema test
+  covers the minimal fixture. Five CFG-NAME-1 exception reasons call
+  `json-array-append` and `json-merge` Camel names; they are additions.
+- **F2. C9 is open.** A non-GraphQL query file, an unknown `operationName`,
+  and a `.rhai` `queryFile` all pass; the two GraphQL codes are never
+  emitted.
+- **F3. CI never runs the adapter `check-contracts.sh`**, the drift check
+  every adapter format names in `config-formats.yaml`.
+- **F4. Acceptance items 2, 3, and 8 fail** (see the closing round below).
+- **F5. A read binding can send unguarded writes** (`cases-get` with two
+  POSTs passes). Medium confidence on exploitability; the rule is cheap.
+- **F6. The dhis2 scripts are not on the section 8.11.3 ABI**
+  (`is-not-found.rhai` reads `body.httpStatusCode`; `shape_records` the
+  same).
+
+### P2
+
+- **F7.** The `retryWhile` doc is inverted (`route.rs` 797).
+- **F8.** The `LoopStep` doc contradicts `LoopProcessor` (`route.rs` 464).
+- **F9.** Check pointers drop the step-kind segment.
+- **F10.** `is_loopback_origin` receives `[::1]` with brackets.
+- **F11.** Still accepted: `%2e%2e`, `?` or `#` inside a path, backslash,
+  single-brace placeholders, query or fragment on `baseUrl` and
+  `tokenEndpoint`.
+- **F12.** `setHeader` of a credential header (`X-Api-Key`) is accepted.
+- **F13.** `okStatusCodeRange` is accepted on `graphql:`, with a loose
+  grammar.
+- **F14.** The `slidingWindowCalls` exception reason misattributes the name;
+  Camel's is `slidingWindowSize`.
+- **F15.** The dependencies added for Wave 1 are not used yet; no gate
+  checks unused dependencies.
+- **F16.** `experiments/FINDINGS.md` statuses are stale.
+
+### Camel contradictions (camel-4.23.0)
+
+| Topic | Camel | Adapter |
+|---|---|---|
+| Filter | `statusPropertyName` sets the named property to the predicate result (`FilterProcessor`); nothing set by default | option missing |
+| `retryWhile` | option of `onException` and of the default error handler, not of the redelivery policy; keeps redelivering while true | nested under the redelivery policy; doc says it stops while true |
+| Breaker window | `slidingWindowSize` | `slidingWindowCalls` (CFG-NAME-4, declared) |
+
+### Closing round (acceptance items)
+
+| Item | Status at `efe56d4eb` | Closes with |
+|---|---|---|
+| 1 | pass | |
+| 2 | FAIL: plain `adapterctl check <dir>` exits 3 reading `profile.yaml` | X2 |
+| 3 | FAIL: no gate runs the corpus; 70 of 74 members give exactly their code, 4 co-fire, 4 coverage gaps | X1 (no cascade), X2 (members), W0 (gate) |
+| 4 | pass | |
+| 5 | pass | |
+| 6 | pass | |
+| 7 | pass | |
+| 8 | FAIL: closing-round list not written | this table |
+
+### Process finding for Jeremi
+
+During Wave 2 a stream ran `git reset --soft HEAD~1` on the shared branch to
+split its own mixed commit. Nothing was lost (the split commits match the
+original), but the rule forbids it. Standing rules since: no stream runs
+reset, rebase, amend, or stash; a stream that sees a wrong commit stops and
+reports; one stream at a time holds staged files and commits by pathspec.
+
+### Lead reviewer rulings on Part 2
+
+- No P0. Increment 1 Wave 0b starts; F1 to F6 close inside it rather than as
+  a separate Increment 0 round, because each has a single owning stream:
+  F1, F4 co-firing, F5, F7 to F14 in X1; F2 in C9; F4 item 2, the corpus
+  gaps, and F6 in X2; F3 and the exact-code corpus gate in a new stream W0.
+- **F5.** Inside a read binding, an `http` send whose method is not safe is
+  refused unless the endpoint operation declares `safeUpstream: true`; a
+  GraphQL query is safe, a mutation is refused (CONCEPT 8.7).
+- **Filter.** Port `statusPropertyName`; Camel sets no filter property by
+  default, so no `CamelFilterMatched` property is added.
+- **`retryWhile`.** Moves to `onException` and the error handler as in
+  Camel; redelivery continues while it is true, capped by
+  `maximumRedeliveries` (CONCEPT 8.7).
+- **F12.** Routes may not set or remove `Authorization`,
+  `Proxy-Authorization`, `Cookie`, or a header an authentication kind on the
+  source uses.
+- **F13.** `okStatusCodeRange` is `http` only, with Camel's grammar
+  (`HttpUtil.isStatusCodeOk`): comma-separated `N` or `N-M`, each 100-599.
+- **F15.** The Increment 1 exit checks that every runtime dependency is
+  used.

@@ -347,6 +347,35 @@ profile-shaped problem body and `CamelHttpResponseCode` write in favor of
 pack names no profile problem code (acceptance 9 below); check accepts the
 good corpus and refuses each new bad member with its code.
 
+**From the Increment 0 staff review Part 2** (`reviews/increment-0-staff.md`),
+closed inside Wave 0b rather than as a separate Increment 0 round:
+
+- X1: the AggregationStrategy wire form and a test validating every
+  maintained pack, example, and experiment against its schema (F1); no
+  cascading finding after a primary fault (F4, corpus co-firing); a read
+  operation reaches only safe sends (F5, CONCEPT 8.8); `retryWhile` moved
+  to `onException` and the error handler, continuing while true (F7,
+  CONCEPT 8.7); filter `statusPropertyName`; the `LoopStep` doc (F8);
+  pointers keep the step-kind segment (F9); bracketed IPv6 loopback (F10);
+  the remaining path and origin refusals (F11); credential headers refused
+  in `setHeader` and `removeHeader` (F12); `okStatusCodeRange` `http` only,
+  with Camel's grammar (F13); the corrected exception reasons (F1, F14); the
+  G3 convert steps and code-map checks (CONCEPT 8.6).
+- X2, after C9 lands: the plain `adapterctl check <project-dir>` form (F4
+  item 2); corpus members for the four coverage gaps and every X1 check;
+  the dhis2 scripts on the 8.11.3 ABI with 404 and 500 replay fixtures
+  (F6); the code-map pack rewrite.
+- **W0, contracts gate**, owns the adapter job in `.github/workflows/ci.yml`
+  and `products/adapter/scripts/check-contracts.sh`: the CI job, and a
+  `check-contracts.sh` that runs the conventions lint, the port-table check,
+  the example check, fixture replay, and an exact-code corpus run (each bad
+  member yields exactly its own code, members discovered, not listed) (F3,
+  F4 item 3).
+- Wave 1 streams whose files do not overlap `registry-adapter-core` (the
+  language module, the journal) may start beside X1; they take the core
+  types as they stand and adapt when X1 lands. Read-only Camel unit-test
+  inventories for the source-bound rows may run at any time.
+
 ### Wave 1 (parallel, disjoint modules)
 
 - **C1, exchange and core EIPs**, owns `src/{exchange,route,language}/**`,
@@ -504,8 +533,8 @@ Increment 0:
 2. `CARGO run --locked -p registry-adapterctl -- check products/adapter/examples/dhis2-tracker/project.yaml`
    exits 0 with a value-free report (the integration report names the
    exact path if it differs).
-3. Each bad corpus member fails `check` with its expected code (driven by
-   the gate).
+3. Each bad corpus member fails `check` with exactly its expected code and
+   no other (driven by `check-contracts.sh`, members discovered).
 4. `python3 products/adapter/scripts/check-port-table.py` exits 0.
 5. `git --no-optional-locks log --format='%H %s' origin/main..HEAD` shows
    conventional subjects; every commit body has exactly one DCO trailer and
@@ -550,6 +579,8 @@ Increment 1:
     cites at least one `camel-4.23.0:` path:
     `rg -L 'camel-4\.23\.0:' crates/registry-adapter/tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle,split,loop,enrich,aggregation,direct,http,header_filter,testing}.rs`
     prints nothing.
+12. Every normal dependency of `registry-adapter` is referenced by its code
+    (no dependency added ahead of use survives the increment).
 
 Increment 2:
 
