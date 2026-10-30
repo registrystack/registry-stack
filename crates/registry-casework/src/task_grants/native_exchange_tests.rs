@@ -480,6 +480,7 @@ fn unseal(root: &Path) {
         }
     }
 }
+#[allow(clippy::too_many_arguments)]
 fn start_issuer(
     root: &Path,
     casework_port: u16,
@@ -960,6 +961,7 @@ fn bearer(token: &registry_platform_httputil::BearerToken) -> String {
         .to_owned()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_task_connection(
     root: &Path,
     name: &str,
