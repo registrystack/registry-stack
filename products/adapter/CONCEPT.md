@@ -859,7 +859,9 @@ The route owns the upstream position; the engine owns the caller's cursor.
   serialized. Absent or `null` at the end of the route means the last page.
 - The engine encodes it as the opaque `nextCursor` slot of section 7 with
   authenticated encryption under the runtime secret `cursorKeyRef`, bound
-  to the concrete operation, the binding id, the caller's subject, a digest
+  to the concrete operation, the binding id, the caller's subject, the
+  deployment the runtime serves (the project lock digest, so a redeploy
+  that changes route meaning invalidates outstanding cursors), a digest
   of the filters and page size, and an expiry (`cursorTtlSeconds`, default
   900). An optional `previousCursorKeyRef` keeps cursors valid across one
   key rotation.
@@ -876,8 +878,16 @@ The route owns the upstream position; the engine owns the caller's cursor.
   to 86400; the cursor is verified after authentication and authorization,
   so an unauthenticated caller with a forged cursor gets
   `facade.unauthenticated`; an oversize cursor raises
-  `facade.invalid-request`. The AEAD algorithm is chosen in Increment 1
-  Wave 0, with its reason in the module documentation.
+  `facade.invalid-request`.
+- Algorithm: XChaCha20-Poly1305 with a random 192-bit nonce, keyed by
+  HKDF-Expand of `cursorKeyRef` under a domain label, with the binding in
+  the associated data so a mismatch is an authentication failure, and a
+  version byte on the wire. The module documentation records the reason
+  (random-nonce safety under one long-lived key, the same choice as Base
+  Registry Engine's cursor). ChaCha20-Poly1305 is not FIPS-approved; the
+  cursor is an engine-internal token only this engine opens, and a
+  deployment that requires approved algorithms for internal tokens needs
+  AES-256-GCM with per-cursor subkeys, a wire-version change.
 
 The caller can therefore neither read nor forge an upstream position, and
 a next link the source returned comes back to the route only as the route
@@ -932,6 +942,21 @@ injected after the allowlist is applied, so no exchange header can replace
 or shadow one. Header names are RFC 9110 tokens, compared without case.
 The same names are refused as a `static-api-key` `headerName` (section
 10.2); a key sent in `Authorization` is the `static-authorization` kind.
+`requestHeaders` also refuses the names the platform transport owns on a
+request: `Content-Type`, which belongs to the body codec, and the
+forwarding, encoding, and signing headers. `responseHeaders` refuses
+`Camel*` names and the authentication-challenge, infrastructure, and
+tracing headers the transport owns on a response. A name listed twice is
+refused.
+
+On a send, an exchange value that is not a strict RFC 9110 field value, or
+exceeds the transport's value bound, raises the uncatchable
+`egress.refused`; it is never trimmed or re-encoded. An exchange that holds
+two entries for one listed name (compared without case) also raises
+`egress.refused`: neither is picked, where Camel's `HttpProducer` would join
+them. A declared response header the upstream repeats, or sends with a
+value that is not visible ASCII, raises `upstream.malformed`. Errors name
+the list position, never the value.
 
 A `header` expression may read only a facade input header, a declared
 response header, a Camel engine header the engine sets
@@ -955,8 +980,13 @@ value as an absolute URL and refuses it with the uncatchable
 `egress.refused` unless its scheme, host, and port equal the endpoint's
 configured origin, its path stays under the endpoint's base path after
 normalization, it carries no userinfo or fragment, and it fits the URL
-length bound. The query string the source wrote is sent as written. `toD`
-stays not ported; redirects stay unfollowed.
+length bound. The link is parsed once and the parsed value is what the
+engine sends, never a reparse; a link the parser would silently repair
+(tabs, newlines, `\` read as `/`, a missing `//`) or whose path is not
+canonical under the transport's fixed-destination rule is refused rather
+than rewritten, and a trailing-dot host is a different host. The query
+string the source wrote is sent as written. `toD` stays not ported;
+redirects stay unfollowed.
 
 #### 8.11.6 Errors become problems
 

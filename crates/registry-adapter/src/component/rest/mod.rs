@@ -21,7 +21,8 @@
 //! `AdapterNextContinuation` as the opaque `nextCursor` slot,
 //! authenticated-encrypted under the runtime secret `cursorKeyRef` and
 //! bound to the concrete operation, the binding id, the caller's
-//! subject, a digest of the filters and page size, and an expiry
+//! authenticated issuer and subject, the deployment the runtime serves,
+//! a digest of the filters and page size, and an expiry
 //! (`cursorTtlSeconds`, default 900), with the optional
 //! `previousCursorKeyRef` keeping cursors valid across one key rotation.
 //! A cursor that fails authentication, has expired, or was minted for
