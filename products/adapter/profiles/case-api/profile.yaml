@@ -14,7 +14,7 @@ kind: AdapterProfile
 id: case-api
 version: "1"
 operations:
-  - id: cases.find
+  - id: cases-find
     method: POST
     path: /v2/cases/{type}
     requestEnvelope: '{"query": {{record}}}'
@@ -24,11 +24,11 @@ operations:
       pageSizeParameter: maxResults
       pageSizeMinimum: 10
       pageSizeMaximum: 500
-  - id: cases.get
+  - id: cases-get
     method: GET
     path: /v2/cases/{type}/{case_id}
     responseEnvelope: '{"case": {{record}}, "retrievedAt": "{{requestId}}"}'
-  - id: cases.file
+  - id: cases-file
     method: PUT
     path: /v2/cases/{type}/{case_id}
     requestEnvelope: '{"record": {{record}}}'

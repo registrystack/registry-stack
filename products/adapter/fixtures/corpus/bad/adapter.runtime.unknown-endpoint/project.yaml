@@ -13,7 +13,7 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:70eb5dea34b9fe2e2865a44407c42eb37a4f7ff2a2b25357b0caf49ec54b4d6a
+  digest: sha256:c01aebac48216c27b9f72222b33d1e110a4881361a1e3fb4d337f2c087a30b20
 pack:
   id: case-api-pack
   version: "1"
@@ -29,7 +29,7 @@ templatedRoutes:
     routeId: caseFind
 bindings:
   - id: case-get
-    operation: cases.get
+    operation: cases-get
     recordType: case
     route: caseFind
     maximumUpstreamCalls: 4
@@ -38,6 +38,6 @@ accessProfiles:
     scopes:
       - cases.read
     operations:
-      - cases.get
+      - cases-get
     recordTypes:
       - case

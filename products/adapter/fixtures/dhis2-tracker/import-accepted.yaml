@@ -16,7 +16,7 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records.create
+  - operation: records-create
     given:
       endpoint: tracker
       method: POST

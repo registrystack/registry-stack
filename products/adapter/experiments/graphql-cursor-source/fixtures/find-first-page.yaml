@@ -11,7 +11,7 @@
 # status filter, pageStateToken, maxResults) or the facade nextCursor
 # either, so the pass-through cursor cannot be asserted.
 #
-# The cases.get not-found entry (a Relay `node: null` answer mapped to the
+# The cases-get not-found entry (a Relay `node: null` answer mapped to the
 # cases.missing problem) is not in this file: an expected facade response
 # is validated against the success result schema whatever its status, so a
 # problem body is refused (adapter.fixture.response-schema). The README
@@ -28,7 +28,7 @@ intercepts:
   - type: endpoint
     endpoint: casesQuery
 entries:
-  - operation: cases.find
+  - operation: cases-find
     given:
       endpoint: casesQuery
       method: POST

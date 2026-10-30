@@ -5,7 +5,7 @@ specification only; no server was contacted. Nothing here changes Rust.
 
 ## What it tries to express
 
-`records.search` on the `breg-records` profile, answered from a FHIR R4
+`records-search` on the `breg-records` profile, answered from a FHIR R4
 server's `GET /Patient?identifier=<system>|` searchset:
 
 - OAuth 2.0 client credentials (`oauth2-client-credentials`) to the FHIR
@@ -49,7 +49,7 @@ server's `GET /Patient?identifier=<system>|` searchset:
 3. **Script input view.** No document says what a `setBody`/`setProperty`
    `rhai` expression receives. The scripts assume the exchange map
    (`exchange.body`, `exchange.properties`, `exchange.headers`).
-4. **Facade paging.** `records.search` has `cursor` and `limit`, but no
+4. **Facade paging.** `records-search` has `cursor` and `limit`, but no
    construct produces `nextCursor` from a route, so the route drains the
    whole searchset; past 10 pages it raises
    `loop.maximum-iterations-reached` instead of returning a page.

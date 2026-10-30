@@ -209,8 +209,8 @@ and problem codes, and declares which parts are parameterized by the
 deployment. The first profile, `breg-records` v1, is a starting target, not
 the only one: it mirrors the Base Registry Engine's public read surface
 (`/v1/records/{type}`, `/v1/records/{type}/{record_id}`) plus write
-operations (`records.search`, `records.get`, `records.create`,
-`records.update`, `records.patch`), answering in Registry Record v1 shape.
+operations (`records-search`, `records-get`, `records-create`,
+`records-update`, `records-patch`), answering in Registry Record v1 shape.
 GovStack, or a contract a ministry already publishes, is another profile
 file.
 
@@ -1185,7 +1185,7 @@ acceptance commands.
   `http` components; the facade with OIDC and access profiles; `adapterctl
   compile` and the generated OpenAPI; the event-notifier journal on
   PostgreSQL with `test-postgres.sh`; fixture replay; `verify --live`; the
-  `dhis2-tracker` pack serving `records.search` and `records.get`; fault
+  `dhis2-tracker` pack serving `records-search` and `records-get`; fault
   injection, read property tests, contract and security tests.
 - Increment 2, DHIS2 writes: `idempotentConsumer` and the idempotency store
   with replay and retention; write-safety checks live; DHIS2 create and

@@ -24,7 +24,7 @@ kind: AdapterProfile
 id: breg-records
 version: "1"
 operations:
-  - id: records.search
+  - id: records-search
     method: GET
     path: /v1/records/{type}
     responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": "{{?nextCursor}}"}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
@@ -33,21 +33,21 @@ operations:
       pageSizeParameter: limit
       pageSizeMinimum: 1
       pageSizeMaximum: 1000
-  - id: records.get
+  - id: records-get
     method: GET
     path: /v1/records/{type}/{record_id}
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
-  - id: records.create
+  - id: records-create
     method: POST
     path: /v1/records/{type}
     requestEnvelope: '{"data": {{record}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
-  - id: records.update
+  - id: records-update
     method: PUT
     path: /v1/records/{type}/{record_id}
     requestEnvelope: '{"data": {{record}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
-  - id: records.patch
+  - id: records-patch
     method: PATCH
     path: /v1/records/{type}/{record_id}
     requestEnvelope: '{"data": {{record}}}'

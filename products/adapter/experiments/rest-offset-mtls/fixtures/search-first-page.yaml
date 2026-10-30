@@ -26,7 +26,7 @@ intercepts:
   - type: endpoint
     endpoint: registry
 entries:
-  - operation: records.search
+  - operation: records-search
     given:
       endpoint: registry
       method: GET

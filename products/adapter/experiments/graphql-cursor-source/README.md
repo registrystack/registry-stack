@@ -9,16 +9,16 @@ server was contacted. Nothing here changes Rust.
 
 ## What it tries to express
 
-`cases.find` and `cases.get` on the second test profile, `case-api`
+`cases-find` and `cases-get` on the second test profile, `case-api`
 (`products/adapter/profiles/case-api/profile.yaml`), answered from a GraphQL
 case system behind a static API key:
 
-- `cases.find`: one Relay connection page per facade call
+- `cases-find`: one Relay connection page per facade call
   (`cases(first:, after:, status:)` with `pageInfo { hasNextPage endCursor }`),
   the facade's `pageStateToken`/`maxResults` passed through as the Relay
   `after`/`first`, and the request envelope's `query` record mapped to the
   `status` enum filter.
-- `cases.get`: `node(id:)` (Relay object identification), where a missing
+- `cases-get`: `node(id:)` (Relay object identification), where a missing
   node is a `200` with `data.node: null`, mapped to the profile's
   `cases.missing` 404.
 - Problem bodies in the case-api vocabulary (`family`, `message`,
@@ -52,7 +52,7 @@ case system behind a static API key:
    `body.data.cases` and `body.cases`. GraphQL over HTTP can answer `200`
    with an `errors` array and partial `data`; nothing says whether that
    raises `upstream.http`, `upstream.malformed`, or passes as success.
-4. **Ending the exchange with a problem from a plain step.** The `cases.get`
+4. **Ending the exchange with a problem from a plain step.** The `cases-get`
    missing-node branch builds the `cases.missing` body in a `choice`
    branch. CONCEPT section 7 validates every final body against the success
    schema, so at runtime that branch fails; Camel's `throwException`
@@ -74,18 +74,18 @@ case system behind a static API key:
    and an expected problem response is validated against the success schema
    (probe `e3-problem-fixture`, five `adapter.fixture.response-schema`
    errors), so a fixture cannot assert a mapped error at all. The committed
-   fixture holds the `cases.find` page only.
+   fixture holds the `cases-find` page only.
 
 ## Check defects found
 
 - **GraphQL send safety.** A `graphql` `to` without `parameters` counts as
   safe because the non-safe test reads `httpMethod`. A GraphQL mutation
-  bound to the `cases.file` write, sent twice, with `maximumRedeliveries: 3`
+  bound to the `cases-file` write, sent twice, with `maximumRedeliveries: 3`
   and no `idempotentConsumer`, passes (probe `e3-mutation-write`). With
   `httpMethod: POST` the read query is refused instead (probe
   `e3-query-over-post`).
 - **Write classification by facade method.** The write rule keys on the
-  profile operation's HTTP method, so the POST search `cases.find` counts as
+  profile operation's HTTP method, so the POST search `cases-find` counts as
   a write (`adapter.route.write-without-idempotency /bindings/0/route` in
   probe `e3-query-over-post`). The redelivery finding is also reported twice,
   once at the template id `/routes/findCases` and once at the instance.

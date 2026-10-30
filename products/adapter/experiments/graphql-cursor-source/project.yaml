@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
-# Experiment project: the case-api profile's cases.find and cases.get bound
+# Experiment project: the case-api profile's cases-find and cases-get bound
 # to the GraphQL case pack.
 #
 # Upstream-call budget (worst-case rule): each route makes 1 send x (1 + 1
@@ -18,11 +18,11 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:b064b4039c009643ed8e28df6214b7b17100db9cffb0db3223bb06a0c36f01c4
+  digest: sha256:cafb0aa8844d440043623dc01d6338acd71a0be22afc6d3fcbd41b4b6aa121da
 pack:
   id: graphql-cases
   version: "1"
-  digest: sha256:4798a8a9079b9ac044c35148d26b43d053b060d603c9d889ac32b1a7c5391007
+  digest: sha256:163ce9c12a3105908604c9a45c0a3c922be7b2bacef95dc9d92c12dc457b5fe8
 recordTypes:
   - name: benefit_case
     fields:
@@ -44,12 +44,12 @@ templatedRoutes:
     routeId: benefitCaseGet
 bindings:
   - id: benefit-case-find
-    operation: cases.find
+    operation: cases-find
     recordType: benefit_case
     route: benefitCaseFind
     maximumUpstreamCalls: 2
   - id: benefit-case-get
-    operation: cases.get
+    operation: cases-get
     recordType: benefit_case
     route: benefitCaseGet
     maximumUpstreamCalls: 2
@@ -58,7 +58,7 @@ accessProfiles:
     scopes:
       - cases.read
     operations:
-      - cases.find
-      - cases.get
+      - cases-find
+      - cases-get
     recordTypes:
       - benefit_case

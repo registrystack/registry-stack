@@ -24,7 +24,7 @@ file is its manifest.
   `sha256` of their bytes. If you edit an artifact, recompute the pins:
   `shasum -a 256 profile.yaml pack.yaml`.
 - Every fixture entry names the profile operation it exercises
-  (`operation: cases.get`).
+  (`operation: cases-get`).
 
 ## Running
 

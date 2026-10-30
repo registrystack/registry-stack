@@ -21,7 +21,7 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records.search
+  - operation: records-search
     given:
       endpoint: tracker
       method: GET

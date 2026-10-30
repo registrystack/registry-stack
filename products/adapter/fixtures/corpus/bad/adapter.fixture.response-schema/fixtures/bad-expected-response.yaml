@@ -17,7 +17,7 @@ intercepts:
   - type: endpoint
     endpoint: cases
 entries:
-  - operation: cases.get
+  - operation: cases-get
     given:
       endpoint: cases
       method: GET

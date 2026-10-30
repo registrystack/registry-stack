@@ -10,7 +10,7 @@ kind: AdapterProfile
 id: case-api
 version: "1"
 operations:
-  - id: cases.get
+  - id: cases-get
     method: GET
     path: /v2/cases/{type}/{case_id}
     responseEnvelope: '{"fetched": true}'

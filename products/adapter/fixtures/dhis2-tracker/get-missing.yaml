@@ -22,7 +22,7 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records.get
+  - operation: records-get
     given:
       endpoint: tracker
       method: GET

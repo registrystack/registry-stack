@@ -34,7 +34,7 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:9d4cbff5a5427e8a3947b4354ad8bf45d8d48789bc1e66505de76bd938aec7a9
+  digest: sha256:7563c52c2ab7dea583513d72b4a1b849d3886b209f8b50f4ab409cda7ef73533
 pack:
   id: dhis2-tracker
   version: "1"
@@ -64,17 +64,17 @@ templatedRoutes:
     routeId: personImport
 bindings:
   - id: person-search
-    operation: records.search
+    operation: records-search
     recordType: person
     route: personSearch
     maximumUpstreamCalls: 24
   - id: person-get
-    operation: records.get
+    operation: records-get
     recordType: person
     route: personFetch
     maximumUpstreamCalls: 4
   - id: person-create
-    operation: records.create
+    operation: records-create
     recordType: person
     route: personImport
     maximumUpstreamCalls: 4
@@ -83,16 +83,16 @@ accessProfiles:
     scopes:
       - records.read
     operations:
-      - records.search
-      - records.get
+      - records-search
+      - records-get
     recordTypes:
       - person
   - id: records-writer
     scopes:
       - records.write
     operations:
-      - records.create
-      - records.update
-      - records.patch
+      - records-create
+      - records-update
+      - records-patch
     recordTypes:
       - person

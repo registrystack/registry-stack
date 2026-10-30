@@ -19,7 +19,7 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:9d4cbff5a5427e8a3947b4354ad8bf45d8d48789bc1e66505de76bd938aec7a9
+  digest: sha256:7563c52c2ab7dea583513d72b4a1b849d3886b209f8b50f4ab409cda7ef73533
 pack:
   id: fhir-r4-patient
   version: "1"
@@ -45,7 +45,7 @@ templatedRoutes:
       page_size: 50
 bindings:
   - id: patient-search
-    operation: records.search
+    operation: records-search
     recordType: patient
     route: patientSearch
     maximumUpstreamCalls: 24
@@ -54,6 +54,6 @@ accessProfiles:
     scopes:
       - records.read
     operations:
-      - records.search
+      - records-search
     recordTypes:
       - patient

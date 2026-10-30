@@ -6,7 +6,7 @@ only; no server was contacted. Nothing here changes Rust.
 
 ## What it tries to express
 
-`records.search` and `records.get` on the `breg-records` profile, answered
+`records-search` and `records-get` on the `breg-records` profile, answered
 from a JSON:API household registry:
 
 - Offset pagination with bracketed query keys: `GET /households?filter[regionCode]=..&page[offset]=..&page[limit]=..`

@@ -13,7 +13,7 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:c9e85e5a2330e4cdc658dda413f094772ec6979aac77921683fa42450ed4ad83
+  digest: sha256:4f0c7a7291c119e715f12744035ceca956667cf174977e33c2436415108b717d
 pack:
   id: case-api-pack
   version: "1"
@@ -38,6 +38,6 @@ accessProfiles:
     scopes:
       - cases.read
     operations:
-      - cases.get
+      - cases-get
     recordTypes:
       - case

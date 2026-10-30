@@ -5,7 +5,7 @@ specification only; no server was contacted. Nothing here changes Rust.
 
 ## What it tries to express
 
-`records.create` on the `breg-records` profile, written to a FHIR R4 server
+`records-create` on the `breg-records` profile, written to a FHIR R4 server
 so that a retried create never makes a second Patient:
 
 - FHIR's own answer is conditional create: `POST /Patient` with

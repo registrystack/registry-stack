@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
-# Experiment project: the breg-records records.create operation bound to
+# Experiment project: the breg-records records-create operation bound to
 # the FHIR conditional-create route.
 #
 # Upstream-call budget (worst-case rule): 2 sends (the transaction and the
@@ -19,7 +19,7 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:9d4cbff5a5427e8a3947b4354ad8bf45d8d48789bc1e66505de76bd938aec7a9
+  digest: sha256:7563c52c2ab7dea583513d72b4a1b849d3886b209f8b50f4ab409cda7ef73533
 pack:
   id: fhir-r4-conditional-create
   version: "1"
@@ -45,7 +45,7 @@ templatedRoutes:
       identifier_system: https://id.example.invalid/national-id
 bindings:
   - id: patient-create
-    operation: records.create
+    operation: records-create
     recordType: patient
     route: patientCreate
     maximumUpstreamCalls: 6
@@ -54,6 +54,6 @@ accessProfiles:
     scopes:
       - records.write
     operations:
-      - records.create
+      - records-create
     recordTypes:
       - patient

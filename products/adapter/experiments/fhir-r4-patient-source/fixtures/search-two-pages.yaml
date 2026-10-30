@@ -24,7 +24,7 @@ intercepts:
   - type: endpoint
     endpoint: fhir
 entries:
-  - operation: records.search
+  - operation: records-search
     given:
       endpoint: fhir
       method: GET

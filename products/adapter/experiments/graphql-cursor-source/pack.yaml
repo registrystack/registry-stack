@@ -5,7 +5,7 @@
 # (https://relay.dev/graphql/connections.htm,
 # https://relay.dev/graphql/objectidentification.htm) and GraphQL over
 # HTTP (https://graphql.github.io/graphql-over-http/draft/). It serves the
-# case-api profile (cases.find, cases.get) behind a static API key. See
+# case-api profile (cases-find, cases-get) behind a static API key. See
 # README.md beside this file.
 #
 # A graphql endpoint carries exactly one query file, operation name, and
