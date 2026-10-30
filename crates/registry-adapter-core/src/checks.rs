@@ -562,20 +562,32 @@ fn value_matches_type(value: &serde_json::Value, expected: TemplateParameterType
 
 /// Every Rhai reference in every route body must resolve to a digest-pinned
 /// inventory entry (CFG-EMBED-1: `rhai` always names a digest-pinned file).
+/// Findings carry the owning body's full document position: /routes/{id}
+/// or /routeTemplates/{index}.
 fn script_reference_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    let mut bodies: Vec<&[Step]> = pack
+    let mut bodies: Vec<(String, &[Step])> = pack
         .routes
         .iter()
-        .map(|route| route.steps.as_slice())
+        .map(|route| {
+            (
+                format!("/routes/{}", route.id.as_str()),
+                route.steps.as_slice(),
+            )
+        })
         .collect();
-    bodies.extend(pack.route_templates.iter().map(|t| t.steps.as_slice()));
-    for steps in bodies {
+    bodies.extend(
+        pack.route_templates
+            .iter()
+            .enumerate()
+            .map(|(index, t)| (format!("/routeTemplates/{index}"), t.steps.as_slice())),
+    );
+    for (prefix, steps) in bodies {
         for script in script_references(steps) {
             if pack.pinned_file(&script.file).is_none() {
                 findings.push(finding(
                     CheckCode::PackUnknownScript,
-                    &format!("/steps{}/rhai", script.path),
+                    &format!("{prefix}/steps{}/rhai", script.path),
                     "the script file is not in the pack's digest-pinned inventory",
                     "List the script in scripts with its sha256 digest.",
                 ));
@@ -3280,6 +3292,40 @@ mod tests {
         };
         let pinned_pack = pack_builder(vec![], vec![pinned_route]);
         assert!(!codes(&check_pack(&pinned_pack)).contains(&CheckCode::PackUnknownScript.code()));
+    }
+
+    /// A script finding carries the owning body's full document position:
+    /// /routes/{id} for pack routes, /routeTemplates/{index} for template
+    /// bodies (staff review P2-1 follow-up).
+    #[test]
+    fn script_findings_carry_the_owning_body_position() {
+        let route = RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps: vec![Step::SetBody(rhai("scripts/unpinned.rhai"))],
+        };
+        let template = RouteTemplate {
+            id: local("pager"),
+            parameters: Vec::new(),
+            steps: vec![Step::SetBody(rhai("scripts/unpinned.rhai"))],
+        };
+        let mut pack = pack_builder(vec![], vec![route]);
+        pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
+        let pointers: Vec<String> = check_pack(&pack)
+            .iter()
+            .filter(|f| f.code == CheckCode::PackUnknownScript.code())
+            .map(|f| f.path.clone())
+            .collect();
+        assert!(
+            pointers.contains(&"/routes/fetch-case/steps/0/rhai".to_string()),
+            "route script pointer: {pointers:?}"
+        );
+        assert!(
+            pointers.contains(&"/routeTemplates/0/steps/0/rhai".to_string()),
+            "template script pointer: {pointers:?}"
+        );
     }
 
     // ----- route checks -----
