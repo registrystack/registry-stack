@@ -27,4 +27,3 @@ network policy, provider construction, audit schema identity, and public
 errors. The existing BReg wrapper can retain its configuration and audit names
 while using this edge; the configurable cross-product runtime can register its
 own format and bind several independently authorized providers.
-
