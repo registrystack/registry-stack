@@ -17,8 +17,8 @@
       "@id": "https://id.registrystack.org/vocab/registry-record/datasetIdentifier",
       "@type": "http://www.w3.org/2001/XMLSchema#string"
     },
-    "entityTypeIdentifier": {
-      "@id": "https://id.registrystack.org/vocab/registry-record/entityTypeIdentifier",
+    "recordTypeIdentifier": {
+      "@id": "https://id.registrystack.org/vocab/registry-record/recordTypeIdentifier",
       "@type": "http://www.w3.org/2001/XMLSchema#string"
     },
     "recordIdentifier": {

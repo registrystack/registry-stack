@@ -7910,7 +7910,7 @@ fn rendered_changes(
         .filter(|change| selected(change))
         .map(|change| {
             let target = match (
-                change.target.entity_id.as_deref(),
+                change.target.record_type_id.as_deref(),
                 change.target.member_id.as_deref(),
             ) {
                 (Some(entity), Some(member)) => format!("{entity}.{member}"),
@@ -7941,7 +7941,7 @@ fn change_code_name(code: registry_breg::package::CompiledRegistryChangeCode) ->
 
 fn diff_change_path(change: &registry_breg::package::CompiledRegistryChange) -> String {
     match (
-        change.target.entity_id.as_deref(),
+        change.target.record_type_id.as_deref(),
         change.target.member_id.as_deref(),
     ) {
         (Some(entity), Some(member)) => format!("changes.{entity}.{member}"),
@@ -15632,7 +15632,7 @@ mod tests {
             code: CompiledRegistryChangeCode::ActionChanged,
             target: CompiledRegistryChangeTarget {
                 kind: CompiledRegistryChangeTargetKind::Action,
-                entity_id: None,
+                record_type_id: None,
                 member_id: Some(id.to_owned()),
             },
         });

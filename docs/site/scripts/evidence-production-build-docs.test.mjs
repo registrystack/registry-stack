@@ -126,4 +126,13 @@ test('the Compose tutorial runs the candidate the adapter mounts, under an activ
     tutorial,
     /docker compose -f compose\/docker-compose\.yaml run --rm authority-activate/u,
   );
+  // The service runs as UID 65532 and refuses a runtime file its host author
+  // still owns, so the page hands the finished file over before any container
+  // reads it.
+  const handover = tutorial.indexOf('sudo chown 65532:65532 "$EVIDENCE_RUNTIME_FILE"');
+  assert.ok(handover >= 0, 'the Compose tutorial gives the runtime file to UID 65532');
+  assert.ok(
+    handover < tutorial.indexOf('run --rm authority-activate'),
+    'the runtime file changes owner before the first container reads it',
+  );
 });

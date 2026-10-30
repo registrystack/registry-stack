@@ -132,7 +132,7 @@ Preferred terms.
 | Repo slugs            | `registry-platform`, `registry-manifest`, `registry-evidence`, `registry-breg`, and `registry-discovery`; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
-| Base Registry Engine nouns | Six nouns, capitalized as the product prints them: `Record type` (`recordType` in a project file), `Record`, `Action`, `Plan`, `Proposal`, and `ActionReceipt`. Retired and refused by `check:config-vocabulary` on Base Registry Engine pages: entity and entities as registry nouns, change request, change control, lifecycle action and lifecycle authority. Registry Record v1's `entityTypeIdentifier`, Manifest names, and other products' own vocabulary are not affected. |
+| Base Registry Engine nouns | Six nouns, capitalized as the product prints them: `Record type` (`recordType` in a project file), `Record`, `Action`, `Plan`, `Proposal`, and `ActionReceipt`. Retired and refused by `check:config-vocabulary` on Base Registry Engine pages: entity and entities as registry nouns, change request, change control, lifecycle action and lifecycle authority. Manifest names and other products' own vocabulary are not affected. |
 
 ## Choosing examples
 

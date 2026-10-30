@@ -143,7 +143,7 @@ fn input() -> Value {
 fn record() -> Value {
     json!({
         "data": {"recordIdentifier": "record-1", "revisionIdentifier": "1", "domainData": {}},
-        "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "entityTypeIdentifier": "e"}
+        "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "recordTypeIdentifier": "e"}
     })
 }
 

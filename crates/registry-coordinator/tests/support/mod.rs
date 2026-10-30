@@ -128,7 +128,7 @@ pub fn write_runtime(path: &Path, config: &RuntimeConfig) {
 pub fn record(allowed: bool, email: &str) -> Value {
     json!({"data": {"recordIdentifier": RECORD, "revisionIdentifier": "1",
         "domainData": {"noticeAllowed": allowed, "email": email}},
-        "meta": {"registryIdentifier": "applications-registry", "datasetIdentifier": "applications", "entityTypeIdentifier": "application"}})
+        "meta": {"registryIdentifier": "applications-registry", "datasetIdentifier": "applications", "recordTypeIdentifier": "application"}})
 }
 
 pub fn submission() -> Value {

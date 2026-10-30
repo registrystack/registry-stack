@@ -809,7 +809,7 @@ fn a_step_output_is_read_through_the_same_reference() {
     let record = |area: Value| {
         json!({
             "data": {"recordIdentifier": "farm-1", "revisionIdentifier": "1", "domainData": {"areaHectares": area}},
-            "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "entityTypeIdentifier": "e"}
+            "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "recordTypeIdentifier": "e"}
         })
     };
     let outputs = |area: Value| BTreeMap::from([("read".to_owned(), record(area))]);
@@ -884,7 +884,7 @@ fn scenario(id: &str, season: &str, domain_data: &str, path: &str, outcome: &str
     read:
     - type: success
       value:
-        meta: {{registryIdentifier: r, datasetIdentifier: d, entityTypeIdentifier: e}}
+        meta: {{registryIdentifier: r, datasetIdentifier: d, recordTypeIdentifier: e}}
         data: {{recordIdentifier: farm-1, revisionIdentifier: '1', domainData: {domain_data}}}
   expect:
     path: [{path}]

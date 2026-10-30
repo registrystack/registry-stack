@@ -322,7 +322,7 @@ fn trace() -> (String, String) {
 fn meta(entity: &str) -> Value {
     json!({
         "datasetIdentifier": REGISTRY,
-        "entityTypeIdentifier": entity,
+        "recordTypeIdentifier": entity,
         "registryIdentifier": REGISTRY,
     })
 }

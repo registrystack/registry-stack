@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: A runtime configuration file is refused with
+  `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
+  owned by root or the runtime user, or is writable by group or others. A
+  root-owned sticky ancestor stays allowed.
+
 First release of the Document Store: custody of document bytes for an owning
 system, exact-version document grants, content verification before release,
 scheduled erasure, and after-commit document events, served over `/v1/` with

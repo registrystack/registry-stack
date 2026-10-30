@@ -19,7 +19,7 @@ class InputTests(unittest.TestCase):
         }
         prepared = client.input_from_record(
             {
-                "meta": {"entityTypeIdentifier": "application"},
+                "meta": {"recordTypeIdentifier": "application"},
                 "data": {
                     "recordIdentifier": "00000000-0000-4000-8000-000000000001",
                     "revisionIdentifier": "r1",
@@ -37,7 +37,7 @@ class InputTests(unittest.TestCase):
 
     def test_identity_and_projection_refusals_are_value_free(self):
         value = {
-            "meta": {"entityTypeIdentifier": "application"},
+            "meta": {"recordTypeIdentifier": "application"},
             "data": {
                 "recordIdentifier": "one",
                 "revisionIdentifier": "r1",

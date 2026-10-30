@@ -336,7 +336,7 @@ never accepted by a running server.
 
 | Token part | Requirement |
 | --- | --- |
-| `alg`, `typ`, `kid` headers | `alg` equals `allowedAlgorithm`; `typ` matches `accessTokenType` case-insensitively, and `at+jwt` and `application/at+jwt` are accepted for each other; `kid` is in the key set and absent from `deniedKids`. |
+| `alg`, `typ`, `kid` headers | `alg` equals `allowedAlgorithm`; `typ` matches `accessTokenType` case-insensitively, and `at+jwt` and `application/at+jwt` are accepted for each other; `kid` is in the key set and absent from `revokedKeyIds`. |
 | `iss` | Equals `issuer`. |
 | `aud` | A string equal to `audience`, or an array of 1 to 16 distinct strings that contains it. |
 | `exp`, `iat`, `nbf` | The lifetime is at most `maximumTokenLifetimeSeconds` (at most 7200); clock skew up to `leewayMilliseconds` (whole seconds, at most 300000) is tolerated. |
@@ -638,9 +638,16 @@ and the database host name in the connection URLs, because the container mounts 
 reaches the database over its own network.
 
 UID 65532 must own the secrets directory, every secret file in it, and the audit directory, with
-mode `0700` on each directory. The mounted runtime file and package need only be readable by it:
+mode `0700` on each directory. The mounted package need only be readable by it.
+
+Startup refuses the runtime file unless it and every directory above it, as the container sees
+them, are owned by root or the runtime user (UID 65532 in the images) and not writable by group or
+others. A symbolic link anywhere in the path is refused. The mount below places one file under
+directories the image owns, so only the file itself needs changing:
 
 ```sh
+chown 65532:65532 /srv/registry/container/runtime.yaml
+chmod 0400 /srv/registry/container/runtime.yaml
 chown -R 65532:65532 /srv/registry/container/secrets
 chmod 0700 /srv/registry/container/secrets
 install -d -m 0700 -o 65532 -g 65532 /var/log/breg
@@ -649,8 +656,8 @@ chown -R 65532:65532 /var/log/breg
 
 Startup refuses an audit directory or audit file owned by anyone else, including a directory Docker
 created as root for a missing mount and one a host-run `breg` or `bregctl` left behind. Once the
-container owns `/var/log/breg`, a host-run `bregctl` is refused it in turn, so plan and apply
-[from the image](#activate-from-the-image).
+container owns `/var/log/breg` and the runtime file, a host-run `bregctl` is refused them in turn,
+so plan and apply [from the image](#activate-from-the-image).
 
 Then mount the inputs read-only and the audit directory writable:
 
@@ -665,12 +672,14 @@ docker run --restart on-failure \
 ```
 
 `BREG_IMAGE` is the image digest from the release manifest. Run `bregctl verify` and
-`bregctl doctor` against this exact runtime file before you rely on its `GET /ready`. A fault that
-recurs on every start makes the container restart repeatedly; the restart policy's backoff bounds
-how often.
+`bregctl doctor` from the image against this exact runtime file before you rely on its
+`GET /ready`. A fault that recurs on every start makes the container restart repeatedly; the
+restart policy's backoff bounds how often.
 
 {/* Evidence: release/docker/Dockerfile.breg; crates/registry-breg/src/runtime_config.rs,
     ListenerConfig; crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    crates/registry-platform-config/src/loader.rs, require_trusted_runtime_path(),
+    require_trusted_ownership();
     crates/registry-platform-audit/src/writer.rs, validate_directory(), validate_active_metadata(). */}
 
 ### Activate from the image

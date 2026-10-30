@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: Registry Record v1 renames `entityTypeIdentifier` to
+  `recordTypeIdentifier` before the 1.0 freeze. `breg.read-record` output
+  follows the v1 contract, so a Service reads `meta.recordTypeIdentifier`.
+- BREAKING: Generated `EventSubject` schemas are an `anyOf` of the Record and
+  Proposal subject shapes, matching BReg event subjects.
+- BREAKING: A runtime configuration file is refused with
+  `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
+  owned by root or the runtime user, or is writable by group or others. A
+  root-owned sticky ancestor stays allowed.
 - BREAKING: protected state schema version 5 adds the latest Proposal
   observation to each wait that follows a BReg Proposal. Version 4 namespaces
   from 0.44.0 are refused. Settle their runs with the 0.44.0 binaries, then

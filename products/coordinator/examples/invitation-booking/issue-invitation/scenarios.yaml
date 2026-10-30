@@ -34,7 +34,7 @@ cases:
         meta:
           registryIdentifier: invitation-source
           datasetIdentifier: invitations
-          entityTypeIdentifier: invitation
+          recordTypeIdentifier: invitation
         data:
           recordIdentifier: 00000000-0000-4000-8000-000000000001
           revisionIdentifier: revision-1
@@ -96,7 +96,7 @@ cases:
         meta:
           registryIdentifier: invitation-source
           datasetIdentifier: invitations
-          entityTypeIdentifier: invitation
+          recordTypeIdentifier: invitation
         data:
           recordIdentifier: 00000000-0000-4000-8000-000000000001
           revisionIdentifier: revision-1

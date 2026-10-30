@@ -104,7 +104,7 @@ fn classify_change(
         Code::FieldVocabularyCodesAdded | Code::FieldLengthWidened => {
             let encrypted = change
                 .target
-                .entity_id
+                .record_type_id
                 .as_deref()
                 .and_then(|entity| candidate.entities().get(entity))
                 .zip(change.target.member_id.as_deref())
@@ -266,7 +266,7 @@ fn access_change_details(
         }
         _ => {}
     }
-    let Some(entity) = change.target.entity_id.as_deref() else {
+    let Some(entity) = change.target.record_type_id.as_deref() else {
         return vec![];
     };
     let before_entity = baseline.entities().get(entity);
@@ -677,7 +677,7 @@ fn access_profile_direction(
     change: &CompiledRegistryChange,
 ) -> DiffClassification {
     let (Some(entity_id), Some(profile_id)) = (
-        change.target.entity_id.as_deref(),
+        change.target.record_type_id.as_deref(),
         change.target.member_id.as_deref(),
     ) else {
         return DiffClassification::Unsupported;
@@ -764,7 +764,7 @@ trait ChangeTargetIds {
 
 impl ChangeTargetIds for CompiledRegistryChange {
     fn change_target_entity_id(&self) -> Option<&str> {
-        self.target.entity_id.as_deref()
+        self.target.record_type_id.as_deref()
     }
 
     fn change_target_member_id(&self) -> Option<&str> {

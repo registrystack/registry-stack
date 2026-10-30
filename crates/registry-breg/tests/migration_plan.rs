@@ -1368,7 +1368,7 @@ fn timer_field_update_artifacts(
         .iter()
         .find(|change| {
             change.code == CompiledRegistryChangeCode::FieldRequirednessChanged
-                && change.target.entity_id.as_deref() == Some("asset")
+                && change.target.record_type_id.as_deref() == Some("asset")
                 && change.target.member_id.as_deref() == Some(field_id)
         })
         .unwrap_or_else(|| panic!("requiredness change for asset.{field_id} is classified"));
@@ -1476,7 +1476,7 @@ fn timer_alter_table_artifacts(
     }) {
         if let Some(change) = changes.changes.iter().find(|change| {
             change.code == CompiledRegistryChangeCode::FieldRequirednessChanged
-                && change.target.entity_id.as_deref() == Some("asset")
+                && change.target.record_type_id.as_deref() == Some("asset")
                 && change.target.member_id.as_deref() == Some(field_id)
         }) {
             let cover = ReviewedChangeCover::from(change);

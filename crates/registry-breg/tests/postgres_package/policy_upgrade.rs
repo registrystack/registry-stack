@@ -93,11 +93,11 @@ async fn reviewed_successor_adds_optional_field_and_proposal_submitter_grant() {
         compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_digest);
     assert!(changes.changes.iter().any(|change| {
         change.code == CompiledRegistryChangeCode::FieldAddedOptional
-            && change.target.entity_id.as_deref() == Some("asset")
+            && change.target.record_type_id.as_deref() == Some("asset")
     }));
     assert!(changes.changes.iter().any(|change| {
         change.code == CompiledRegistryChangeCode::AccessProfileAdded
-            && change.target.entity_id.as_deref() == Some("asset")
+            && change.target.record_type_id.as_deref() == Some("asset")
     }));
     let baseline_policies = predecessor
         .registry()

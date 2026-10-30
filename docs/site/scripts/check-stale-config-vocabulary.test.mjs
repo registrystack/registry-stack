@@ -110,7 +110,7 @@ test('allowances pass on BReg and cross-product pages', async () => {
     {
       pages: {
         'src/content/docs/reference/breg-api.mdx': [
-          '| `meta.entityTypeIdentifier` | string | The Record type identifier. |',
+          '| `meta.recordTypeIdentifier` | string | The Record type identifier. |',
           '`etag` is the strong entity tag a later patch must present.',
           'See [Actions and Proposals](../../configure/breg-change-control/).',
           '{/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities() */}',

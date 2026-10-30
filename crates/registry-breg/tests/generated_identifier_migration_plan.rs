@@ -125,7 +125,7 @@ fn assert_unsupported_generation_removal(
         CompiledRegistryChangeClass::Unsupported
     );
     assert_eq!(
-        generation_change.target.entity_id.as_deref(),
+        generation_change.target.record_type_id.as_deref(),
         Some("record")
     );
     assert_eq!(

@@ -525,9 +525,6 @@ impl BRegCreationRevision {
             .get("meta")
             .and_then(Value::as_object)
             .ok_or_else(|| wrong_evidence("the revision has no record type"))?;
-        if meta.contains_key("entityTypeIdentifier") {
-            return Err(wrong_evidence("the revision record type is invalid"));
-        }
         let record_type = meta
             .get("recordTypeIdentifier")
             .and_then(Value::as_str)

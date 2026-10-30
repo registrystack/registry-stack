@@ -202,7 +202,7 @@ pub fn timer_activation_preview_definitions(
         .map(|change| {
             let entity = change
                 .target
-                .entity_id
+                .record_type_id
                 .clone()
                 .ok_or(PackageError::MigrationPlan)?;
             let timer = change

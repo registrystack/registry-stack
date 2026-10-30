@@ -12,7 +12,7 @@ def input_from_record(response, application):
         record = response["data"]
         if (
             record["recordIdentifier"] != application
-            or response["meta"]["entityTypeIdentifier"] != "application"
+            or response["meta"]["recordTypeIdentifier"] != "application"
         ):
             raise ValueError("BReg returned a different application identity")
         revision = record["revisionIdentifier"]

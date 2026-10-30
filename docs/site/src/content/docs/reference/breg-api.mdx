@@ -107,7 +107,7 @@ Reads, creates, patches, tombstones, revisions, and snapshots return the Registr
   "meta": {
     "registryIdentifier": "asset-registry",
     "datasetIdentifier": "asset-sites",
-    "entityTypeIdentifier": "asset-site"
+    "recordTypeIdentifier": "asset-site"
   }
 }
 ```
@@ -117,8 +117,7 @@ Reads, creates, patches, tombstones, revisions, and snapshots return the Registr
 | `data.recordIdentifier` | string, UUID | Stable identity of the record. |
 | `data.revisionIdentifier` | string, `^[1-9][0-9]*$` | Revision counter, starting at `1`. Compare as a string. |
 | `data.domainData` | object | The record's fields under their `apiName`, narrowed to the grant's `readableFields` and to `$select`. |
-| `data.snapshot` | string | On mutation responses only: an opaque token for `:snapshot` reads, at most 4096 bytes. |
-| `meta.registryIdentifier`, `meta.datasetIdentifier`, `meta.entityTypeIdentifier` | strings | The registry, dataset, and Record type IDs from the compiled package. |
+| `meta.registryIdentifier`, `meta.datasetIdentifier`, `meta.recordTypeIdentifier` | strings | The registry, dataset, and Record type IDs from the compiled package. |
 
 Fields travel under their `apiName`: by default the camelCase form of the field ID, so
 `household-code` is `householdCode`. The field ID is never accepted in its place.
@@ -150,7 +149,7 @@ is `items[0].domainData`, not `items[0].data.domainData`:
 {
   "items": [{"recordIdentifier": "…", "revisionIdentifier": "1", "domainData": {}}],
   "pageInfo": {"nextCursor": "eyJ…"},
-  "meta": {"registryIdentifier": "asset-registry", "datasetIdentifier": "asset-sites", "entityTypeIdentifier": "asset-site"}
+  "meta": {"registryIdentifier": "asset-registry", "datasetIdentifier": "asset-sites", "recordTypeIdentifier": "asset-site"}
 }
 ```
 
@@ -229,7 +228,7 @@ followed by the field's `apiName`:
 
 `If-Match` must carry the `ETag` of the revision you read: a stale value answers
 `412 precondition.failed` and a missing one `428 precondition.required`. The response is the new
-revision's envelope with `data.snapshot`.
+revision's envelope.
 Reference values must name active targets, as on Create.
 
 ### Tombstone
@@ -256,7 +255,7 @@ bounded by its `batch.maximumItems` and `batch.maximumBytes`:
 {
   "items": [
     {"operation": "create", "data": {"code": "SITE-002", "label": "East depot"}},
-    {"operation": "patch", "recordId": "2d7e5e0c-…", "ifMatch": "\"breg-hmac-sha256:…\"", "patch": [{"op": "replace", "path": "/data/label", "value": "West depot"}]}
+    {"operation": "patch", "recordIdentifier": "2d7e5e0c-…", "ifMatch": "\"breg-hmac-sha256:…\"", "patch": [{"op": "replace", "path": "/data/label", "value": "West depot"}]}
   ],
   "changeContext": {
     "kind": "correction",
@@ -267,8 +266,8 @@ bounded by its `batch.maximumItems` and `batch.maximumBytes`:
 }
 ```
 
-The response is `{"snapshot", "results"}`. Each result carries `operation`, `id`, `revision`,
-`etag`, and `data`.
+The response is `{"snapshot", "results"}`. Each result carries `operation`, `recordIdentifier`,
+`revisionIdentifier`, `etag`, and `domainData`.
 
 `changeContext` is optional and covers the whole batch; an item-level override is refused. A
 `correction` requires a nonempty `reasonCode`. `reasonCode` holds at most 64 UTF-8 bytes,
@@ -291,7 +290,7 @@ and statistics publications require it.
   `410 idempotency.expired` and is never executed; read the record instead.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), precondition_required(), valid_idempotency_key(), and MAX_IDEMPOTENCY_KEY_BYTES;
-    crates/registry-breg/src/problem_location.rs, batch item members operation, recordId, ifMatch, patch;
+    crates/registry-breg/src/problem_location.rs, batch item members operation, recordIdentifier, ifMatch, patch;
     crates/registry-breg/src/artifacts.rs, batch_response_schema;
     crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, resolve_binding(), KEY_SCOPE_MUTATION, and SpentKeyCaller;
     crates/registry-breg/src/api/proposals.rs, missing_idempotency_key();
@@ -480,8 +479,9 @@ instant and needs no time zone.
     crates/registry-breg/tests/postgres_temporal_corrections.rs, real_postgres_last_day_interval_is_in_force_through_its_last_day. */}
 
 `GET /v1/records/{route}:snapshot` without `snapshot` captures the latest committed state and
-returns its token with the page, so paging stays consistent while writes continue. With
-`snapshot`, it reproduces that earlier state. `validAt` filters by effective time inside the
+returns its token with the page, so paging stays consistent while writes continue. A Batch
+response carries a token for the state it committed. With `snapshot`, the route reproduces that
+earlier state. A token is opaque and at most 4096 bytes. `validAt` filters by effective time inside the
 snapshot and is refused on a non-temporal Record type; it takes a calendar date for a `date` start
 field and a UTC RFC 3339 timestamp for a `timestamp` one. `asOf` and `recordedAsOf` are refused
 on this route.
@@ -491,6 +491,7 @@ boundaries apply. A snapshot whose history was erased, whose field metadata no l
 whose two-second database budget runs out answers `503 source.unavailable`.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, revision_dispatch();
+    crates/registry-breg/src/mutation.rs, held_response();
     crates/registry-breg/src/query.rs, ParsedSnapshotQuery;
     crates/registry-breg/src/postgres/history_read.rs;
     crates/registry-breg/src/postgres/revision_read.rs;
@@ -611,7 +612,7 @@ counted on the metrics listener rather than journaled; see
 | --- | --- |
 | Create body | `/data` for a missing `data` member or a field you may not write, known or not; `/data/<apiName>` for a missing required field or a wrong value of a field you may write. |
 | Patch document | `/<n>` for operation `n`, `/<n>/op`, `/<n>/path` for a path outside `/data/` or a field you may not write, known or not, and `/<n>/value`. |
-| Batch body | `/items`, `/changeContext`, `/items/<n>`, `/items/<n>/operation`, `/items/<n>/recordId`, `/items/<n>/ifMatch`, `/items/<n>/patch`, and the create and patch forms above under `/items/<n>` and `/items/<n>/patch`. |
+| Batch body | `/items`, `/changeContext`, `/items/<n>`, `/items/<n>/operation`, `/items/<n>/recordIdentifier`, `/items/<n>/ifMatch`, `/items/<n>/patch`, and the create and patch forms above under `/items/<n>` and `/items/<n>/patch`. |
 | Header | `Idempotency-Key` when it is missing or malformed; `If-Match` when a batch request sends one, because each batch item carries its own `ifMatch`. |
 | Query | The parameter: `$select`, `$filter`, `$orderby`, `$top`, `$count`, `$skiptoken`, `bbox`, `accessProfile`, `asOf`, `snapshot`, or `validAt`; on statistics routes also `from`, `to`, or `status`. A revision route takes none but `accessProfile` and names the first other one you sent. |
 

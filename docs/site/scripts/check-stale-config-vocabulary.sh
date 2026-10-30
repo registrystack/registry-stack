@@ -45,14 +45,13 @@ BREG_RETIRED='(^|[^A-Za-z])[Ee]ntit(y|ies)([^a-z]|$)|SSL_CERT_FILE'
 # project, a definition answers a question, and Casework pins a ReviewRequest.
 EVIDENCE_CASEWORK_RETIRED='[Aa]uthoring [Ww]orkspaces?|[Bb]ounded [Qq]uestions?|[Rr]eview [Rr]ounds?'
 # Spellings removed from a line before it is matched:
-# - Registry Record v1's entityTypeIdentifier field, and its prose name;
 # - HTTP entity tags;
 # - Evidence's entity-reference value forms and their problem codes;
 # - DHIS2 tracked entities;
 # - Registry Manifest renderings and retired Relay tool names;
 # - the Rust source types and functions cited by evidence anchors;
 # - the configure/breg-change-control page slug in links.
-ALLOWED='entityTypeIdentifier|[Ee]ntity type identifiers?|[Ee]ntity[ -]tags?|(audience-scoped-)?entity-reference(-list)?|[a-z_]*entity_reference[a-z_]*|[Tt]racked[ _-]?[Ee]ntit(y|ies)(_id)?|entity JSON Schemas?|SHACL entity shapes|get_metadata_entity_[a-z_]+|Entity(Extension)?Source|[a-z_]*entit(y|ies)[a-z_]*\(\)|breg-change-control'
+ALLOWED='[Ee]ntity[ -]tags?|(audience-scoped-)?entity-reference(-list)?|[a-z_]*entity_reference[a-z_]*|[Tt]racked[ _-]?[Ee]ntit(y|ies)(_id)?|entity JSON Schemas?|SHACL entity shapes|get_metadata_entity_[a-z_]+|Entity(Extension)?Source|[a-z_]*entit(y|ies)[a-z_]*\(\)|breg-change-control'
 # Pages that still carry retired vocabulary until a later rewrite removes it.
 # Their lines are counted and reported, not refused.
 BASELINE="$ROOT/scripts/check-stale-config-vocabulary.baseline"

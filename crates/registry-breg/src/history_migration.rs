@@ -1148,7 +1148,7 @@ mod tests {
             schema: "registry_data".to_owned(),
             table: table.to_owned(),
             entity_id: entity_id.to_owned(),
-            kind: ReviewedMigrationObjectKind::Entity,
+            kind: ReviewedMigrationObjectKind::RecordType,
             member_id: None,
             physical_name: table.to_owned(),
         }

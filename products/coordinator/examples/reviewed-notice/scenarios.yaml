@@ -26,7 +26,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -58,7 +58,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     notify:
     - type: success
       value:
@@ -129,7 +129,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -203,7 +203,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -277,7 +277,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
   expect:
     path:
     - read-for-review
@@ -310,7 +310,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -342,7 +342,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
   waits:
     await-review:
       type: event
@@ -401,7 +401,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -433,7 +433,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
   waits:
     await-review:
       type: event
@@ -492,7 +492,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -571,7 +571,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -649,7 +649,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -730,7 +730,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     submit-review:
     - type: success
       value:
@@ -762,7 +762,7 @@ cases:
         meta:
           registryIdentifier: coordinator-source
           datasetIdentifier: synthetic-applications
-          entityTypeIdentifier: application
+          recordTypeIdentifier: application
     notify:
     - type: refused
       code: product-forbidden

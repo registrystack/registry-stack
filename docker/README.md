@@ -53,6 +53,18 @@ Copy the generated `runtime.example.yaml` to a private runtime file and set its
 Supply PostgreSQL URLs through the secret references already declared in that
 file. The runtime file and secrets stay outside the image.
 
+Startup refuses the runtime file unless it and every directory above it, as the
+container sees them, are owned by root or the runtime user (UID 65532 in the
+images) and not writable by group or others. A symbolic link anywhere in the path
+is refused. Casework and Evidence both apply this rule. A single-file mount sits
+under directories the image owns, so when you have finished editing the file,
+give it to that user:
+
+```sh
+sudo chown 65532:65532 '<runtime-file>'
+sudo chmod 0400 '<runtime-file>'
+```
+
 Build and run the source image directly, or use the maintained Compose adapter:
 
 ```sh
@@ -92,9 +104,14 @@ That explicit mode treats the container network and upstream TLS proxy as the
 operator-owned exposure boundary. It still rejects concrete public addresses,
 hostnames, and multicast addresses. The metrics listener remains private-only.
 
-For example:
+This example mounts a whole directory, so the
+[runtime file rule](#running-casework-locally) covers that directory as well as
+`runtime.yaml`. Give both to the runtime user first:
 
 ```sh
+sudo chown 65532:65532 deploy/evidence deploy/evidence/runtime.yaml
+sudo chmod 0755 deploy/evidence
+sudo chmod 0400 deploy/evidence/runtime.yaml
 docker network create registry-evidence-net
 docker run --rm \
   --network registry-evidence-net \

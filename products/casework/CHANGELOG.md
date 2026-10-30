@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: `caseworkctl` removes the `data` wrapper and adopts the shared
+  report envelope. Machine-readable reports open with `ok`, `command`, `status`,
+  `apiVersion` and `kind`, command members are flat, and every report carries
+  the binary's displayed `version` and a `diagnostics` array. `status` is
+  `complete`, `domain-refusal`, `usage-error` or `operational-failure`, matching
+  exit codes 0 through 3. Command-specific results such as `declined` or `ready`
+  move to `outcome`. An internal failure is reported as
+  `caseworkctl.internal-error` and exits 3.
+- BREAKING: A runtime configuration file is refused with
+  `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
+  owned by root or the runtime user, or is writable by group or others. A
+  root-owned sticky ancestor stays allowed.
 - A request body that the closed request type refuses with 422
   `request.unprocessable` now carries the failing JSON path in the
   `Registry-Casework-Validation-Path` header and `schema-mismatch` in the

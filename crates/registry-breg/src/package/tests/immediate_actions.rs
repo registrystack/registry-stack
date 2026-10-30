@@ -202,7 +202,7 @@ fn action_configuration_and_disclosure_changes_are_visible_in_package_diffs() {
             CompiledRegistryChangeClass::AccessOrDisclosureChange
         );
         assert_eq!(change.target.kind, CompiledRegistryChangeTargetKind::Action);
-        assert_eq!(change.target.entity_id, None);
+        assert_eq!(change.target.record_type_id, None);
         assert_eq!(change.target.member_id.as_deref(), Some("rename-item"));
         assert!(change_set_to_applicable_migration_plan(&changes).is_err());
     }

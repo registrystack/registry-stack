@@ -304,7 +304,7 @@ fn record_schema_and_openapi_use_breg_terms_without_respelling_registry_record_v
     assert!(operation.get("x-registry-responseEntity").is_none());
     let metadata = &operation["responses"]["200"]["content"]["application/json"]["schema"]
         ["properties"]["meta"]["properties"];
-    assert_eq!(metadata["entityTypeIdentifier"]["const"], "directory-entry");
+    assert_eq!(metadata["recordTypeIdentifier"]["const"], "directory-entry");
     assert!(metadata.get("recordType").is_none());
     let problem = &openapi["components"]["schemas"]["Problem"]["properties"];
     assert!(problem["recordType"].is_object());

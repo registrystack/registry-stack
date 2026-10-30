@@ -770,7 +770,7 @@ pub struct ReviewedMigrationObject {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewedMigrationObjectKind {
-    Entity,
+    RecordType,
     Field,
     Constraint,
     Index,
@@ -1314,7 +1314,7 @@ fn validate_field_encryption_step_grouping(
             }
             let entity_id = cover
                 .target
-                .entity_id
+                .record_type_id
                 .as_ref()
                 .ok_or(ReviewedMigrationError::Coverage)?;
             let field_id = cover
@@ -1373,7 +1373,7 @@ fn validate_field_encryption_drop_order(
         .filter(|cover| cover.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
         .filter_map(|cover| {
             Some((
-                cover.target.entity_id.as_ref()?.clone(),
+                cover.target.record_type_id.as_ref()?.clone(),
                 cover.target.member_id.as_ref()?.clone(),
             ))
         })
@@ -1980,7 +1980,7 @@ fn validate_step_sql(
             if !descriptor
                 .covers
                 .iter()
-                .any(|cover| cover.target.entity_id.as_deref() == Some(entity_id))
+                .any(|cover| cover.target.record_type_id.as_deref() == Some(entity_id))
             {
                 return Err(ReviewedMigrationError::Coverage);
             }
@@ -2107,7 +2107,7 @@ fn validate_field_encryption_backfill_step(
     }
     if !descriptor.covers.iter().any(|cover| {
         cover.code == CompiledRegistryChangeCode::FieldEncryptionChanged
-            && cover.target.entity_id.as_deref() == Some(entity_id.as_str())
+            && cover.target.record_type_id.as_deref() == Some(entity_id.as_str())
     }) {
         return Err(ReviewedMigrationError::Coverage);
     }
@@ -2876,7 +2876,7 @@ fn drop_table_objects(
     Ok(vec![reviewed_object(
         table,
         &entity_id,
-        ReviewedMigrationObjectKind::Entity,
+        ReviewedMigrationObjectKind::RecordType,
         None,
         table,
     )])
@@ -2920,7 +2920,7 @@ fn member_for_physical(
             ReviewedMigrationObjectKind::Field => &entity.fields,
             ReviewedMigrationObjectKind::Constraint => &entity.constraints,
             ReviewedMigrationObjectKind::Index => &entity.indexes,
-            ReviewedMigrationObjectKind::Entity => return Err(ReviewedMigrationError::Sql),
+            ReviewedMigrationObjectKind::RecordType => return Err(ReviewedMigrationError::Sql),
         };
         ids.extend(
             members
@@ -2970,14 +2970,14 @@ fn object_cover(
     covers: &[ReviewedChangeCover],
 ) -> Result<ReviewedChangeCover, ReviewedMigrationError> {
     let kind = match object.kind {
-        ReviewedMigrationObjectKind::Entity => CompiledRegistryChangeTargetKind::Entity,
+        ReviewedMigrationObjectKind::RecordType => CompiledRegistryChangeTargetKind::RecordType,
         ReviewedMigrationObjectKind::Field => CompiledRegistryChangeTargetKind::Field,
         ReviewedMigrationObjectKind::Constraint => CompiledRegistryChangeTargetKind::Constraint,
         ReviewedMigrationObjectKind::Index => CompiledRegistryChangeTargetKind::Index,
     };
     let target = CompiledRegistryChangeTarget {
         kind,
-        entity_id: Some(object.entity_id.clone()),
+        record_type_id: Some(object.entity_id.clone()),
         member_id: object.member_id.clone(),
     };
     let matches = covers
@@ -3005,7 +3005,7 @@ fn reference_target_cover_matches_implicit_constraint(
     cover.code == CompiledRegistryChangeCode::ReferenceTargetChanged
         && object.kind == ReviewedMigrationObjectKind::Constraint
         && cover.target.kind == CompiledRegistryChangeTargetKind::Field
-        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && cover.target.record_type_id.as_deref() == Some(object.entity_id.as_str())
         && object
             .member_id
             .as_deref()
@@ -3024,7 +3024,7 @@ fn pattern_cover_matches_implicit_constraint(
             | CompiledRegistryChangeCode::FieldPatternRemoved
     ) && object.kind == ReviewedMigrationObjectKind::Constraint
         && cover.target.kind == CompiledRegistryChangeTargetKind::Field
-        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && cover.target.record_type_id.as_deref() == Some(object.entity_id.as_str())
         && object
             .member_id
             .as_deref()
@@ -3047,7 +3047,7 @@ fn encryption_cover_matches_implicit_lookup_column(
             | CompiledRegistryChangeCode::FieldLookupChanged
     ) && object.kind == ReviewedMigrationObjectKind::Field
         && cover.target.kind == CompiledRegistryChangeTargetKind::Field
-        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && cover.target.record_type_id.as_deref() == Some(object.entity_id.as_str())
         && object
             .member_id
             .as_deref()
@@ -3069,7 +3069,7 @@ fn encryption_cover_matches_implicit_lookup_index(
             | CompiledRegistryChangeCode::FieldLookupChanged
     ) && object.kind == ReviewedMigrationObjectKind::Index
         && cover.target.kind == CompiledRegistryChangeTargetKind::Field
-        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && cover.target.record_type_id.as_deref() == Some(object.entity_id.as_str())
         && object
             .member_id
             .as_deref()
@@ -3242,7 +3242,7 @@ mod tests {
             code,
             target: CompiledRegistryChangeTarget {
                 kind: CompiledRegistryChangeTargetKind::Recipient,
-                entity_id: None,
+                record_type_id: None,
                 member_id: Some("recipient".to_owned()),
             },
         }

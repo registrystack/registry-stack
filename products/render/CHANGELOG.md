@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: A runtime configuration file is refused with
+  `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
+  owned by root or the runtime user, or is writable by group or others. A
+  root-owned sticky ancestor stays allowed.
+
 ## 0.44.0 - 2026-10-27
 
 - `registry-render check --bundle` reads an optional

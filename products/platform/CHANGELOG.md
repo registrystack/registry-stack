@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: `registry-cli-report` serializes the shared operator report
+  envelope: `ok`, `command`, `status`, `apiVersion`, `kind`, flat members,
+  `version` and `diagnostics`. `registry-cli-api` exit classes change:
+  configuration and credential failures exit 1 (were 3), HTTP 5xx exits 3, HTTP
+  4xx exits 1.
+- BREAKING: `registry-platform-config` adds `require_trusted_ownership()` and
+  `require_trusted_runtime_path()`, which refuse an unsafe file with
+  `platform.runtime-config.unsafe-file`.
+
 ## 0.44.0 - 2026-10-27
 
 - Upgrade the P-256 dependency stack to use `crypto-bigint` 0.7.6, addressing

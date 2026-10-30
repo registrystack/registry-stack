@@ -32,8 +32,8 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
       return respond(response, 'application/geo+json', `{"type":"FeatureCollection","features":[{"type":"Feature","id":"${id}","geometry":null,"properties":{"wide":9007199254740992},"registry":{"revision":1}}],"numberReturned":1,"registry":{"pageInfo":{"nextCursor":${continuation ? 'null' : '"geo-next"'}}}}`);
     }
     const collection = !path.endsWith(id) && !path.includes('/revisions/');
-    const responseMeta = path.includes('/retired-meta/')
-      ? { ...meta, entityTypeIdentifier: 'company' }
+    const responseMeta = path.includes('/incomplete-meta/')
+      ? { registryIdentifier: meta.registryIdentifier, datasetIdentifier: meta.datasetIdentifier }
       : meta;
     if (collection) {
       const document = { items: [record], pageInfo: { nextCursor: continuation ? null : 'next' }, meta: responseMeta };
@@ -89,7 +89,7 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
     assert(requests.some(item => item.url.includes('bbox=100.1%2C13.1%2C100.2%2C13.2')));
     assert(requests.some(item => item.url.includes('$select=name')));
     await assert.rejects(
-      client.getRecord('retired-meta', id),
+      client.getRecord('incomplete-meta', id),
       error => error.kind === 'protocol' && error.status === 200,
     );
     const beforeRetiredOption = requests.length;

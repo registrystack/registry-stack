@@ -158,7 +158,7 @@ References, spatial reads, historical reads, and statistical datasets expose
 only their declared capability variants.
 
 Record routes use the shared Registry Record v1 envelope. Its independently
-versioned `entityTypeIdentifier` names the Record type; it is not a BReg authoring
+versioned `recordTypeIdentifier` names the Record type; it is not a BReg authoring
 key. Action receipts and Proposals have separate response contracts. All responses
 use `Cache-Control: no-store`. `/v1/registry` also carries
 `Registry-Engine-Version` for matching-build consumers; concealed responses

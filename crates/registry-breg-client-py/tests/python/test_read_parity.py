@@ -106,8 +106,8 @@ class ReadParityTests(unittest.TestCase):
                     return
                 revision_detail = "/revisions/" in self.path
                 response_meta = metadata()
-                if "/retired-meta/" in self.path:
-                    response_meta["entityTypeIdentifier"] = "company"
+                if "/incomplete-meta/" in self.path:
+                    del response_meta["recordTypeIdentifier"]
                 self.respond(
                     {"data": record_data(), "meta": response_meta},
                     "application/json",
@@ -200,10 +200,10 @@ class ReadParityTests(unittest.TestCase):
 
         revision = self.client.get_record_revision("companies", RECORD_ID, 1)
         self.assertEqual(json.loads(revision["body"])["data"]["recordIdentifier"], RECORD_ID)
-        with self.assertRaises(BaseRegistryClientError) as retired:
-            self.client.get_record("retired-meta", RECORD_ID)
-        self.assertEqual(retired.exception.kind, "protocol")
-        self.assertEqual(retired.exception.status, 200)
+        with self.assertRaises(BaseRegistryClientError) as incomplete:
+            self.client.get_record("incomplete-meta", RECORD_ID)
+        self.assertEqual(incomplete.exception.kind, "protocol")
+        self.assertEqual(incomplete.exception.status, 200)
         count = len(self.requests)
         with self.assertRaises(TypeError):
             self.client.get_record(

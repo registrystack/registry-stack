@@ -11,7 +11,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-7
@@ -71,7 +71,7 @@ cases:
       read-current-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-8
@@ -131,7 +131,7 @@ cases:
       read-dispatching-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-9
@@ -202,7 +202,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-7
@@ -239,7 +239,7 @@ cases:
       read-current-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-9
@@ -280,7 +280,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-7
@@ -337,7 +337,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-9
@@ -377,7 +377,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-7
@@ -437,7 +437,7 @@ cases:
       read-current-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-8
@@ -497,7 +497,7 @@ cases:
       read-dispatching-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-9
@@ -572,7 +572,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-10
@@ -612,7 +612,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-7
@@ -637,7 +637,7 @@ cases:
       read-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-7
@@ -654,7 +654,7 @@ cases:
       read-current-subscription:
         - type: success
           value:
-            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, recordTypeIdentifier: alert-subscription}
             data:
               recordIdentifier: 00000000-0000-4000-8000-000000000201
               revisionIdentifier: revision-8

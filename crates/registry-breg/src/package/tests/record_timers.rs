@@ -357,7 +357,7 @@ fn serialized_timer_change_uses_the_closed_timer_vocabulary() {
         json!({
             "class":"access-or-disclosure-change",
             "code":"timer-added",
-            "target":{"kind":"timer","entityId":"contact","memberId":"activate"}
+            "target":{"kind":"timer","recordTypeId":"contact","memberId":"activate"}
         })
     );
 }
@@ -373,7 +373,7 @@ fn assert_timer_change(changes: &CompiledRegistryChangeSet, code: CompiledRegist
         CompiledRegistryChangeClass::AccessOrDisclosureChange
     );
     assert_eq!(timer.target.kind, CompiledRegistryChangeTargetKind::Timer);
-    assert_eq!(timer.target.entity_id.as_deref(), Some("contact"));
+    assert_eq!(timer.target.record_type_id.as_deref(), Some("contact"));
     assert_eq!(timer.target.member_id.as_deref(), Some("activate"));
     assert!(
         change_set_to_applicable_migration_plan(changes).is_err(),

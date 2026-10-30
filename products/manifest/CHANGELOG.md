@@ -7,6 +7,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- BREAKING: `registry-manifest` adopts the shared report envelope. Machine-readable
+  reports gain `version`, being the binary version, and their members now run
+  `ok`, `command`, `status`, `apiVersion`, `kind`, flat members, `version` and
+  `diagnostics`.
+
+- BREAKING: A filesystem failure exits 3 with status `operational-failure` and
+  code `manifest.io-failure`. It exited 1 with `manifest.operation.refused`. A
+  refused destination still exits 1.
+
 ## [0.44.0] - 2026-10-27
 
 - `registry-manifest validate` and `validate-profiles` read an optional

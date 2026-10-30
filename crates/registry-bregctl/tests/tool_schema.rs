@@ -461,7 +461,7 @@ fn full_descriptor() -> Value {
         "changeClass": "destructive-or-irreversible",
         "covers": [{
             "code": "field-encryption-changed",
-            "target": {"kind": "field", "entityId": "asset", "memberId": "batch"},
+            "target": {"kind": "field", "recordTypeId": "asset", "memberId": "batch"},
         }],
         "recovery": "exact-target-resume",
         "lockTimeoutMilliseconds": 1000,

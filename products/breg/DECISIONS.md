@@ -39,7 +39,7 @@
   parallel DCAT model.
 - A selected and authorized compiled record operation is the BReg's governed
   decision to publish the record's structural registry, primary-dataset, and
-  entity-type identifiers. They are mandatory Registry Record metadata rather
+  record-type identifiers. They are mandatory Registry Record metadata rather
   than caller-selectable domain fields, and the BReg does not add a second
   gate based on the optional Registry Manifest catalogue publication profile.
   Successful JSON and JSON-LD records use the shared Registry Record v1

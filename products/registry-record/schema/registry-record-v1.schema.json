@@ -70,7 +70,7 @@
           { "required": ["meta"] },
           { "required": ["registryIdentifier"] },
           { "required": ["datasetIdentifier"] },
-          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordTypeIdentifier"] },
           { "required": ["recordIdentifier"] },
           { "required": ["revisionIdentifier"] },
           { "required": ["nextCursor"] }
@@ -89,7 +89,7 @@
           { "required": ["meta"] },
           { "required": ["registryIdentifier"] },
           { "required": ["datasetIdentifier"] },
-          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordTypeIdentifier"] },
           { "required": ["nextCursor"] },
           { "required": ["@context"] }
         ]
@@ -103,7 +103,7 @@
     },
     "responseMeta": {
       "type": "object",
-      "required": ["registryIdentifier", "datasetIdentifier", "entityTypeIdentifier"],
+      "required": ["registryIdentifier", "datasetIdentifier", "recordTypeIdentifier"],
       "not": {
         "anyOf": [
           { "required": ["data"] },
@@ -119,7 +119,7 @@
       "properties": {
         "registryIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
         "datasetIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
-        "entityTypeIdentifier": { "$ref": "#/$defs/opaqueIdentifier" }
+        "recordTypeIdentifier": { "$ref": "#/$defs/opaqueIdentifier" }
       },
       "additionalProperties": { "$ref": "#/$defs/extensionValue" }
     },
@@ -133,7 +133,7 @@
           { "required": ["meta"] },
           { "required": ["registryIdentifier"] },
           { "required": ["datasetIdentifier"] },
-          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordTypeIdentifier"] },
           { "required": ["recordIdentifier"] },
           { "required": ["revisionIdentifier"] },
           { "required": ["domainData"] },
@@ -159,7 +159,7 @@
           { "required": ["pageInfo"] },
           { "required": ["registryIdentifier"] },
           { "required": ["datasetIdentifier"] },
-          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordTypeIdentifier"] },
           { "required": ["recordIdentifier"] },
           { "required": ["revisionIdentifier"] },
           { "required": ["domainData"] },
@@ -180,7 +180,7 @@
           { "required": ["data"] },
           { "required": ["registryIdentifier"] },
           { "required": ["datasetIdentifier"] },
-          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordTypeIdentifier"] },
           { "required": ["recordIdentifier"] },
           { "required": ["revisionIdentifier"] },
           { "required": ["domainData"] },

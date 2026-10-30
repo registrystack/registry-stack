@@ -107,6 +107,10 @@ fn every_compatible_negative_fixture_is_rejected() {
             RegistryRecordRepresentation::JsonLdProductComposition,
         ),
         (
+            "retired-record-type-member.json",
+            RegistryRecordRepresentation::Json,
+        ),
+        (
             "shared-only-context-array.jsonld",
             RegistryRecordRepresentation::JsonLdProductComposition,
         ),
@@ -133,42 +137,6 @@ fn duplicate_wire_members_are_rejected_before_profile_decoding() {
     }"#;
     assert!(
         RegistryRecordResponse::from_slice(duplicate, RegistryRecordRepresentation::Json).is_err()
-    );
-}
-
-#[test]
-fn record_type_identifier_is_the_only_record_meta_spelling() {
-    let canonical = json!({
-        "data": {
-            "recordIdentifier": "00000000-0000-4000-8000-000000000001",
-            "revisionIdentifier": "1",
-            "domainData": {}
-        },
-        "meta": {
-            "registryIdentifier": "registry",
-            "datasetIdentifier": "dataset",
-            "recordTypeIdentifier": "company"
-        }
-    });
-    RegistryRecordResponse::from_value(canonical.clone(), RegistryRecordRepresentation::Json)
-        .expect("canonical record meta must decode");
-
-    let mut mixed = canonical.clone();
-    mixed["meta"]["entityTypeIdentifier"] = json!("company");
-    assert!(
-        RegistryRecordResponse::from_value(mixed, RegistryRecordRepresentation::Json,).is_err()
-    );
-
-    let mut retired = canonical;
-    let meta = retired["meta"]
-        .as_object_mut()
-        .expect("record meta is an object");
-    let record_type = meta
-        .remove("recordTypeIdentifier")
-        .expect("canonical record type exists");
-    meta.insert("entityTypeIdentifier".to_owned(), record_type);
-    assert!(
-        RegistryRecordResponse::from_value(retired, RegistryRecordRepresentation::Json,).is_err()
     );
 }
 
