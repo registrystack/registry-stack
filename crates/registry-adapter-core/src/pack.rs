@@ -112,8 +112,13 @@ pub enum GraphQlOperationKind {
 pub struct CodeMap {
     /// The map identifier.
     pub id: LocalId,
-    /// The conversion entries.
-    pub entries: std::collections::BTreeMap<String, serde_json::Value>,
+    /// The conversion entries; each key is the upstream's own code value,
+    /// the wire name the source system documents (CFG-ID-2).
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::external_id_map_schema::<serde_json::Value>")
+    )]
+    pub entries: std::collections::BTreeMap<ExternalId, serde_json::Value>,
 }
 
 impl registry_platform_yaml::Identified for CodeMap {
@@ -246,6 +251,45 @@ mod tests {
         assert_eq!(pack.version, "1.0.0");
     }
 
+    /// A code-map entry key is the upstream's own code value, the wire
+    /// name the source system documents (CFG-ID-2): keys a local
+    /// identifier would refuse, including numerics and upper case, parse
+    /// and keep the value each converts to.
+    #[test]
+    fn code_map_entries_accept_external_id_keys() {
+        let json = r#"{"id":"case-api-pack","version":"1.0.0","testedVersions":["2.7"],"codeMaps":[{"id":"tracker-status","entries":{"female":"F","M":"male","01":"zero"}}]}"#;
+        let pack = serde_json::from_str::<AdapterPack>(json).expect("parse");
+        let entries = &pack.code_maps[0].entries;
+        let keys: Vec<&str> = entries.keys().map(|key| key.as_str()).collect();
+        assert_eq!(keys, vec!["01", "M", "female"], "keys stay as written");
+        assert_eq!(
+            entries[&ExternalId::new("M").expect("key")],
+            serde_json::json!("male")
+        );
+    }
+
+    /// A code-map entry key outside `ExternalId` (empty, carrying a
+    /// control character, or over 512 characters) refuses at the reader,
+    /// worded as the shared text type (CFG-ID-2).
+    #[test]
+    fn code_map_entries_refuse_a_bad_key() {
+        let read = |key: &str| {
+            let document = format!(
+                r#"{{"id":"case-api-pack","version":"1.0.0","testedVersions":["2.7"],"codeMaps":[{{"id":"tracker-status","entries":{{"{key}":"F"}}}}]}}"#
+            );
+            serde_json::from_str::<AdapterPack>(&document)
+        };
+        for key in ["", "no\\u0000pe", &"x".repeat(513)] {
+            let error = read(key).expect_err("a key outside ExternalId is refused");
+            assert!(
+                error
+                    .to_string()
+                    .contains("a non-empty identifier of at most 512 characters"),
+                "a bad entry key {key:?} is refused as the shared text type: {error}"
+            );
+        }
+    }
+
     /// The pack artifact round-trips: endpoints with component kind and
     /// authentication, templates, internal routes, code maps, inventories,
     /// and capabilities.
@@ -273,7 +317,7 @@ mod tests {
             code_maps: UniqueIdList::new(vec![CodeMap {
                 id: LocalId::new("gender-codes").expect("id"),
                 entries: std::collections::BTreeMap::from([(
-                    "female".to_string(),
+                    ExternalId::new("female").expect("key"),
                     serde_json::json!("F"),
                 )]),
             }])

@@ -262,7 +262,10 @@
       "properties": {
         "entries": {
           "additionalProperties": true,
-          "description": "The conversion entries.",
+          "description": "The conversion entries; each key is the upstream's own code value,\nthe wire name the source system documents (CFG-ID-2).",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         },
         "id": {
