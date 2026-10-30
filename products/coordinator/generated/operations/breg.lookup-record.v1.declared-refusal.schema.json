@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One package-declared business refusal from a validated product response.\n\nThe code is deliberately absent from `Debug`; callers must opt in to reading\nor serializing it for an authored refusal branch.",
+  "properties": {
+    "refusalCode": {
+      "const": "unresolved",
+      "type": "string"
+    }
+  },
+  "required": [
+    "refusalCode"
+  ],
+  "title": "breg.lookup-record/v1 declared-refusal output",
+  "type": "object"
+}

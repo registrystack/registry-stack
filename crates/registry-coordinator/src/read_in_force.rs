@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{NaiveDate, SecondsFormat, Utc};
+use chrono::NaiveDate;
 use registry_breg_client::{BRegAsOfListRequest, BRegRecordOptions, BaseRegistryClient};
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
@@ -145,7 +145,7 @@ pub(crate) async fn read_in_force(
         Ok(answer) => answer,
         Err(error) => return read_failure(error),
     };
-    let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let observed_at = crate::record_read::observed_at_now();
     let mut items = answer.value.value.items;
     match items.len() {
         0 => DeclaredRefusal::new(NONE_IN_FORCE)

@@ -28,6 +28,8 @@ Each catalog operation has an input contract, the type its adapter decodes, and 
 | [`breg.start-proposal/v1`](#breg.start-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
 | [`breg.submit-proposal/v1`](#breg.submit-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
 | [`breg.cancel-proposal/v1`](#breg.cancel-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
+| [`breg.lookup-record/v1`](#breg.lookup-record/v1) | 1 | `breg` | read | none | none | read-again | none | [`onDeclaredRefusal`](breg.lookup-record.v1.declared-refusal.schema.json) |
+| [`breg.read-record/v2`](#breg.read-record/v2) | 2 | `breg` | read | none | none | read-again | none | none |
 
 ## breg.read-record/v1
 
@@ -1684,6 +1686,144 @@ Output ([`breg.cancel-proposal.v1.output.schema.json`](breg.cancel-proposal.v1.o
 | `submissionVersion` | integer | yes |
 
 No other members are accepted.
+
+## breg.lookup-record/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "read",
+    "id": "breg.lookup-record/v1",
+    "keyRequirement": "none",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.lookup-record.v1.input.schema.json`](breg.lookup-record.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `entity` | string | yes |
+| `selector` | string | yes |
+| `values` | object | yes |
+
+No other members are accepted.
+
+Output ([`breg.lookup-record.v1.output.schema.json`](breg.lookup-record.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `domainData` | object | yes |
+| `provenance` | `Provenance` | yes |
+| `recordIdentifier` | string | yes |
+| `revisionIdentifier` | string | yes |
+
+Other members are tolerated.
+
+Declared-refusal output ([`breg.lookup-record.v1.declared-refusal.schema.json`](breg.lookup-record.v1.declared-refusal.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `refusalCode` | string | yes |
+
+No other members are accepted.
+
+## breg.read-record/v2
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "breg",
+  "identity": {
+    "effect": "read",
+    "id": "breg.read-record/v2",
+    "keyRequirement": "none",
+    "product": "breg",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 2
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`breg.read-record.v2.input.schema.json`](breg.read-record.v2.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `collection` | string | yes |
+| `grant` | `GrantReference` or null | no |
+| `recordId` | string | yes |
+
+No other members are accepted.
+
+Output ([`breg.read-record.v2.output.schema.json`](breg.read-record.v2.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `@context` | `RegistryRecordJsonLdContext` or null | no |
+| `data` | `RegistryRecord` | yes |
+| `meta` | `RegistryRecordMeta` | yes |
+| `provenance` | `Provenance` | yes |
+
+Other members are tolerated.
 
 ## Completions
 

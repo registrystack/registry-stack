@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "Provenance": {
+      "description": "Where a record came from and when the workflow looked at it.\n\n`observedAt` is the Coordinator's clock when the read returned. It says when\nthe workflow looked, not when the fact became true.",
+      "properties": {
+        "etag": {
+          "description": "The entity tag BReg sent with the record, where it sends one.",
+          "type": "string"
+        },
+        "observedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "recordIdentifier": {
+          "type": "string"
+        },
+        "revisionIdentifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordIdentifier",
+        "revisionIdentifier",
+        "observedAt"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The one record a lookup resolved, with its provenance.",
+  "properties": {
+    "domainData": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "recordIdentifier": {
+      "type": "string"
+    },
+    "revisionIdentifier": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "recordIdentifier",
+    "revisionIdentifier",
+    "domainData",
+    "provenance"
+  ],
+  "title": "breg.lookup-record/v1 output",
+  "type": "object"
+}

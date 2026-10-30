@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "GrantReference": {
+      "additionalProperties": false,
+      "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+      "properties": {
+        "expiresAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expiresAt"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "collection": {
+      "type": "string"
+    },
+    "grant": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GrantReference"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recordId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "collection",
+    "recordId"
+  ],
+  "title": "breg.read-record/v2 input",
+  "type": "object"
+}

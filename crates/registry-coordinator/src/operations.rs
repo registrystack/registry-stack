@@ -232,6 +232,15 @@ const fn declared_read(id: &'static str, product: &'static str) -> OperationDesc
     }
 }
 
+/// A read whose identifier carries a second version, so bindings to the first
+/// version keep their exact input and output.
+const fn read_v2(id: &'static str, product: &'static str) -> OperationDescriptor {
+    OperationDescriptor {
+        version: 2,
+        ..read(id, product)
+    }
+}
+
 const fn declared_mutation(
     id: &'static str,
     product: &'static str,
@@ -300,6 +309,8 @@ macro_rules! operation_catalog {
             StartProposal => "breg.start-proposal/v1", mutation("breg", false, true), start_proposal;
             SubmitProposal => "breg.submit-proposal/v1", mutation("breg", false, true), submit_proposal;
             CancelProposal => "breg.cancel-proposal/v1", mutation("breg", false, true), cancel_proposal;
+            LookupRecord => "breg.lookup-record/v1", declared_read("breg"), lookup_record;
+            ReadRecordV2 => "breg.read-record/v2", read_v2("breg"), read_record_v2;
         }
     };
 }
@@ -416,6 +427,8 @@ mod tests {
             (Operation::StartProposal, "breg.start-proposal/v1"),
             (Operation::SubmitProposal, "breg.submit-proposal/v1"),
             (Operation::CancelProposal, "breg.cancel-proposal/v1"),
+            (Operation::LookupRecord, "breg.lookup-record/v1"),
+            (Operation::ReadRecordV2, "breg.read-record/v2"),
         ];
         assert_eq!(
             descriptors()
@@ -513,6 +526,20 @@ mod tests {
             failure_code("in-force-ambiguous"),
             Some("in-force-ambiguous")
         );
+        for lookup in [Operation::LookupRecord, Operation::ReadRecordV2] {
+            assert!(lookup.is_read());
+            assert!(!lookup.requires_key());
+            assert!(!lookup.requires_preparation());
+            assert!(!lookup.has_dispatch_risk());
+            assert!(!lookup.supports_read_receipt());
+            assert_eq!(lookup.product(), "breg");
+            assert_eq!(lookup.recovery(), RecoverySemantics::ReadAgain);
+        }
+        assert!(Operation::LookupRecord.descriptor().declared_refusal);
+        assert_eq!(Operation::LookupRecord.descriptor().version, 1);
+        assert!(!Operation::ReadRecordV2.descriptor().declared_refusal);
+        assert_eq!(Operation::ReadRecordV2.descriptor().version, 2);
+        assert_eq!(Operation::ReadRecord.descriptor().version, 1);
         assert!(Operation::ExternalGet.is_read());
         assert!(!Operation::ExternalGet.requires_key());
         assert!(!Operation::ExternalGet.requires_preparation());
