@@ -17,7 +17,7 @@ mod upstream;
 
 use registry_adapter::auth::{
     AuthError, AuthEvent, AuthPlan, AuthorizeContext, ClientAssertion, ClientAssertionSigner,
-    ProtectedText, TokenBudget, CREDENTIAL_REJECTED_CLASS,
+    ProtectedText, TokenBudget, CREDENTIAL_REJECTED_CLASS, UNREGISTERED_ERROR_CODE,
 };
 use registry_adapter_core::{
     CredentialPlacement, EndpointAuthentication, EndpointBinding, RuntimeCredential,
@@ -470,6 +470,93 @@ mod oauth2_client_credentials {
             "the token endpoint declined to issue a token: invalid_client"
         );
         assert!(!error.to_string().contains("server text"), "{error}");
+    }
+
+    /// One plan serves many exchanges: the credential an earlier
+    /// exchange cached is a hit for the next, each exchange under its
+    /// own budget, so the endpoint is asked once in total. Compiling per
+    /// exchange would silently re-fetch on every exchange.
+    #[tokio::test]
+    async fn one_plan_serves_many_exchanges() {
+        std::env::set_var("ADAPTER_IT_CC_REUSE_ID", "cid-reuse");
+        std::env::set_var("ADAPTER_IT_CC_REUSE_SECRET", "cc-secret-7");
+        let double = UpstreamDouble::start();
+        double.respond_with(vec![Response::json(
+            200,
+            r#"{"access_token":"issued-reuse","token_type":"Bearer","expires_in":600}"#,
+        )]);
+        let plan = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &oauth_binding(
+                &double.url("/token"),
+                "ADAPTER_IT_CC_REUSE_ID",
+                "ADAPTER_IT_CC_REUSE_SECRET",
+                CredentialPlacement::BasicHeader,
+            ),
+        )
+        .expect("a usable plan");
+        for _ in 0..2 {
+            // A fresh budget each exchange, the engine's shape; the plan
+            // and its cache are the deployment's, held across both.
+            let mut budget = TokenBudget::new_exchange();
+            let mut events = Vec::new();
+            let mut context = AuthorizeContext {
+                resolver: &resolver(),
+                budget: &mut budget,
+                send: &LoopbackSend::new(),
+                signer: &KeyBindingSigner,
+                events: &mut events,
+            };
+            let header = plan
+                .authorize(&mut context)
+                .await
+                .expect("a credential issues")
+                .expect("a header is sent");
+            assert_eq!(header.value().as_bytes(), b"Bearer issued-reuse");
+        }
+        assert_eq!(
+            double.request_count(),
+            1,
+            "the second exchange is a cache hit"
+        );
+    }
+
+    /// A 401 whose body is not a readable error object is still the
+    /// uncatchable credential rejection: the status, not the body,
+    /// decides the class, so no gateway error page can let a fallback
+    /// mask a dead credential.
+    #[tokio::test]
+    async fn a_401_with_an_unparseable_body_is_still_rejected() {
+        std::env::set_var("ADAPTER_IT_CC_EMPTY_ID", "cid-empty");
+        std::env::set_var("ADAPTER_IT_CC_EMPTY_SECRET", "cc-secret-6");
+        let double = UpstreamDouble::start();
+        double.respond_with(vec![Response {
+            status: 401,
+            media_type: "text/html",
+            body: "<html>bad gateway</html>".to_owned(),
+        }]);
+        let plan = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &oauth_binding(
+                &double.url("/token"),
+                "ADAPTER_IT_CC_EMPTY_ID",
+                "ADAPTER_IT_CC_EMPTY_SECRET",
+                CredentialPlacement::BasicHeader,
+            ),
+        )
+        .expect("a usable plan");
+        let mut events = Vec::new();
+        let error = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            AuthError::Token(registry_adapter::auth::TokenFault::Refused {
+                code: UNREGISTERED_ERROR_CODE
+            })
+        );
+        assert_eq!(error.class(), CREDENTIAL_REJECTED_CLASS);
+        assert!(!error.to_string().contains("bad gateway"), "{error}");
     }
 
     /// The exchange budget holds two token sends; the third refuses

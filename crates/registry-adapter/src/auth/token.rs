@@ -93,7 +93,9 @@ fn error_code_name(wire: &str) -> &'static str {
 /// Why the token endpoint did not yield a credential. Every rendering is
 /// fixed text; the registered code names are the RFC spellings, and an
 /// unregistered spelling collapses to one fixed name, never server
-/// text.
+/// text. The HTTP status decides the fault before any body is read, so
+/// no gateway error page can masquerade as a malformed response and no
+/// outage as a rejected credential.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenFault {
     /// The token request did not complete on the transport.
@@ -107,13 +109,18 @@ pub enum TokenFault {
         /// name for an unregistered spelling.
         code: &'static str,
     },
-    /// The answer was not a token response this layer can use: an
-    /// unexpected status or media type, an unreadable body, or a member
-    /// that does not satisfy the contract.
-    Protocol {
-        /// The unexpected HTTP status, zero when the body failed.
+    /// The token endpoint answered with a redirect, which this client
+    /// never follows: the token endpoint is a fixed destination, never
+    /// one a response derives.
+    Redirect,
+    /// The token endpoint is unavailable: 429 or a server error, which
+    /// is catchable and retryable, not a judgment on the credential.
+    Unavailable {
+        /// The HTTP status.
         status: u16,
     },
+    /// The answer's body is not a JSON object this layer can read.
+    Unreadable,
     /// The token response stated a scope that does not include every
     /// scope the deployment requested.
     ScopeNarrowed,
@@ -138,10 +145,16 @@ impl fmt::Display for TokenFault {
                     "the token endpoint declined to issue a token: {code}"
                 )
             }
-            Self::Protocol { status } => write!(
-                formatter,
-                "the token response does not satisfy the OAuth 2.0 contract: status {status}"
-            ),
+            Self::Redirect => formatter.write_str("the token endpoint answered with a redirect"),
+            Self::Unavailable { status } => {
+                write!(
+                    formatter,
+                    "the token endpoint is unavailable: status {status}"
+                )
+            }
+            Self::Unreadable => {
+                formatter.write_str("the token response body is not a readable JSON object")
+            }
             Self::ScopeNarrowed => {
                 formatter.write_str("the token response does not include every requested scope")
             }
@@ -695,7 +708,13 @@ pub(crate) async fn acquire_token(
                 TokenFault::Transport { kind } => {
                     events.push(AuthEvent::TokenTransportFailed { kind: kind.kind() });
                 }
-                TokenFault::Protocol { .. }
+                TokenFault::Redirect => {
+                    events.push(AuthEvent::TokenRedirected);
+                }
+                TokenFault::Unavailable { status } => {
+                    events.push(AuthEvent::TokenUnavailable { status });
+                }
+                TokenFault::Unreadable
                 | TokenFault::ScopeNarrowed
                 | TokenFault::NoLifetime
                 | TokenFault::Invalid => {
@@ -707,25 +726,41 @@ pub(crate) async fn acquire_token(
     }
 }
 
-/// Read one answer: the status, the media type, then the body as Evidence
-/// reads it.
+/// Read one answer: the status decides the fault class before any body
+/// is read, then the media type, then the body as Evidence reads it.
 fn read_answer(
     wire: TokenWire,
     expected_scope: Option<&str>,
     assumed_lifetime: Option<Duration>,
 ) -> Result<(ProtectedText, Duration), TokenFault> {
-    if !(200..300).contains(&wire.status) {
-        if let Ok(members) = parse_object(&wire.body, MAXIMUM_TOKEN_RESPONSE_BYTES as usize) {
-            if let Some((_, JsonMember::Text(code))) =
-                members.iter().find(|(name, _)| name == "error")
-            {
-                return Err(TokenFault::Refused {
-                    code: error_code_name(code),
-                });
-            }
-        }
-        return Err(TokenFault::Protocol {
+    if (300..=399).contains(&wire.status) {
+        return Err(TokenFault::Redirect);
+    }
+    if wire.status == 400 || wire.status == 401 {
+        let code = parse_object(&wire.body, MAXIMUM_TOKEN_RESPONSE_BYTES as usize)
+            .ok()
+            .and_then(|members| {
+                members
+                    .iter()
+                    .find_map(|(name, member)| match (name.as_str(), member) {
+                        ("error", JsonMember::Text(code)) => Some(error_code_name(code)),
+                        _ => None,
+                    })
+            })
+            .unwrap_or(UNREGISTERED_ERROR_CODE);
+        return Err(TokenFault::Refused { code });
+    }
+    if wire.status == 429 || (500..=599).contains(&wire.status) {
+        return Err(TokenFault::Unavailable {
             status: wire.status,
+        });
+    }
+    if !(200..300).contains(&wire.status) {
+        // Any other status (403, 404, 405, 1xx, ...) says the token
+        // endpoint is misconfigured for this deployment, which is a
+        // deployment credential fault, so it is uncatchable.
+        return Err(TokenFault::Refused {
+            code: UNREGISTERED_ERROR_CODE,
         });
     }
     let media_is_json = wire
@@ -734,9 +769,7 @@ fn read_answer(
         .and_then(|value| value.split(';').next())
         .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
     if !media_is_json {
-        return Err(TokenFault::Protocol {
-            status: wire.status,
-        });
+        return Err(TokenFault::Unreadable);
     }
     parse_token_response(&wire.body, expected_scope, assumed_lifetime)
 }
@@ -748,7 +781,7 @@ pub(crate) fn parse_token_response(
     assumed_lifetime: Option<Duration>,
 ) -> Result<(ProtectedText, Duration), TokenFault> {
     let members = parse_object(bytes, MAXIMUM_TOKEN_RESPONSE_BYTES as usize)
-        .map_err(|_| TokenFault::Protocol { status: 0 })?;
+        .map_err(|_| TokenFault::Unreadable)?;
     let token = member_text(&members, "access_token")?.ok_or(TokenFault::Invalid)?;
     if token.is_empty()
         || token.len() > MAXIMUM_CREDENTIAL_BYTES
@@ -1081,15 +1114,15 @@ mod tests {
         let oversized = vec![b' '; MAXIMUM_TOKEN_RESPONSE_BYTES as usize + 1];
         assert_eq!(
             parse_token_response(&oversized, None, None),
-            Err(TokenFault::Protocol { status: 0 })
+            Err(TokenFault::Unreadable)
         );
         assert_eq!(
             parse_token_response(b"[]", None, None),
-            Err(TokenFault::Protocol { status: 0 })
+            Err(TokenFault::Unreadable)
         );
         assert_eq!(
             parse_token_response(br#"{"a":1,"a":2}"#, None, None),
-            Err(TokenFault::Protocol { status: 0 })
+            Err(TokenFault::Unreadable)
         );
     }
 
@@ -1280,10 +1313,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(
-            error,
-            AuthError::Token(TokenFault::Protocol { status: 302 })
-        );
+        assert_eq!(error, AuthError::Token(TokenFault::Redirect));
 
         let html = ScriptedSend::always(
             200,
@@ -1300,10 +1330,131 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(
-            error,
-            AuthError::Token(TokenFault::Protocol { status: 200 })
-        );
+        assert_eq!(error, AuthError::Token(TokenFault::Unreadable));
+    }
+
+    /// The status decides the fault and its class before any body is
+    /// read: a redirect is a redirect, an outage is catchable
+    /// `upstream.http`, an unparseable 400/401 body is still the
+    /// uncatchable credential rejection, and a 2xx that is not a usable
+    /// token response is a credential fault.
+    #[tokio::test]
+    async fn statuses_decide_the_fault_and_class() {
+        use super::super::CREDENTIAL_REJECTED_CLASS;
+        std::env::set_var("CLIENT_ID", "cid");
+        std::env::set_var("CLIENT_SECRET", "csecret");
+        async fn fault_of(
+            status: u16,
+            media_type: Option<&'static str>,
+            body: &'static str,
+        ) -> AuthError {
+            let send = ScriptedSend::always(status, media_type, body);
+            acquire_token(
+                &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
+                &mut TokenBudget::new_exchange(),
+                &resolver(),
+                &send,
+                &FixedSigner,
+                &mut Vec::new(),
+            )
+            .await
+            .unwrap_err()
+        }
+        let cases: [(u16, Option<&'static str>, &'static str, TokenFault, &str); 10] = [
+            // A 401 with an empty body is still the credential rejection.
+            (
+                401,
+                Some("application/json"),
+                "",
+                TokenFault::Refused {
+                    code: UNREGISTERED_ERROR_CODE,
+                },
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            // So is a 401 whose body is a gateway's HTML error page.
+            (
+                401,
+                Some("text/html"),
+                "<html>bad gateway</html>",
+                TokenFault::Refused {
+                    code: UNREGISTERED_ERROR_CODE,
+                },
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            // A 400 with a registered code keeps its name.
+            (
+                400,
+                Some("application/json"),
+                r#"{"error":"invalid_client"}"#,
+                TokenFault::Refused {
+                    code: "invalid_client",
+                },
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            // A 503 outage with an error body is unavailable, not a
+            // judged credential; the body is not read.
+            (
+                503,
+                Some("application/json"),
+                r#"{"error":"temporarily_unavailable"}"#,
+                TokenFault::Unavailable { status: 503 },
+                "upstream.http",
+            ),
+            (
+                429,
+                Some("application/json"),
+                "",
+                TokenFault::Unavailable { status: 429 },
+                "upstream.http",
+            ),
+            // A redirect is a redirect, with or without a body.
+            (
+                302,
+                Some("application/json"),
+                r#"{"error":"invalid_client"}"#,
+                TokenFault::Redirect,
+                "upstream.redirect",
+            ),
+            (
+                302,
+                Some("application/json"),
+                "",
+                TokenFault::Redirect,
+                "upstream.redirect",
+            ),
+            // A misconfigured token endpoint answering 404 is a
+            // deployment credential fault, uncatchable.
+            (
+                404,
+                Some("application/json"),
+                "",
+                TokenFault::Refused {
+                    code: UNREGISTERED_ERROR_CODE,
+                },
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            // A 2xx that is not a usable token response is a credential
+            // fault, not a malformed one.
+            (
+                200,
+                Some("application/json"),
+                r#"{"access_token":"at","token_type":"mac","expires_in":60}"#,
+                TokenFault::Invalid,
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            (
+                200,
+                Some("application/json"),
+                r#"{"access_token":"at","token_type":"Bearer","expires_in":0}"#,
+                TokenFault::Invalid,
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+        ];
+        for (status, media_type, body, fault, class) in cases {
+            let error = fault_of(status, media_type, body).await;
+            assert_eq!(error, AuthError::Token(fault), "status {status}");
+            assert_eq!(error.class(), class, "status {status}");
+        }
     }
 
     /// Concurrent acquisitions over one endpoint's cache make exactly one

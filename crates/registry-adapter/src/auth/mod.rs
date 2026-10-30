@@ -44,7 +44,7 @@ pub use tls::{EndpointTls, TlsFault};
 pub use token::{
     ClientAssertion, ClientAssertionSigner, TokenBudget, TokenCache, TokenEndpointPlan, TokenFault,
     TokenRequest, TokenSend, TokenWire, TransportFailure, UpstreamStatusAction,
-    TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
+    TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE, UNREGISTERED_ERROR_CODE,
 };
 
 use registry_platform_httputil::TransportKind;
@@ -98,10 +98,13 @@ impl AuthError {
                     // transport-level failure of the token send.
                     _ => "upstream.connection",
                 },
-                TokenFault::Refused { .. } | TokenFault::ScopeNarrowed | TokenFault::NoLifetime => {
-                    CREDENTIAL_REJECTED_CLASS
-                }
-                TokenFault::Protocol { .. } | TokenFault::Invalid => "upstream.malformed",
+                TokenFault::Refused { .. }
+                | TokenFault::ScopeNarrowed
+                | TokenFault::NoLifetime
+                | TokenFault::Invalid => CREDENTIAL_REJECTED_CLASS,
+                TokenFault::Redirect => "upstream.redirect",
+                TokenFault::Unavailable { .. } => "upstream.http",
+                TokenFault::Unreadable => "upstream.malformed",
             },
         }
     }
@@ -143,6 +146,15 @@ pub enum AuthEvent {
     /// The token endpoint's answer did not satisfy the OAuth 2.0
     /// contract.
     TokenProtocolRefused,
+    /// The token endpoint answered with a redirect, which this client
+    /// never follows.
+    TokenRedirected,
+    /// The token endpoint is unavailable (429 or a server error); the
+    /// status is carried, catchable and retryable as `upstream.http`.
+    TokenUnavailable {
+        /// The HTTP status.
+        status: u16,
+    },
     /// The token request did not complete on the transport.
     TokenTransportFailed {
         /// The coarse transport failure kind.
@@ -203,11 +215,24 @@ mod tests {
             CREDENTIAL_REJECTED_CLASS
         );
         assert_eq!(
-            AuthError::Token(TokenFault::Protocol { status: 302 }).class(),
-            "upstream.malformed"
+            AuthError::Token(TokenFault::NoLifetime).class(),
+            CREDENTIAL_REJECTED_CLASS
         );
         assert_eq!(
             AuthError::Token(TokenFault::Invalid).class(),
+            CREDENTIAL_REJECTED_CLASS,
+            "a 2xx that is not a usable token response is a credential fault"
+        );
+        assert_eq!(
+            AuthError::Token(TokenFault::Redirect).class(),
+            "upstream.redirect"
+        );
+        assert_eq!(
+            AuthError::Token(TokenFault::Unavailable { status: 503 }).class(),
+            "upstream.http"
+        );
+        assert_eq!(
+            AuthError::Token(TokenFault::Unreadable).class(),
             "upstream.malformed"
         );
 

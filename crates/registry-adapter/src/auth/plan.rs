@@ -202,6 +202,10 @@ pub struct AuthorizeContext<'a> {
 impl AuthPlan {
     /// Compile one endpoint's declared kind against its runtime binding.
     ///
+    /// One rule for callers: compile once per deployment start and hold
+    /// the plan in runtime state; never per exchange: each compile owns
+    /// a fresh cache.
+    ///
     /// This re-runs, defensively, the refusals `adapterctl check` owns;
     /// a deployment whose artifacts were never checked still cannot send
     /// a credential an endpoint did not declare.
