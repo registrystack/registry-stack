@@ -8,7 +8,7 @@
 //! dispatches to its bound route, `clientRequestValidation` is always
 //! on, unmatched requests answer 404 or 405 as in Camel, and a missing
 //! route fails startup (Camel's `missingOperation` default; `ignore` and
-//! `mock` are not ported). Serving rides `registry-platform-httpsec`
+//! `mock` are not ported). Serving is an axum listener
 //! with OIDC and the access profiles of section 10.1. The consumer
 //! places only the validated facade inputs of section 8.11.1 on the
 //! exchange, under closed, profile-neutral names, and fills the

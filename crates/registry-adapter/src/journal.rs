@@ -20,8 +20,13 @@ use tokio_postgres::Error as PgError;
 
 /// Every schema version, in the order it is applied. Each later migration
 /// takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] =
-    [(100, include_str!("journal/migrations/0100_journal.sql"))];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+    (100, include_str!("journal/migrations/0100_journal.sql")),
+    (
+        200,
+        include_str!("journal/migrations/0200_call_refused.sql"),
+    ),
+];
 
 /// The newest schema version this release applies.
 pub(crate) const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;

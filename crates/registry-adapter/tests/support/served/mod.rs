@@ -217,6 +217,36 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             .collect()
     }
 
+    /// The `detail` of every journal event of `kind`, oldest first.
+    pub async fn journal_details(&self, kind: &str) -> Vec<Value> {
+        let (client, connection) = tokio_postgres::connect(&self.database, tokio_postgres::NoTls)
+            .await
+            .expect("connect the journal schema");
+        tokio::spawn(connection);
+        client
+            .query(
+                "SELECT detail::text FROM adapter_journal_events \
+                 WHERE event_kind = $1 ORDER BY occurred_at",
+                &[&kind],
+            )
+            .await
+            .expect("read the journal")
+            .iter()
+            .map(|row| serde_json::from_str(&row.get::<_, String>(0)).expect("detail is JSON"))
+            .collect()
+    }
+
+    /// Send one GET, give the adapter time to start the exchange, then drop
+    /// the connection without reading the answer.
+    pub fn get_and_disconnect(&self, path: &str, bearer: &str) {
+        let mut stream = TcpStream::connect(("127.0.0.1", self.port)).expect("connect");
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {bearer}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).expect("write");
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
     pub fn token(&self, scope: &str) -> String {
         self.token_for(SUBJECT, scope)
     }

@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use registry_adapter_core::{
     ErrorClass, Expression, HttpMethod, OnExceptionStep, SendComponent, SetPropertyStep, Step,
@@ -211,7 +211,43 @@ pub struct RouteContext<'a> {
 #[derive(Clone, Debug)]
 pub struct RouteEvent {
     pub kind: &'static str,
+    /// The runtime clock at the event, which the journal stamps the row with.
+    pub at: SystemTime,
     pub detail: Value,
+}
+
+/// The authentication events of one send as value-free journal facts: the
+/// fixed event name and, where the event carries one, a fixed code name,
+/// status or failure kind. Never a token, a header or server text.
+fn auth_events_detail(events: &[AuthEvent]) -> Value {
+    Value::Array(
+        events
+            .iter()
+            .map(|event| match event {
+                AuthEvent::TokenRequested => json!({ "event": "tokenRequested" }),
+                AuthEvent::TokenIssued => json!({ "event": "tokenIssued" }),
+                AuthEvent::TokenCacheHit => json!({ "event": "tokenCacheHit" }),
+                AuthEvent::TokenRefused { code } => {
+                    json!({ "event": "tokenRefused", "code": code })
+                }
+                AuthEvent::TokenProtocolRefused => json!({ "event": "tokenProtocolRefused" }),
+                AuthEvent::TokenRedirected => json!({ "event": "tokenRedirected" }),
+                AuthEvent::TokenUnavailable { status } => {
+                    json!({ "event": "tokenUnavailable", "status": status })
+                }
+                AuthEvent::TokenTransportFailed { kind } => {
+                    json!({ "event": "tokenTransportFailed", "kind": kind })
+                }
+                AuthEvent::TokenEgressRefused => json!({ "event": "tokenEgressRefused" }),
+                AuthEvent::TokenAdmissionShed => json!({ "event": "tokenAdmissionShed" }),
+                AuthEvent::TokenInvalidatedAfterUnauthorized => {
+                    json!({ "event": "tokenInvalidatedAfterUnauthorized" })
+                }
+                AuthEvent::CredentialRejected => json!({ "event": "credentialRejected" }),
+                AuthEvent::TokenBudgetExhausted => json!({ "event": "tokenBudgetExhausted" }),
+            })
+            .collect(),
+    )
 }
 
 /// How a route run failed: the class it raised and, when a
@@ -303,6 +339,7 @@ impl Run<'_, '_> {
                     redeliveries += 1;
                     self.events.push(RouteEvent {
                         kind: "exchangeRedelivery",
+                        at: SystemTime::now(),
                         detail: json!({
                             "class": failure.class.class(),
                             "counter": redeliveries,
@@ -324,6 +361,7 @@ impl Run<'_, '_> {
             }
             self.events.push(RouteEvent {
                 kind: "exchangeFailureHandled",
+                at: SystemTime::now(),
                 detail: json!({ "class": failure.class.class() }),
             });
             for clause_step in &clause.steps {
@@ -428,7 +466,7 @@ impl Run<'_, '_> {
 
         let mut budget = TokenBudget::new_exchange();
         let mut auth_events: Vec<AuthEvent> = Vec::new();
-        let credential = endpoint
+        let authorized = endpoint
             .plan
             .authorize(&mut AuthorizeContext {
                 resolver: self.context.resolver,
@@ -437,17 +475,22 @@ impl Run<'_, '_> {
                 signer: &NoSigner,
                 events: &mut auth_events,
             })
-            .await
-            .map_err(|error| {
-                RouteFailure::of(
-                    ErrorClass::from_class(error.class()).unwrap_or(ErrorClass::CredentialRejected),
-                )
-            })?;
-
+            .await;
+        let mut sending = json!({ "endpoint": to.uri.id, "method": "GET", "operation": parameters.operation.as_ref().map(|o| o.as_str()) });
+        if !auth_events.is_empty() {
+            sending["auth"] = auth_events_detail(&auth_events);
+        }
         self.events.push(RouteEvent {
             kind: "exchangeSending",
-            detail: json!({ "endpoint": to.uri.id, "method": "GET", "operation": parameters.operation.as_ref().map(|o| o.as_str()) }),
+            at: SystemTime::now(),
+            detail: sending,
         });
+        let credential = authorized.map_err(|error| {
+            RouteFailure::of(
+                ErrorClass::from_class(error.class()).unwrap_or(ErrorClass::CredentialRejected),
+            )
+        })?;
+        auth_events.clear();
         let headers = self.exchange.message.string_headers();
         let started = Instant::now();
         let reply = endpoint
@@ -481,14 +524,34 @@ impl Run<'_, '_> {
                 )
                 .await;
             if action != UpstreamStatusAction::Continue {
+                let mut sent = json!({
+                    "endpoint": to.uri.id,
+                    "class": ErrorClass::CredentialRejected.class(),
+                    "status": status,
+                    "durationMs": elapsed,
+                });
+                if !auth_events.is_empty() {
+                    sent["auth"] = auth_events_detail(&auth_events);
+                }
+                self.events.push(RouteEvent {
+                    kind: "exchangeSent",
+                    at: SystemTime::now(),
+                    detail: sent,
+                });
                 return Err(RouteFailure::of(ErrorClass::CredentialRejected));
             }
         }
         match reply {
             Ok(reply) => {
+                let mut sent =
+                    json!({ "endpoint": to.uri.id, "status": reply.status, "durationMs": elapsed });
+                if !auth_events.is_empty() {
+                    sent["auth"] = auth_events_detail(&auth_events);
+                }
                 self.events.push(RouteEvent {
                     kind: "exchangeSent",
-                    detail: json!({ "endpoint": to.uri.id, "status": reply.status, "durationMs": elapsed }),
+                    at: SystemTime::now(),
+                    detail: sent,
                 });
                 let message = &mut self.exchange.message;
                 message.body = reply.body;
@@ -503,9 +566,14 @@ impl Run<'_, '_> {
                 if let EgressError::Refused(reason) = &error {
                     tracing::warn!(endpoint = %to.uri.id, reason = %reason, "an upstream send was refused");
                 }
+                let mut sent = json!({ "endpoint": to.uri.id, "class": class.class(), "status": status, "durationMs": elapsed });
+                if !auth_events.is_empty() {
+                    sent["auth"] = auth_events_detail(&auth_events);
+                }
                 self.events.push(RouteEvent {
                     kind: "exchangeSent",
-                    detail: json!({ "endpoint": to.uri.id, "class": class.class(), "status": status, "durationMs": elapsed }),
+                    at: SystemTime::now(),
+                    detail: sent,
                 });
                 if let EgressError::Upstream(failure) = error {
                     let message = &mut self.exchange.message;
@@ -727,5 +795,31 @@ mod served_tests {
             {"to": {"uri": "http:tracker", "parameters": {"httpMethod": "POST", "path": "/x"}}}
         ]));
         assert!(check_servable(&steps).is_err());
+    }
+}
+
+#[cfg(test)]
+mod auth_journal_tests {
+    use super::*;
+
+    #[test]
+    fn auth_events_reach_the_journal_as_fixed_names_and_codes_only() {
+        let detail = auth_events_detail(&[
+            AuthEvent::TokenRequested,
+            AuthEvent::TokenRefused {
+                code: "invalid_scope",
+            },
+            AuthEvent::TokenUnavailable { status: 503 },
+            AuthEvent::CredentialRejected,
+        ]);
+        assert_eq!(
+            detail,
+            json!([
+                { "event": "tokenRequested" },
+                { "event": "tokenRefused", "code": "invalid_scope" },
+                { "event": "tokenUnavailable", "status": 503 },
+                { "event": "credentialRejected" },
+            ])
+        );
     }
 }

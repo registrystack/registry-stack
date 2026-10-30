@@ -58,7 +58,7 @@ pub fn router(state: Arc<FacadeState>) -> Router {
                       Path(params): Path<HashMap<String, String>>,
                       RawQuery(query): RawQuery| {
                     let shared = Arc::clone(&shared);
-                    async move { handle(&shared, index, &headers, &params, query.as_deref()).await }
+                    async move { handle(shared, index, headers, params, query).await }
                 },
             ),
         );
@@ -66,7 +66,37 @@ pub fn router(state: Arc<FacadeState>) -> Router {
     router
 }
 
+/// Run one call to completion on its own task: a caller that disconnects
+/// drops this future but cannot cancel an exchange part way, so the source
+/// call and its journal rows always finish together.
 async fn handle(
+    state: Arc<FacadeState>,
+    index: usize,
+    headers: HeaderMap,
+    params: HashMap<String, String>,
+    query: Option<String>,
+) -> Response {
+    let fallback = Arc::clone(&state);
+    let task =
+        tokio::spawn(
+            async move { answer(&state, index, &headers, &params, query.as_deref()).await },
+        );
+    match task.await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(%error, "a facade call ended without an answer");
+            facade_problem(
+                &fallback.loaded.profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "",
+                "",
+            )
+        }
+    }
+}
+
+async fn answer(
     state: &FacadeState,
     index: usize,
     headers: &HeaderMap,
@@ -92,22 +122,28 @@ async fn handle(
         Err(refusal) => return refusal_response(profile, refusal, &request_id),
     };
     if record_type != operation.record_type {
-        return facade_problem(
-            profile,
+        return refuse_call(
+            state,
+            operation,
+            &caller,
+            &record_type,
+            &request_id,
             ErrorClass::FacadeNotFound,
             StatusCode::NOT_FOUND,
-            &record_type,
-            &request_id,
-        );
+        )
+        .await;
     }
     if !admits(&state.loaded.project, &caller, operation) {
-        return facade_problem(
-            profile,
-            ErrorClass::FacadeForbidden,
-            StatusCode::FORBIDDEN,
+        return refuse_call(
+            state,
+            operation,
+            &caller,
             &record_type,
             &request_id,
-        );
+            ErrorClass::FacadeForbidden,
+            StatusCode::FORBIDDEN,
+        )
+        .await;
     }
 
     if !is_path_segment_value(&record_id) {
@@ -163,7 +199,20 @@ async fn handle(
         route_id: operation.route_id.clone(),
         detail: detail.map(|value| value.to_string()),
     };
-    let mut events = vec![journal_event("exchangeCreated", None)];
+    // The exchange is on record before the source is called: a call that
+    // never completes still leaves its `exchangeCreated` behind.
+    let created = vec![(journal_event("exchangeCreated", None), SystemTime::now())];
+    if let Err(fault) = append_all(&state.journal, created).await {
+        tracing::error!(%fault, "the audit journal could not record the exchange");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &record_type,
+            &request_id,
+        );
+    }
+    let mut events = Vec::new();
 
     let context = RouteContext {
         endpoints: &state.loaded.endpoints,
@@ -173,13 +222,13 @@ async fn handle(
     };
     let outcome = run_route(&context, &operation.steps, exchange).await;
     for event in outcome.events {
-        events.push(journal_event(event.kind, Some(event.detail)));
+        events.push((journal_event(event.kind, Some(event.detail)), event.at));
     }
 
     let rendered = match outcome.result {
         Ok(done) => match disclosed_slots(operation, &done.message.body) {
             Ok(slots) => {
-                events.push(journal_event("exchangeCompleted", None));
+                events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
                 Ok((done, slots))
             }
             Err(violations) => {
@@ -191,25 +240,31 @@ async fn handle(
                     class: ErrorClass::DisclosureViolation,
                     message: None,
                 };
-                events.push(journal_event(
-                    "exchangeFailed",
-                    Some(json!({ "class": failure.class.class() })),
+                events.push((
+                    journal_event(
+                        "exchangeFailed",
+                        Some(json!({ "class": failure.class.class() })),
+                    ),
+                    SystemTime::now(),
                 ));
                 Err(failure)
             }
         },
         Err(failure) => {
-            events.push(journal_event(
-                "exchangeFailed",
-                Some(json!({ "class": failure.class.class() })),
+            events.push((
+                journal_event(
+                    "exchangeFailed",
+                    Some(json!({ "class": failure.class.class() })),
+                ),
+                SystemTime::now(),
             ));
             Err(failure)
         }
     };
     // Journal first: a response is never sent for an exchange the journal
-    // could not record.
-    if let Err(error) = append_all(&state.journal, events).await {
-        tracing::error!(%error, "the audit journal could not record the exchange");
+    // could not record. The rest of the exchange commits as one unit.
+    if let Err(fault) = append_all(&state.journal, events).await {
+        tracing::error!(%fault, "the audit journal could not record the exchange");
         return facade_problem(
             profile,
             ErrorClass::Facade,
@@ -246,14 +301,37 @@ async fn handle(
     }
 }
 
-async fn append_all(pool: &Pool, events: Vec<JournalEvent>) -> Result<(), String> {
-    let client = pool.get().await.map_err(|error| error.to_string())?;
-    for event in events {
-        journal::append(&client, event, SystemTime::now())
+/// Append `events` in one transaction, each stamped with its own instant.
+/// The error is a fixed account of the fault (the SQLSTATE where the driver
+/// reports one), never the driver's text, which can repeat server detail.
+async fn append_all(pool: &Pool, events: Vec<(JournalEvent, SystemTime)>) -> Result<(), String> {
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|error| journal_fault(&error))?;
+    for (event, occurred_at) in events {
+        journal::append(&transaction, event, occurred_at)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| match error {
+                journal::JournalError::Query(error) => journal_fault(&error),
+                _ => "the journal write failed".to_owned(),
+            })?;
     }
-    Ok(())
+    transaction
+        .commit()
+        .await
+        .map_err(|error| journal_fault(&error))
+}
+
+fn journal_fault(error: &tokio_postgres::Error) -> String {
+    match error.code() {
+        Some(code) => format!("the journal write failed with SQLSTATE {}", code.code()),
+        None => "the journal write failed without a SQLSTATE".to_owned(),
+    }
 }
 
 async fn authenticate(state: &FacadeState, headers: &HeaderMap) -> Result<Caller, CallerRefusal> {
@@ -486,6 +564,46 @@ fn seal_next(
         .map_err(|error| error.to_string())
 }
 
+/// Answer a verified caller's refused call (403, or a record type the
+/// operation does not serve) after journaling it as `callRefused` with the
+/// class and status only. The refusal is also logged, so an operator sees it
+/// without reading the journal.
+async fn refuse_call(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    caller: &Caller,
+    record_type: &str,
+    request_id: &str,
+    class: ErrorClass,
+    status: StatusCode,
+) -> Response {
+    let profile = &state.loaded.profile;
+    tracing::warn!(
+        class = class.class(),
+        status = status.as_u16(),
+        "a verified caller's call was refused"
+    );
+    let event = JournalEvent {
+        event_kind: "callRefused",
+        exchange_id: request_id.to_owned(),
+        operation: operation.operation.clone(),
+        caller_ref: caller.reference.clone(),
+        route_id: operation.route_id.clone(),
+        detail: Some(json!({ "class": class.class(), "status": status.as_u16() }).to_string()),
+    };
+    if let Err(fault) = append_all(&state.journal, vec![(event, SystemTime::now())]).await {
+        tracing::error!(%fault, "the audit journal could not record the refusal");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            record_type,
+            request_id,
+        );
+    }
+    facade_problem(profile, class, status, record_type, request_id)
+}
+
 /// Answer a refused request as `facade.invalid-request`, journaling the
 /// refusal first with its value-free reason.
 async fn refuse_request(
@@ -497,13 +615,18 @@ async fn refuse_request(
     reason: &str,
 ) -> Response {
     let profile = &state.loaded.profile;
-    let event = |kind: &'static str, detail: Option<Value>| JournalEvent {
-        event_kind: kind,
-        exchange_id: request_id.to_owned(),
-        operation: operation.operation.clone(),
-        caller_ref: caller.reference.clone(),
-        route_id: operation.route_id.clone(),
-        detail: detail.map(|value| value.to_string()),
+    let event = |kind: &'static str, detail: Option<Value>| {
+        (
+            JournalEvent {
+                event_kind: kind,
+                exchange_id: request_id.to_owned(),
+                operation: operation.operation.clone(),
+                caller_ref: caller.reference.clone(),
+                route_id: operation.route_id.clone(),
+                detail: detail.map(|value| value.to_string()),
+            },
+            SystemTime::now(),
+        )
     };
     let events = vec![
         event("exchangeCreated", None),
@@ -515,8 +638,8 @@ async fn refuse_request(
             })),
         ),
     ];
-    if let Err(error) = append_all(&state.journal, events).await {
-        tracing::error!(%error, "the audit journal could not record the refusal");
+    if let Err(fault) = append_all(&state.journal, events).await {
+        tracing::error!(%fault, "the audit journal could not record the refusal");
         return facade_problem(
             profile,
             ErrorClass::Facade,

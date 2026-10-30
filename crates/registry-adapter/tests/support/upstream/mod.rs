@@ -27,6 +27,7 @@ use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use zeroize::Zeroizing;
@@ -95,6 +96,7 @@ pub struct UpstreamDouble {
     listener: TcpListener,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     responses: Arc<Mutex<VecDeque<Response>>>,
+    delay_millis: Arc<AtomicU64>,
 }
 
 impl UpstreamDouble {
@@ -103,12 +105,14 @@ impl UpstreamDouble {
         let listener = TcpListener::bind("127.0.0.1:0").expect("the double binds loopback");
         let requests = Arc::new(Mutex::new(Vec::new()));
         let responses = Arc::new(Mutex::new(VecDeque::new()));
+        let delay_millis = Arc::new(AtomicU64::new(0));
         let double = Self {
             listener: listener
                 .try_clone()
                 .expect("the listener clones for the accept loop"),
             requests: Arc::clone(&requests),
             responses: Arc::clone(&responses),
+            delay_millis: Arc::clone(&delay_millis),
         };
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -117,7 +121,8 @@ impl UpstreamDouble {
                 };
                 let requests = Arc::clone(&requests);
                 let responses = Arc::clone(&responses);
-                std::thread::spawn(move || serve(stream, requests, responses));
+                let delay_millis = Arc::clone(&delay_millis);
+                std::thread::spawn(move || serve(stream, requests, responses, delay_millis));
             }
         });
         double
@@ -134,6 +139,12 @@ impl UpstreamDouble {
     /// Script the responses, served in order, one per request.
     pub fn respond_with(&self, responses: Vec<Response>) {
         *self.responses.lock().expect("the response script") = responses.into();
+    }
+
+    /// Hold every answer back by `delay` after the request is recorded.
+    pub fn delay_answers(&self, delay: Duration) {
+        let millis = u64::try_from(delay.as_millis()).expect("a delay in milliseconds");
+        self.delay_millis.store(millis, Ordering::SeqCst);
     }
 
     /// Every request the double received, in order.
@@ -154,6 +165,7 @@ fn serve(
     mut stream: TcpStream,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     responses: Arc<Mutex<VecDeque<Response>>>,
+    delay_millis: Arc<AtomicU64>,
 ) {
     let request = match read_request(&mut stream) {
         Some(request) => request,
@@ -168,6 +180,7 @@ fn serve(
         }
     };
     requests.lock().expect("the request record").push(request);
+    std::thread::sleep(Duration::from_millis(delay_millis.load(Ordering::SeqCst)));
     let response = responses
         .lock()
         .expect("the response script")

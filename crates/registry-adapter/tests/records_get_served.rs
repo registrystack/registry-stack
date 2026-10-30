@@ -251,3 +251,52 @@ async fn a_source_body_with_undeclared_fields_is_never_disclosed() {
         "{kinds:?}"
     );
 }
+
+#[tokio::test]
+async fn a_verified_caller_refused_by_scope_or_record_type_is_journaled_without_values() {
+    let upstream = UpstreamDouble::start();
+    let served = Served::start(&upstream.url("")).await;
+
+    let unscoped = served.token("records.write");
+    let (status, _, _) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&unscoped));
+    assert_eq!(status, 403);
+    let token = served.token("records.read");
+    let (status, _, _) = served.get("/v1/records/canary-type/EeBJ3Sn9uLg", Some(&token));
+    assert_eq!(status, 404);
+
+    let details = served.journal_details("callRefused").await;
+    assert_eq!(
+        details,
+        vec![
+            json!({ "class": "facade.forbidden", "status": 403 }),
+            json!({ "class": "facade.not-found", "status": 404 }),
+        ]
+    );
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
+async fn an_exchange_finishes_and_journals_when_the_caller_disconnects() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    upstream.delay_answers(std::time::Duration::from_millis(800));
+    let served = Served::start(&upstream.url("")).await;
+
+    let token = served.token("records.read");
+    served.get_and_disconnect("/v1/records/person/EeBJ3Sn9uLg", &token);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let kinds = served.journal_kinds().await;
+        if kinds.contains(&"exchangeCompleted".to_owned()) {
+            assert!(kinds.contains(&"exchangeCreated".to_owned()), "{kinds:?}");
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the exchange never completed: {kinds:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}

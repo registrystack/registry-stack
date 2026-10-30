@@ -7,13 +7,18 @@
 //! journal (`products/adapter/CONCEPT.md` section 8.1). One execution per
 //! facade call validates the request against the declared model, resolves
 //! the operation binding, interprets the bound plan step by step, and
-//! journals metadata for every step before answering.
+//! journals the exchange before answering: its creation before the source
+//! is called, then each send, redelivery, failure handling and the
+//! completion or failure as one transaction. A verified caller's refused
+//! call (403, or a record type the operation does not serve) is journaled
+//! as `callRefused`; an unauthenticated call is logged and not journaled.
 //!
 //! The upstream transport reuses `registry-platform-httputil`'s fixed
-//! destination policy and destination scripts, the facade server side
-//! uses `registry-platform-httpsec`, and throttling, configuration,
-//! audit, and artifact reading reuse the corresponding platform crates;
-//! the adapter inherits no authorization from any caller or upstream.
+//! destination policy and destination scripts, and configuration and
+//! artifact reading reuse the corresponding platform crates. The facade
+//! listener is a bare axum server: the platform HTTP security headers,
+//! request limits and per-caller throttling are not attached to it yet.
+//! The adapter inherits no authorization from any caller or upstream.
 //! The source-neutral model this runtime interprets lives in
 //! `registry-adapter-core`; operator tooling lives in
 //! `registry-adapterctl`.
