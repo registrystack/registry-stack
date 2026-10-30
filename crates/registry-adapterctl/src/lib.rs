@@ -567,7 +567,7 @@ fn human_lead(report: &Value) -> String {
         "compile" if report["check"] == json!(true) => "Compile drift check passed.".to_owned(),
         "compile" => "Compiled contract written.".to_owned(),
         "fixtures replay" => {
-            "Fixture contracts hold; send-by-send replay is not run yet (needs the route engine)."
+            "Fixture contracts hold; send-by-send replay is not driven here, the runtime engine drives sends."
                 .to_owned()
         }
         "verify" => match report["drove"].as_u64().unwrap_or_default() {

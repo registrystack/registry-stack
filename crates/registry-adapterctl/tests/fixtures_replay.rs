@@ -148,7 +148,7 @@ fn a_passed_replay_names_its_limits_in_the_human_lead() {
     assert_eq!(exit, ExitCode::SUCCESS);
     let human = String::from_utf8_lossy(&stdout);
     assert!(human.contains("Fixture contracts hold"));
-    assert!(human.contains("send-by-send replay is not run yet"));
+    assert!(human.contains("send-by-send replay is not driven here"));
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
 }
 
