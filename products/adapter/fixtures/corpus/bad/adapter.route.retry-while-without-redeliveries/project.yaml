@@ -17,7 +17,7 @@ profile:
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:dde884f6ae4e3ba84a7bc4260a5c39a0a07c2a72a0300ff9b44f1bfee5444838
+  digest: sha256:d93c0c5a48c56880debd533d38cf548ca5660e5d35facf98337fc911898797bb
 recordTypes:
   - name: case
     fields:
@@ -25,13 +25,13 @@ recordTypes:
         type: string
         required: true
 templatedRoutes:
-  - routeTemplate: findCases
-    routeId: caseFind
+  - routeTemplate: find-cases
+    routeId: case-find
 bindings:
   - id: case-get
     operation: cases-get
     recordType: case
-    route: caseFind
+    route: case-find
     maximumUpstreamCalls: 4
 accessProfiles:
   - id: case-reader

@@ -26,11 +26,11 @@ provenance:
   reference: https://relay.dev/graphql/connections.htm
 intercepts:
   - type: endpoint
-    endpoint: casesQuery
+    endpoint: cases-query
 entries:
   - operation: cases-find
     given:
-      endpoint: casesQuery
+      endpoint: cases-query
       method: POST
       path: /
       body:

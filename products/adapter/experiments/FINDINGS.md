@@ -85,7 +85,7 @@ staff-review round that was running in parallel.
 | C3 | Header reads and writes unbounded; would forward the caller's token (security) | `setHeader: {name: Authorization, value: {header: Authorization}}` before a send; `query: {identifier: {header: CamelHttpResponseCode}}` | open |
 | C4 | Endpoint-wide `idempotentUpstream` covers a POST naming no operation | a send with no `operation` on an endpoint with one idempotent operation | fixed |
 | C5 | Redelivery over a `direct:` target that POSTs | `maximumRedeliveries` over `to: direct:postTransaction` | fixed |
-| C6 | One redelivery defect reported twice, once at a template id | `/routes/createPatient` and `/routes/patientCreate` | open |
+| C6 | One redelivery defect reported twice, once at a template id | `/routes/createPatient` and `/routes/patient-create` | open |
 | C7 | Script-uncompilable pointer lacks `/routeTemplates/N` | `/steps/7/rhai` | open |
 | C8 | A script that does not parse, or has no matching entrypoint, passes in some slots | `fn find_variables(exchange) { let x = ; }` | open |
 | C9 | GraphQL query file unchecked | `queryFile: scripts/to-case.rhai`; a file holding `this is not graphql {{{`; `operationName: NoSuchOperation` | open |

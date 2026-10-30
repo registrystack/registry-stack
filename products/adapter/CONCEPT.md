@@ -326,8 +326,8 @@ keyed by the Camel EIP name, as Camel's YAML DSL writes it:
 
 ```yaml
 routes:
-  - id: fetchTrackedEntity
-    from: { uri: "direct:fetchTrackedEntity" }
+  - id: fetch-tracked-entity
+    from: { uri: "direct:fetch-tracked-entity" }
     steps:
       - to:
           uri: "http:tracker"

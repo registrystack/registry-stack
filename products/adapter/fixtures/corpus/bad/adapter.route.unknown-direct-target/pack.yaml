@@ -17,11 +17,11 @@ endpoints:
     authentication:
       type: basic
 routeTemplates:
-  - id: findCases
+  - id: find-cases
     parameters: []
     steps:
       - enrich:
-          uri: direct:absentRoute
+          uri: direct:absent-route
 capabilities:
   components:
     - http

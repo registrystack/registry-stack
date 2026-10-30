@@ -79,7 +79,7 @@ so the code appears twice; the refused code set is still exactly one.
 | `adapter.pack.graphql-query-required` | `graphql` endpoint names no `queryFile` | `adapter.pack.graphql-query-required` | checks |
 | `adapter.pack.reserved-header-name` | `static-api-key` declares the reserved header `Authorization` | `adapter.pack.reserved-header-name` | checks |
 | `adapter.pack.unknown-script` | A route's `rhai` file is not in the digest-pinned inventory | `adapter.pack.unknown-script` | checks |
-| `adapter.pack.unknown-template-parameter` | Template body references `{{missingParam}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
+| `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
 | `adapter.pack.script-uncompilable` | A pinned script does not parse (missing closing brace; its pin matches the broken bytes) | `adapter.pack.script-uncompilable` | tool |
 
@@ -123,7 +123,7 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.project.unknown-operation` | Binding references no declared profile operation | `adapter.project.unknown-operation` | checks |
 | `adapter.project.unknown-record-type` | Binding references no declared record type (co-fires `adapter.profile.response-envelope-uncompilable`, see the note above) | `adapter.project.unknown-record-type` | checks |
 | `adapter.project.unknown-route` | Binding references no declared route (co-fires `adapter.project.template-not-instantiated`, see the note above) | `adapter.project.unknown-route` | checks |
-| `adapter.project.template-not-instantiated` | Binding names the raw template `findCases`; `templatedRoutes` is empty | `adapter.project.template-not-instantiated` | checks |
+| `adapter.project.template-not-instantiated` | Binding names the raw template `find-cases`; `templatedRoutes` is empty | `adapter.project.template-not-instantiated` | checks |
 | `adapter.project.upstream-budget-exceeded` | Worst case 2 sends (loop bound 2) against a budget of 1 | `adapter.project.upstream-budget-exceeded` | checks |
 
 ### Route members
@@ -131,8 +131,8 @@ derivation sees, and their sweep expectations list both codes.
 | Member | Defect | Expected code | Layer |
 |---|---|---|---|
 | `adapter.route.unknown-endpoint` | Send names endpoint `nope` | `adapter.route.unknown-endpoint` | checks, per body |
-| `adapter.route.unknown-direct-target` | Enrich names `direct:absentRoute` | `adapter.route.unknown-direct-target` | checks, per body |
-| `adapter.route.direct-cycle` | Internal routes `loopA` and `loopB` call each other | `adapter.route.direct-cycle` | checks |
+| `adapter.route.unknown-direct-target` | Enrich names `direct:absent-route` | `adapter.route.unknown-direct-target` | checks, per body |
+| `adapter.route.direct-cycle` | Internal routes `loop-a` and `loop-b` call each other | `adapter.route.direct-cycle` | checks |
 | `adapter.route.direct-depth-exceeded` | 18 chained direct routes exceed the 16-deep bound | `adapter.route.direct-depth-exceeded` | checks |
 | `adapter.route.from-not-direct` | A route consumes from `http:cases`, not `direct:` | `adapter.route.from-not-direct` | checks |
 | `adapter.route.maximum-items-required` | Split declares no `maximumItems` | `adapter.route.maximum-items-required` | checks, per body |

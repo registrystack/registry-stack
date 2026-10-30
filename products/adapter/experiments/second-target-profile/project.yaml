@@ -19,11 +19,11 @@ project:
 profile:
   id: fhir-facade
   version: "1"
-  digest: sha256:3217b3ba399b688c371c60faf2d16dfd6ec1ee94d9220655a4817bba97a0e8f3
+  digest: sha256:738ca956fb95421fdc80a44c7bcbfa7131e9ce23b3ee23b6ed0dd9280f3e861f
 pack:
   id: jsonapi-households
   version: "1"
-  digest: sha256:0ed111e612284e8043cb2fa71162fc452cf1bc19ef23e157bf21c7f3180c4ccd
+  digest: sha256:844273e9a43b13d2ecc0ac251bef270bd6995e63b82b7e0ce41c99270ba9fab4
 recordTypes:
   - name: household
     fields:
@@ -36,32 +36,32 @@ recordTypes:
       - name: registered_on
         type: date
 templatedRoutes:
-  - routeTemplate: searchHouseholds
-    routeId: householdSearch
+  - routeTemplate: search-households
+    routeId: household-search
     parameters:
       region_code: R-07
       page_size: 100
       maximum_total: 1000
-  - routeTemplate: getHousehold
-    routeId: householdGet
+  - routeTemplate: get-household
+    routeId: household-get
     parameters: {}
 bindings:
   - id: household-search
-    operation: fhir.search-type
+    operation: fhir-search-type
     recordType: household
-    route: householdSearch
+    route: household-search
     maximumUpstreamCalls: 11
   - id: household-read
-    operation: fhir.read
+    operation: fhir-read
     recordType: household
-    route: householdGet
+    route: household-get
     maximumUpstreamCalls: 2
 accessProfiles:
   - id: household-reader
     scopes:
       - system/Basic.read
     operations:
-      - fhir.search-type
-      - fhir.read
+      - fhir-search-type
+      - fhir-read
     recordTypes:
       - household

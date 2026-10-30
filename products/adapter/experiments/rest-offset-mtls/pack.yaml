@@ -21,12 +21,12 @@ endpoints:
     authentication:
       type: oauth2-private-key-jwt
     operations:
-      - id: households.list
-      - id: households.read
+      - id: households-list
+      - id: households-read
     testedVersions:
       - "1.1"
 routeTemplates:
-  - id: searchHouseholds
+  - id: search-households
     parameters:
       - name: region_code
         type: string
@@ -54,10 +54,6 @@ routeTemplates:
                   title: The registry refused the request.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -71,10 +67,6 @@ routeTemplates:
                   title: The registry answered something unusable.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -86,10 +78,6 @@ routeTemplates:
                   title: The registry is unavailable.
                   status: 503
                   code: source.unavailable
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -101,10 +89,6 @@ routeTemplates:
                   title: The search matches more households than this deployment serves at once.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - setProperty:
           name: regionCode
@@ -130,12 +114,12 @@ routeTemplates:
           maximumIterations: 10
           steps:
             - to:
-                uri: direct:fetchHouseholdPage
+                uri: direct:fetch-household-page
       - setBody:
           rhai:
             file: scripts/to-households.rhai
             entrypoint: to_households
-  - id: getHousehold
+  - id: get-household
     parameters: []
     steps:
       - onException:
@@ -148,10 +132,6 @@ routeTemplates:
                   title: The registry refused the request.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -165,10 +145,6 @@ routeTemplates:
                   title: The registry answered something unusable.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -180,10 +156,6 @@ routeTemplates:
                   title: The registry is unavailable.
                   status: 503
                   code: source.unavailable
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -195,10 +167,6 @@ routeTemplates:
                   title: No household has this identifier.
                   status: 404
                   code: source.not-found
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 404
             - stop: {}
       - circuitBreaker:
           failureRateThreshold: 50
@@ -216,7 +184,7 @@ routeTemplates:
                         pathParameters:
                           id:
                             header: recordId
-                        operation: households.read
+                        operation: households-read
                 doCatch:
                   - exception:
                       - upstream.http
@@ -239,9 +207,9 @@ routeTemplates:
             file: scripts/to-household.rhai
             entrypoint: to_household
 routes:
-  - id: fetchHouseholdPage
+  - id: fetch-household-page
     from:
-      uri: direct:fetchHouseholdPage
+      uri: direct:fetch-household-page
     steps:
       - circuitBreaker:
           failureRateThreshold: 50
@@ -261,7 +229,7 @@ routes:
                       exchangeProperty: pageOffset
                     "page[limit]":
                       exchangeProperty: pageLimit
-                  operation: households.list
+                  operation: households-list
       - setProperty:
           name: upstreamTotal
           value:

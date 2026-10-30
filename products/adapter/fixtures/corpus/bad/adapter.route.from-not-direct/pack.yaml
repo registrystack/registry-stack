@@ -17,7 +17,7 @@ endpoints:
     authentication:
       type: basic
 routeTemplates:
-  - id: findCases
+  - id: find-cases
     parameters: []
     steps:
       - to:
@@ -29,7 +29,7 @@ routeTemplates:
               case_id:
                 header: recordId
 routes:
-  - id: oddRoute
+  - id: odd-route
     from:
       uri: http:cases
     steps: []

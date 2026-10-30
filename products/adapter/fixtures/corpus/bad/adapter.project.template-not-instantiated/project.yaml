@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.project.template-not-instantiated: this artifact set must be refused with
-# exactly adapter.project.template-not-instantiated. The binding names the raw template findCases; the project instantiates nothing.
+# exactly adapter.project.template-not-instantiated. The binding names the raw template find-cases; the project instantiates nothing.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.template-not-instantiated/project.yaml
@@ -17,7 +17,7 @@ profile:
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:5eb6fc8832bd318d98311c191ef073605a7e983056d474bdb100634cc9f9b873
+  digest: sha256:24297cc2e07e5754df26f40ae12f85c2b400304361da2d76ed75d9e6f4f0129b
 recordTypes:
   - name: case
     fields:
@@ -29,7 +29,7 @@ bindings:
   - id: case-get
     operation: cases-get
     recordType: case
-    route: findCases
+    route: find-cases
     maximumUpstreamCalls: 4
 accessProfiles:
   - id: case-reader

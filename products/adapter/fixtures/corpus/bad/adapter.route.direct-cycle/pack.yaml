@@ -17,7 +17,7 @@ endpoints:
     authentication:
       type: basic
 routeTemplates:
-  - id: findCases
+  - id: find-cases
     parameters: []
     steps:
       - to:
@@ -29,18 +29,18 @@ routeTemplates:
               case_id:
                 header: recordId
 routes:
-  - id: loopA
+  - id: loop-a
     from:
-      uri: direct:loopA
+      uri: direct:loop-a
     steps:
       - enrich:
-          uri: direct:loopB
-  - id: loopB
+          uri: direct:loop-b
+  - id: loop-b
     from:
-      uri: direct:loopB
+      uri: direct:loop-b
     steps:
       - enrich:
-          uri: direct:loopA
+          uri: direct:loop-a
 capabilities:
   components:
     - http

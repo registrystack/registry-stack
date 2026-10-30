@@ -18,7 +18,7 @@ version: "1"
 testedVersions:
   - "2024-01"
 endpoints:
-  - id: casesQuery
+  - id: cases-query
     component: graphql
     authentication:
       type: static-api-key
@@ -30,10 +30,10 @@ endpoints:
         file: scripts/find-variables.rhai
         entrypoint: find_variables
     operations:
-      - id: cases.query
+      - id: cases-query
     testedVersions:
       - "2024-01"
-  - id: caseNode
+  - id: case-node
     component: graphql
     authentication:
       type: static-api-key
@@ -45,11 +45,11 @@ endpoints:
         file: scripts/get-variables.rhai
         entrypoint: get_variables
     operations:
-      - id: cases.node
+      - id: cases-node
     testedVersions:
       - "2024-01"
 routeTemplates:
-  - id: findCases
+  - id: find-cases
     parameters:
       - name: case_type
         type: string
@@ -70,10 +70,6 @@ routeTemplates:
                   family: cases.unreachable
                   message: The case system did not answer in time.
                   httpStatus: 503
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -85,10 +81,6 @@ routeTemplates:
                   family: cases.refused
                   message: The case system refused the query.
                   httpStatus: 502
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -103,17 +95,13 @@ routeTemplates:
                   family: cases.refused
                   message: The case system answered something unusable.
                   httpStatus: 502
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - setProperty:
           name: caseType
           value:
             constant: "{{case_type}}"
       - to:
-          uri: graphql:casesQuery
+          uri: graphql:cases-query
       - setProperty:
           name: nextCursor
           value:
@@ -124,7 +112,7 @@ routeTemplates:
           rhai:
             file: scripts/to-cases.rhai
             entrypoint: to_cases
-  - id: getCase
+  - id: get-case
     parameters: []
     steps:
       - onException:
@@ -141,10 +129,6 @@ routeTemplates:
                   family: cases.unreachable
                   message: The case system did not answer in time.
                   httpStatus: 503
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -156,10 +140,6 @@ routeTemplates:
                   family: cases.refused
                   message: The case system refused the query.
                   httpStatus: 502
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -174,13 +154,9 @@ routeTemplates:
                   family: cases.refused
                   message: The case system answered something unusable.
                   httpStatus: 502
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - to:
-          uri: graphql:caseNode
+          uri: graphql:case-node
       - choice:
           when:
             - rhai:
@@ -192,10 +168,6 @@ routeTemplates:
                       family: cases.missing
                       message: No case has this identifier.
                       httpStatus: 404
-                - setHeader:
-                    name: CamelHttpResponseCode
-                    value:
-                      constant: 404
                 - stop: {}
           otherwise:
             steps:

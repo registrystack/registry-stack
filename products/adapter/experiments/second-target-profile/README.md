@@ -16,9 +16,9 @@ existing pack to it without touching the pack:
 - `pack.yaml` and `scripts/` are byte copies of experiment 4's
   `jsonapi-households` pack (same digest,
   `sha256:993b64ddd49a122dade6ae198e5d72209c89d87a13fd737ef01e2761bd025e28`).
-- `fhir.search-type` answers a searchset Bundle with `entry` and a `next`
+- `fhir-search-type` answers a searchset Bundle with `entry` and a `next`
   link; `_page_token` and `_count` are the paging parameters.
-- `fhir.read` answers one resource with `resourceType` and `id`.
+- `fhir-read` answers one resource with `resourceType` and `id`.
 - Problems answer an OperationOutcome whose codes are FHIR IssueType codes
   (`not-found`, `transient`, `processing`, `exception`), with no `status`
   member (FHIR carries the status on the HTTP response only).

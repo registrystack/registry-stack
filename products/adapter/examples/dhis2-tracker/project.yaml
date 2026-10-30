@@ -9,10 +9,10 @@
 # widest exception-clause body; every send counts one plus the widest
 # declared maximumRedeliveries; token requests none, the endpoint is
 # basic):
-#   - personSearch: loop bound 10 pages x (1 fetch per page) x
+#   - person-search: loop bound 10 pages x (1 fetch per page) x
 #     (1 + 1 redelivery) = 20; budget 24 leaves headroom.
-#   - personFetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
-#   - personImport: 1 send x (1 + 1 redelivery) = 2; budget 4.
+#   - person-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
+#   - person-import: 1 send x (1 + 1 redelivery) = 2; budget 4.
 #
 # Check with (the profile, pack, and fixtures live in their own product
 # directories, so the paths are passed explicitly):
@@ -38,7 +38,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:012045ea17eb59a3e5bce372d0b1243ac981b41491dad88b1638c29fa2ff7247
+  digest: sha256:8f6b01d806f1c812861b27a1509f36c64b962377018e6b066fef9e40738851fe
 recordTypes:
   - name: person
     fields:
@@ -53,30 +53,30 @@ recordTypes:
       - name: updated_at
         type: date-time
 templatedRoutes:
-  - routeTemplate: searchTrackedEntities
-    routeId: personSearch
+  - routeTemplate: search-tracked-entities
+    routeId: person-search
     parameters:
       program: qyVpUaAYv2A
       page_size: 50
-  - routeTemplate: fetchTrackedEntity
-    routeId: personFetch
-  - routeTemplate: importTrackedEntity
-    routeId: personImport
+  - routeTemplate: fetch-tracked-entity
+    routeId: person-fetch
+  - routeTemplate: import-tracked-entity
+    routeId: person-import
 bindings:
   - id: person-search
     operation: records-search
     recordType: person
-    route: personSearch
+    route: person-search
     maximumUpstreamCalls: 24
   - id: person-get
     operation: records-get
     recordType: person
-    route: personFetch
+    route: person-fetch
     maximumUpstreamCalls: 4
   - id: person-create
     operation: records-create
     recordType: person
-    route: personImport
+    route: person-import
     maximumUpstreamCalls: 4
 accessProfiles:
   - id: records-reader

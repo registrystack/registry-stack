@@ -88,7 +88,7 @@ case system behind a static API key:
   profile operation's HTTP method, so the POST search `cases-find` counts as
   a write (`adapter.route.write-without-idempotency /bindings/0/route` in
   probe `e3-query-over-post`). The redelivery finding is also reported twice,
-  once at the template id `/routes/findCases` and once at the instance.
+  once at the template id `/routes/find-cases` and once at the instance.
 - **Endpoint variables script unchecked.** A variables script that does not
   parse, and one without the named entrypoint, both pass (probe
   `e3-variables-broken`).

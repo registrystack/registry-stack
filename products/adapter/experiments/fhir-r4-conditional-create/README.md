@@ -72,7 +72,7 @@ so that a retried create never makes a second Patient:
 
 - **Endpoint-wide idempotency inheritance** (probe `e2-no-operation`): with
   `operation` omitted on the POST, and `idempotentUpstream: true` moved onto
-  the unrelated `fhir.read`, redelivery over the POST passes. The check
+  the unrelated `fhir-read`, redelivery over the POST passes. The check
   treats any idempotent operation on the endpoint as covering an unnamed
   send.
 - **Redelivery does not look through `direct:`** (probe `e2-direct-hop`):
@@ -80,7 +80,7 @@ so that a retried create never makes a second Patient:
   `direct:postTransaction` route makes redelivery over it pass.
 - `redelivery-over-non-safe-send` is reported twice, once at
   `/routes/createPatient` (a route template, not a route) and once at
-  `/routes/patientCreate`.
+  `/routes/patient-create`.
 
 ## Check run
 

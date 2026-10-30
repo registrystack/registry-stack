@@ -23,7 +23,7 @@ profile:
 pack:
   id: fhir-r4-conditional-create
   version: "1"
-  digest: sha256:c1d4999238fd5067352681e39e3e6c9a4f8107ccb372c21bdf1a2bf8dcf1b7b5
+  digest: sha256:ddfefa7012ab29e02c7e38f9d51a02dc529dd6901c134ee7de62fe2aabf4fc2d
 recordTypes:
   - name: patient
     fields:
@@ -39,15 +39,15 @@ recordTypes:
       - name: gender
         type: string
 templatedRoutes:
-  - routeTemplate: createPatient
-    routeId: patientCreate
+  - routeTemplate: create-patient
+    routeId: patient-create
     parameters:
       identifier_system: https://id.example.invalid/national-id
 bindings:
   - id: patient-create
     operation: records-create
     recordType: patient
-    route: patientCreate
+    route: patient-create
     maximumUpstreamCalls: 6
 accessProfiles:
   - id: patient-writer

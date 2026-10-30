@@ -22,7 +22,7 @@ profile:
 pack:
   id: graphql-cases
   version: "1"
-  digest: sha256:163ce9c12a3105908604c9a45c0a3c922be7b2bacef95dc9d92c12dc457b5fe8
+  digest: sha256:447257450df8d729d61107c2f36a2787c64654ff1fdb0b0994f2b41566a51c75
 recordTypes:
   - name: benefit_case
     fields:
@@ -36,22 +36,22 @@ recordTypes:
       - name: applicant_national_id
         type: string
 templatedRoutes:
-  - routeTemplate: findCases
-    routeId: benefitCaseFind
+  - routeTemplate: find-cases
+    routeId: benefit-case-find
     parameters:
       case_type: BENEFIT
-  - routeTemplate: getCase
-    routeId: benefitCaseGet
+  - routeTemplate: get-case
+    routeId: benefit-case-get
 bindings:
   - id: benefit-case-find
     operation: cases-find
     recordType: benefit_case
-    route: benefitCaseFind
+    route: benefit-case-find
     maximumUpstreamCalls: 2
   - id: benefit-case-get
     operation: cases-get
     recordType: benefit_case
-    route: benefitCaseGet
+    route: benefit-case-get
     maximumUpstreamCalls: 2
 accessProfiles:
   - id: case-reader

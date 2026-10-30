@@ -23,7 +23,7 @@ profile:
 pack:
   id: fhir-r4-patient
   version: "1"
-  digest: sha256:4ed6d34b7c5c270275e76d87a2f4ab127f4a8297859b29b55f6bfbe31c84cc56
+  digest: sha256:d56f7a69eee1c0aff49d2f4099a26009f8200d04f94e8bd8e6772ef413b1253a
 recordTypes:
   - name: patient
     fields:
@@ -38,8 +38,8 @@ recordTypes:
       - name: gender
         type: string
 templatedRoutes:
-  - routeTemplate: searchPatients
-    routeId: patientSearch
+  - routeTemplate: search-patients
+    routeId: patient-search
     parameters:
       identifier_system: https://id.example.invalid/national-id
       page_size: 50
@@ -47,7 +47,7 @@ bindings:
   - id: patient-search
     operation: records-search
     recordType: patient
-    route: patientSearch
+    route: patient-search
     maximumUpstreamCalls: 24
 accessProfiles:
   - id: patient-reader

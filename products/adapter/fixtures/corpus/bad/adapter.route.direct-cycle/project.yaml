@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.route.direct-cycle: this artifact set must be refused with
-# exactly adapter.route.direct-cycle. The pack's internal routes loopA and loopB call each other.
+# exactly adapter.route.direct-cycle. The pack's internal routes loop-a and loop-b call each other.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.direct-cycle/project.yaml
@@ -17,7 +17,7 @@ profile:
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:766af9de971cc16e1695f00e200cd993ea475540b799b2f4d70210fbcf52a1ea
+  digest: sha256:7faacbfde5ed867a9926e233d37081b562f654b9bd56f0536da97f0dad837ab2
 recordTypes:
   - name: case
     fields:
@@ -25,13 +25,13 @@ recordTypes:
         type: string
         required: true
 templatedRoutes:
-  - routeTemplate: findCases
-    routeId: caseFind
+  - routeTemplate: find-cases
+    routeId: case-find
 bindings:
   - id: case-get
     operation: cases-get
     recordType: case
-    route: caseFind
+    route: case-find
     maximumUpstreamCalls: 4
 accessProfiles:
   - id: case-reader

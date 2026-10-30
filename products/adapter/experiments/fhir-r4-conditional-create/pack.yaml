@@ -5,7 +5,7 @@
 # write rules (idempotentConsumer, one non-safe send, redelivery only
 # over an idempotentUpstream operation). See README.md beside this file.
 #
-# Idempotency basis for `fhir.transaction` (idempotentUpstream: true): the
+# Idempotency basis for `fhir-transaction` (idempotentUpstream: true): the
 # one request entry carries `ifNoneExist: identifier=<system>|<value>`, so
 # the server applies conditional-create rules
 # (https://hl7.org/fhir/R4/http.html#ccreate): no match creates the
@@ -18,7 +18,7 @@
 # as good as the server's conditional-create support: a server without
 # it creates a duplicate.
 #
-# `fhir.read` is the follow-up read of the created Patient, since a
+# `fhir-read` is the follow-up read of the created Patient, since a
 # transaction-response entry carries `response.location` and, without the
 # `Prefer: return=representation` request header (also not authorable),
 # no resource.
@@ -37,13 +37,13 @@ endpoints:
       - location
       - etag
     operations:
-      - id: fhir.transaction
+      - id: fhir-transaction
         idempotentUpstream: true
-      - id: fhir.read
+      - id: fhir-read
     testedVersions:
       - "4.0.1"
 routeTemplates:
-  - id: createPatient
+  - id: create-patient
     parameters:
       - name: identifier_system
         type: string
@@ -64,10 +64,6 @@ routeTemplates:
                   title: The source did not answer in time.
                   status: 503
                   code: source.unavailable
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -83,10 +79,6 @@ routeTemplates:
                   title: More than one source record matches the identifier.
                   status: 409
                   code: source.write-rejected
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 409
             - stop: {}
       - onException:
           exception:
@@ -98,10 +90,6 @@ routeTemplates:
                   title: The source refused the write.
                   status: 409
                   code: source.write-rejected
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 409
             - stop: {}
       - onException:
           exception:
@@ -116,10 +104,6 @@ routeTemplates:
                   title: The source answered something unusable.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - setProperty:
           name: fhirIdentifierSystem
@@ -141,7 +125,7 @@ routeTemplates:
                     rhai:
                       file: scripts/to-transaction.rhai
                       entrypoint: to_transaction
-                  operation: fhir.transaction
+                  operation: fhir-transaction
             - setProperty:
                 name: fhirPatientId
                 value:
@@ -159,7 +143,7 @@ routeTemplates:
                   query:
                     _format:
                       constant: json
-                  operation: fhir.read
+                  operation: fhir-read
             - setBody:
                 rhai:
                   file: scripts/to-record.rhai

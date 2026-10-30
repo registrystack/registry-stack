@@ -8,12 +8,12 @@ apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
 kind: AdapterRuntimeConfig
 id: graphql-cases-experiment
 endpoints:
-  - endpoint: casesQuery
+  - endpoint: cases-query
     baseUrl: https://cases.example.invalid/graphql
     credential:
       type: static-api-key
       valueRef: secret:env/CASES_API_KEY
-  - endpoint: caseNode
+  - endpoint: case-node
     baseUrl: https://cases.example.invalid/graphql
     credential:
       type: static-api-key

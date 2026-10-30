@@ -17,7 +17,7 @@ kind: AdapterProfile
 id: fhir-facade
 version: "1"
 operations:
-  - id: fhir.search-type
+  - id: fhir-search-type
     method: GET
     path: /fhir/{type}
     responseEnvelope: '{"resourceType": "Bundle", "type": "searchset", "entry": {{records}}, "link": [{"relation": "next", "url": "{{?nextCursor}}"}]}'
@@ -26,7 +26,7 @@ operations:
       pageSizeParameter: _count
       pageSizeMinimum: 1
       pageSizeMaximum: 500
-  - id: fhir.read
+  - id: fhir-read
     method: GET
     path: /fhir/{type}/{record_id}
     responseEnvelope: '{"resourceType": "{{recordType}}", "id": "{{recordId}}", "extension": [{"url": "https://id.example.invalid/fhir/StructureDefinition/registry-record", "valueRecord": {{record}}}]}'

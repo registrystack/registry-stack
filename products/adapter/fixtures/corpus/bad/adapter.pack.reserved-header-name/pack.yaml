@@ -18,7 +18,7 @@ endpoints:
       type: static-api-key
       headerName: Authorization
 routeTemplates:
-  - id: findCases
+  - id: find-cases
     parameters: []
     steps:
       - to:

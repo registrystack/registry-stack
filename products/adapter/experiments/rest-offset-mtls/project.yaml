@@ -24,7 +24,7 @@ profile:
 pack:
   id: jsonapi-households
   version: "1"
-  digest: sha256:0ed111e612284e8043cb2fa71162fc452cf1bc19ef23e157bf21c7f3180c4ccd
+  digest: sha256:844273e9a43b13d2ecc0ac251bef270bd6995e63b82b7e0ce41c99270ba9fab4
 recordTypes:
   - name: household
     fields:
@@ -37,25 +37,25 @@ recordTypes:
       - name: registered_on
         type: date
 templatedRoutes:
-  - routeTemplate: searchHouseholds
-    routeId: householdSearch
+  - routeTemplate: search-households
+    routeId: household-search
     parameters:
       region_code: R-07
       page_size: 100
       maximum_total: 1000
-  - routeTemplate: getHousehold
-    routeId: householdGet
+  - routeTemplate: get-household
+    routeId: household-get
     parameters: {}
 bindings:
   - id: household-search
     operation: records-search
     recordType: household
-    route: householdSearch
+    route: household-search
     maximumUpstreamCalls: 11
   - id: household-get
     operation: records-get
     recordType: household
-    route: householdGet
+    route: household-get
     maximumUpstreamCalls: 2
 accessProfiles:
   - id: household-reader

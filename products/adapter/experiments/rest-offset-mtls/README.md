@@ -27,7 +27,7 @@ from a JSON:API household registry:
 
 - Bracketed JSON:API query keys (`"page[offset]"`) are accepted as static
   query keys; the fixture's percent-encoded query matches them.
-- The `loop` over `to: direct:fetchHouseholdPage` with exchange properties
+- The `loop` over `to: direct:fetch-household-page` with exchange properties
   as the paging state (`pageOffset`, `upstreamTotal`, `households`) is
   expressible, and the budget counts the send behind the `direct:` hop:
   10 iterations x 1 send + 1 refreshed-401 resend = 11. Budget 10 is
@@ -60,7 +60,7 @@ from a JSON:API household registry:
    the middle of a page loop. `onFallback` cannot tell rejection from
    failure either.
 3. **Error propagation across `direct:`.** The page fetch lives in the
-   plain route `fetchHouseholdPage`; the clauses that map its
+   plain route `fetch-household-page`; the clauses that map its
    `breaker.open`, `upstream.*`, and `validation` live on the calling
    template. No document says whether an error raised in a `direct:`
    target is handled by the caller's clauses. I believe Camel hands it back

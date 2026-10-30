@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.route.unknown-direct-target: this artifact set must be refused with
-# exactly adapter.route.unknown-direct-target. The enrich names direct route absentRoute, which no pack route or template declares.
+# exactly adapter.route.unknown-direct-target. The enrich names direct route absent-route, which no pack route or template declares.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.unknown-direct-target/project.yaml
@@ -17,7 +17,7 @@ profile:
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:52befa61f259dc43b0237d8a3cd79e4cc015882a793bba6f20318fd27ac8467a
+  digest: sha256:4ce35be37d84c187fdeeed90fe8d7c0c05a1abb33e2de803cd574e8ba373cce8
 recordTypes:
   - name: case
     fields:
@@ -25,13 +25,13 @@ recordTypes:
         type: string
         required: true
 templatedRoutes:
-  - routeTemplate: findCases
-    routeId: caseFind
+  - routeTemplate: find-cases
+    routeId: case-find
 bindings:
   - id: case-get
     operation: cases-get
     recordType: case
-    route: caseFind
+    route: case-find
     maximumUpstreamCalls: 4
 accessProfiles:
   - id: case-reader

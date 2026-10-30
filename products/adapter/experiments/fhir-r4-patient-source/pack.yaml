@@ -33,11 +33,11 @@ endpoints:
     authentication:
       type: oauth2-client-credentials
     operations:
-      - id: fhir.search
+      - id: fhir-search
     testedVersions:
       - "4.0.1"
 routeTemplates:
-  - id: searchPatients
+  - id: search-patients
     parameters:
       - name: identifier_system
         type: string
@@ -62,10 +62,6 @@ routeTemplates:
                   title: The source did not answer in time.
                   status: 503
                   code: source.unavailable
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -82,10 +78,6 @@ routeTemplates:
                   title: The source answered something unusable.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - setProperty:
           name: fhirIdentifierSystem
@@ -112,7 +104,7 @@ routeTemplates:
           maximumIterations: 10
           steps:
             - enrich:
-                uri: direct:fetchSearchPage
+                uri: direct:fetch-search-page
                 aggregationStrategy:
                   type: json-array-append
                   from: pages
@@ -123,9 +115,9 @@ routeTemplates:
             file: scripts/to-records.rhai
             entrypoint: to_records
 routes:
-  - id: fetchSearchPage
+  - id: fetch-search-page
     from:
-      uri: direct:fetchSearchPage
+      uri: direct:fetch-search-page
     steps:
       - choice:
           when:
@@ -152,7 +144,7 @@ routes:
                     parameters:
                       httpMethod: GET
                       path: /
-                      operation: fhir.search
+                      operation: fhir-search
                       query:
                         _getpages:
                           exchangeProperty: fhirPagesId
@@ -171,7 +163,7 @@ routes:
                   parameters:
                     httpMethod: GET
                     path: /Patient
-                    operation: fhir.search
+                    operation: fhir-search
                     query:
                       identifier:
                         exchangeProperty: fhirIdentifier

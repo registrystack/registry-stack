@@ -17,7 +17,7 @@ endpoints:
     authentication:
       type: none
 routeTemplates:
-  - id: findCases
+  - id: find-cases
     parameters: []
     steps:
       - to:

@@ -31,7 +31,7 @@ intercepts:
   - type: endpoint
     endpoint: registry
 entries:
-  - operation: fhir.search-type
+  - operation: fhir-search-type
     given:
       endpoint: registry
       method: GET

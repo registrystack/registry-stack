@@ -23,7 +23,7 @@
 # documented behavior carries no response header the facade consumes, so
 # the allowlist stays empty and the engine copies nothing.
 #
-# Idempotency basis for `tracker.import` (idempotentUpstream: true): the
+# Idempotency basis for `tracker-import` (idempotentUpstream: true): the
 # tracker importer treats a payload object whose UID already exists as an
 # update, and refuses a create whose UID collides (error E1002); repeating
 # an import whose objects carry client-supplied UIDs therefore lands every
@@ -49,7 +49,7 @@
 #
 # Paging assumption, to be proven by a captured fixture: the tracker
 # export reply's page block is read at $.page.totalPage; DHIS2 fills it
-# only when the request carries totalPages=true, which the fetchPage route
+# only when the request carries totalPages=true, which the fetch-page route
 # always sends (docs.dhis2.org tracker export parameters). The reviewed
 # page bound is the loop's maximumIterations: 10.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
@@ -64,13 +64,13 @@ endpoints:
     authentication:
       type: basic
     operations:
-      - id: tracker.export
-      - id: tracker.import
+      - id: tracker-export
+      - id: tracker-import
         idempotentUpstream: true
     testedVersions:
       - "2.41"
 routeTemplates:
-  - id: searchTrackedEntities
+  - id: search-tracked-entities
     parameters:
       - name: program
         type: string
@@ -96,10 +96,6 @@ routeTemplates:
                   title: The source did not answer in time.
                   status: 503
                   code: source.unavailable
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -112,10 +108,6 @@ routeTemplates:
                   title: The source refused the search.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -130,10 +122,6 @@ routeTemplates:
                   title: The source answered something unusable.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - setProperty:
           name: dhis2Program
@@ -155,7 +143,7 @@ routeTemplates:
           maximumIterations: 10
           steps:
             - enrich:
-                uri: direct:fetchPage
+                uri: direct:fetch-page
                 aggregationStrategy:
                   type: json-array-append
                   from: pages
@@ -171,7 +159,7 @@ routeTemplates:
           rhai:
             file: scripts/shape-records.rhai
             entrypoint: shape_records
-  - id: fetchTrackedEntity
+  - id: fetch-tracked-entity
     parameters: []
     steps:
       - onException:
@@ -189,10 +177,6 @@ routeTemplates:
                   title: No record with that identifier exists at the source.
                   status: 404
                   code: source.not-found
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 404
             - stop: {}
       - onException:
           exception:
@@ -205,10 +189,6 @@ routeTemplates:
                   title: The source refused the lookup.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -225,10 +205,6 @@ routeTemplates:
                   title: The source did not answer in time.
                   status: 503
                   code: source.unavailable
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -243,10 +219,6 @@ routeTemplates:
                   title: The source answered something unusable.
                   status: 502
                   code: source.upstream-error
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 502
             - stop: {}
       - to:
           uri: http:tracker
@@ -256,7 +228,7 @@ routeTemplates:
             pathParameters:
               id:
                 header: recordId
-            operation: tracker.export
+            operation: tracker-export
       - choice:
           when:
             - rhai:
@@ -269,10 +241,6 @@ routeTemplates:
                       title: No record with that identifier exists at the source.
                       status: 404
                       code: source.not-found
-                - setHeader:
-                    name: CamelHttpResponseCode
-                    value:
-                      constant: 404
                 - stop: {}
           otherwise:
             steps:
@@ -280,7 +248,7 @@ routeTemplates:
                   rhai:
                     file: scripts/to-record.rhai
                     entrypoint: to_record
-  - id: importTrackedEntity
+  - id: import-tracked-entity
     parameters: []
     steps:
       - onException:
@@ -298,10 +266,6 @@ routeTemplates:
                   title: The source did not answer in time.
                   status: 503
                   code: source.unavailable
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 503
             - stop: {}
       - onException:
           exception:
@@ -317,10 +281,6 @@ routeTemplates:
                   title: The source refused the write.
                   status: 409
                   code: source.write-rejected
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 409
             - stop: {}
       - onException:
           exception:
@@ -338,10 +298,6 @@ routeTemplates:
                   title: The write could not be prepared for the source.
                   status: 409
                   code: source.write-rejected
-            - setHeader:
-                name: CamelHttpResponseCode
-                value:
-                  constant: 409
             - stop: {}
       - idempotentConsumer:
           expression:
@@ -359,7 +315,7 @@ routeTemplates:
                     rhai:
                       file: scripts/to-bundle.rhai
                       entrypoint: to_bundle
-                  operation: tracker.import
+                  operation: tracker-import
             - choice:
                 when:
                   - rhai:
@@ -372,10 +328,6 @@ routeTemplates:
                             title: The source refused the write.
                             status: 409
                             code: source.write-rejected
-                      - setHeader:
-                          name: CamelHttpResponseCode
-                          value:
-                            constant: 409
                       - stop: {}
                 otherwise:
                   steps:
@@ -384,16 +336,16 @@ routeTemplates:
                           file: scripts/accepted-record.rhai
                           entrypoint: accepted_record
 routes:
-  - id: fetchPage
+  - id: fetch-page
     from:
-      uri: direct:fetchPage
+      uri: direct:fetch-page
     steps:
       - to:
           uri: http:tracker
           parameters:
             httpMethod: GET
             path: /api/tracker/trackedEntities
-            operation: tracker.export
+            operation: tracker-export
             query:
               program:
                 exchangeProperty: dhis2Program
@@ -414,7 +366,7 @@ routes:
           value:
             jsonpath: "$.instances"
 codeMaps:
-  - id: trackerImportStatus
+  - id: tracker-import-status
     entries:
       OK:
         outcome: accepted
