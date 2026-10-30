@@ -17,6 +17,8 @@ operations:
   - id: cases-find
     method: POST
     path: /v2/cases/{type}
+    pathParameters:
+      - type
     requestEnvelope: '{"query": {{record}}}'
     responseEnvelope: '{"cases": {{records}}, "pageStateToken": "{{?nextCursor}}"}'
     pagination:
@@ -27,10 +29,16 @@ operations:
   - id: cases-get
     method: GET
     path: /v2/cases/{type}/{case_id}
+    pathParameters:
+      - type
+      - case_id
     responseEnvelope: '{"case": {{record}}, "retrievedAt": "{{requestId}}"}'
   - id: cases-file
     method: PUT
     path: /v2/cases/{type}/{case_id}
+    pathParameters:
+      - type
+      - case_id
     requestEnvelope: '{"record": {{record}}}'
     responseEnvelope: '{"case": {{record}}}'
 problemCodes:

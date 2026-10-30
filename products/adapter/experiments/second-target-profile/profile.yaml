@@ -20,6 +20,8 @@ operations:
   - id: fhir-search-type
     method: GET
     path: /fhir/{type}
+    pathParameters:
+      - type
     responseEnvelope: '{"resourceType": "Bundle", "type": "searchset", "entry": {{records}}, "link": [{"relation": "next", "url": "{{?nextCursor}}"}]}'
     pagination:
       cursorParameter: _page_token
@@ -29,6 +31,9 @@ operations:
   - id: fhir-read
     method: GET
     path: /fhir/{type}/{record_id}
+    pathParameters:
+      - type
+      - record_id
     responseEnvelope: '{"resourceType": "{{recordType}}", "id": "{{recordId}}", "extension": [{"url": "https://id.example.invalid/fhir/StructureDefinition/registry-record", "valueRecord": {{record}}}]}'
 problemCodes:
   - not-found

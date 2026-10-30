@@ -19,7 +19,7 @@ project:
 profile:
   id: fhir-facade
   version: "1"
-  digest: sha256:738ca956fb95421fdc80a44c7bcbfa7131e9ce23b3ee23b6ed0dd9280f3e861f
+  digest: sha256:9f041dc8cc49ec10cb3c6990edbdca29d161527da17c3b8ae2408af7659712c2
 pack:
   id: jsonapi-households
   version: "1"

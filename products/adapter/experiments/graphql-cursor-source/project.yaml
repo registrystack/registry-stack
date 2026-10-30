@@ -18,7 +18,7 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:cafb0aa8844d440043623dc01d6338acd71a0be22afc6d3fcbd41b4b6aa121da
+  digest: sha256:532d24d29a26838696e40f5df81fc461586c07be4be84cd1112e90a178f465e5
 pack:
   id: graphql-cases
   version: "1"
