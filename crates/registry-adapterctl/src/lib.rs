@@ -389,6 +389,10 @@ fn fixtures_command(
             let mut report = json!({
                 "command": command_name,
                 "project": run.project,
+                // This command checks the contracts only; the send-by-send
+                // replay activates with the route engine (CONCEPT 13.3).
+                // The field says so, so no gate mistakes this for a replay.
+                "drive": "not-run",
                 "fixtures": run.fixtures,
                 "entries": run.entries,
                 "upstreamExchanges": run.exchanges,
@@ -480,7 +484,10 @@ fn human_lead(report: &Value) -> String {
         "schemas" => "Generated schemas written; nothing drifted.".to_owned(),
         "compile" if report["check"] == json!(true) => "Compile drift check passed.".to_owned(),
         "compile" => "Compiled contract written.".to_owned(),
-        "fixtures replay" => "Fixture replay passed.".to_owned(),
+        "fixtures replay" => {
+            "Fixture contracts hold; send-by-send replay is not run yet (needs the route engine)."
+                .to_owned()
+        }
         other => format!("{other} completed."),
     }
 }

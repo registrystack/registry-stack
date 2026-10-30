@@ -115,7 +115,9 @@ fn codes(report: &Value) -> Vec<&str> {
 /// The minimal suite replays clean against its compiled contract: both
 /// entries, the ordered token and read exchanges, the response expectation
 /// with its headers, and the problem expectation by class and code
-/// (G-FIXTURES, CONCEPT 13.3).
+/// (G-FIXTURES, CONCEPT 13.3). The report says what did not run: until the
+/// route engine drives sends, `drive` stays `not-run`, so no gate mistakes
+/// the contract check for a replay.
 #[test]
 fn the_minimal_suite_replays_against_its_compiled_contract() {
     let project = minimal_dir().join("project.yaml");
@@ -123,14 +125,16 @@ fn the_minimal_suite_replays_against_its_compiled_contract() {
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert_eq!(report["command"], "fixtures replay");
     assert_eq!(report["status"], "complete");
+    assert_eq!(report["drive"], "not-run");
     assert_eq!(report["fixtures"], json!(1));
     assert_eq!(report["entries"], json!(2));
     assert_eq!(report["upstreamExchanges"], json!(4));
 }
 
-/// The human form of a passed replay says so in its lead line.
+/// The human form of a passed replay names its limits in its lead line:
+/// the contracts hold, and the send-by-send replay is not run yet.
 #[test]
-fn a_passed_replay_says_so_in_the_human_lead() {
+fn a_passed_replay_names_its_limits_in_the_human_lead() {
     let project = minimal_dir().join("project.yaml");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -142,7 +146,9 @@ fn a_passed_replay_says_so_in_the_human_lead() {
     ];
     let exit = registry_adapterctl::main_entry_from(all, &mut stdout, &mut stderr);
     assert_eq!(exit, ExitCode::SUCCESS);
-    assert!(String::from_utf8_lossy(&stdout).contains("Fixture replay passed."));
+    let human = String::from_utf8_lossy(&stdout);
+    assert!(human.contains("Fixture contracts hold"));
+    assert!(human.contains("send-by-send replay is not run yet"));
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
 }
 
