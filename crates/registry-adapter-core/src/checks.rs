@@ -275,6 +275,43 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
     findings
 }
 
+/// The path-parameter correspondence faults of a send's static path,
+/// each with the parameters member it points at: a `{{name}}` placeholder
+/// no `pathParameters` entry binds (pointed at `path`), and an entry
+/// naming no placeholder the path carries (pointed at `pathParameters`).
+/// A `{{?name}}` optional placeholder may stay unbound.
+fn path_parameter_faults(
+    path: &str,
+    bindings: &std::collections::BTreeMap<String, Expression>,
+) -> Vec<(&'static str, &'static str)> {
+    let mut faults: Vec<(&'static str, &'static str)> = Vec::new();
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    let mut placed: HashSet<String> = HashSet::new();
+    for (name, optional) in placeholders(path) {
+        if optional {
+            continue;
+        }
+        placed.insert(name.clone());
+        if !bindings.contains_key(&name)
+            && seen.insert("the path carries a placeholder no pathParameters entry binds")
+        {
+            faults.push((
+                "path",
+                "the path carries a placeholder no pathParameters entry binds",
+            ));
+        }
+    }
+    if bindings.keys().any(|key| !placed.contains(key))
+        && seen.insert("a pathParameters entry names no placeholder in the path")
+    {
+        faults.push((
+            "pathParameters",
+            "a pathParameters entry names no placeholder in the path",
+        ));
+    }
+    faults
+}
+
 /// The origin-relative fault of an authored static path, if any: no
 /// scheme or authority, no `..` segment, and a leading slash. The fault
 /// text never quotes the path.
@@ -567,18 +604,27 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         walk_steps(steps, &mut |step, path| match step {
             Step::To(to) => {
                 let target = &to.uri;
-                if let Some(fault) = to
-                    .parameters
-                    .as_ref()
-                    .and_then(|parameters| parameters.path.as_deref())
-                    .and_then(origin_relative_path_fault)
-                {
-                    route_findings.push(finding(
-                        CheckCode::RouteInvalidPath,
-                        &format!("/routes/{id}/steps{path}/parameters/path"),
-                        fault,
-                        "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
-                    ));
+                if let Some(parameters) = to.parameters.as_ref() {
+                    if let Some(send_path) = parameters.path.as_deref() {
+                        if let Some(fault) = origin_relative_path_fault(send_path) {
+                            route_findings.push(finding(
+                                CheckCode::RouteInvalidPath,
+                                &format!("/routes/{id}/steps{path}/parameters/path"),
+                                fault,
+                                "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+                            ));
+                        }
+                        for (member, fault) in
+                            path_parameter_faults(send_path, &parameters.path_parameters)
+                        {
+                            route_findings.push(finding(
+                                CheckCode::RoutePathParameterMismatch,
+                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                fault,
+                                "Bind every {{name}} placeholder of the path in pathParameters, and keep no entry the path does not name.",
+                            ));
+                        }
+                    }
                 }
                 match target.component {
                     SendComponent::Http | SendComponent::GraphQl => {
@@ -604,18 +650,27 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 }
             }
             Step::Enrich(enrich) => {
-                if let Some(fault) = enrich
-                    .parameters
-                    .as_ref()
-                    .and_then(|parameters| parameters.path.as_deref())
-                    .and_then(origin_relative_path_fault)
-                {
-                    route_findings.push(finding(
-                        CheckCode::RouteInvalidPath,
-                        &format!("/routes/{id}/steps{path}/parameters/path"),
-                        fault,
-                        "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
-                    ));
+                if let Some(parameters) = enrich.parameters.as_ref() {
+                    if let Some(send_path) = parameters.path.as_deref() {
+                        if let Some(fault) = origin_relative_path_fault(send_path) {
+                            route_findings.push(finding(
+                                CheckCode::RouteInvalidPath,
+                                &format!("/routes/{id}/steps{path}/parameters/path"),
+                                fault,
+                                "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+                            ));
+                        }
+                        for (member, fault) in
+                            path_parameter_faults(send_path, &parameters.path_parameters)
+                        {
+                            route_findings.push(finding(
+                                CheckCode::RoutePathParameterMismatch,
+                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                fault,
+                                "Bind every {{name}} placeholder of the path in pathParameters, and keep no entry the path does not name.",
+                            ));
+                        }
+                    }
                 }
                 match enrich.uri.component {
                     SendComponent::Http | SendComponent::GraphQl => {
@@ -5540,6 +5595,73 @@ mod tests {
                 "/routes/fetch-case/steps/0/parameters/path"
             );
         }
+    }
+
+    // ----- path parameter correspondence (round 6 C12) -----
+
+    /// Every `{{name}}` placeholder of a send's static path is bound in
+    /// `pathParameters`, and every entry binds a placeholder the path
+    /// carries; both directions refuse under one code.
+    #[test]
+    fn routes_refuse_send_paths_and_path_parameters_that_disagree() {
+        let send_with = |path: Option<&str>, parameters: &[(&str, &str)]| {
+            let mut step = to_get("case-api");
+            if let Step::To(to) = &mut step {
+                if let Some(to_parameters) = &mut to.parameters {
+                    to_parameters.path = path.map(str::to_string);
+                    to_parameters.path_parameters = parameters
+                        .iter()
+                        .map(|(name, language)| {
+                            (
+                                name.to_string(),
+                                Expression::Constant(serde_json::json!(language)),
+                            )
+                        })
+                        .collect();
+                }
+            }
+            step
+        };
+        let route_with = |step: Step| {
+            let route = RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![step],
+            };
+            let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+            check_routes(&pack, &project_builder(&pack))
+        };
+        // A placeholder with no binding refuses at the path member.
+        let findings = route_with(send_with(Some("/v2/cases/{{caseId}}"), &[]));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RoutePathParameterMismatch.code()
+        );
+        assert_eq!(
+            findings[0].path,
+            "/routes/fetch-case/steps/0/parameters/path"
+        );
+        // A binding with no placeholder refuses at the map member.
+        let findings = route_with(send_with(Some("/v2/cases"), &[("ghost", "x")]));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RoutePathParameterMismatch.code()
+        );
+        assert_eq!(
+            findings[0].path,
+            "/routes/fetch-case/steps/0/parameters/pathParameters"
+        );
+        // A matched pair is clean, and an optional placeholder may stay
+        // unbound.
+        assert_clean(route_with(send_with(
+            Some("/v2/cases/{{caseId}}"),
+            &[("caseId", "x")],
+        )));
+        assert_clean(route_with(send_with(Some("/v2/cases/{{?filter}}"), &[])));
     }
 
     // ----- header hygiene (round 6 C3) -----

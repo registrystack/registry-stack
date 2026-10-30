@@ -71,6 +71,7 @@ pub enum CheckCode {
     RouteMultipleNonSafeSends,
     RouteNestingDepthExceeded,
     RouteNonSafeSendInSplit,
+    RoutePathParameterMismatch,
     RoutePredicateAmbiguous,
     RoutePredicateLanguageRequired,
     RouteRedeliveryOverNonSafeSend,
@@ -140,6 +141,7 @@ impl CheckCode {
         Self::RouteMultipleNonSafeSends,
         Self::RouteNestingDepthExceeded,
         Self::RouteNonSafeSendInSplit,
+        Self::RoutePathParameterMismatch,
         Self::RoutePredicateAmbiguous,
         Self::RoutePredicateLanguageRequired,
         Self::RouteRedeliveryOverNonSafeSend,
@@ -209,6 +211,7 @@ impl CheckCode {
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
             Self::RouteEmptyExceptionList => "adapter.route.empty-exception-list",
             Self::RouteErrorHandlerShape => "adapter.route.error-handler-shape",
+            Self::RoutePathParameterMismatch => "adapter.route.path-parameter-mismatch",
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
             Self::RouteHandledAndContinued => "adapter.route.handled-and-continued",
             Self::RouteInvalidPath => "adapter.route.invalid-path",
@@ -276,6 +279,7 @@ impl CheckCode {
             | Self::RouteEmptyExceptionList
             | Self::RouteErrorHandlerShape
             | Self::RouteFromNotDirect
+            | Self::RoutePathParameterMismatch
             | Self::RouteHandledAndContinued
             | Self::RouteInvalidPath
             | Self::RouteLoopCountAboveBound
