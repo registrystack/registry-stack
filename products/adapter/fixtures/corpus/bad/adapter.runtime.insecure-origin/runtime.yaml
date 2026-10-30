@@ -11,7 +11,7 @@ kind: AdapterRuntimeConfig
 id: case-deployment
 endpoints:
   - endpoint: cases
-    baseUrl: http://cases.example.invalid
+    baseUrl: http://192.0.2.9:8081
     credential:
       type: basic
       usernameRef: secret:env/CASES_USER
