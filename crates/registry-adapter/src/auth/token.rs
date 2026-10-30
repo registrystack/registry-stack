@@ -692,9 +692,10 @@ impl TokenCache {
     /// Discard the cached credential only when it is still the issuance
     /// `sent` names, the 401 rule's compare-and-invalidate: the send
     /// that drew the 401 clears its own issuance, and a concurrent
-    /// refresh's fresher issuance survives it. `None` clears
-    /// unconditionally, the fallback for an engine that lost track of
-    /// what it sent.
+    /// refresh's fresher issuance survives it. A generation the cache
+    /// never issued clears nothing, and there is no unconditional
+    /// eviction: a credential with no generation invalidates nothing,
+    /// because the acquisition stored nothing for it.
     ///
     /// The lock wait is one handoff, never a queue: the lock is held
     /// only across one in-flight token send, whose own request timeout
@@ -702,15 +703,12 @@ impl TokenCache {
     /// is why this call takes no admission bound; a bounded give-up
     /// would skip the invalidation and strand the credential that just
     /// drew the 401.
-    pub async fn invalidate_if(&self, sent: Option<u64>) {
+    pub async fn invalidate_if(&self, sent: u64) {
         let mut guard = self.state.lock().await;
-        let matches = match sent {
-            Some(sent) => guard
-                .cached
-                .as_ref()
-                .is_some_and(|cached| cached.generation == sent),
-            None => true,
-        };
+        let matches = guard
+            .cached
+            .as_ref()
+            .is_some_and(|cached| cached.generation == sent);
         if matches {
             guard.cached = None;
         }
@@ -1800,10 +1798,9 @@ mod tests {
 
     /// The 401 rule's compare-and-invalidate: only the generation the
     /// send carried clears; a concurrent refresh's fresher issuance
-    /// survives a stale 401, an unknown generation clears nothing, and
-    /// `None` clears unconditionally. The counter keeps advancing past
-    /// invalidations, so a stale generation can never alias a future
-    /// issuance.
+    /// survives a stale 401, and a generation the cache never issued
+    /// clears nothing. The counter keeps advancing past invalidations,
+    /// so a stale generation can never alias a future issuance.
     #[tokio::test]
     async fn invalidate_if_only_clears_the_matching_issuance() {
         async fn store(cache: &TokenCache, token: &str) -> u64 {
@@ -1821,28 +1818,23 @@ mod tests {
         // Exchange X drew the 401 on its issuance while exchange Y had
         // already refreshed past it: X's invalidation names gen1 and
         // must leave Y's gen2 in place.
-        cache.invalidate_if(Some(gen1)).await;
+        cache.invalidate_if(gen1).await;
         assert!(
             cache.remaining_lifetime().await.is_some(),
             "the fresher issuance survives a stale 401"
         );
-        cache.invalidate_if(Some(99)).await;
+        cache.invalidate_if(99).await;
         assert!(
             cache.remaining_lifetime().await.is_some(),
             "a generation the cache never issued clears nothing"
         );
-        cache.invalidate_if(Some(gen2)).await;
+        cache.invalidate_if(gen2).await;
         assert!(
             cache.remaining_lifetime().await.is_none(),
             "the generation the cache holds clears"
         );
         let gen3 = store(&cache, "token-three").await;
         assert_eq!(gen3, 3, "the counter survives invalidation");
-        cache.invalidate_if(None).await;
-        assert!(
-            cache.remaining_lifetime().await.is_none(),
-            "None is the unconditional fallback"
-        );
     }
 
     /// A waiter queued behind a stalled refresh gives up at the

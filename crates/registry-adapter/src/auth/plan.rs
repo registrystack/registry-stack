@@ -204,7 +204,9 @@ pub struct AuthorizeContext<'a> {
 /// the credential came from an OAuth2 endpoint's cache, the generation
 /// of that cached issuance. The engine hands the generation back to the
 /// 401 rule with the status, which clears only the issuance its send
-/// carried, never one a concurrent refresh already replaced.
+/// carried, never one a concurrent refresh already replaced; a
+/// credential whose generation is `None` invalidates nothing, because
+/// nothing was cached for it.
 #[derive(Debug)]
 pub struct AuthorizedCredential {
     /// The header to append to the send.
@@ -462,8 +464,8 @@ impl AuthPlan {
     /// rule from racing a concurrent refresh: a 401 that arrives late,
     /// about an issuance another exchange has already replaced, leaves
     /// the newer issuance cached instead of forcing another token
-    /// request. `None` invalidates unconditionally, the fallback for an
-    /// engine that lost track of what it sent. A 401 after the one
+    /// request. A send whose credential named no generation invalidates
+    /// nothing: nothing was cached for it to clear. A 401 after the one
     /// refresh, or any 401 under a static kind, raises the uncatchable
     /// `credential.rejected`. A 403 stays the caller's `upstream.http`:
     /// it answers about the request, not the credential.
@@ -482,8 +484,8 @@ impl AuthPlan {
         }
         if self.kind.is_oauth2() && !*refresh_used {
             *refresh_used = true;
-            if let Some(plan) = &self.token {
-                plan.cache().invalidate_if(sent_generation).await;
+            if let (Some(plan), Some(generation)) = (&self.token, sent_generation) {
+                plan.cache().invalidate_if(generation).await;
             }
             events.push(AuthEvent::TokenInvalidatedAfterUnauthorized);
             return UpstreamStatusAction::RetryWithFreshCredential;
