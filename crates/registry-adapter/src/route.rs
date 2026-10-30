@@ -245,7 +245,9 @@ fn auth_events_detail(events: &[AuthEvent]) -> Value {
                 AuthEvent::TokenTransportFailed { kind } => {
                     json!({ "event": "tokenTransportFailed", "kind": kind })
                 }
-                AuthEvent::TokenEgressRefused => json!({ "event": "tokenEgressRefused" }),
+                AuthEvent::TokenEgressRefused { detail } => {
+                    json!({ "event": "tokenEgressRefused", "detail": detail })
+                }
                 AuthEvent::TokenAdmissionShed => json!({ "event": "tokenAdmissionShed" }),
                 AuthEvent::TokenInvalidatedAfterUnauthorized => {
                     json!({ "event": "tokenInvalidatedAfterUnauthorized" })
@@ -727,7 +729,11 @@ impl TokenSend for NoTokenSend {
         &'a self,
         _request: &'a TokenRequest,
     ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>> {
-        Box::pin(async { Err(TransportFailure::PolicyRefused) })
+        Box::pin(async {
+            Err(TransportFailure::PolicyRefused {
+                journal_name: "invalid-frozen-policy",
+            })
+        })
     }
 }
 

@@ -283,10 +283,15 @@ fn tls_config(
             r#"{ "issuer": "https://issuer.example.invalid", "audience": "tls" }"#,
         )
         .expect("oidc"),
+        allowed_clients: UniqueList::new(vec![ExternalId::new("tls-client").expect("client")])
+            .expect("clients"),
         audit: registry_adapter_core::AuditRetention {
             retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
                 .expect("retention"),
         },
+        cursor_key_ref: None,
+        previous_cursor_key_ref: None,
+        cursor_ttl_seconds: None,
     }
 }
 
@@ -295,6 +300,10 @@ fn pack_endpoint(id: &str, authentication: EndpointAuthentication) -> Endpoint {
         id: LocalId::new(id).expect("endpoint id"),
         component: ComponentKind::Http,
         authentication,
+        attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+            .expect("attempt timeout"),
+        maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+            .expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
         request_headers: UniqueList::new(Vec::new()).expect("request headers"),
         operations: Vec::new(),
@@ -320,6 +329,8 @@ fn basic_binding(
         }),
         tls_trust_profile: Some(LocalId::new("private-ca").expect("profile id")),
         mtls_identity: None,
+        attempt_timeout_milliseconds: None,
+        maximum_response_bytes: None,
     }
 }
 
@@ -346,6 +357,8 @@ fn oauth_binding(
         }),
         tls_trust_profile: Some(LocalId::new("private-ca").expect("profile id")),
         mtls_identity: None,
+        attempt_timeout_milliseconds: None,
+        maximum_response_bytes: None,
     }
 }
 

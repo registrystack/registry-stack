@@ -23,13 +23,6 @@ path = "src/main.rs"
 # its equivalent loopback TLS lane.
 postgres-test = ["registry-platform-httputil/test-support"]
 
-[dev-dependencies]
-# The loopback TLS doubles of tests/egress_tls_wiring.rs: a locally
-# terminated certificate and acceptor, test-only, never a runtime
-# dependency.
-rcgen.workspace = true
-tokio-rustls.workspace = true
-
 [dependencies]
 # The continuation cursor codec (CONCEPT.md section 8.11.2): XChaCha20-Poly1305
 # with its zeroize feature, so the cipher wipes its copy of the key on drop.
@@ -72,6 +65,11 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The loopback TLS doubles of tests/egress_tls_wiring.rs: a locally
+# terminated certificate and acceptor, test-only, never a runtime
+# dependency.
+rcgen.workspace = true
+tokio-rustls.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-testing.workspace = true
 tempfile.workspace = true
