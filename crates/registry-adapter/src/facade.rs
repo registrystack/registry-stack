@@ -254,13 +254,15 @@ async fn authenticate(state: &FacadeState, headers: &HeaderMap) -> Result<Caller
 }
 
 /// Whether some access profile the caller's scopes satisfy admits the
-/// operation on the record type.
+/// operation on the record type. A profile that names no scope admits
+/// nobody: an empty requirement is not a satisfied one.
 fn admits(project: &AdapterProject, caller: &Caller, operation: &ServedOperation) -> bool {
     project.access_profiles.iter().any(|profile| {
-        profile
-            .scopes
-            .iter()
-            .all(|scope| caller.scopes.iter().any(|held| held == scope.as_str()))
+        !profile.scopes.is_empty()
+            && profile
+                .scopes
+                .iter()
+                .all(|scope| caller.scopes.iter().any(|held| held == scope.as_str()))
             && profile
                 .operations
                 .iter()
@@ -743,5 +745,49 @@ mod tests {
     #[test]
     fn a_missing_required_slot_is_a_fault() {
         assert!(render_envelope(r#"{"a": {{record}}}"#, &slots(&[])).is_err());
+    }
+
+    fn example_project(scopes: Value) -> AdapterProject {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples/dhis2-tracker/project.yaml");
+        let text = std::fs::read_to_string(path).expect("the example project reads");
+        #[allow(clippy::disallowed_methods)]
+        let mut value: Value = serde_norway::from_str(&text).expect("the example project parses");
+        for profile in value["accessProfiles"].as_array_mut().expect("profiles") {
+            profile["scopes"] = scopes.clone();
+        }
+        value.as_object_mut().expect("a mapping").retain(|key, _| key != "apiVersion" && key != "kind");
+        serde_json::from_value(value).expect("the project deserializes")
+    }
+
+    fn served(operation: &str, record_type: &str) -> ServedOperation {
+        ServedOperation {
+            operation: operation.to_owned(),
+            method_path: String::new(),
+            record_type_parameter: String::new(),
+            record_id_parameter: None,
+            binding: String::new(),
+            record_type: record_type.to_owned(),
+            route_id: String::new(),
+            steps: Vec::new(),
+            maximum_upstream_calls: 1,
+            response_envelope: String::new(),
+            pagination: None,
+        }
+    }
+
+    #[test]
+    fn an_access_profile_with_no_scopes_admits_nobody() {
+        let caller = Caller {
+            reference: "caller".to_owned(),
+            scopes: vec!["records.read".to_owned()],
+        };
+        let operation = served("records-get", "person");
+        assert!(admits(
+            &example_project(json!(["records.read"])),
+            &caller,
+            &operation
+        ));
+        assert!(!admits(&example_project(json!([])), &caller, &operation));
     }
 }

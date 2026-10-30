@@ -140,6 +140,7 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.project.pin-version-mismatch` | Pack pinned at version `0.0.1`, pack declares `1` (digest matches the bytes) | `adapter.project.pin-version-mismatch` | checks |
 | `adapter.project.duplicate-route-id` | Instantiated route id collides with the pack template name | `adapter.project.duplicate-route-id` | checks |
 | `adapter.project.filter-parameter-collision` | Binding's filter names `limit`, which the bound search operation already fills as its page-size parameter; the cursor and declared path parameters are equally taken | `adapter.project.filter-parameter-collision` | checks |
+| `adapter.project.access-profile-scopes-empty` | Access profile `case-reader` declares `scopes: []`, which every verified caller would satisfy | `adapter.project.access-profile-scopes-empty` | checks |
 | `adapter.project.unknown-operation` | Binding references no declared profile operation | `adapter.project.unknown-operation` | checks |
 | `adapter.project.unknown-record-type` | Binding references no declared record type (co-fires `adapter.profile.response-envelope-uncompilable`, see the note above) | `adapter.project.unknown-record-type` | checks |
 | `adapter.project.unknown-route` | Binding references no declared route (co-fires `adapter.project.template-not-instantiated`, see the note above) | `adapter.project.unknown-route` | checks |

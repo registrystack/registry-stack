@@ -3154,6 +3154,14 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
 
     for (index, access) in project.access_profiles.iter().enumerate() {
         let prefix = format!("/accessProfiles/{index}");
+        if access.scopes.is_empty() {
+            findings.push(finding(
+                CheckCode::ProjectAccessProfileScopesEmpty,
+                &format!("{prefix}/scopes"),
+                "the access profile requires no scope, so any verified caller would pass it",
+                "Name the scope a caller's token must hold; an access profile with no scopes admits nobody.",
+            ));
+        }
         for (operation_index, operation) in access.operations.iter().enumerate() {
             if workspace
                 .profile
@@ -7997,6 +8005,22 @@ mod tests {
         let findings = check_project(&workspace(&profile, &pack, &project));
         assert_has(&findings, CheckCode::ProjectUnknownOperation);
         assert_has(&findings, CheckCode::ProjectUnknownRecordType);
+    }
+
+    #[test]
+    fn project_refuses_an_access_profile_with_no_scopes() {
+        let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        let pack = pack_builder(vec![], vec![]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(vec![AccessProfile {
+            id: local("registry-clerk"),
+            scopes: UniqueList::new(vec![]).expect("unique"),
+            operations: UniqueList::new(vec![id("cases-find")]).expect("unique"),
+            record_types: UniqueList::new(vec![]).expect("unique"),
+        }])
+        .expect("unique");
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert_has(&findings, CheckCode::ProjectAccessProfileScopesEmpty);
     }
 
     // ----- runtime checks -----
