@@ -21,6 +21,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -2209,6 +2210,56 @@ class CommittedCorpusTest(unittest.TestCase):
                     self.assertEqual(parent.pop(key), runner.MARKER)
                     self.assertEqual(document, yaml.safe_load(text))
         self.assertGreater(swept, 0)
+
+
+class WrapperRefusalTest(unittest.TestCase):
+    """The shell wrapper refuses to run without a usable adapterctl binary.
+
+    A repo-local target/ directory is never used: a stale binary there
+    once checked green against the wrong reader. The wrapper takes the
+    binary from --bin-dir or ADAPTERCTL_BIN, builds it under an exported
+    CARGO_TARGET_DIR, and refuses otherwise. PATH is scrubbed in every
+    case so a wrapper that reaches the corpus instead of refusing fails
+    instantly as 127 and cannot satisfy an asserted exit code."""
+
+    wrapper = Path(__file__).with_name("run-config-conformance.sh")
+
+    def run_wrapper(self, *args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(self.wrapper), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def environment_without_binaries(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env.pop("ADAPTERCTL_BIN", None)
+        env.pop("CARGO_TARGET_DIR", None)
+        env["PATH"] = "/usr/bin:/bin"
+        return env
+
+    def test_the_wrapper_refuses_with_no_bin_dir_and_no_target(self) -> None:
+        done = self.run_wrapper(env=self.environment_without_binaries())
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("adapterctl", done.stderr)
+        for remedy in ("ADAPTERCTL_BIN", "--bin-dir", "CARGO_TARGET_DIR"):
+            self.assertIn(remedy, done.stderr)
+
+    def test_the_wrapper_refuses_an_adapterctl_bin_that_is_not_executable(self) -> None:
+        env = self.environment_without_binaries()
+        env["ADAPTERCTL_BIN"] = str(self.wrapper.parent / "no-such-adapterctl")
+        done = self.run_wrapper(env=env)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("ADAPTERCTL_BIN", done.stderr)
+
+    def test_the_wrapper_refuses_a_bin_dir_without_the_binary(self) -> None:
+        env = self.environment_without_binaries()
+        with tempfile.TemporaryDirectory() as directory:
+            done = self.run_wrapper("--bin-dir", directory, env=env)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("adapterctl", done.stderr)
 
 
 if __name__ == "__main__":

@@ -4,12 +4,20 @@
 #   products/platform/scripts/run-config-conformance.sh [--bin-dir DIR] [--strict] [--matrix] ...
 #
 # Every option is the Python runner's; see run-config-conformance.py.
+#
+# The adapterctl binary comes from, most explicit first:
+#   1. the --bin-dir option,
+#   2. the ADAPTERCTL_BIN environment variable (the adapterctl binary),
+#   3. a build under the exported CARGO_TARGET_DIR,
+# and the wrapper refuses otherwise. A repo-local target/ directory is
+# never used: a stale binary there once checked green against the wrong
+# reader, which passed the corpus silently.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "${script_dir}/../../.." && pwd)"
 
-bin_dir="${CARGO_TARGET_DIR:-${root}/target}/debug"
+bin_dir=''
 previous=''
 for argument in "$@"; do
 	case "$argument" in
@@ -23,6 +31,34 @@ for argument in "$@"; do
 	previous="$argument"
 done
 
+if [[ -z "$bin_dir" ]]; then
+	if [[ -n "${ADAPTERCTL_BIN:-}" ]]; then
+		if [[ ! -x "${ADAPTERCTL_BIN}" ]]; then
+			printf 'run-config-conformance: ADAPTERCTL_BIN names no executable: %s\n' "${ADAPTERCTL_BIN}" >&2
+			printf 'Set ADAPTERCTL_BIN to the adapterctl binary, pass --bin-dir, or export CARGO_TARGET_DIR.\n' >&2
+			exit 2
+		fi
+		bin_dir="$(cd "$(dirname "${ADAPTERCTL_BIN}")" && pwd -P)"
+	elif [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+		command -v cargo >/dev/null 2>&1 || {
+			printf 'run-config-conformance: CARGO_TARGET_DIR is set but cargo is not on PATH.\n' >&2
+			exit 2
+		}
+		cargo build --locked -p registry-adapterctl --manifest-path "${root}/Cargo.toml" --target-dir "${CARGO_TARGET_DIR}"
+		bin_dir="${CARGO_TARGET_DIR}/debug"
+	else
+		printf 'run-config-conformance: no adapterctl binary found.\n' >&2
+		printf 'Set ADAPTERCTL_BIN to the adapterctl binary, pass --bin-dir, or export CARGO_TARGET_DIR; the repository target/ directory is never used.\n' >&2
+		exit 2
+	fi
+fi
+
+if [[ ! -x "${bin_dir}/adapterctl" ]]; then
+	printf 'run-config-conformance: no adapterctl binary in %s.\n' "${bin_dir}" >&2
+	printf 'Set ADAPTERCTL_BIN to the adapterctl binary, pass --bin-dir, or export CARGO_TARGET_DIR.\n' >&2
+	exit 2
+fi
+
 # A debug build that links aws-lc-fips-sys dynamically on macOS needs its
 # library at each check-command launch. Keep the directory in the non-DYLD
 # carrier that survives uv's protected /usr/bin/env launcher; the Python runner
@@ -30,7 +66,8 @@ done
 if [[ -z "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}" ]]; then
 	for artifacts in "${bin_dir}"/build/aws-lc-fips-sys-*/out/build/artifacts; do
 		if [[ -d "$artifacts" ]]; then
-			export REGISTRY_CARGO_RUNTIME_LIBRARY_PATH="$(cd "$artifacts" && pwd -P)"
+			REGISTRY_CARGO_RUNTIME_LIBRARY_PATH="$(cd "$artifacts" && pwd -P)"
+			export REGISTRY_CARGO_RUNTIME_LIBRARY_PATH
 			break
 		fi
 	done
