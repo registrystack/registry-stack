@@ -32,6 +32,7 @@
 mod auth;
 mod checks;
 mod diagnostics;
+mod envelope;
 mod fixture;
 mod model;
 mod naming;
@@ -47,6 +48,7 @@ mod typed;
 pub use auth::*;
 pub use checks::*;
 pub use diagnostics::*;
+pub use envelope::*;
 pub use fixture::*;
 pub use model::*;
 pub use naming::*;

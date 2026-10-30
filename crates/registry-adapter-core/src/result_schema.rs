@@ -8,8 +8,8 @@
 //! with `items`; and the scalars `string`, `integer`, `number`,
 //! `boolean`, and `null`.
 
-use crate::checks::is_placeholder_name;
 use crate::diagnostics::{finding, CheckCode};
+use crate::envelope::{decode_slot, parse_envelope_template, ENVELOPE_GRAMMAR_RULE, SLOT_MARK};
 use crate::profile::{AdapterProfile, ParameterizedPart};
 use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
@@ -172,83 +172,6 @@ pub fn check_envelope_derivation(
     findings
 }
 
-/// The sentinel opening (and closing) one slot in a parsed envelope
-/// template. A control character real template text cannot carry opens
-/// it, so no literal envelope string can decode as a slot.
-const SLOT_MARK: char = '\u{1}';
-
-/// Parses an envelope template text into JSON: every `{{slot}}` or
-/// `{{?slot}}` placeholder, whether it fills a quoted string member or a
-/// whole JSON value, becomes one quoted sentinel string the walk decodes.
-fn parse_envelope_template(text: &str) -> Result<Value, String> {
-    let mut parsed = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(open) = rest.find("{{") {
-        let Some(close) = rest[open..].find("}}") else {
-            return Err(
-                "the response envelope template carries an unterminated placeholder".to_string(),
-            );
-        };
-        let inner = &rest[open + 2..open + close];
-        let (name, optional) = match inner.strip_prefix('?') {
-            Some(stripped) => (stripped, true),
-            None => (inner, false),
-        };
-        if !is_placeholder_name(name) {
-            parsed.push_str(&rest[..open + 2]);
-            rest = &rest[open + 2..];
-            continue;
-        }
-        // A placeholder inside a longer string never binds; refuse with
-        // the grammar rule rather than a confusing parse error.
-        let leading_quote = open > 0 && rest.as_bytes()[open - 1] == b'"';
-        let trailing_quote = rest[open + close + 2..].starts_with('"');
-        let consumed = text.len() - rest.len();
-        let inside_string = text.as_bytes()[..consumed + open]
-            .iter()
-            .filter(|byte| **byte == b'"')
-            .count()
-            % 2
-            == 1;
-        if inside_string && !(leading_quote && trailing_quote) {
-            return Err(ENVELOPE_GRAMMAR_RULE.to_string());
-        }
-        // A quoted placeholder `"{{slot}}"` fills the whole string
-        // member; drop the surrounding quote pair so the sentinel is the
-        // member's whole value.
-        let quoted = leading_quote && trailing_quote;
-        if quoted {
-            parsed.push_str(&rest[..open - 1]);
-        } else {
-            parsed.push_str(&rest[..open]);
-        }
-        parsed.push('"');
-        parsed.push_str("\\u0001");
-        parsed.push_str(if optional { "opt:" } else { "req:" });
-        parsed.push_str(name);
-        parsed.push_str("\\u0001");
-        parsed.push('"');
-        rest = if quoted {
-            &rest[open + close + 3..]
-        } else {
-            &rest[open + close + 2..]
-        };
-    }
-    parsed.push_str(rest);
-    serde_json::from_str(&parsed)
-        .map_err(|error| format!("the response envelope template is not a JSON template: {error}"))
-}
-
-/// Decodes one sentinel string back to `(slot name, optional)`.
-fn decode_slot(text: &str) -> Option<(&str, bool)> {
-    text.strip_prefix(SLOT_MARK)
-        .and_then(|rest| rest.strip_suffix(SLOT_MARK))
-        .map(|inner| match inner.strip_prefix("opt:") {
-            Some(name) => (name, true),
-            None => (inner.strip_prefix("req:").unwrap_or(inner), false),
-        })
-}
-
 /// Derives the schema of one template value.
 fn derive_value(
     template: &Value,
@@ -313,12 +236,6 @@ fn derive_value(
         Value::Null => Ok(json!({"type": "null"})),
     }
 }
-
-/// The envelope grammar: a placeholder fills a whole member value or a
-/// whole string member, never a part of a string; inside a longer string
-/// it would never bind, so the derivation refuses.
-const ENVELOPE_GRAMMAR_RULE: &str =
-    "an envelope placeholder fills a whole member value or a whole string member, never a part of a string";
 
 /// One object member's schema and whether it may be absent: a whole-value
 /// optional slot (`{{?slot}}`) is optional, everything else is required. A
@@ -438,6 +355,16 @@ fn validate_at(value: &Value, schema: &Value, pointer: &str, violations: &mut Ve
         return;
     }
     match expected {
+        "string" => {
+            let well_formed = match (schema.get("format").and_then(Value::as_str), value.as_str()) {
+                (Some("date"), Some(text)) => is_date(text),
+                (Some("date-time"), Some(text)) => is_date_time(text),
+                _ => true,
+            };
+            if !well_formed {
+                violations.push(pointer.to_string());
+            }
+        }
         "object" => {
             let Some(members) = value.as_object() else {
                 return;
@@ -481,6 +408,76 @@ fn validate_at(value: &Value, schema: &Value, pointer: &str, violations: &mut Ve
         }
         _ => {}
     }
+}
+
+/// A calendar date in `YYYY-MM-DD` form that exists.
+pub fn is_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let digits = |range: std::ops::Range<usize>| -> Option<u32> {
+        let part = &text[range];
+        if part.bytes().all(|byte| byte.is_ascii_digit()) {
+            part.parse().ok()
+        } else {
+            None
+        }
+    };
+    let (Some(year), Some(month), Some(day)) = (digits(0..4), digits(5..7), digits(8..10)) else {
+        return false;
+    };
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let longest = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=longest).contains(&day)
+}
+
+/// An RFC 3339 date-time: a date, `T`, a time with optional fraction, and
+/// `Z` or a numeric offset.
+pub fn is_date_time(text: &str) -> bool {
+    let Some((date, rest)) = text.split_once(['T', 't']) else {
+        return false;
+    };
+    if !is_date(date) {
+        return false;
+    }
+    let (time, offset) = match rest.find(['Z', 'z', '+', '-']) {
+        Some(index) => rest.split_at(index),
+        None => return false,
+    };
+    let (clock, fraction) = match time.split_once('.') {
+        Some((clock, fraction)) => (clock, Some(fraction)),
+        None => (time, None),
+    };
+    if fraction
+        .is_some_and(|digits| digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return false;
+    }
+    let field = |text: &str, limit: u32| {
+        text.len() == 2
+            && text.bytes().all(|byte| byte.is_ascii_digit())
+            && text.parse::<u32>().is_ok_and(|value| value <= limit)
+    };
+    let parts: Vec<&str> = clock.split(':').collect();
+    let clock_ok =
+        parts.len() == 3 && field(parts[0], 23) && field(parts[1], 59) && field(parts[2], 60);
+    let offset_ok = match offset {
+        "Z" | "z" => true,
+        _ => {
+            let numeric = &offset[1..];
+            numeric
+                .split_once(':')
+                .is_some_and(|(hours, minutes)| field(hours, 23) && field(minutes, 59))
+        }
+    };
+    clock_ok && offset_ok
 }
 
 fn type_matches(value: &Value, expected: &str) -> bool {
@@ -565,6 +562,39 @@ pub fn check_fixture_expected_response(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn dates_and_date_times_are_checked_for_shape_and_calendar() {
+        assert!(is_date("2024-02-29"));
+        assert!(!is_date("2023-02-29"));
+        assert!(!is_date("2023-13-01"));
+        assert!(!is_date("23-01-01"));
+        assert!(!is_date("2023-1-001"));
+        assert!(is_date_time("2024-05-01T10:20:30Z"));
+        assert!(is_date_time("2024-05-01T10:20:30.123+02:00"));
+        assert!(is_date_time("2024-05-01T10:20:30-05:30"));
+        assert!(!is_date_time("2024-05-01T10:20:30"));
+        assert!(!is_date_time("2024-05-01 10:20:30Z"));
+        assert!(!is_date_time("2024-05-01T25:20:30Z"));
+        assert!(!is_date_time("2024-05-01T10:20:30.Z"));
+        assert!(!is_date_time("2024-05-01T10:20:30+0200"));
+    }
+
+    #[test]
+    fn a_record_with_a_malformed_date_is_a_violation() {
+        let schema = json!({"type":"object","properties":{"born":{"type":"string","format":"date"}},"required":["born"],"additionalProperties":false});
+        let mut found = Vec::new();
+        validate_at(&json!({"born":"2024-02-30"}), &schema, "", &mut found);
+        assert_eq!(found, vec!["/born".to_owned()]);
+        let mut found = Vec::new();
+        validate_at(&json!({"born":"2024-02-28"}), &schema, "", &mut found);
+        assert!(found.is_empty());
+    }
 }
 
 #[cfg(test)]

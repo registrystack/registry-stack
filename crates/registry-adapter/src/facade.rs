@@ -7,7 +7,8 @@
 //! envelope or problem (`products/adapter/CONCEPT.md` sections 6 to 8).
 //!
 //! The caller's token never reaches the exchange: the route sees only the
-//! record type and record id the path named.
+//! record type, the record id, the page cursor and the page size the call
+//! named.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -27,6 +28,7 @@ use serde_json::{json, Value};
 use crate::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
 };
+use crate::envelope::CompiledEnvelope;
 use crate::exchange::{
     Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
 };
@@ -77,20 +79,35 @@ async fn handle(
     query: Option<String>,
 ) -> Response {
     let fallback = Arc::clone(&state);
-    let task =
-        tokio::spawn(
-            async move { answer(&state, index, &headers, &params, query.as_deref()).await },
-        );
+    // The id is minted before the task starts, so the fallback answer
+    // carries the same request id the journal rows would have.
+    let request_id = new_id();
+    let fallback_id = request_id.clone();
+    let fallback_record_type = params
+        .get(&state.loaded.served[index].record_type_parameter)
+        .cloned()
+        .unwrap_or_default();
+    let task = tokio::spawn(async move {
+        answer(
+            &state,
+            index,
+            request_id,
+            &headers,
+            &params,
+            query.as_deref(),
+        )
+        .await
+    });
     match task.await {
         Ok(response) => response,
         Err(error) => {
             tracing::error!(%error, "a facade call ended without an answer");
             facade_problem(
-                &fallback.loaded.profile,
+                fallback.loaded.problems(),
                 ErrorClass::Facade,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "",
-                "",
+                &fallback_record_type,
+                &fallback_id,
             )
         }
     }
@@ -99,13 +116,13 @@ async fn handle(
 async fn answer(
     state: &FacadeState,
     index: usize,
+    request_id: String,
     headers: &HeaderMap,
     params: &HashMap<String, String>,
     query: Option<&str>,
 ) -> Response {
     let operation = &state.loaded.served[index];
-    let profile = &state.loaded.profile;
-    let request_id = new_id();
+    let profile = state.loaded.problems();
     let record_type = params
         .get(&operation.record_type_parameter)
         .cloned()
@@ -160,6 +177,7 @@ async fn answer(
 
     let mut exchange = Exchange::new(request_id.clone());
     let mut search_binding: Option<SearchBinding> = None;
+    let mut requested_page_size: Option<u64> = None;
     if let Some(pagination) = &operation.pagination {
         match open_search(state, operation, pagination, &caller, &record_type, query) {
             Ok(search) => {
@@ -170,6 +188,7 @@ async fn answer(
                 if let Some(continuation) = search.continuation {
                     exchange.set_property(CONTINUATION_PROPERTY, continuation);
                 }
+                requested_page_size = Some(search.page_size);
                 search_binding = Some(search.binding);
             }
             Err(reason) => {
@@ -225,11 +244,33 @@ async fn answer(
         events.push((journal_event(event.kind, Some(event.detail)), event.at));
     }
 
+    // The response body is built before the journal commits, so the
+    // journal never records `exchangeCompleted` for an exchange whose body
+    // the facade then failed to seal or render.
     let rendered = match outcome.result {
-        Ok(done) => match disclosed_slots(operation, &done.message.body) {
+        Ok(done) => match disclosed_slots(operation, &done.message.body, requested_page_size) {
             Ok(slots) => {
-                events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
-                Ok((done, slots))
+                match seal_next(state, operation, &caller, search_binding, &done).and_then(
+                    |next_cursor| {
+                        render_success(operation, slots, next_cursor, &record_type, &request_id)
+                    },
+                ) {
+                    Ok(body) => {
+                        events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
+                        Finished::Body(body)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "the response could not be built");
+                        events.push((
+                            journal_event(
+                                "exchangeFailed",
+                                Some(json!({ "class": ErrorClass::Facade.class() })),
+                            ),
+                            SystemTime::now(),
+                        ));
+                        Finished::Internal
+                    }
+                }
             }
             Err(violations) => {
                 tracing::error!(
@@ -247,7 +288,7 @@ async fn answer(
                     ),
                     SystemTime::now(),
                 ));
-                Err(failure)
+                Finished::Route(failure)
             }
         },
         Err(failure) => {
@@ -258,7 +299,7 @@ async fn answer(
                 ),
                 SystemTime::now(),
             ));
-            Err(failure)
+            Finished::Route(failure)
         }
     };
     // Journal first: a response is never sent for an exchange the journal
@@ -274,31 +315,24 @@ async fn answer(
         );
     }
     match rendered {
-        Ok((done, slots)) => {
-            let next_cursor = match seal_next(state, operation, &caller, search_binding, &done) {
-                Ok(cursor) => cursor,
-                Err(error) => {
-                    tracing::error!(%error, "the next cursor could not be sealed");
-                    return facade_problem(
-                        profile,
-                        ErrorClass::Facade,
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &record_type,
-                        &request_id,
-                    );
-                }
-            };
-            success(
-                profile,
-                operation,
-                slots,
-                next_cursor,
-                &record_type,
-                &request_id,
-            )
-        }
-        Err(failure) => route_problem(profile, &failure, &record_type, &request_id),
+        Finished::Body(body) => json_response(StatusCode::OK, &body),
+        Finished::Internal => facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &record_type,
+            &request_id,
+        ),
+        Finished::Route(failure) => route_problem(profile, &failure, &record_type, &request_id),
     }
+}
+
+/// How an exchange ended once the response was built, before the journal
+/// commits it.
+enum Finished {
+    Body(Value),
+    Internal,
+    Route(RouteFailure),
 }
 
 /// Append `events` in one transaction, each stamped with its own instant.
@@ -335,17 +369,18 @@ fn journal_fault(error: &tokio_postgres::Error) -> String {
 }
 
 async fn authenticate(state: &FacadeState, headers: &HeaderMap) -> Result<Caller, CallerRefusal> {
-    let value = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(CallerRefusal::Unauthenticated)?;
-    let (scheme, token) = value
-        .split_once(' ')
-        .ok_or(CallerRefusal::Unauthenticated)?;
-    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
+    let Some(token) = bearer_token(headers) else {
+        state.authenticator.log_header_refusal();
         return Err(CallerRefusal::Unauthenticated);
-    }
+    };
     state.authenticator.authenticate(token).await
+}
+
+/// The bearer credential of the `Authorization` header, if it carries one.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
 
 /// Whether some access profile the caller's scopes satisfy admits the
@@ -369,11 +404,7 @@ fn admits(project: &AdapterProject, caller: &Caller, operation: &ServedOperation
     })
 }
 
-fn refusal_response(
-    profile: &AdapterProfile,
-    refusal: CallerRefusal,
-    request_id: &str,
-) -> Response {
+fn refusal_response(profile: Problems<'_>, refusal: CallerRefusal, request_id: &str) -> Response {
     let (class, status) = match refusal {
         CallerRefusal::Unauthenticated => {
             (ErrorClass::FacadeUnauthenticated, StatusCode::UNAUTHORIZED)
@@ -424,16 +455,22 @@ fn disclosed_record(body: &Value, schema: &Value) -> Result<Value, usize> {
 }
 
 /// The slots the response envelope is filled from: one record, or every
-/// record of a page, each checked by [`disclosed_record`].
+/// record of a page, each checked by [`disclosed_record`]. A page larger
+/// than the size the caller asked for is a disclosure violation: the
+/// caller never receives more records than it requested.
 fn disclosed_slots(
     operation: &ServedOperation,
     body: &Value,
+    page_size: Option<u64>,
 ) -> Result<BTreeMap<&'static str, Value>, usize> {
     let mut slots = BTreeMap::new();
     if operation.pagination.is_some() {
         let Value::Array(records) = body else {
             return Err(1);
         };
+        if page_size.is_some_and(|size| records.len() as u64 > size) {
+            return Err(records.len());
+        }
         let disclosed = records
             .iter()
             .map(|record| disclosed_record(record, &operation.record_schema))
@@ -577,7 +614,7 @@ async fn refuse_call(
     class: ErrorClass,
     status: StatusCode,
 ) -> Response {
-    let profile = &state.loaded.profile;
+    let profile = state.loaded.problems();
     tracing::warn!(
         class = class.class(),
         status = status.as_u16(),
@@ -614,7 +651,7 @@ async fn refuse_request(
     request_id: &str,
     reason: &str,
 ) -> Response {
-    let profile = &state.loaded.profile;
+    let profile = state.loaded.problems();
     let event = |kind: &'static str, detail: Option<Value>| {
         (
             JournalEvent {
@@ -657,36 +694,26 @@ async fn refuse_request(
     )
 }
 
-fn success(
-    profile: &AdapterProfile,
+/// The rendered success body: the next cursor (when the route set one) and
+/// the request-scoped slots joined to the disclosed ones, filled into the
+/// operation's response envelope.
+fn render_success(
     operation: &ServedOperation,
     mut slots: BTreeMap<&'static str, Value>,
     next_cursor: Option<String>,
     record_type: &str,
     request_id: &str,
-) -> Response {
+) -> Result<Value, String> {
     if let Some(cursor) = next_cursor.filter(|_| operation.pagination.is_some()) {
         slots.insert("nextCursor", Value::String(cursor));
     }
     slots.insert("recordType", Value::String(record_type.to_owned()));
     slots.insert("requestId", Value::String(request_id.to_owned()));
-    match render_envelope(&operation.response_envelope, &slots) {
-        Ok(rendered) => json_response(StatusCode::OK, &rendered),
-        Err(error) => {
-            tracing::error!(%error, "the response envelope could not be rendered");
-            facade_problem(
-                profile,
-                ErrorClass::Facade,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                record_type,
-                request_id,
-            )
-        }
-    }
+    operation.response_envelope.render(&slots)
 }
 
 fn route_problem(
-    profile: &AdapterProfile,
+    profile: Problems<'_>,
     failure: &RouteFailure,
     record_type: &str,
     request_id: &str,
@@ -704,7 +731,7 @@ fn route_problem(
 /// A facade-level problem whose HTTP status the failure fixes (401, 403,
 /// 404 and the like), filled into the profile's problem for the class.
 fn facade_problem(
-    profile: &AdapterProfile,
+    profile: Problems<'_>,
     class: ErrorClass,
     status: StatusCode,
     record_type: &str,
@@ -713,18 +740,26 @@ fn facade_problem(
     problem_response(profile, class, Some(status), None, record_type, request_id)
 }
 
+/// What a problem reply needs: the profile's declared problems and its
+/// compiled problem envelope.
+#[derive(Clone, Copy)]
+pub struct Problems<'a> {
+    pub profile: &'a AdapterProfile,
+    pub envelope: &'a CompiledEnvelope,
+}
+
 /// The profile's problem for `class`: the declared problem whose class is
 /// the closest ancestor of (or equal to) the raised class. Without a match
 /// the response is a bare 500 with no body detail.
 fn problem_response(
-    profile: &AdapterProfile,
+    problems: Problems<'_>,
     class: ErrorClass,
     status_override: Option<StatusCode>,
     detail: Option<&str>,
     record_type: &str,
     request_id: &str,
 ) -> Response {
-    let Some(problem) = select_problem(profile, class) else {
+    let Some(problem) = select_problem(problems.profile, class) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let status = status_override.unwrap_or_else(|| {
@@ -743,7 +778,7 @@ fn problem_response(
     if let Some(detail) = detail {
         slots.insert("problemDetail", Value::String(detail.to_owned()));
     }
-    match render_envelope(profile.problem_envelope.text(), &slots) {
+    match problems.envelope.render(&slots) {
         Ok(rendered) => {
             let mut response = json_response(status, &rendered);
             response.headers_mut().insert(
@@ -790,180 +825,9 @@ fn new_id() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// A marker an absent optional slot leaves; the member holding it is
-/// dropped from the rendered envelope.
-const ABSENT: &str = "@@adapter-absent-slot@@";
-
-/// Writes the deployment's value over every string member of the envelope
-/// template named for a parameterized part. The template carries the part
-/// name as stand-in text at the binding point (`"name": "name"`); the value
-/// replaces that text. The pass reads the template, never a rendered
-/// record, so a record field of the same name is not touched.
-pub fn bind_parameterized_parts(
-    template: &str,
-    parts: &BTreeMap<registry_platform_yaml::ExternalId, String>,
-) -> String {
-    let mut bound = template.to_owned();
-    for (name, value) in parts {
-        let key = format!("\"{}\"", name.as_str());
-        let mut from = 0;
-        while let Some(found) = bound[from..].find(&key) {
-            let after_key = from + found + key.len();
-            let tail = &bound[after_key..];
-            let colon = tail.trim_start();
-            let Some(value_start) = colon
-                .strip_prefix(':')
-                .map(|rest| rest.trim_start())
-                .filter(|rest| rest.starts_with('"'))
-            else {
-                from = after_key;
-                continue;
-            };
-            let open = bound.len() - value_start.len();
-            let close = value_start[1..]
-                .find('"')
-                .map_or(bound.len(), |end| open + 1 + end + 1);
-            let quoted = Value::String(value.clone()).to_string();
-            bound.replace_range(open..close, &quoted);
-            from = open + quoted.len();
-        }
-    }
-    bound
-}
-
-/// Fill an envelope template. A `{{slot}}` or `{{?slot}}` standing alone
-/// takes the slot's JSON value; one inside a string takes its text. A
-/// missing required slot is a fault; a missing optional one drops the
-/// member that carried it.
-pub fn render_envelope(template: &str, slots: &BTreeMap<&str, Value>) -> Result<Value, String> {
-    let mut out = String::new();
-    let mut rest = template;
-    let mut in_string = false;
-    while let Some(start) = rest.find("{{") {
-        let (before, after) = rest.split_at(start);
-        for ch in before.chars() {
-            if ch == '"' {
-                in_string = !in_string;
-            }
-            out.push(ch);
-        }
-        // Escaped quotes inside strings do not occur in envelopes; a
-        // backslash before the placeholder is not supported.
-        let end = after.find("}}").ok_or("an unterminated placeholder")?;
-        let inner = &after[2..end];
-        let (name, optional) = match inner.strip_prefix('?') {
-            Some(name) => (name, true),
-            None => (inner, false),
-        };
-        match slots.get(name) {
-            Some(value) => {
-                if in_string {
-                    let text = match value {
-                        Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    };
-                    let quoted = Value::String(text).to_string();
-                    out.push_str(&quoted[1..quoted.len() - 1]);
-                } else {
-                    out.push_str(&value.to_string());
-                }
-            }
-            None if optional => {
-                if in_string {
-                    out.push_str(ABSENT);
-                } else {
-                    out.push_str(&format!("\"{ABSENT}\""));
-                }
-            }
-            None => return Err(format!("the slot {name} has no value")),
-        }
-        rest = &after[end + 2..];
-    }
-    out.push_str(rest);
-    let mut value: Value = serde_json::from_str(&out).map_err(|error| error.to_string())?;
-    prune_absent(&mut value);
-    Ok(value)
-}
-
-fn prune_absent(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            let keys: Vec<String> = map
-                .iter()
-                .filter(|(_, member)| member.as_str().is_some_and(|text| text.contains(ABSENT)))
-                .map(|(key, _)| key.clone())
-                .collect();
-            for key in keys {
-                map.remove(&key);
-            }
-            for member in map.values_mut() {
-                prune_absent(member);
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(prune_absent),
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn slots(pairs: &[(&'static str, Value)]) -> BTreeMap<&'static str, Value> {
-        pairs.iter().cloned().collect()
-    }
-
-    #[test]
-    fn a_bare_slot_takes_the_value_and_a_string_slot_takes_the_text() {
-        let rendered = render_envelope(
-            r#"{"data": {{record}}, "meta": {"type": "{{recordType}}"}}"#,
-            &slots(&[("record", json!({"a": 1})), ("recordType", json!("person"))]),
-        )
-        .unwrap();
-        assert_eq!(
-            rendered,
-            json!({"data": {"a": 1}, "meta": {"type": "person"}})
-        );
-    }
-
-    #[test]
-    fn an_absent_optional_slot_drops_its_member() {
-        let template = r#"{"status": {{status}}, "detail": "{{?problemDetail}}"}"#;
-        let without = render_envelope(template, &slots(&[("status", json!(404))])).unwrap();
-        assert_eq!(without, json!({"status": 404}));
-        let with = render_envelope(
-            template,
-            &slots(&[
-                ("status", json!(404)),
-                ("problemDetail", json!("gone \"x\"")),
-            ]),
-        )
-        .unwrap();
-        assert_eq!(with, json!({"status": 404, "detail": "gone \"x\""}));
-    }
-
-    #[test]
-    fn parameterized_parts_replace_the_stand_in_text_of_their_name() {
-        let parts = BTreeMap::from([(
-            registry_platform_yaml::ExternalId::new("registryIdentifier").unwrap(),
-            "ci\"vil".to_owned(),
-        )]);
-        let template = r#"{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "other": "registryIdentifier"}}"#;
-        let bound = bind_parameterized_parts(template, &parts);
-        let slots = BTreeMap::from([("record", json!({"registryIdentifier": "from-the-record"}))]);
-        assert_eq!(
-            render_envelope(&bound, &slots).unwrap(),
-            json!({
-                "data": {"registryIdentifier": "from-the-record"},
-                "meta": {"registryIdentifier": "ci\"vil", "other": "registryIdentifier"}
-            })
-        );
-    }
-
-    #[test]
-    fn a_missing_required_slot_is_a_fault() {
-        assert!(render_envelope(r#"{"a": {{record}}}"#, &slots(&[])).is_err());
-    }
 
     fn example_project(scopes: Value) -> AdapterProject {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -992,7 +856,8 @@ mod tests {
             route_id: String::new(),
             steps: Vec::new(),
             maximum_upstream_calls: 1,
-            response_envelope: String::new(),
+            response_envelope: crate::envelope::CompiledEnvelope::compile("{}", &BTreeMap::new())
+                .expect("an empty envelope compiles"),
             record_schema: json!({}),
             pagination: None,
         }

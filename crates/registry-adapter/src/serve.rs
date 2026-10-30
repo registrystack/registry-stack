@@ -73,6 +73,17 @@ pub struct Authenticator {
 }
 
 impl Authenticator {
+    /// Log the refusal of a request whose `Authorization` header is absent,
+    /// not text, or not a bearer credential, so every 401 leaves the same
+    /// value-free, rate-limited trace as a refused token.
+    pub fn log_header_refusal(&self) {
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            AuthenticationStage::Header,
+            "Adapter authentication refused"
+        );
+    }
+
     pub async fn authenticate(&self, token: &str) -> Result<Caller, CallerRefusal> {
         validate_compact_access_token(token).map_err(|_| {
             registry_platform_oidc::log_authentication_refusal!(
@@ -106,8 +117,10 @@ impl Authenticator {
         // it. This runtime declares no assertion authority, so it admits
         // no exchanged token.
         if verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
-            tracing::debug!(
-                "an exchanged credential arrived at a deployment that declares no assertion authority"
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                AuthenticationStage::Client,
+                "Adapter authentication refused: an exchanged credential arrived at a deployment that declares no assertion authority"
             );
             return Err(CallerRefusal::Unauthenticated);
         }
@@ -141,6 +154,11 @@ async fn authenticator(
 ) -> Result<Authenticator, ServeError> {
     let oidc = &runtime.oidc;
     let invalid = |what: &str| ServeError::Configuration(format!("oidc: {what}"));
+    if oidc.allow_insecure_http {
+        tracing::warn!(
+            "allowInsecureHttp is set: the token issuer and its keys may be fetched over plain http"
+        );
+    }
     let network = IssuerNetworkPolicy::new(oidc.issuer.as_str(), oidc.allow_insecure_http)
         .map_err(|_| invalid("the issuer was refused"))?;
     let keys = match &oidc.jwks_source {

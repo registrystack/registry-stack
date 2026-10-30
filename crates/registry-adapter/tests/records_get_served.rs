@@ -14,7 +14,9 @@ mod served_harness;
 
 use serde_json::json;
 use served_harness::upstream::{Response, UpstreamDouble};
-use served_harness::{capture, expected_basic, Served};
+use served_harness::{
+    capture, copy_example_project, digest_of, expected_basic, replace_profile_text, Served,
+};
 
 #[tokio::test]
 async fn a_found_record_comes_back_shaped_through_the_served_binary() {
@@ -200,40 +202,10 @@ async fn the_example_folder_is_served_with_its_pack_and_profile_by_flag() {
     assert_eq!(status, 200, "{body}");
 }
 
-fn copy_example_project(directory: &std::path::Path) {
-    fn copy(from: &std::path::Path, to: &std::path::Path) {
-        std::fs::create_dir_all(to).expect("create the copy directory");
-        for entry in std::fs::read_dir(from).expect("read the example directory") {
-            let entry = entry.expect("a directory entry");
-            let target = to.join(entry.file_name());
-            if entry.file_type().expect("a file type").is_dir() {
-                copy(&entry.path(), &target);
-            } else {
-                std::fs::copy(entry.path(), &target).expect("copy a file");
-            }
-        }
-    }
-    copy(&Served::example_project(), directory);
-    // The example folder holds only the project: the copy carries its own
-    // pack, scripts and profile beside it, so a test can edit them.
-    let packs = Served::example_pack();
-    copy(packs.parent().expect("the pack directory"), directory);
-    std::fs::copy(Served::example_profile(), directory.join("profile.yaml"))
-        .expect("copy the profile");
-}
-
 /// A copy of the example project whose fetch route has no shaping step, so
 /// the route ends with the source's own body; the pack digest pin in the
 /// copied project is re-pinned to the edited bytes.
 fn project_without_the_shaping_step(directory: &std::path::Path) {
-    use sha2::{Digest, Sha256};
-    fn digest_of(bytes: &[u8]) -> String {
-        let hex: String = Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        format!("sha256:{hex}")
-    }
     copy_example_project(directory);
     let pack_path = directory.join("pack.yaml");
     let pack = std::fs::read_to_string(&pack_path).expect("the pack is readable");
@@ -359,4 +331,149 @@ async fn an_unusable_cursor_key_refuses_startup_before_the_listener_opens() {
             .await;
 
     assert!(stderr.contains("cursor key"), "{stderr}");
+}
+
+#[tokio::test]
+async fn every_401_path_leaves_a_value_free_log_line() {
+    let upstream = UpstreamDouble::start();
+    let served = Served::start(&upstream.url("")).await;
+
+    let (status, _, _) = served.get("/v1/records/person/EeBJ3Sn9uLg", None);
+    assert_eq!(status, 401);
+    let exchanged = served.token_with(
+        "subject",
+        "records.read",
+        json!({registry_platform_oidc::ASSERTION_ISSUER_CLAIM: "https://other.example.invalid"}),
+    );
+    let (status, _, _) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&exchanged));
+    assert_eq!(status, 401);
+    let unusable_subject = served.token_for(&"s".repeat(257), "records.read");
+    let (status, _, _) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&unusable_subject));
+    assert_eq!(status, 401);
+
+    let stderr = served.stop_and_read_stderr();
+    for stage in ["header", "client", "profile"] {
+        assert!(
+            stderr.contains(&format!("\"stage\":\"{stage}\"")),
+            "no {stage}-stage refusal was logged: {stderr}"
+        );
+    }
+    assert!(
+        !stderr.contains(&"s".repeat(257)),
+        "no caller value reaches the log"
+    );
+}
+
+#[tokio::test]
+async fn an_unresolvable_endpoint_credential_refuses_startup() {
+    let upstream = UpstreamDouble::start();
+
+    let stderr =
+        Served::refusal_without_upstream_username(&upstream.url(""), &Served::example_project())
+            .await;
+
+    assert!(
+        stderr.contains("credential reference") && stderr.contains("did not resolve"),
+        "the refusal names its cause: {stderr}"
+    );
+    assert!(
+        !stderr.contains(served_harness::PASSWORD),
+        "no secret reaches the refusal: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn a_write_binding_is_left_unserved_with_a_named_reason() {
+    let upstream = UpstreamDouble::start();
+    let served = Served::start(&upstream.url("")).await;
+
+    let token = served.token("records.read");
+    let (status, _, _) = served.get("/v1/records/person", Some(&token));
+    assert_ne!(status, 200, "the search binding is served; create is not");
+    let stderr = served.stop_and_read_stderr();
+
+    assert!(
+        stderr.contains("binding not served") && stderr.contains("other than GET"),
+        "the unserved write binding is named: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn a_success_status_other_than_200_leaves_the_binding_unserved() {
+    let upstream = UpstreamDouble::start();
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    copy_example_project(directory.path());
+    replace_profile_text(
+        directory.path(),
+        "    recordIdParameter: record_id\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+        "    recordIdParameter: record_id\n    successStatus: 202\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+    );
+    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
+
+    let token = served.token("records.read");
+    let (status, _, _) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+    let stderr = served.stop_and_read_stderr();
+
+    assert_ne!(status, 200);
+    assert!(
+        stderr.contains("successStatus other than 200"),
+        "the reason is named: {stderr}"
+    );
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_previous_cursor_key_without_a_current_key_refuses_startup() {
+    let upstream = UpstreamDouble::start();
+
+    let stderr = Served::refusal_with_cursor_config(
+        &upstream.url(""),
+        &Served::example_project(),
+        "previousCursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+    )
+    .await;
+
+    assert!(
+        stderr.contains("previousCursorKeyRef"),
+        "the refusal names the member: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_journal_that_fails_mid_exchange_answers_500_and_discloses_nothing() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![Response::json(status, &body)]);
+    upstream.delay_answers(std::time::Duration::from_millis(1500));
+    let served = std::sync::Arc::new(Served::start(&upstream.url("")).await);
+    let token = served.token("records.read");
+
+    // `exchangeCreated` lands before the source is called; the journal then
+    // becomes unwritable while the source is still answering.
+    let breaker = {
+        let served = std::sync::Arc::clone(&served);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            served
+                .execute_sql("ALTER TABLE adapter_journal_events RENAME TO adapter_journal_broken")
+                .await;
+        })
+    };
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+    breaker.await.expect("the breaker finishes");
+
+    assert_eq!(status, 500, "{body}");
+    assert!(
+        body.get("data").is_none(),
+        "no record is disclosed without its journal entry: {body}"
+    );
+    served
+        .execute_sql("ALTER TABLE adapter_journal_broken RENAME TO adapter_journal_events")
+        .await;
+    let kinds = served.journal_kinds().await;
+    assert!(
+        kinds.contains(&"exchangeCreated".to_owned())
+            && !kinds.contains(&"exchangeCompleted".to_owned()),
+        "{kinds:?}"
+    );
 }

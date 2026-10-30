@@ -29,10 +29,10 @@ use registry_platform_yaml::{
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
-use crate::auth::AuthPlan;
+use crate::auth::{AuthPlan, StaticCredential};
 use crate::component::http::header_filter::HeaderFilter;
 use crate::component::http::uri::PinnedOrigin;
-use crate::facade::bind_parameterized_parts;
+use crate::envelope::CompiledEnvelope;
 use crate::interim_loopback::LoopbackSender;
 use crate::route::{check_servable, is_served_auth, EndpointRuntime};
 use crate::scripts::ScriptSet;
@@ -95,7 +95,7 @@ pub struct ServedOperation {
     pub route_id: String,
     pub steps: Vec<Step>,
     pub maximum_upstream_calls: u64,
-    pub response_envelope: String,
+    pub response_envelope: CompiledEnvelope,
     /// The closed schema of one record this operation may disclose: the
     /// bound record type's declared fields and nothing else.
     pub record_schema: Value,
@@ -114,6 +114,8 @@ pub struct ServedPagination {
 /// Everything startup produced.
 pub struct Loaded {
     pub profile: AdapterProfile,
+    /// The profile's problem envelope, compiled once.
+    pub problem_envelope: CompiledEnvelope,
     pub project: AdapterProject,
     pub runtime: AdapterRuntimeConfig,
     pub scripts: ScriptSet,
@@ -125,6 +127,17 @@ pub struct Loaded {
     /// A digest of the project, profile and pack bytes, so a cursor
     /// minted under other artifacts is refused.
     pub deployment: String,
+}
+
+impl Loaded {
+    /// The problems view the facade answers refusals from.
+    #[must_use]
+    pub fn problems(&self) -> crate::facade::Problems<'_> {
+        crate::facade::Problems {
+            profile: &self.profile,
+            envelope: &self.problem_envelope,
+        }
+    }
 }
 
 /// Whether a served operation already answers the facade path: the router
@@ -167,6 +180,34 @@ fn read<T: DeserializeOwned>(
                 .join("; "),
         })?;
     Ok((decoded.value, bytes))
+}
+
+/// Resolve every secret reference of an endpoint's static credential, so
+/// a reference that names no secret refuses startup and not the first send.
+/// The resolved values are dropped unread; the sender resolves them again
+/// per send.
+fn resolve_static_credential(
+    endpoint: &str,
+    plan: &AuthPlan,
+    resolver: &SecretResolver,
+) -> Result<(), LoadError> {
+    let references: Vec<&str> = match plan.static_credential() {
+        Some(StaticCredential::Basic {
+            username_ref,
+            password_ref,
+        }) => vec![username_ref.as_str(), password_ref.as_str()],
+        Some(StaticCredential::Authorization { token_ref, .. }) => vec![token_ref.as_str()],
+        Some(StaticCredential::ApiKey { value_ref, .. }) => vec![value_ref.as_str()],
+        None => Vec::new(),
+    };
+    for reference in references {
+        resolver.resolve(reference).map_err(|_| {
+            LoadError::Runtime(format!(
+                "endpoint {endpoint} credential reference {reference} did not resolve"
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 fn digest_of(bytes: &[u8]) -> Digest {
@@ -283,6 +324,7 @@ pub fn load(
             );
             continue;
         }
+        resolve_static_credential(&id, &plan, &resolver)?;
         let origin = PinnedOrigin::new(binding.base_url.as_str())
             .map_err(|_| LoadError::Runtime(format!("endpoint {id} baseUrl was refused")))?;
         let filter = HeaderFilter::for_endpoint(declared).map_err(|_| {
@@ -316,6 +358,12 @@ pub fn load(
             .collect::<Vec<u8>>(),
     );
     let has_cursor_key = runtime.cursor_key_ref.is_some();
+    if runtime.previous_cursor_key_ref.is_some() && !has_cursor_key {
+        return Err(LoadError::Runtime(
+            "previousCursorKeyRef is set without cursorKeyRef; a previous key only opens cursors the current key sealed"
+                .to_owned(),
+        ));
+    }
 
     let mut scripts = ScriptSet::default();
     let mut served = Vec::new();
@@ -354,8 +402,13 @@ pub fn load(
             }
         }
     }
+    let problem_envelope =
+        CompiledEnvelope::compile(profile.problem_envelope.text(), &BTreeMap::new()).map_err(
+            |reason| LoadError::Runtime(format!("the problem envelope is unusable: {reason}")),
+        )?;
     Ok(Loaded {
         profile,
+        problem_envelope,
         project,
         runtime,
         scripts,
@@ -385,6 +438,9 @@ fn compile_binding(
         .ok_or("the binding names no profile operation")?;
     if operation.method != registry_adapter_core::HttpMethod::Get {
         return Err("a facade method other than GET is not served by this runtime yet".into());
+    }
+    if operation.success_status.get() != 200 {
+        return Err("a served operation answers 200; a successStatus other than 200 is not served by this runtime yet".into());
     }
     let route_id = binding.route.as_str();
     let steps: Vec<Step> = if let Some(templated) = project.templated_routes.get(route_id) {
@@ -444,10 +500,13 @@ fn compile_binding(
         route_id: route_id.to_owned(),
         steps,
         maximum_upstream_calls: binding.maximum_upstream_calls.get(),
-        response_envelope: bind_parameterized_parts(
+        response_envelope: CompiledEnvelope::compile(
             operation.response_envelope.text(),
             &project.parameterized_parts,
-        ),
+        )
+        .map_err(|reason| {
+            BindingRefusal::Fault(format!("the response envelope is unusable: {reason}"))
+        })?,
         record_schema: registry_adapter_core::binding_record_schema(project, binding)?,
         pagination: operation
             .pagination
@@ -592,7 +651,7 @@ mod tests {
             route_id: "route".to_owned(),
             steps: Vec::new(),
             maximum_upstream_calls: 1,
-            response_envelope: String::new(),
+            response_envelope: CompiledEnvelope::compile("{}", &BTreeMap::new()).unwrap(),
             record_schema: json!({}),
             pagination: None,
         };

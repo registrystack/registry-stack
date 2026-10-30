@@ -14,7 +14,7 @@ mod served_harness;
 
 use serde_json::{json, Value};
 use served_harness::upstream::{Response, UpstreamDouble};
-use served_harness::{expected_basic, fixture, Served};
+use served_harness::{copy_example_project, expected_basic, fixture, replace_pack_script, Served};
 
 const FIRST_PAGE_QUERY: &str =
     "order=createdAt%3Adesc&orgUnitMode=ACCESSIBLE&page=1&pageSize=5&program=qyVpUaAYv2A&totalPages=true";
@@ -252,4 +252,84 @@ async fn an_undeclared_or_out_of_bounds_input_is_refused_before_any_upstream_cal
     ] {
         assert_refused(served.get(path, Some(&token)), &upstream, 0);
     }
+}
+
+#[tokio::test]
+async fn a_continuation_too_large_to_seal_answers_500_and_journals_a_failure() {
+    let upstream = UpstreamDouble::start();
+    let (reply, _) = search_page();
+    upstream.respond_with(vec![Response::json(200, &reply.to_string())]);
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    copy_example_project(directory.path());
+    replace_pack_script(
+        directory.path(),
+        "scripts/next-continuation.rhai",
+        &format!(
+            "fn next_continuation(exchange) {{\n    \"{}\"\n}}\n",
+            "x".repeat(3000)
+        ),
+    );
+    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
+
+    let token = served.token("records.read");
+    let (status, _, body) = served.get("/v1/records/person?limit=5", Some(&token));
+
+    assert_eq!(status, 500, "{body}");
+    let kinds = served.journal_kinds().await;
+    assert!(
+        kinds.contains(&"exchangeFailed".to_owned())
+            && !kinds.contains(&"exchangeCompleted".to_owned()),
+        "{kinds:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_part_value_with_a_quote_a_backslash_and_braces_renders_as_text() {
+    let upstream = UpstreamDouble::start();
+    let (reply, expected) = search_page();
+    upstream.respond_with(vec![Response::json(200, &reply.to_string())]);
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    copy_example_project(directory.path());
+    let project_path = directory.path().join("project.yaml");
+    let project = std::fs::read_to_string(&project_path).expect("the project is readable");
+    let hostile = r#"civil "registry" \ {{record}}"#;
+    let edited = project.replace(
+        "registryIdentifier: dhis2-tracker-registry",
+        &format!("registryIdentifier: '{hostile}'"),
+    );
+    assert_ne!(edited, project, "the part is where the test expects it");
+    std::fs::write(&project_path, edited).expect("write the project");
+    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
+
+    let token = served.token("records.read");
+    let (status, _, body) = served.get("/v1/records/person?limit=5", Some(&token));
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["meta"]["registryIdentifier"], hostile);
+    assert_eq!(body["meta"]["datasetIdentifier"], "persons");
+    assert_eq!(body["items"], expected["items"]);
+}
+
+#[tokio::test]
+async fn a_page_larger_than_the_requested_size_is_a_disclosure_violation() {
+    let upstream = UpstreamDouble::start();
+    let (reply, _) = search_page();
+    // The source ignores the requested size and answers its full page.
+    upstream.respond_with(vec![Response::json(200, &reply.to_string())]);
+    let served = Served::start(&upstream.url("")).await;
+
+    let token = served.token("records.read");
+    let (status, _, body) = served.get("/v1/records/person?limit=1", Some(&token));
+
+    assert_eq!(status, 500, "{body}");
+    assert!(
+        body.get("items").is_none(),
+        "no record is disclosed: {body}"
+    );
+    let kinds = served.journal_kinds().await;
+    assert!(
+        kinds.contains(&"exchangeFailed".to_owned())
+            && !kinds.contains(&"exchangeCompleted".to_owned()),
+        "{kinds:?}"
+    );
 }

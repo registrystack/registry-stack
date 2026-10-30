@@ -144,26 +144,62 @@ impl Served {
         cursor_key: &str,
     ) -> String {
         let mut served = Self::spawn_with_project(upstream_url, project, cursor_key).await;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            if let Some(status) = served.child.try_wait().expect("poll the adapter") {
-                assert!(!status.success(), "the adapter exited successfully");
-                let mut stderr = String::new();
-                if let Some(mut pipe) = served.child.stderr.take() {
-                    pipe.read_to_string(&mut stderr).expect("read stderr");
-                }
-                return stderr;
-            }
-            assert!(
-                TcpStream::connect(("127.0.0.1", served.port)).is_err(),
-                "the adapter started serving"
-            );
-            assert!(Instant::now() < deadline, "the adapter never exited");
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        served.await_refusal()
+    }
+
+    /// As [`Self::refusal_with_project`], with the upstream username
+    /// secret left out of the adapter's environment.
+    pub async fn refusal_without_upstream_username(upstream_url: &str, project: &Path) -> String {
+        let mut served = Self::spawn_inner(
+            upstream_url,
+            project,
+            CURSOR_KEY,
+            &["TEST_UPSTREAM_USERNAME"],
+        )
+        .await;
+        served.await_refusal()
+    }
+
+    /// As [`Self::refusal_with_project`], with `cursor_lines` as the
+    /// runtime config's cursor members.
+    pub async fn refusal_with_cursor_config(
+        upstream_url: &str,
+        project: &Path,
+        cursor_lines: &str,
+    ) -> String {
+        let mut served =
+            Self::spawn_config(upstream_url, project, CURSOR_KEY, &[], cursor_lines).await;
+        served.await_refusal()
     }
 
     async fn spawn_with_project(upstream_url: &str, project: &Path, cursor_key: &str) -> Self {
+        Self::spawn_inner(upstream_url, project, cursor_key, &[]).await
+    }
+
+    async fn spawn_inner(
+        upstream_url: &str,
+        project: &Path,
+        cursor_key: &str,
+        omitted_env: &[&str],
+    ) -> Self {
+        Self::spawn_config(
+            upstream_url,
+            project,
+            cursor_key,
+            omitted_env,
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+        )
+        .await
+    }
+
+    /// `cursor_lines` are the runtime config's cursor members, verbatim.
+    async fn spawn_config(
+        upstream_url: &str,
+        project: &Path,
+        cursor_key: &str,
+        omitted_env: &[&str],
+        cursor_lines: &str,
+    ) -> Self {
         let database = schema_url().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
@@ -202,8 +238,7 @@ allowedPrivateCidrs:
   - 127.0.0.0/8
 audit:
   retentionDays: 90
-cursorKeyRef: secret:env/TEST_CURSOR_KEY
-"#
+{cursor_lines}"#
             ),
         )
         .expect("write the runtime config");
@@ -222,22 +257,46 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
         if !project.join("profile.yaml").exists() {
             command.arg("--profile").arg(Self::example_profile());
         }
-        let child = command
+        command
             .env("TEST_UPSTREAM_USERNAME", USERNAME)
             .env("TEST_UPSTREAM_PASSWORD", PASSWORD)
             .env("TEST_DB_URL", &database)
             .env("TEST_JWKS", &jwks)
             .env("TEST_CURSOR_KEY", cursor_key)
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the adapter binary starts");
+            .stderr(Stdio::piped());
+        for name in omitted_env {
+            command.env_remove(name);
+        }
+        let child = command.spawn().expect("the adapter binary starts");
         Self {
             child,
             port,
             database,
             key,
             _directory: directory,
+        }
+    }
+
+    /// The stderr of an adapter that refuses to start; panics when it
+    /// starts, or never exits.
+    fn await_refusal(&mut self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = self.child.try_wait().expect("poll the adapter") {
+                assert!(!status.success(), "the adapter exited successfully");
+                let mut stderr = String::new();
+                if let Some(mut pipe) = self.child.stderr.take() {
+                    pipe.read_to_string(&mut stderr).expect("read stderr");
+                }
+                return stderr;
+            }
+            assert!(
+                TcpStream::connect(("127.0.0.1", self.port)).is_err(),
+                "the adapter started serving"
+            );
+            assert!(Instant::now() < deadline, "the adapter never exited");
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 
@@ -259,7 +318,27 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
         }
     }
 
-    /// The `kind` of every journal event written so far, oldest first.
+    /// Stop the adapter and return what it wrote to stderr.
+    pub fn stop_and_read_stderr(mut self) -> String {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let mut stderr = String::new();
+        if let Some(mut pipe) = self.child.stderr.take() {
+            pipe.read_to_string(&mut stderr).expect("read stderr");
+        }
+        stderr
+    }
+
+    /// Run `sql` against the adapter's journal schema.
+    pub async fn execute_sql(&self, sql: &str) {
+        let (client, connection) = tokio_postgres::connect(&self.database, tokio_postgres::NoTls)
+            .await
+            .expect("connect the journal schema");
+        tokio::spawn(connection);
+        client.batch_execute(sql).await.expect("run the statement");
+    }
+
+    /// The `kind` of every journal event written so far, sorted by kind.
     pub async fn journal_kinds(&self) -> Vec<String> {
         let (client, connection) = tokio_postgres::connect(&self.database, tokio_postgres::NoTls)
             .await
@@ -385,4 +464,87 @@ pub fn expected_basic() -> String {
         "Basic {}",
         STANDARD.encode(format!("{USERNAME}:{PASSWORD}"))
     )
+}
+
+pub fn copy_example_project(directory: &std::path::Path) {
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).expect("create the copy directory");
+        for entry in std::fs::read_dir(from).expect("read the example directory") {
+            let entry = entry.expect("a directory entry");
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("a file type").is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).expect("copy a file");
+            }
+        }
+    }
+    copy(&Served::example_project(), directory);
+    // The example folder holds only the project: the copy carries its own
+    // pack, scripts and profile beside it, so a test can edit them.
+    let packs = Served::example_pack();
+    copy(packs.parent().expect("the pack directory"), directory);
+    std::fs::copy(Served::example_profile(), directory.join("profile.yaml"))
+        .expect("copy the profile");
+}
+
+/// The digest string the pins use for `bytes`.
+pub fn digest_of(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hex: String = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("sha256:{hex}")
+}
+
+/// Replace one pack script in a copied project and re-pin it: the pack
+/// pins the script's digest and the project pins the pack's.
+pub fn replace_pack_script(directory: &Path, script: &str, text: &str) {
+    let script_path = directory.join(script);
+    let old = std::fs::read(&script_path).expect("the script is readable");
+    let pack_path = directory.join("pack.yaml");
+    let pack = std::fs::read_to_string(&pack_path).expect("the pack is readable");
+    let old_pin = digest_of(&old);
+    assert!(
+        pack.contains(&old_pin),
+        "the pack pins the committed script"
+    );
+    let edited = pack.replace(&old_pin, &digest_of(text.as_bytes()));
+    let project_path = directory.join("project.yaml");
+    let project = std::fs::read_to_string(&project_path).expect("the project is readable");
+    let pinned = digest_of(pack.as_bytes());
+    assert!(
+        project.contains(&pinned),
+        "the project pins the committed pack"
+    );
+    std::fs::write(&script_path, text).expect("write the script");
+    std::fs::write(&pack_path, &edited).expect("write the pack");
+    std::fs::write(
+        &project_path,
+        project.replace(&pinned, &digest_of(edited.as_bytes())),
+    )
+    .expect("write the project");
+}
+
+/// Replace `from` with `to` in a copied project's profile and re-pin it:
+/// the project pins the profile's digest.
+pub fn replace_profile_text(directory: &Path, from: &str, to: &str) {
+    let profile_path = directory.join("profile.yaml");
+    let profile = std::fs::read_to_string(&profile_path).expect("the profile is readable");
+    assert!(profile.contains(from), "the profile carries the text");
+    let edited = profile.replacen(from, to, 1);
+    let project_path = directory.join("project.yaml");
+    let project = std::fs::read_to_string(&project_path).expect("the project is readable");
+    let pinned = digest_of(profile.as_bytes());
+    assert!(
+        project.contains(&pinned),
+        "the project pins the committed profile"
+    );
+    std::fs::write(&profile_path, &edited).expect("write the profile");
+    std::fs::write(
+        &project_path,
+        project.replace(&pinned, &digest_of(edited.as_bytes())),
+    )
+    .expect("write the project");
 }

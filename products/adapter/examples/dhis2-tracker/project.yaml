@@ -74,10 +74,12 @@ recordTypes:
       - name: tracked_entity_type
         type: string
         required: true
+      # DHIS2 timestamps carry no UTC offset, so they are not RFC 3339
+      # date-times; the closed record schema holds them as plain text.
       - name: created_at
-        type: date-time
+        type: string
       - name: updated_at
-        type: date-time
+        type: string
 templatedRoutes:
   - routeTemplate: search-tracked-entities
     routeId: person-search

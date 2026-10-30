@@ -3721,6 +3721,14 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
         ));
     }
     check_outbound_tls(runtime, &mut findings);
+    if let Err(error) = runtime.oidc.check("oidc", true) {
+        findings.push(finding(
+            CheckCode::RuntimeInvalidOrigin,
+            "/oidc",
+            &format!("the OIDC issuer block was refused: {error}"),
+            "Declare an https issuer without credentials, query, or fragment, a bounded audience, and a key source the platform accepts; plain http beyond loopback needs allowInsecureHttp: true.",
+        ));
+    }
     findings
 }
 
@@ -8374,6 +8382,29 @@ mod tests {
         ws.runtime = Some(&loopback);
         assert!(!codes(&check_runtime(&ws, &loopback))
             .contains(&CheckCode::RuntimeInsecureOrigin.code()));
+    }
+
+    #[test]
+    fn runtime_refuses_an_oidc_issuer_with_a_query_or_plain_http_beyond_loopback() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        for issuer in [
+            "https://issuer.example.invalid/?x=1",
+            "http://issuer.example.invalid",
+        ] {
+            let mut runtime = runtime_builder(vec![oauth_binding("https://cases.example.invalid")]);
+            runtime.oidc = serde_json::from_str(&format!(
+                r#"{{ "issuer": "{issuer}", "audience": "case-api" }}"#
+            ))
+            .expect("oidc");
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&runtime);
+            assert_has(
+                &check_runtime(&ws, &runtime),
+                CheckCode::RuntimeInvalidOrigin,
+            );
+        }
     }
 
     /// A binding naming a trust profile the runtime config does not declare

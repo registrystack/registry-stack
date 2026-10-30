@@ -407,3 +407,52 @@ async fn the_journal_refuses_unknown_kinds_and_oversized_details() {
     .expect_err("a journal row's detail is bounded");
     expect_check_violation(error, "the oversized detail");
 }
+
+#[tokio::test]
+async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_refused_calls() {
+    let isolated = isolated().await;
+    let client = isolated.client().await;
+    client
+        .batch_execute(
+            "CREATE TABLE adapter_schema_migrations (\
+             version bigint PRIMARY KEY CHECK (version > 0),\
+             applied_at timestamptz NOT NULL)",
+        )
+        .await
+        .expect("create the migration ledger");
+    client
+        .batch_execute(include_str!("../src/journal/migrations/0100_journal.sql"))
+        .await
+        .expect("apply the first journal schema by hand");
+    client
+        .execute(
+            "INSERT INTO adapter_schema_migrations (version, applied_at) VALUES (100, now())",
+            &[],
+        )
+        .await
+        .expect("record version 100");
+    journal::append(&client, event("exchangeCreated"), SystemTime::now())
+        .await
+        .expect("a version 100 journal takes its own kinds");
+    let error = journal::append(&client, event("callRefused"), SystemTime::now())
+        .await
+        .expect_err("version 100 does not know callRefused");
+    expect_check_violation(error, "callRefused before the upgrade");
+
+    journal::migrate(&client)
+        .await
+        .expect("the upgrade applies over existing rows");
+
+    journal::append(&client, event("callRefused"), SystemTime::now())
+        .await
+        .expect("version 200 accepts callRefused");
+    let rows = client
+        .query(
+            "SELECT event_kind FROM adapter_journal_events ORDER BY 1",
+            &[],
+        )
+        .await
+        .expect("read the journal");
+    let kinds: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+    assert_eq!(kinds, ["callRefused", "exchangeCreated"]);
+}

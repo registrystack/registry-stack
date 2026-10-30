@@ -74,7 +74,6 @@
                         "additionalProperties": false,
                         "properties": {
                           "created_at": {
-                            "format": "date-time",
                             "type": "string"
                           },
                           "org_unit": {
@@ -84,7 +83,6 @@
                             "type": "string"
                           },
                           "updated_at": {
-                            "format": "date-time",
                             "type": "string"
                           }
                         },
@@ -248,7 +246,6 @@
                     "additionalProperties": false,
                     "properties": {
                       "created_at": {
-                        "format": "date-time",
                         "type": "string"
                       },
                       "org_unit": {
@@ -258,7 +255,6 @@
                         "type": "string"
                       },
                       "updated_at": {
-                        "format": "date-time",
                         "type": "string"
                       }
                     },
@@ -289,7 +285,6 @@
                       "additionalProperties": false,
                       "properties": {
                         "created_at": {
-                          "format": "date-time",
                           "type": "string"
                         },
                         "org_unit": {
@@ -299,7 +294,6 @@
                           "type": "string"
                         },
                         "updated_at": {
-                          "format": "date-time",
                           "type": "string"
                         }
                       },
@@ -462,7 +456,6 @@
                       "additionalProperties": false,
                       "properties": {
                         "created_at": {
-                          "format": "date-time",
                           "type": "string"
                         },
                         "org_unit": {
@@ -472,7 +465,6 @@
                           "type": "string"
                         },
                         "updated_at": {
-                          "format": "date-time",
                           "type": "string"
                         }
                       },
