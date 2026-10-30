@@ -37,10 +37,11 @@
 #     --fixtures products/adapter/fixtures/dhis2-tracker/search-page.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/get-found.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/get-soft-deleted.yaml \
-#     --fixtures products/adapter/fixtures/dhis2-tracker/import-accepted.yaml \
-#     --fixtures products/adapter/fixtures/dhis2-tracker/import-error-200.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/get-missing.yaml \
-#     --fixtures products/adapter/fixtures/dhis2-tracker/get-server-error.yaml
+#     --fixtures products/adapter/fixtures/dhis2-tracker/get-server-error.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-accepted.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-rejected.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-server-error.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:
@@ -53,7 +54,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:27dca69987211151e0cf3b1472e78e616e27c561890627bb1d97151dbfc69e29
+  digest: sha256:7539c9a1da404fb5151bea3d75f4cbf5eaed66a49807e7733b1cdb69b7fd7b2c
 recordTypes:
   - name: person
     fields:
@@ -81,7 +82,7 @@ bindings:
     operation: records-search
     recordType: person
     route: person-search
-    maximumUpstreamCalls: 24
+    maximumUpstreamCalls: 4
   - id: person-get
     operation: records-get
     recordType: person

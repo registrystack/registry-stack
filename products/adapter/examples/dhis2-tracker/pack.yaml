@@ -7,17 +7,19 @@
 # Authentication (cited choices):
 #   - User accounts authenticate over `Authorization: Basic
 #     base64encode(username:password)`; the DHIS2 documentation recommends
-#     Basic only over TLS. The endpoint below declares `basic`; the runtime
-#     config binds usernameRef and passwordRef.
+#     Basic only over TLS, and prefers personal access tokens for service
+#     use. The endpoint below declares `basic`; the runtime config binds
+#     usernameRef and passwordRef.
 #   - Personal access tokens authenticate over `Authorization: ApiToken
 #     <token>` (same page). A deployment that prefers a PAT swaps this
 #     endpoint's kind to `static-authorization` with `scheme: ApiToken` and
 #     binds tokenRef in the runtime config; both sides of the kind match
 #     must move together.
-#   - DHIS2's OAuth2 support carries the password, refresh, and
-#     authorization-code grants, not the client-credentials grant, so no
-#     `oauth2-client-credentials` or `oauth2-private-key-jwt` endpoint is
-#     declared here.
+#   - The DHIS2 documentation documents three OAuth2 grant types (password,
+#     refresh token, authorization code) and the pack declares no OAuth2
+#     endpoint; a deployment that needs one declares it against those
+#     grants. Whether a client-credentials client works is unsettled (the
+#     documentation lists no such grant and does not refuse one).
 #
 # Upstream responses and their declared headers: the tracker endpoints'
 # documented behavior carries no response header the facade consumes, so
@@ -25,35 +27,44 @@
 #
 # Idempotency basis for `tracker-import` (idempotentUpstream: true): the
 # tracker importer treats a payload object whose UID already exists as an
-# update, and refuses a create whose UID collides (error E1002); repeating
-# an import whose objects carry client-supplied UIDs therefore lands every
-# object on the same one. Imports without client-supplied UIDs are NOT
-# idempotent (each repeat would mint new UIDs or collide), so the claim
-# holds only for the client-supplied-UID payload this pack's to-bundle
-# mapping produces, and the script throws when a record carries no
+# update (the default importStrategy is CREATE_AND_UPDATE), so repeating
+# an import whose objects carry client-supplied UIDs lands every object
+# on the same one. Error E1002, the create-strategy collision refusal,
+# fires only under importStrategy=CREATE, which this pack never sends.
+# A repeat over the UID of a soft-deleted entity is refused with E1114,
+# which arrives as a 409 import report and so raises `outcome.rejected`
+# through the clause below; recreating the entity is a deployment action,
+# not a retry. What a repeat does to existing attribute values when the
+# bundle carries an empty attribute list is unsettled and awaits a
+# captured answer. Imports without client-supplied UIDs are NOT
+# idempotent (each repeat would mint new UIDs), so the claim holds only
+# for the client-supplied-UID payload this pack's to-bundle mapping
+# produces, and the script throws when a record carries no
 # recordIdentifier.
 #
-# The 200-with-error-body quirk: the tracker importer reports its outcome
-# in the summary body, not the status line; DHIS2 answers HTTP 200 with a
-# summary whose `status` is ERROR in the field. Detecting that answer is
-# this pack's concern (scripts/import-failed.rhai) through the grammar's
-# choice step, never an inline check.
+# Rejection: a failed synchronous import is an HTTP 409. The import
+# controller answers CONFLICT with the import report as the body when the
+# report's status is ERROR, and OK or WARNING with a 200 (read from the
+# 2.41 source; the documentation states the ERROR status but no HTTP
+# code). The route's first exception clause matches upstream.http whose
+# body is that report and raises `outcome.rejected`; a WebMessage error,
+# which also carries status ERROR, carries no validationReport member and
+# stays upstream.http.
 #
 # Error clauses: the pack raises the closed error classes of CONCEPT 8.7
 # and never names a profile's problem codes or writes a problem body
 # (CONCEPT 8.11.6). A clause that translates a source answer ends with
-# `throwException` carrying an `outcome.*` class (the 404 answer and the
-# soft-deleted entity raise `outcome.not-found`, the ERROR import summary
-# raises `outcome.rejected`); redelivery stays a clause of its own and
-# every other error propagates as its own class. The bound profile's
-# `problems` list decides the problem the caller sees, so the pack binds
-# any profile; the example deploys breg-records, which maps
-# `outcome.not-found` to its 404 and `outcome.rejected` to its 409.
+# `throwException` carrying an `outcome.*` class (the 404 answer raises
+# `outcome.not-found`, the 409 import report raises `outcome.rejected`);
+# redelivery stays a clause of its own and every other error propagates
+# as its own class. The bound profile's `problems` list decides the
+# problem the caller sees, so the pack binds any profile; the example
+# deploys breg-records, which maps `outcome.not-found` to its 404 and
+# `outcome.rejected` to its 409.
 #
-# Code maps: the tracker import summary (OK, WARNING, ERROR) is read by
-# scripts/import-failed.rhai today. A `convert` step over a code map
-# returns with the core convert steps (CONCEPT 8.6); this pack declares
-# none until then.
+# Code maps: a `convert` step over the source's code values returns with
+# the core convert steps (CONCEPT 8.6); this pack declares none until
+# then.
 #
 # Paging: one facade page per upstream page, the default shape of CONCEPT
 # 8.11.2 and the cheapest bound. The caller's pageSize header (a facade
@@ -61,12 +72,21 @@
 # position is the page number: the route seeds dhis2Page from the
 # AdapterContinuation property the engine restores from the caller's
 # cursor (absent on the first page), fetches that one page, and sets
-# AdapterNextContinuation to the next page number while the reply's page
-# block holds one more. DHIS2 fills the page block only when the request
-# carries totalPages=true, which the search route always sends
-# (docs.dhis2.org tracker export parameters); the assumption awaits a
-# captured fixture. An absent or null AdapterNextContinuation at the end
-# of the route is the last page, so the engine seals no cursor.
+# AdapterNextContinuation to the next page number while the reply's pager
+# holds one more. In 2.41 the reply carries the entities under
+# `trackedEntities` and a `pager` object that is always present with
+# `page` and `pageSize`; `totalPages=true` adds `total` and `pageCount`,
+# and `pageCount` is the only another-page signal, so the search route
+# always sends it (flagged expensive in the documentation). A missing
+# pager or pageCount is an unexpected shape and throws; a pageCount of 0
+# is a legitimate empty result with no cursor. Version dependence is
+# stated: 2.40 answered `instances` with flat page fields and no pager
+# object, 2.42 keeps only the pager, and this pack targets 2.41 only.
+# A pageSize above the server's KeyTrackedEntityMaxLimit system setting,
+# when that setting is non-zero, is refused with a 400; the bound
+# profile's pageSize maximum must respect the deployment's setting. An
+# absent or null AdapterNextContinuation at the end of the route is the
+# last page, so the engine seals no cursor.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: dhis2-tracker
@@ -122,26 +142,32 @@ routeTemplates:
             query:
               program:
                 exchangeProperty: dhis2Program
+              # The documentation states the default orgUnitMode is SELECTED
+              # and requires an org unit or orgUnitMode=ALL, while the 2.41
+              # source defaults to ACCESSIBLE when no org unit is sent; the
+              # two disagree, so the route sends ACCESSIBLE explicitly and
+              # the search scope is a decision, not an accident.
+              orgUnitMode:
+                constant: ACCESSIBLE
               page:
                 exchangeProperty: dhis2Page
               # The caller's pageSize header (a facade input, CONCEPT
               # 8.11.1; the bound profile bounds it) is the DHIS2 page
-              # size. totalPages makes DHIS2 fill the reply's page block,
-              # which scripts/next-continuation.rhai reads.
+              # size. totalPages=true adds total and pageCount to the
+              # always-present pager; pageCount is the only another-page
+              # signal in 2.41, which scripts/next-continuation.rhai
+              # reads.
               pageSize:
                 header: pageSize
               totalPages:
                 constant: true
               order:
                 constant: "createdAt:desc"
-      - setProperty:
-          name: dhis2TotalPages
-          value:
-            jsonpath: "$.page.totalPage"
       # The continuation the engine seals into the caller's nextCursor:
-      # the next page number while the reply reported one more, absent on
-      # the last page (scripts/next-continuation.rhai). An absent or null
-      # AdapterNextContinuation at the end of the route is the last page.
+      # the next page number while pager.pageCount holds one more, absent
+      # on the last page (scripts/next-continuation.rhai). An absent or
+      # null AdapterNextContinuation at the end of the route is the last
+      # page.
       - setProperty:
           name: AdapterNextContinuation
           value:
@@ -186,27 +212,35 @@ routeTemplates:
               id:
                 header: recordId
             operation: tracker-export
-      - choice:
-          when:
-            - rhai:
-                file: scripts/soft-deleted.rhai
-                entrypoint: soft_deleted
-              steps:
-                - throwException:
-                    exceptionType: outcome.not-found
-                    message: The tracked entity is deleted or deactivated at the source.
-          otherwise:
-            steps:
-              - setBody:
-                  rhai:
-                    file: scripts/to-record.rhai
-                    entrypoint: to_record
+      # In 2.41 a soft-deleted entity answers 404 like an absent one, so
+      # the not-found clause above already covers it; `inactive` is not a
+      # deletion and hides nothing from this route.
+      - setBody:
+          rhai:
+            file: scripts/to-record.rhai
+            entrypoint: to_record
   - id: import-tracked-entity
     parameters: []
     steps:
+      # A refused write is a 409 whose body is the import report; the
+      # predicate requires the report shape (status ERROR AND a
+      # validationReport member) so a WebMessage error, which also carries
+      # status ERROR, stays unmatched and propagates as upstream.http.
       - onException:
           exception:
             - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/import-rejected.rhai
+              entrypoint: import_rejected
+          steps:
+            - throwException:
+                exceptionType: outcome.rejected
+                message: The source refused the write.
+      # A write is retried on transport faults only; an HTTP failure
+      # propagates (rejection above) or surfaces as its own class.
+      - onException:
+          exception:
             - upstream.timeout
             - upstream.connection
           redeliveryPolicy:
@@ -216,7 +250,7 @@ routeTemplates:
           expression:
             header: Idempotency-Key
           steps:
-            # The send replaces the body with the import summary, so the
+            # The send replaces the body with the import report, so the
             # submitted record rides the exchange through the send in this
             # property; scripts/accepted-record.rhai returns it.
             - setProperty:
@@ -236,40 +270,29 @@ routeTemplates:
                       file: scripts/to-bundle.rhai
                       entrypoint: to_bundle
                   operation: tracker-import
-            - choice:
-                when:
-                  - rhai:
-                      file: scripts/import-failed.rhai
-                      entrypoint: import_failed
-                    steps:
-                      - throwException:
-                          exceptionType: outcome.rejected
-                          message: The source refused the write.
-                otherwise:
-                  steps:
-                    - setBody:
-                        rhai:
-                          file: scripts/accepted-record.rhai
-                          entrypoint: accepted_record
+            # A 200 is OK or WARNING in 2.41, both acceptance, so the
+            # accepted path is unconditional after the send.
+            - setBody:
+                rhai:
+                  file: scripts/accepted-record.rhai
+                  entrypoint: accepted_record
 scripts:
   - path: scripts/seed-page.rhai
     digest: sha256:3d1f10f861171fcff9f21c0e36aa7941d6bc327b5c510cf9127a7e8131c835ed
   - path: scripts/next-continuation.rhai
-    digest: sha256:36a545f5d82b1b2032a1dd059c0dac9c063ea141b1bf49254e2134fe3bdd8b7d
-  - path: scripts/soft-deleted.rhai
-    digest: sha256:c5cb2eaf086c6b2a6156f17e5d50f6171ec95ecbd869e9b79d715b96fe0047a6
+    digest: sha256:5abfc2fb0d5c3bbe073abbe5cb693de534ee28092c77ee5f1948000f8bd39b7e
+  - path: scripts/import-rejected.rhai
+    digest: sha256:cb4946280489c6827f39a58eb7a0dc300c6ba64488d06f8b194e4dbf86425401
   - path: scripts/is-not-found.rhai
     digest: sha256:8f738dc51ecbd1641f8f512ff5d2edcc48408e438814179ea360cd4267dd34b0
   - path: scripts/to-record.rhai
     digest: sha256:2971163431db3510392b631edcf245baded3aa78ad2fcf187e9863b5c482cb30
   - path: scripts/shape-records.rhai
-    digest: sha256:1bc47ede1499fc273611d5a0cd1ffe8c49a9951d66ae08e3ea84144400ba6d35
+    digest: sha256:edf24b5caecd5cd137866182cea50810020f79dcab382d2f99719fc8b0fc68c5
   - path: scripts/to-bundle.rhai
-    digest: sha256:d289269e36bf753e723a849f7cb192c070d925d4e991311d12dfb59f0a8e97bc
-  - path: scripts/import-failed.rhai
-    digest: sha256:2cf14b9227470f1e07944433a58fe06ba4c527a01af3e23e670049ca3eeeece3
+    digest: sha256:38bc0110f19cf0c69890105b37af5f704cb166bd2a008e28f807ceb529b88110
   - path: scripts/accepted-record.rhai
-    digest: sha256:951b0c03cd2771d1688f35661b1cf5f8e7a50dec6d0ac7b4283316fc8d5e1b7c
+    digest: sha256:6e18faccbddafbdf8676ad4480f056df92eb3344517c4e2c141d4e55abbb4e99
 capabilities:
   components:
     - http
@@ -280,7 +303,6 @@ capabilities:
     - jsonpath
     - rhai
   eips:
-    - choice
     - idempotentConsumer
     - onException
     - setBody

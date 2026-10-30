@@ -1,9 +1,13 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
-# Documented fixture (NOT captured): reconstructed from the DHIS2 tracker
-# object property table (deleted and inactive flags; DHIS2 keeps
-# soft-deleted entities in the tracker store and answers 200). The pack's
-# soft-deleted seam maps that answer to the facade's not-found problem.
+# Documented fixture (NOT captured): the source's answer for a
+# soft-deleted tracked entity. In 2.41 the store's read path returns
+# nothing for an object whose deleted flag is set, so the single GET
+# answers the same 404 as an absent entity (dhis2-core 2.41.9
+# HibernateTrackedEntityStore; the collection parameter includeDeleted
+# shows soft-deleted elements are excluded unless asked for). The pack's
+# not-found clause maps exactly this answer, so no separate seam exists;
+# `inactive` is not a deletion and hides nothing.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-get-soft-deleted
@@ -25,16 +29,12 @@ entries:
           method: GET
           path: /api/tracker/trackedEntities/Uid00000002
         response:
-          status: 200
+          status: 404
           body:
-            trackedEntity: Uid00000002
-            trackedEntityType: person
-            orgUnit: OqVpUaAYv2B
-            createdAt: "2025-11-02T08:00:00.000"
-            updatedAt: "2026-01-20T16:45:00.000"
-            deleted: true
-            inactive: false
-            attributes: []
+            httpStatus: Not Found
+            httpStatusCode: 404
+            status: ERROR
+            message: TrackedEntity with id Uid00000002 could not be found.
     expected:
       type: problem
       class: outcome.not-found

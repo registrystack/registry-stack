@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): the refused write. The import
+# controller answers HTTP 409 with the import report as the body when the
+# report's status is ERROR (dhis2-core 2.41 TrackerImportController; the
+# documentation states the ERROR status but no HTTP code). The report
+# here carries the tracked-entity error for a missing org unit, E1049,
+# trackerType TRACKED_ENTITY (DOCS-T error codes; E1080 is the
+# enrollment-already-exists error). The pack's rejection clause maps
+# exactly this report shape to the facade's refused-write problem.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-import-rejected
+pack: dhis2-tracker
+upstreamVersion: "2.41"
+provenance:
+  type: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/tracker.html
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-create
+      path: /v1/records/person
+    upstream:
+      - request:
+          endpoint: tracker
+          method: POST
+          path: /api/tracker
+          query: async=false
+          body:
+            trackedEntities:
+              - trackedEntity: Uid00000004
+                trackedEntityType: person
+                orgUnit: MissingOrgUnit0
+                attributes: []
+        response:
+          status: 409
+          body:
+            status: ERROR
+            validationReport:
+              errorReports:
+                - message: 'Could not find OrganisationUnit: MissingOrgUnit0, linked to Tracked Entity.'
+                  errorCode: E1049
+                  trackerType: TRACKED_ENTITY
+                  uid: Uid00000004
+              warningReports: []
+            stats:
+              created: 0
+              updated: 0
+              deleted: 0
+              ignored: 1
+              total: 1
+            bundleReport:
+              typeReportMap:
+                TRACKED_ENTITY:
+                  trackerType: TRACKED_ENTITY
+                  stats:
+                    created: 0
+                    updated: 0
+                    deleted: 0
+                    ignored: 1
+                    total: 1
+                  objectReports: []
+    expected:
+      type: problem
+      class: outcome.rejected
+      code: source.write-rejected

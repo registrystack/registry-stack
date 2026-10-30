@@ -28,22 +28,36 @@ entries:
           body:
             trackedEntities:
               - trackedEntity: Uid00000003
+                trackedEntityType: person
                 orgUnit: OqVpUaAYv2B
                 attributes: []
         response:
           status: 200
           body:
             status: OK
+            validationReport:
+              errorReports: []
+              warningReports: []
             stats:
               created: 1
               updated: 0
               deleted: 0
               ignored: 0
               total: 1
-            bundle-report:
+            bundleReport:
               typeReportMap:
                 TRACKED_ENTITY:
-                  created: 1
+                  trackerType: TRACKED_ENTITY
+                  stats:
+                    created: 1
+                    updated: 0
+                    deleted: 0
+                    ignored: 0
+                    total: 1
+                  objectReports:
+                    - trackerType: TRACKED_ENTITY
+                      uid: Uid00000003
+                      errorReports: []
     expected:
       type: response
       status: 201

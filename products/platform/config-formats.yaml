@@ -3939,7 +3939,7 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterProject
-    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-rejected.yaml --fixtures {fixtures}/import-server-error.yaml --fixtures {fixtures}/get-missing.yaml --fixtures {fixtures}/get-server-error.yaml
     example: products/adapter/examples/dhis2-tracker/project.yaml
     conformance:
       requiredText: /project/id
@@ -3976,7 +3976,7 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterProfile
-    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-rejected.yaml --fixtures {fixtures}/import-server-error.yaml --fixtures {fixtures}/get-missing.yaml --fixtures {fixtures}/get-server-error.yaml
     example: products/adapter/profiles/breg-records/profile.yaml
     conformance:
       requiredText: /version
@@ -4013,7 +4013,7 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterPack
-    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-rejected.yaml --fixtures {fixtures}/import-server-error.yaml --fixtures {fixtures}/get-missing.yaml --fixtures {fixtures}/get-server-error.yaml
     example: products/adapter/packs/dhis2-tracker/pack.yaml
     conformance:
       requiredText: /version
@@ -4050,7 +4050,7 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterFixture
-    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-rejected.yaml --fixtures {fixtures}/import-server-error.yaml --fixtures {fixtures}/get-missing.yaml --fixtures {fixtures}/get-server-error.yaml
     example: products/adapter/fixtures/dhis2-tracker/get-found.yaml
     conformance:
       requiredText: /id
@@ -4087,7 +4087,7 @@ formats:
       file: crates/registry-adapterctl/src/check.rs
       function: run
       type: AdapterRuntimeConfig
-    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-error-200.yaml --fixtures {fixtures}/get-missing.yaml --runtime {file}
+    check: adapterctl check {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml --fixtures {fixtures}/search-page.yaml --fixtures {fixtures}/get-found.yaml --fixtures {fixtures}/get-soft-deleted.yaml --fixtures {fixtures}/import-accepted.yaml --fixtures {fixtures}/import-rejected.yaml --fixtures {fixtures}/import-server-error.yaml --fixtures {fixtures}/get-missing.yaml --fixtures {fixtures}/get-server-error.yaml --runtime {file}
     example: products/adapter/examples/dhis2-tracker/runtime.example.yaml
     conformance:
       requiredText: /listener/bind

@@ -1,9 +1,12 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
 # Documented fixture (NOT captured): reconstructed from the DHIS2 tracker
-# export documentation. The reply's page block ($.page.totalPage) is the
-# pack's paging assumption; a capture from a live or containerized DHIS2
-# 2.41 replaces this reference once run.
+# export documentation. In 2.41 the reply carries the entities under
+# `trackedEntities` and a `pager` object that is always present with page
+# and pageSize; totalPages=true adds total and pageCount (DOCS-T response
+# example; dhis2-core 2.41 Page.java). A capture from a live or
+# containerized DHIS2 2.41 replaces this reference once run; the 2.40 and
+# 2.42 reply shapes differ and only 2.41 is targeted.
 #
 # The expected facade body echoes the profile envelope's literals: the
 # meta registry and dataset identifiers are deployment values the engine
@@ -31,11 +34,16 @@ entries:
           endpoint: tracker
           method: GET
           path: /api/tracker/trackedEntities
-          query: order=createdAt%3Adesc&page=1&pageSize=50&program=qyVpUaAYv2A&totalPages=true
+          query: order=createdAt%3Adesc&orgUnitMode=ACCESSIBLE&page=1&pageSize=50&program=qyVpUaAYv2A&totalPages=true
         response:
           status: 200
           body:
-            instances:
+            pager:
+              page: 1
+              pageSize: 50
+              total: 1
+              pageCount: 1
+            trackedEntities:
               - trackedEntity: Uid00000001
                 trackedEntityType: person
                 orgUnit: OqVpUaAYv2B
@@ -44,10 +52,6 @@ entries:
                 deleted: false
                 inactive: false
                 attributes: []
-            page:
-              page: 1
-              pageSize: 50
-              totalPage: 1
     expected:
       type: response
       status: 200

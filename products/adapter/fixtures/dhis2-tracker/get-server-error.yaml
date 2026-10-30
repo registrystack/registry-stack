@@ -1,12 +1,14 @@
-# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/v1alpha1.schema.json
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
 # Documented fixture (NOT captured): the source's server error. The
 # tracker API answers a failed request with 500, and DHIS2 writes every
 # error body in its consistent web API envelope (httpStatus,
 # httpStatusCode, status, message; DHIS2 documentation, "Introduction",
-# Error and info messages). No onException clause of the fetch route
-# handles upstream.http generally, so the class propagates as itself and
-# the bound profile maps it to the facade's upstream-error problem.
+# Error and info messages); the exact body of an uncaught exception is
+# unsettled and the capture may correct it. No onException clause of the
+# fetch route handles upstream.http generally, so the class propagates
+# as itself and the bound profile maps it to the facade's upstream-error
+# problem.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-get-server-error
