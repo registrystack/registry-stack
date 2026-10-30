@@ -26,7 +26,8 @@
   stable keys; check refuses a cancel that does not name a Proposal the run
   opened. No operation decides a Proposal.
 - A `breg` connection takes `resultCheckSeconds` (60 to 86,400, default 900)
-  for how often a Proposal wait reads, and an `https` `requestLink` template.
+  for how often a Proposal wait reads, and a `requestLink` template: `https`,
+  or `http` on a loopback IP address, as for connection endpoints.
   Neither enters the binding digest, so both can change while runs wait.
 - `coordinatorctl check` warns `coordinator.follow.long` for a Proposal wait
   longer than 90 days and `coordinator.follow.timeout-unrouted` for one with

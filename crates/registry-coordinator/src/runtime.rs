@@ -211,14 +211,15 @@ pub struct BregConnectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(extend("default" = DEFAULT_RESULT_CHECK_SECONDS)))]
     pub result_check_seconds: Option<registry_platform_yaml::BoundedU32<60, 86_400>>,
-    /// An `https` URL template with exactly one `{proposalId}` placeholder,
-    /// after the host. Inspection offers it as "Open the request".
+    /// An `https` URL template, or `http` on a loopback address, with exactly
+    /// one `{proposalId}` placeholder after the host. Inspection offers it as
+    /// "Open the request".
     #[serde(
         default,
         deserialize_with = "request_link",
         skip_serializing_if = "Option::is_none"
     )]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<String>", extend("pattern" = "^https://[^{}]+/[^{}]*\\{proposalId\\}[^{}]*$", "maxLength" = 2048)))]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>", extend("pattern" = "^(https://[^{}]+|http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)/[^{}]*\\{proposalId\\}[^{}]*$", "maxLength" = 2048)))]
     pub request_link: Option<String>,
 }
 
@@ -1126,12 +1127,16 @@ fn config_error(field: &str, action: &str) -> CoordinatorError {
     .at("runtime.yaml", pointer(field))
     .suggest(action)
 }
-fn check_endpoint(url: &Url) -> Result<()> {
-    let loopback = match url.host() {
+fn is_loopback(url: &Url) -> bool {
+    match url.host() {
         Some(Host::Ipv4(ip)) => ip.is_loopback(),
         Some(Host::Ipv6(ip)) => ip.is_loopback(),
         _ => false,
-    };
+    }
+}
+
+fn check_endpoint(url: &Url) -> Result<()> {
+    let loopback = is_loopback(url);
     if !(url.scheme() == "https" || (loopback && url.scheme() == "http"))
         || !url.username().is_empty()
         || url.password().is_some()
@@ -1251,7 +1256,7 @@ fn request_link<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<S
     let template = String::deserialize(d)?;
     let invalid = || {
         serde::de::Error::custom(
-            "use an https URL with exactly one {proposalId} placeholder after the host",
+            "use an https URL, or http on a loopback address, with exactly one {proposalId} placeholder after the host",
         )
     };
     if template.len() > 2_048
@@ -1271,7 +1276,11 @@ fn request_link<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<S
         1,
     );
     let url = Url::parse(&sample).map_err(|_| invalid())?;
-    if url.scheme() != "https" || url.host_str().is_none() || sample.contains(['{', '}']) {
+    let loopback = is_loopback(&url);
+    if !(url.scheme() == "https" || (loopback && url.scheme() == "http"))
+        || url.host_str().is_none()
+        || sample.contains(['{', '}'])
+    {
         return Err(invalid());
     }
     Ok(Some(template))

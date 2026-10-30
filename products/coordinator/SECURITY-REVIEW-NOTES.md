@@ -453,7 +453,11 @@ request were applied.
   encrypted: they hold no person's value and no Proposal id, and the row is
   deleted with the wait. Inspection adds the connection's `requestLink` with
   the Proposal id filled in, only for a caller already authorized to inspect
-  the run; the id grants nothing without BReg's own grant.
+  the run; the id grants nothing without BReg's own grant. The link must be
+  `https` unless its host is a loopback IP address, the same rule as a
+  connection endpoint: a plain-http link can only point at the operator's own
+  machine, never across a network, and a host name such as `localhost` is
+  refused because name resolution is outside the Coordinator's control.
 - The run list finds waits on one Proposal through the keyed wait commitment
   over the database identity and the Proposal id, so the database and the
   list cursor never hold the id in clear. The commitment leaves out the BReg
