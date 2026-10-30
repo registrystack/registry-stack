@@ -55,13 +55,32 @@ Every brief carries these rules by reference; they are not optional.
 10. Never log secrets or environment dumps. All adapter diagnostics are
     value-free (`adapter.*` codes, CFG-SEC-3).
 11. Port, do not invent. Before writing a port-table row, open its Camel
-    4.x page (and the resilience4j page for the breaker), and write the
+    page (and the resilience4j page for the breaker), and write the
     conformance cases from what the page says: option names, defaults,
     exchange properties, matching and ordering rules. Each case's doc
     comment cites the page URL. If the page contradicts `CONCEPT.md`, the
     report says so and the stream follows the page for semantics and
     `CONCEPT.md` for spelling and divergences; the integration stream
     corrects the concept. Never write a default from memory.
+    The pinned reference (`CONCEPT.md` 5.4) is a read-only shallow clone of
+    tag `camel-4.23.0` at
+    `/Volumes/CodexWorktrees/agent-scratch/camel-src/camel-4.23.0`; never
+    edit, build, or commit from it, and never copy it into the repository.
+    Where the page is silent, ambiguous, or gone, read the implementing
+    Java there and cite it (`camel-4.23.0:<path>`). Rows where this is
+    mandatory, because the semantics live in code: error handler and
+    redelivery (`RedeliveryErrorHandler`, `RedeliveryPolicy`), exception
+    clauses (`DefaultExceptionPolicyStrategy`), try/catch/finally, circuit
+    breaker, throttle, split, loop, enrich, aggregation strategies,
+    `direct` (`DirectProducer`), `http` failure handling
+    (`HttpOperationFailedException`), the header filter
+    (`HttpHeaderFilterStrategy`), mock and intercept (`MockEndpoint`,
+    `InterceptSendToEndpointDefinition`), and the idempotent consumer.
+    For each such row, the stream lists the Camel unit tests under the
+    clone that exercise it and ports each one as a conformance case, or
+    records why it does not apply (outside the port's boundaries, or a
+    recorded divergence). Read the Java for behavior and write idiomatic
+    Rust; never translate it line by line.
 
 ## Wave model and review protocol
 
@@ -221,7 +240,7 @@ pagination parameters, problem envelope and codes); a second test profile
 under the corpus with different paths, envelope, and pagination names
 (`CONCEPT.md` 13.6); the
 `dhis2-tracker` pack as route templates: search with pagination as `loop`
-plus `enrich` with `jsonArrayAppend` and `uniqueBy`, get with `choice` and
+plus `enrich` with `json-array-append` and `uniqueBy`, get with `choice` and
 a Rhai seam in its own digest-pinned file, code maps, `onException`
 clauses mapping DHIS2 errors to profile problems; an example project
 instantiating the templates; a bad corpus (one member per A1 check);
@@ -305,9 +324,15 @@ the read-only facade inputs of 8.11.1 (refusing writes to them except
 singular-query predicate rule of 8.11.8; runtime config `cursorKeyRef`,
 `previousCursorKeyRef`, `cursorTtlSeconds`; and the P1 format gaps:
 `recordException` and `ignoreException` on `circuitBreaker`
-(G-BREAKERCLASS, resilience4j names), per-endpoint `connectTimeoutSeconds`
-and `responseTimeoutSeconds` (G-TIMEOUT, Camel's http options), a CA bundle
-and mTLS identity for the token endpoint (G-TOKENTLS), `maximumIterations`
+(G-BREAKERCLASS, resilience4j names), per-endpoint `attemptTimeoutMilliseconds`
+and `maximumResponseBytes` (G-TIMEOUT, CFG-NAME-5 spelling, Evidence bounds,
+required, the runtime may only lower them), the Evidence-shaped trust
+profile (`outboundTls.trustProfiles.<id>.caBundleFile`, endpoint
+`tlsTrustProfile`) that the token request shares with its endpoint
+(G-TOKENTLS, section 10.2), the facade classes
+`facade.unsupported-media-type` and `facade.not-acceptable`, Evidence's
+auth field bounds (section 10.2), the refusal of an `okStatusCodeRange`
+covering 401 on an authenticated endpoint, `maximumIterations`
 as a typed template parameter and `maximumTotal` checked against the loop
 bound (G-BOUNDS). DoD as A1's, plus an accept and a reject unit test per
 new check asserting its `adapter.*` code.
@@ -385,8 +410,12 @@ the test profile, with an identical pack (errors included); fault injection
 (13.4), read property tests (13.5), contract tests (13.6), security tests
 (13.7) in the default suite; `check-port-table.py` now requires every
 Increment 1 row; review report. Then the lead reviewer migrates the
-experiments to 8.11 and reruns them; a gap that still needs Rust is a
-finding against this increment.
+experiments to 8.11 and reruns them, executed and not only checked: each
+experiment's fixtures replay through the engine, and each read experiment
+runs over HTTP against the upstream double through the compiled package.
+A gap that still needs Rust, or an experiment that passes `check` but
+fails to execute, is a finding against this increment, and Increment 1 is
+not done while one is open.
 
 P1 gaps from the first experiments not owned above, with their
 disposition: G-IDEMCLAIM (an `idempotentUpstream` or `safeUpstream` claim
@@ -513,8 +542,14 @@ Increment 1:
 9. `rg -n 'CamelHttpResponseCode|source\.(not-found|unavailable|upstream-error|write-rejected|write-partial)' products/adapter/packs`
    prints no `setHeader` of the response code and no profile problem code
    (packs raise classes; profiles own problems).
-10. `adapterctl check` exits 0 for every experiment under
-    `products/adapter/experiments/`, and `FINDINGS.md` carries the rerun.
+10. For every experiment under `products/adapter/experiments/`,
+    `adapterctl check`, `adapterctl fixtures replay`, and
+    `adapterctl verify --live` against the upstream double each exit 0, and
+    `FINDINGS.md` carries the executed rerun with each command's output.
+11. Every conformance module for a row listed in rule 11 as source-bound
+    cites at least one `camel-4.23.0:` path:
+    `rg -L 'camel-4\.23\.0:' crates/registry-adapter/tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle,split,loop,enrich,aggregation,direct,http,header_filter,testing}.rs`
+    prints nothing.
 
 Increment 2:
 

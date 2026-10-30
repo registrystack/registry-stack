@@ -53,7 +53,8 @@ its status in CONCEPT section 8.10 as it stood.
 | G-IDEMCLAIM | `idempotentUpstream` is a bare claim the check cannot verify | none | unstated | P1 |
 | G-COMPARE | The inline languages have no comparisons, so a status test needs a one-line Rhai script | Simple has comparisons | unstated | P1 |
 | G-JSONPATH | Whether a selector yields a node list or a single value | `camel-jsonpath` result types | undefined | P1 |
-| G-LOOPTIMING | When `doWhile` is evaluated, and `copy` semantics | `loop-eip.html` | not recorded | P1 |
+| G-LOOPTIMING | When `doWhile` is evaluated, and `copy` semantics | `loop-eip.html`; resolved from `LoopProcessor` at `camel-4.23.0`: tested before every iteration, the first included; `copy: false` chains out to in | not recorded; the core doc said after each iteration, which is wrong | P1, resolved in CONCEPT 8.6 |
+| G-LOOPFIRST | A pagination predicate that holds before the first fetch: `fhir-r4-patient-source` (`fhirNextUrl` absent) and the maintained `dhis2-tracker` pack (`totalPages` unset) both stop before page one under Camel's timing; the offset experiments hold under both readings | `LoopProcessor.run()` evaluates the predicate first | 8.6 silent on timing | P1, fixed by seeding before the loop: dhis2-tracker in X2, the experiment in the 8.11 migration |
 | G-LOOPCLASS | `loop.maximum-iterations-reached` is in the code but not in the 8.7 hierarchy | n/a | missing | P1 |
 | G-CONTENTTYPE | Which media types count as JSON (`application/fhir+json`, `application/vnd.api+json`) | data formats | unstated | P1 |
 | G-TIMEOUT | No connect or read timeout per endpoint | http `connectTimeout`, `responseTimeout` | absent | P1 |
