@@ -1682,6 +1682,140 @@ mod tests {
         assert_eq!(asks, 2, "the stale 401 sent nothing");
     }
 
+    /// A zero cache ceiling stores no issuance, so the credential
+    /// carries no generation: a 401 about its send invalidates nothing
+    /// and records no invalidation, every authorize sends again, and
+    /// the refresh rule still answers that the send must retry.
+    #[tokio::test]
+    async fn a_zero_cache_credential_invalidates_nothing_on_a_401() {
+        use crate::auth::{TokenRequest, TokenWire};
+        use std::future::Future;
+        use std::pin::Pin;
+        use zeroize::Zeroizing;
+
+        std::env::set_var("ADAPTER_TEST_ZCACHE_ID", "cid-zcache");
+        std::env::set_var("ADAPTER_TEST_ZCACHE_SECRET", "csecret-zcache");
+
+        /// Answers every ask with the same issuance, recording the asks.
+        struct CountsAsks {
+            asks: std::sync::Mutex<u32>,
+        }
+        impl TokenSend for CountsAsks {
+            fn send<'a>(
+                &'a self,
+                _request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    let mut asks = self.asks.lock().expect("asks");
+                    *asks += 1;
+                    Ok(TokenWire {
+                        status: 200,
+                        media_type: Some("application/json".to_owned()),
+                        body: Zeroizing::new(
+                            br#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#
+                                .to_vec(),
+                        ),
+                    })
+                })
+            }
+        }
+
+        /// The client-credentials kind never signs an assertion; a call
+        /// is a bug.
+        struct NeverSigns;
+        impl ClientAssertionSigner for NeverSigns {
+            fn sign_client_assertion(
+                &self,
+                _request: crate::auth::ClientAssertion<'_>,
+            ) -> Result<crate::auth::ProtectedText, AuthError> {
+                panic!("client-credentials never signs an assertion");
+            }
+        }
+
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let send = CountsAsks {
+            asks: std::sync::Mutex::new(0),
+        };
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let plan = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &binding(
+                "https://cases.example.invalid",
+                Some(RuntimeCredential::Oauth2ClientCredentials {
+                    token_endpoint: Url::new("https://token.example.invalid/token").expect("url"),
+                    client_id_ref: secret("ADAPTER_TEST_ZCACHE_ID"),
+                    client_secret_ref: secret("ADAPTER_TEST_ZCACHE_SECRET"),
+                    scope: None,
+                    audience: None,
+                    resource: None,
+                    credential_placement: CredentialPlacement::BasicHeader,
+                    maximum_cache_seconds: BoundedU64::new(0).expect("cache"),
+                    assumed_lifetime_seconds: None,
+                }),
+            ),
+        )
+        .expect("a usable plan");
+
+        let first = {
+            let mut context = AuthorizeContext {
+                resolver: &resolver,
+                budget: &mut budget,
+                send: &send,
+                signer: &NeverSigns,
+                events: &mut events,
+            };
+            plan.authorize(&mut context)
+                .await
+                .expect("the first issuance")
+                .expect("a header is sent")
+        };
+        assert_eq!(
+            first.generation, None,
+            "a zero ceiling stores no issuance, so there is no generation"
+        );
+
+        // The 401 about the uncached send still demands a fresh
+        // credential, and invalidates nothing: nothing was cached.
+        let mut refresh_used = false;
+        assert_eq!(
+            plan.on_upstream_status(401, first.generation, &mut refresh_used, &mut events)
+                .await,
+            UpstreamStatusAction::RetryWithFreshCredential
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AuthEvent::TokenInvalidatedAfterUnauthorized))
+                .count(),
+            0,
+            "nothing was cached, so nothing was invalidated"
+        );
+
+        // The refresh sends again: no cache hit exists to answer.
+        let second = {
+            let mut context = AuthorizeContext {
+                resolver: &resolver,
+                budget: &mut budget,
+                send: &send,
+                signer: &NeverSigns,
+                events: &mut events,
+            };
+            plan.authorize(&mut context)
+                .await
+                .expect("the refresh issues again")
+                .expect("a header is sent")
+        };
+        assert_eq!(second.header.value().as_bytes(), b"Bearer at");
+        let asks = *send.asks.lock().expect("asks");
+        assert_eq!(asks, 2, "the zero cache sent again instead of answering");
+        assert!(
+            !events.contains(&AuthEvent::TokenCacheHit),
+            "a zero cache never answers from cache"
+        );
+    }
+
     /// Two OAuth2 endpoints over one exchange keep separate caches and
     /// separate budget allowances: a credential issued to one endpoint
     /// never serves the other, and one endpoint's spent sends never
