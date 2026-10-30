@@ -28,16 +28,8 @@
 //! another operation, caller, or filter set raises
 //! `facade.invalid-request` before any route step runs.
 //!
-//! The AEAD is `chacha20poly1305`'s `XChaCha20Poly1305`, the choice Base
-//! Registry Engine already makes for the same job in
-//! `crates/registry-breg/src/cursor.rs`. The workspace carries the
-//! crate (`chacha20poly1305`, no default features) and it is the
-//! established in-process AEAD; the extended 24-byte nonce removes
-//! nonce-reuse risk for concurrently minted cursors without per-key
-//! counter state or a nonce-derivation scheme. `aws-lc-rs` stays what
-//! the workspace uses it for, the FIPS provider behind TLS and JOSE
-//! signatures in `registry-platform-crypto`; no crate seals with
-//! AES-GCM today. The codec is security-sensitive (it carries source
+//! [`continuation`] records the AEAD it seals with and the reason for
+//! that choice. The codec is security-sensitive (it carries source
 //! state through the caller) and carries review notes (section 13.7).
 
 pub mod continuation;

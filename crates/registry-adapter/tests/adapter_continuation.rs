@@ -4,7 +4,7 @@
 //! section 8.11.2: a search route's `AdapterNextContinuation` value
 //! sealed as the opaque `nextCursor` and opened back, bound to the
 //! concrete operation, the binding id, the caller's issuer and `sub`,
-//! the filter digest, and an expiry. Every refusal is the one
+//! the deployment, the filter digest, and an expiry. Every refusal is the one
 //! caller-facing `facade.invalid-request`; the reason stays
 //! distinguishable here and in the journal, and carries no cursor
 //! content (section 13.7).
@@ -37,6 +37,9 @@ const KEY_MARKER: &str = "continuation-test-key";
 const VALUE_MARKER: &str = "upstream-position-marker";
 
 const ISSUED_AT: u64 = 1_800_000_000;
+
+/// The project lock digest the test deployment serves.
+const DEPLOYMENT: &str = "sha256:0f3a9c1e5b7d2468ace0f3a9c1e5b7d2468ace0f3a9c1e5b7d2468ace0f3a9c";
 
 fn secret(bytes: &[u8]) -> Zeroizing<Vec<u8>> {
     Zeroizing::new(bytes.to_vec())
@@ -76,6 +79,7 @@ fn binding(filters: FilterDigest) -> CursorBinding<'static> {
         binding_id: "persons-search",
         issuer: "https://issuer.example",
         subject: "caller-1",
+        deployment: DEPLOYMENT,
         filters,
     }
 }
@@ -293,7 +297,7 @@ fn a_clock_before_the_epoch_refuses_to_seal_and_to_open() {
     );
 }
 
-// Binding: caller, operation, binding id, filters, page size.
+// Binding: caller, operation, binding id, deployment, filters, page size.
 
 fn assert_refused_under(other: &CursorBinding<'_>) {
     let codec = codec();
@@ -337,6 +341,14 @@ fn a_cursor_presented_to_another_binding_is_refused() {
 }
 
 #[test]
+fn a_cursor_minted_before_a_redeploy_is_refused_by_the_new_deployment() {
+    assert_refused_under(&CursorBinding {
+        deployment: "sha256:7e1b4d8a2c6f0935bd7e1b4d8a2c6f0935bd7e1b4d8a2c6f0935bd7e1b4d8a2c",
+        ..binding(digest())
+    });
+}
+
+#[test]
 fn a_cursor_replayed_with_other_filters_is_refused() {
     let other = filter_digest(
         &json!({"recordType": "persons", "filters": {"region": "south", "active": true}}),
@@ -352,26 +364,47 @@ fn a_cursor_replayed_with_another_page_size_is_refused() {
     assert_refused_under(&binding(other));
 }
 
-#[test]
-fn field_boundaries_cannot_be_shifted_between_binding_fields() {
+fn assert_shift_refused(original: &CursorBinding<'_>, shifted: &CursorBinding<'_>) {
     let codec = codec();
-    let original = CursorBinding {
-        operation: "search",
-        binding_id: "persons",
-        ..binding(digest())
-    };
     let token = codec
-        .seal(Some(&continuation()), &original, at(ISSUED_AT))
+        .seal(Some(&continuation()), original, at(ISSUED_AT))
         .expect("seal succeeds")
         .expect("a cursor");
-    let shifted = CursorBinding {
-        operation: "searchp",
-        binding_id: "ersons",
-        ..binding(digest())
-    };
     assert_eq!(
-        codec.open(&token, &shifted, at(ISSUED_AT + 1)),
+        codec.open(&token, shifted, at(ISSUED_AT + 1)),
         Err(CursorRefusal::Unauthenticated)
+    );
+}
+
+#[test]
+fn field_boundaries_cannot_be_shifted_between_binding_fields() {
+    assert_shift_refused(
+        &CursorBinding {
+            operation: "search",
+            binding_id: "persons",
+            ..binding(digest())
+        },
+        &CursorBinding {
+            operation: "searchp",
+            binding_id: "ersons",
+            ..binding(digest())
+        },
+    );
+}
+
+#[test]
+fn field_boundaries_cannot_be_shifted_between_subject_and_deployment() {
+    assert_shift_refused(
+        &CursorBinding {
+            subject: "caller-1",
+            deployment: "sha256:abc",
+            ..binding(digest())
+        },
+        &CursorBinding {
+            subject: "caller-1s",
+            deployment: "ha256:abc",
+            ..binding(digest())
+        },
     );
 }
 

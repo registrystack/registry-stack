@@ -15,9 +15,9 @@
 //! # What a cursor is bound to
 //!
 //! Every cursor is bound to a [`CursorBinding`]: the concrete operation,
-//! the binding id, the caller's authenticated issuer and `sub`, and the
-//! [`FilterDigest`] of the validated facade inputs and page size, plus
-//! an expiry. The binding travels in the AEAD's associated data, never
+//! the binding id, the caller's authenticated issuer and `sub`, the
+//! deployment the runtime serves, and the [`FilterDigest`] of the
+//! validated facade inputs and page size, plus an expiry. The binding travels in the AEAD's associated data, never
 //! on the wire, so a cursor presented under any other binding fails
 //! authentication exactly as a tampered one does; there is no field
 //! comparison to get wrong. The expiry is the issue time sealed inside
@@ -314,13 +314,23 @@ pub struct CursorBinding<'a> {
     pub issuer: &'a str,
     /// The authenticated caller's `sub`.
     pub subject: &'a str,
+    /// An identifier of the loaded project the runtime serves, so a
+    /// cursor minted before a redeploy that changes route meaning is
+    /// refused; the `rest` consumer supplies the project lock digest.
+    pub deployment: &'a str,
     /// The digest of the validated facade inputs and page size.
     pub filters: FilterDigest,
 }
 
 impl CursorBinding<'_> {
     fn associated_data(&self) -> Vec<u8> {
-        let fields = [self.operation, self.binding_id, self.issuer, self.subject];
+        let fields = [
+            self.operation,
+            self.binding_id,
+            self.issuer,
+            self.subject,
+            self.deployment,
+        ];
         let length = AAD_DOMAIN.len()
             + 2
             + fields.iter().map(|field| 8 + field.len()).sum::<usize>()
@@ -347,6 +357,7 @@ impl fmt::Debug for CursorBinding<'_> {
             .field("binding_id", &self.binding_id)
             .field("issuer", &self.issuer)
             .field("subject", &"<redacted>")
+            .field("deployment", &self.deployment)
             .field("filters", &self.filters)
             .finish()
     }
