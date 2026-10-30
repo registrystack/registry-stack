@@ -25,6 +25,66 @@ use std::collections::{HashMap, HashSet};
 /// (`products/adapter/CONCEPT.md` section 8.3).
 pub const MAX_DIRECT_DEPTH: usize = 16;
 
+/// The headers the rest consumer places on the exchange before a route
+/// runs; a route reads them, never writes them
+/// (`products/adapter/CONCEPT.md` section 8.11.1). Lowercase; names
+/// compare without case.
+const FACADE_INPUT_HEADERS: &[&str] = &["idempotency-key", "pagesize", "recordid", "recordtype"];
+
+/// The headers the engine itself places on the exchange; a route reads
+/// them, never writes them (`products/adapter/CONCEPT.md` lines covering
+/// the engine-set Camel headers). Lowercase; names compare without case.
+const ENGINE_HEADERS: &[&str] = &[
+    "camelduplicatemessage",
+    "camelexceptioncaught",
+    "camelfiltermatched",
+    "camelhttpresponsecode",
+    "camelloopindex",
+    "camelsplitcomplete",
+    "camelsplitindex",
+    "camelsplitsize",
+];
+
+/// The credential, cookie, and hop-by-hop header names a route never
+/// writes or removes (`products/adapter/CONCEPT.md` section 8.11.4,
+/// never-allowlistable list). Lowercase, sorted; names compare without
+/// case, and the `proxy-` prefix joins them.
+const RESERVED_ROUTE_HEADER_WRITES: &[&str] = &[
+    "authorization",
+    "connection",
+    "content-length",
+    "cookie",
+    "host",
+    "keep-alive",
+    "set-cookie",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+];
+
+/// Whether a route may write (set or remove) the named header. Reserved
+/// names, the `proxy-` prefix, engine-placed Camel headers, and the
+/// facade inputs all refuse.
+fn is_reserved_header_write(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    RESERVED_ROUTE_HEADER_WRITES.contains(&lower.as_str())
+        || FACADE_INPUT_HEADERS.contains(&lower.as_str())
+        || ENGINE_HEADERS.contains(&lower.as_str())
+        || lower.starts_with("proxy-")
+}
+
+/// Whether a route may read the named header: a facade input, an
+/// engine-placed header, a response header some endpoint allowlist
+/// declares, or a header an earlier step of the same body set.
+fn is_header_read_known(name: &str, placed: &HashSet<String>, allowlist: &HashSet<String>) -> bool {
+    let lower = name.to_ascii_lowercase();
+    FACADE_INPUT_HEADERS.contains(&lower.as_str())
+        || ENGINE_HEADERS.contains(&lower.as_str())
+        || placed.contains(lower.as_str())
+        || allowlist.contains(lower.as_str())
+}
+
 /// The valid placeholder references of an envelope or template text:
 /// `(name, optional)` pairs for every `{{name}}` and `{{?name}}`. Any other
 /// text passes through; `has_malformed_placeholder` refuses a `{{` that
@@ -433,6 +493,20 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         bodies.iter().map(|(id, steps)| (*id, *steps)).collect();
     ordered_bodies.sort_by_key(|(id, _)| *id);
 
+    // The response-header allowlists every endpoint declares, lowercased;
+    // header names compare without case
+    // (`products/adapter/CONCEPT.md` section 8.11.4).
+    let allowlist: HashSet<String> = pack
+        .endpoints
+        .iter()
+        .flat_map(|endpoint| {
+            endpoint
+                .response_headers
+                .iter()
+                .map(|header| header.as_str().to_ascii_lowercase())
+        })
+        .collect();
+
     // Graph shape over direct: edges.
     let mut edges: HashMap<&str, Vec<&str>> = HashMap::new();
     for (id, steps) in &ordered_bodies {
@@ -726,6 +800,10 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             _ => {}
         });
 
+        // Header writes and reads stay bounded
+        // (`products/adapter/CONCEPT.md` section 8.11.4).
+        check_route_headers(id, steps, &allowlist, &mut route_findings);
+
         // A non-safe send naming an operation the endpoint does not
         // declare is a reference defect on its own (CFG-ID-4).
         for send in &sends {
@@ -788,6 +866,63 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         }
     }
     findings
+}
+
+/// A route's header writes and reads stay bounded
+/// (`products/adapter/CONCEPT.md` section 8.11.4): no `setHeader` or
+/// `removeHeader` names a credential, cookie, host, hop-by-hop, engine, or
+/// facade-input header, and every `header` expression reads a facade
+/// input, an engine-placed header, a response header some endpoint
+/// allowlist declares, or a header an earlier step of the same body set.
+/// Findings sit at the step.
+fn check_route_headers(
+    id: &str,
+    steps: &[Step],
+    allowlist: &HashSet<String>,
+    findings: &mut Vec<Diagnostic>,
+) {
+    let mut placed: HashSet<String> = HashSet::new();
+    walk_steps(steps, &mut |step, path| {
+        let pointer = format!("/routes/{id}/steps{path}");
+        // Reads answer before the step runs, so a step's own setHeader
+        // does not authorize its own value.
+        for expression in step_expressions(step) {
+            if let Expression::Header(name) = expression {
+                if !is_header_read_known(&name, &placed, allowlist) {
+                    findings.push(finding(
+                        CheckCode::RouteUnknownHeader,
+                        &pointer,
+                        "the route reads a header nothing places",
+                        "Read only a facade input, an engine-placed header, a header an endpoint response allowlist declares, or a header an earlier step of this route sets.",
+                    ));
+                }
+            }
+        }
+        match step {
+            Step::SetHeader(header) if is_reserved_header_write(&header.name) => {
+                findings.push(finding(
+                    CheckCode::RouteReservedHeaderName,
+                    &pointer,
+                    "the route sets a header reserved to the consumer, the engine, or the HTTP hop",
+                    "Set only headers the route owns; credential, cookie, host, hop-by-hop, engine, and facade-input headers are never written by a route.",
+                ));
+            }
+            // A setHeader the route owns places its name for the reads
+            // after it.
+            Step::SetHeader(header) => {
+                placed.insert(header.name.to_ascii_lowercase());
+            }
+            Step::RemoveHeader(name) if is_reserved_header_write(name) => {
+                findings.push(finding(
+                    CheckCode::RouteReservedHeaderName,
+                    &pointer,
+                    "the route removes a header reserved to the consumer, the engine, or the HTTP hop",
+                    "Remove only headers the route owns; credential, cookie, host, hop-by-hop, engine, and facade-input headers are never written by a route.",
+                ));
+            }
+            _ => {}
+        }
+    });
 }
 
 /// Whether a `to` send is a non-safe upstream send.
@@ -2294,8 +2429,8 @@ mod tests {
         ChoiceStep, CircuitBreakerStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep,
         EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
         OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, RouteDefinition,
-        RouteFrom, RouteTemplate, SplitStep, TemplateParameter, TemplateParameterType,
-        TemplatedRoute, ThrottleStep, ToParameters, ToStep, When,
+        RouteFrom, RouteTemplate, SetHeaderStep, SplitStep, TemplateParameter,
+        TemplateParameterType, TemplatedRoute, ThrottleStep, ToParameters, ToStep, When,
     };
     use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
     use registry_platform_yaml::Url;
@@ -5239,6 +5374,99 @@ mod tests {
         let findings = check_runtime(&ws, &runtime);
         assert_has(&findings, CheckCode::RuntimeUnknownEndpoint);
         assert_has(&findings, CheckCode::RuntimeMissingEndpoint);
+    }
+
+    // ----- header hygiene (round 6 C3) -----
+
+    /// A `setHeader` names no credential, cookie, host, hop-by-hop,
+    /// engine, or facade-input header, and a `header` expression reads
+    /// only a facade input, an engine-placed header, a response header an
+    /// endpoint allowlist declares, or a header an earlier step of the
+    /// same body set (`products/adapter/CONCEPT.md` section 8.11.4).
+    #[test]
+    fn header_writes_and_reads_stay_bounded() {
+        let route = |steps: Vec<Step>| RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps,
+        };
+        let set = |name: &str, value: Expression| {
+            Step::SetHeader(SetHeaderStep {
+                name: name.to_string(),
+                value,
+            })
+        };
+        let read = |name: &str| Expression::Header(name.to_string());
+        let check = |steps: Vec<Step>, endpoint_headers: &[&str]| {
+            let mut endpoint = oauth_endpoint();
+            endpoint.response_headers = UniqueList::new(
+                endpoint_headers
+                    .iter()
+                    .map(|header| id(header))
+                    .collect::<Vec<_>>(),
+            )
+            .expect("unique");
+            let pack = pack_builder(vec![endpoint], vec![route(steps)]);
+            check_routes(&pack, &project_builder(&pack))
+        };
+
+        // Credential, cookie, host, hop-by-hop, engine, and facade
+        // headers refuse as writes, under one code.
+        for name in [
+            "Authorization",
+            "Proxy-Authorization",
+            "Cookie",
+            "Host",
+            "Transfer-Encoding",
+            "Connection",
+            "CamelHttpResponseCode",
+            "recordId",
+        ] {
+            let findings = check(vec![set(name, read("recordType"))], &[]);
+            assert_has(&findings, CheckCode::RouteReservedHeaderName);
+        }
+        // A step may set a header the pack defines.
+        let findings = check(
+            vec![
+                set("scratch", read("recordType")),
+                Step::SetBody(read("scratch")),
+            ],
+            &[],
+        );
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteReservedHeaderName.code()),
+            "a pack-defined header sets cleanly: {:?}",
+            codes(&findings)
+        );
+
+        // A read answers to the facade inputs and the engine headers.
+        let findings = check(vec![set("scratch", read("recordId"))], &[]);
+        assert_clean(findings);
+        let findings = check(vec![set("scratch", read("CamelSplitIndex"))], &[]);
+        assert_clean(findings);
+
+        // A read answers to a response allowlist any endpoint declares.
+        let findings = check(vec![set("scratch", read("etag"))], &["ETag"]);
+        assert_clean(findings);
+
+        // A read of a header nothing places refuses, at the step, and a
+        // read before the step that sets it refuses too.
+        let findings = check(vec![set("scratch", read("ghost"))], &[]);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::RouteUnknownHeader.code());
+        assert_eq!(findings[0].path, "/routes/fetchCase/steps/0");
+
+        let findings = check(
+            vec![
+                Step::SetBody(read("scratch")),
+                set("scratch", read("recordType")),
+            ],
+            &[],
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::RouteUnknownHeader.code());
     }
 
     // ----- fixture checks -----

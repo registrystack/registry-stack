@@ -73,11 +73,13 @@ pub enum CheckCode {
     RoutePredicateLanguageRequired,
     RouteRedeliveryOverNonSafeSend,
     RouteRedeliveryWithoutUpstreamSend,
+    RouteReservedHeaderName,
     RouteRetryWhileWithoutRedeliveries,
     RouteStopOnExceptionExclusive,
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
     RouteUnknownEndpoint,
+    RouteUnknownHeader,
     RouteUnknownOperation,
     RouteWriteWithoutIdempotency,
     // adapter.runtime.*
@@ -138,11 +140,13 @@ impl CheckCode {
         Self::RoutePredicateLanguageRequired,
         Self::RouteRedeliveryOverNonSafeSend,
         Self::RouteRedeliveryWithoutUpstreamSend,
+        Self::RouteReservedHeaderName,
         Self::RouteRetryWhileWithoutRedeliveries,
         Self::RouteStopOnExceptionExclusive,
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
         Self::RouteUnknownEndpoint,
+        Self::RouteUnknownHeader,
         Self::RouteUnknownOperation,
         Self::RouteWriteWithoutIdempotency,
         Self::RuntimeInsecureOrigin,
@@ -214,6 +218,7 @@ impl CheckCode {
             Self::RouteRedeliveryWithoutUpstreamSend => {
                 "adapter.route.redelivery-without-upstream-send"
             }
+            Self::RouteReservedHeaderName => "adapter.route.reserved-header-name",
             Self::RouteRetryWhileWithoutRedeliveries => {
                 "adapter.route.retry-while-without-redeliveries"
             }
@@ -221,6 +226,7 @@ impl CheckCode {
             Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
             Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
             Self::RouteUnknownEndpoint => "adapter.route.unknown-endpoint",
+            Self::RouteUnknownHeader => "adapter.route.unknown-header",
             Self::RouteUnknownOperation => "adapter.route.unknown-operation",
             Self::RouteWriteWithoutIdempotency => "adapter.route.write-without-idempotency",
             Self::RuntimeInsecureOrigin => "adapter.runtime.insecure-origin",
@@ -274,11 +280,13 @@ impl CheckCode {
             | Self::RoutePredicateLanguageRequired
             | Self::RouteRedeliveryOverNonSafeSend
             | Self::RouteRedeliveryWithoutUpstreamSend
+            | Self::RouteReservedHeaderName
             | Self::RouteRetryWhileWithoutRedeliveries
             | Self::RouteStopOnExceptionExclusive
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget
             | Self::RouteUnknownEndpoint
+            | Self::RouteUnknownHeader
             | Self::RouteUnknownOperation
             | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
             Self::ProjectDuplicateRouteId
