@@ -150,7 +150,7 @@ key_discovery:
 profile_non_goals:
   rule: None of the following is implemented, stubbed, feature-flagged, or left as an extension seam.
   items:
-    - OID4VCI in any part, including credential offers, pre-authorized codes, authorization or token endpoints, c_nonce, proof-of-possession challenges, credential endpoints, and deferred issuance
+    - OID4VCI in any part of the Evidence runtime or of this response format, including credential offers, pre-authorized codes, authorization or token endpoints, c_nonce, proof-of-possession challenges, credential endpoints, and deferred issuance; wallet delivery is the separate evidence-oid4vci adapter described by oid4vci-profile.yaml, which Evidence does not depend on and which never changes this format
     - persistent issuance state, an application database, or any store beyond the stateless request-nonce echo
     - status lists, revocation, suspension, or a credential-status endpoint
     - presentation-side verification or key-binding JWT validation
