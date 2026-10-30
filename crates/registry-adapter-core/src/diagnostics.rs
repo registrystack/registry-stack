@@ -63,6 +63,7 @@ pub enum CheckCode {
     RouteEmptyExceptionList,
     RouteErrorHandlerShape,
     RouteFromNotDirect,
+    RouteGraphQlSendMembers,
     RouteHandledAndContinued,
     RouteInvalidPath,
     RouteInvalidStatusCodeRange,
@@ -134,6 +135,7 @@ impl CheckCode {
         Self::RouteEmptyExceptionList,
         Self::RouteErrorHandlerShape,
         Self::RouteFromNotDirect,
+        Self::RouteGraphQlSendMembers,
         Self::RouteHandledAndContinued,
         Self::RouteInvalidPath,
         Self::RouteInvalidStatusCodeRange,
@@ -215,6 +217,7 @@ impl CheckCode {
             Self::RouteErrorHandlerShape => "adapter.route.error-handler-shape",
             Self::RoutePathParameterMismatch => "adapter.route.path-parameter-mismatch",
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
+            Self::RouteGraphQlSendMembers => "adapter.route.graphql-send-members",
             Self::RouteHandledAndContinued => "adapter.route.handled-and-continued",
             Self::RouteInvalidPath => "adapter.route.invalid-path",
             Self::RouteInvalidStatusCodeRange => "adapter.route.invalid-status-code-range",
@@ -282,6 +285,7 @@ impl CheckCode {
             | Self::RouteEmptyExceptionList
             | Self::RouteErrorHandlerShape
             | Self::RouteFromNotDirect
+            | Self::RouteGraphQlSendMembers
             | Self::RoutePathParameterMismatch
             | Self::RouteHandledAndContinued
             | Self::RouteInvalidPath

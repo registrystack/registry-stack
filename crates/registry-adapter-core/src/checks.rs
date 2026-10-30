@@ -670,6 +670,18 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         ));
                     }
                 }
+                if target.component == SendComponent::GraphQl {
+                    if let Some(parameters) = to.parameters.as_ref() {
+                        for member in graphql_send_member_faults(parameters) {
+                            route_findings.push(finding(
+                                CheckCode::RouteGraphQlSendMembers,
+                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                "the graphql send carries an HTTP-send member",
+                                "Remove the HTTP-send members (httpMethod, path, pathParameters, query); a graphql send carries operation and body only.",
+                            ));
+                        }
+                    }
+                }
                 match target.component {
                     SendComponent::Http | SendComponent::GraphQl => {
                         if !endpoint_ids.contains(target.id.as_str()) {
@@ -726,6 +738,18 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             fault,
                             "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
                         ));
+                    }
+                }
+                if enrich.uri.component == SendComponent::GraphQl {
+                    if let Some(parameters) = enrich.parameters.as_ref() {
+                        for member in graphql_send_member_faults(parameters) {
+                            route_findings.push(finding(
+                                CheckCode::RouteGraphQlSendMembers,
+                                &format!("/routes/{id}/steps{path}/parameters/{member}"),
+                                "the graphql enrichment carries an HTTP-send member",
+                                "Remove the HTTP-send members (httpMethod, path, pathParameters, query); a graphql enrichment carries operation and body only.",
+                            ));
+                        }
                     }
                 }
                 match enrich.uri.component {
@@ -1113,9 +1137,12 @@ fn is_non_safe_upstream(
 ) -> bool {
     match component {
         SendComponent::Direct => false,
-        SendComponent::Http => {
-            parameters.is_some_and(|parameters| !parameters.http_method.is_safe())
-        }
+        SendComponent::Http => parameters.is_some_and(|parameters| {
+            parameters
+                .http_method
+                .as_ref()
+                .is_some_and(|method| !method.is_safe())
+        }),
         SendComponent::GraphQl => !is_declared_graphql_query(endpoint, parameters, pack),
     }
 }
@@ -1137,6 +1164,26 @@ fn is_declared_graphql_query(
         declared.id.as_str() == operation.as_str()
             && declared.graphql == Some(GraphQlOperationKind::Query)
     })
+}
+
+/// The HTTP-send members a graphql send must not carry: the graphql shape
+/// carries `operation` and the body only
+/// (`products/adapter/CONCEPT.md` section 8.8).
+fn graphql_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'static str> {
+    let mut members = Vec::new();
+    if parameters.http_method.is_some() {
+        members.push("httpMethod");
+    }
+    if parameters.path.is_some() {
+        members.push("path");
+    }
+    if !parameters.path_parameters.is_empty() {
+        members.push("pathParameters");
+    }
+    if !parameters.query.is_empty() {
+        members.push("query");
+    }
+    members
 }
 
 /// Whether any step in the body declares redelivery beyond the first
@@ -2717,7 +2764,7 @@ mod tests {
         Step::To(ToStep {
             uri: send(endpoint),
             parameters: Some(ToParameters {
-                http_method: HttpMethod::Get,
+                http_method: Some(HttpMethod::Get),
                 path: None,
                 path_parameters: BTreeMap::new(),
                 query: BTreeMap::new(),
@@ -2734,7 +2781,7 @@ mod tests {
         Step::To(ToStep {
             uri: send(endpoint),
             parameters: Some(ToParameters {
-                http_method: HttpMethod::Post,
+                http_method: Some(HttpMethod::Post),
                 path: None,
                 path_parameters: BTreeMap::new(),
                 query: BTreeMap::new(),
@@ -3431,7 +3478,7 @@ mod tests {
         let post = Step::To(ToStep {
             uri: send("case-api"),
             parameters: Some(ToParameters {
-                http_method: HttpMethod::Post,
+                http_method: Some(HttpMethod::Post),
                 path: None,
                 path_parameters: BTreeMap::new(),
                 query: BTreeMap::new(),
@@ -3476,7 +3523,7 @@ mod tests {
             Step::To(ToStep {
                 uri: send("case-api"),
                 parameters: Some(ToParameters {
-                    http_method: HttpMethod::Get,
+                    http_method: Some(HttpMethod::Get),
                     path: Some("/v2/cases/{{caseId}}".to_string()),
                     path_parameters: BTreeMap::from([(
                         "caseId".to_string(),
@@ -3582,7 +3629,7 @@ mod tests {
                 aggregation_strategy: None,
                 aggregate_on_exception: false,
                 parameters: Some(ToParameters {
-                    http_method,
+                    http_method: Some(http_method),
                     path: None,
                     path_parameters: BTreeMap::new(),
                     query: BTreeMap::new(),
@@ -3643,7 +3690,7 @@ mod tests {
                 aggregation_strategy: None,
                 aggregate_on_exception: false,
                 parameters: Some(ToParameters {
-                    http_method: HttpMethod::Get,
+                    http_method: Some(HttpMethod::Get),
                     path: None,
                     path_parameters: BTreeMap::new(),
                     query: BTreeMap::from([(
@@ -3682,7 +3729,7 @@ mod tests {
             steps: vec![Step::To(ToStep {
                 uri: send("case-api"),
                 parameters: Some(ToParameters {
-                    http_method: HttpMethod::Get,
+                    http_method: Some(HttpMethod::Get),
                     path,
                     path_parameters: BTreeMap::new(),
                     query: BTreeMap::new(),
@@ -3792,7 +3839,7 @@ mod tests {
             let post = Step::To(ToStep {
                 uri: send("case-api"),
                 parameters: Some(ToParameters {
-                    http_method: HttpMethod::Post,
+                    http_method: Some(HttpMethod::Post),
                     path: None,
                     path_parameters: BTreeMap::new(),
                     query: BTreeMap::new(),
@@ -5769,7 +5816,7 @@ mod tests {
                 Step::To(ToStep {
                     uri: SendUri::parse("graphql:graph-api").expect("uri"),
                     parameters: Some(ToParameters {
-                        http_method: HttpMethod::Get,
+                        http_method: None,
                         path: None,
                         path_parameters: BTreeMap::new(),
                         query: BTreeMap::new(),
@@ -5804,6 +5851,98 @@ mod tests {
             vec![graphql_endpoint(Some(GraphQlOperationKind::Query))],
             vec![redelivered_send("person-find")],
         );
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
+    // ----- graphql send members (round 6 C11) -----
+
+    /// A graphql send carries only the graphql members: the HTTP-send
+    /// members `httpMethod`, `path`, `pathParameters`, and `query` each
+    /// refuse (`products/adapter/CONCEPT.md` section 8.8).
+    #[test]
+    fn graphql_sends_refuse_the_http_send_members() {
+        let graphql_endpoint = || Endpoint {
+            id: local("graph-api"),
+            component: ComponentKind::GraphQl,
+            authentication: EndpointAuthentication::None {},
+            response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            operations: vec![EndpointOperation {
+                id: local("person-find"),
+                idempotent_upstream: false,
+                graphql: Some(GraphQlOperationKind::Query),
+            }],
+            tested_versions: vec!["1.0".to_string()],
+            query_file: Some("queries/person.graphql".to_string()),
+            operation_name: None,
+            variables: None,
+        };
+        let send_route = |parameters: ToParameters| RouteDefinition {
+            id: local("fetch-person"),
+            from: RouteFrom {
+                uri: direct("fetch-person"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: SendUri::parse("graphql:graph-api").expect("uri"),
+                parameters: Some(parameters),
+            })],
+        };
+        let clean = || ToParameters {
+            http_method: None,
+            path: None,
+            path_parameters: BTreeMap::new(),
+            query: BTreeMap::new(),
+            body: None,
+            operation: Some(id("person-find")),
+            throw_exception_on_failure: true,
+            ok_status_code_range: None,
+            resume_bindings: Vec::new(),
+        };
+        let cases: Vec<(&str, ToParameters)> = vec![
+            (
+                "httpMethod",
+                ToParameters {
+                    http_method: Some(HttpMethod::Get),
+                    ..clean()
+                },
+            ),
+            (
+                "path",
+                ToParameters {
+                    path: Some("/v1/person".to_string()),
+                    ..clean()
+                },
+            ),
+            (
+                "pathParameters",
+                ToParameters {
+                    path_parameters: BTreeMap::from([(
+                        "id".to_string(),
+                        Expression::Constant(serde_json::json!("x")),
+                    )]),
+                    ..clean()
+                },
+            ),
+            (
+                "query",
+                ToParameters {
+                    query: BTreeMap::from([(
+                        id("type"),
+                        Expression::Constant(serde_json::json!("case")),
+                    )]),
+                    ..clean()
+                },
+            ),
+        ];
+        for (member, parameters) in cases {
+            let pack = pack_builder(vec![graphql_endpoint()], vec![send_route(parameters)]);
+            assert!(
+                codes(&check_routes(&pack, &project_builder(&pack)))
+                    .contains(&CheckCode::RouteGraphQlSendMembers.code()),
+                "the {member} member refuses on a graphql send",
+            );
+        }
+        // Without the HTTP-send members, the graphql send passes.
+        let pack = pack_builder(vec![graphql_endpoint()], vec![send_route(clean())]);
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 

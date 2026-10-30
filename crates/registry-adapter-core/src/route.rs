@@ -137,9 +137,11 @@ pub struct ToStep {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToParameters {
-    /// The request method. Its safety carries the write-safety rules of
+    /// The request method; an `http:` send declares it, a `graphql:` send
+    /// omits it. Its safety carries the write-safety rules of
     /// `crate::checks`.
-    pub http_method: HttpMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_method: Option<HttpMethod>,
     /// The path template, e.g. `/v2/cases/{type}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -1220,7 +1222,7 @@ mod tests {
         };
         assert_eq!(
             to.parameters.as_ref().expect("parameters").http_method,
-            HttpMethod::Get
+            Some(HttpMethod::Get)
         );
         assert_eq!(
             serde_json::to_value(&step).expect("serialize"),
@@ -2032,7 +2034,7 @@ mod tests {
         )
         .expect("parse");
         let parameters = enrich.parameters.as_ref().expect("parameters");
-        assert_eq!(parameters.http_method, HttpMethod::Get);
+        assert_eq!(parameters.http_method, Some(HttpMethod::Get));
         assert_eq!(parameters.query.len(), 1);
         assert_eq!(
             parameters
