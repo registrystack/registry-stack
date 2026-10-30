@@ -568,3 +568,16 @@ async fn a_static_authorization_endpoint_sends_its_declared_scheme_and_token() {
         Some("ApiToken synthetic-password")
     );
 }
+
+#[tokio::test]
+async fn a_plain_http_origin_outside_the_allowed_private_ranges_refuses_startup() {
+    // 10.0.0.7 is private and not in the served harness's allowed range, so
+    // startup refuses the deployment before any socket opens.
+    let stderr =
+        Served::refusal_with_project("http://10.0.0.7:9", &Served::example_project()).await;
+
+    assert!(
+        stderr.contains("adapter.runtime.insecure-origin"),
+        "the refusal names the insecure origin: {stderr}"
+    );
+}
