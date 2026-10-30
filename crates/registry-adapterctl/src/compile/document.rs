@@ -307,7 +307,7 @@ fn operation_parameters(
 }
 
 /// The typed equality query parameters of a search binding's declared
-/// filter fields: one optional parameter per field, typed by the field's
+/// filter fields: one required parameter per field, typed by the field's
 /// declared type, in the record type's declared field order.
 fn filter_parameters(fields: &[&RecordField]) -> Vec<Value> {
     fields
@@ -316,7 +316,7 @@ fn filter_parameters(fields: &[&RecordField]) -> Vec<Value> {
             json!({
                 "name": field.name.as_str(),
                 "in": "query",
-                "required": false,
+                "required": true,
                 "schema": field_schema(field.r#type),
             })
         })
@@ -695,7 +695,7 @@ mod tests {
                 {
                     "name": "case_type",
                     "in": "query",
-                    "required": false,
+                    "required": true,
                     "schema": {"type": "string"},
                 },
                 {
@@ -707,7 +707,7 @@ mod tests {
                 {
                     "name": "opened_on",
                     "in": "query",
-                    "required": false,
+                    "required": true,
                     "schema": {"type": "string", "format": "date"},
                 },
                 {
@@ -886,7 +886,7 @@ mod tests {
         assert_eq!(parsed, document);
     }
 
-    /// The filter assembler offers one optional typed equality parameter
+    /// The filter assembler offers one required typed equality parameter
     /// per declared field, in the record type's declared order.
     #[test]
     fn filter_parameters_are_typed_equality_parameters() {
@@ -905,19 +905,19 @@ mod tests {
                 json!({
                     "name": "case_type",
                     "in": "query",
-                    "required": false,
+                    "required": true,
                     "schema": {"type": "string"},
                 }),
                 json!({
                     "name": "severity",
                     "in": "query",
-                    "required": false,
+                    "required": true,
                     "schema": {"type": "integer"},
                 }),
                 json!({
                     "name": "opened_on",
                     "in": "query",
-                    "required": false,
+                    "required": true,
                     "schema": {"type": "string", "format": "date"},
                 }),
             ]

@@ -87,6 +87,9 @@ pub struct Binding {
     /// The declared fields of the bound record type a search binding
     /// filters on (`products/adapter/CONCEPT.md` section 8.11.1); the
     /// facade offers exactly these as typed equality query parameters.
+    /// Every declared filter is required: a call that leaves one out is
+    /// refused as an invalid field before any script runs or source is
+    /// called.
     /// Every entry must name a declared field, checked at the project
     /// checks; the list is unique (CFG-ID-6).
     #[serde(default, skip_serializing_if = "filters_empty")]

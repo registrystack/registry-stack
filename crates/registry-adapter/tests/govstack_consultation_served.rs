@@ -308,8 +308,7 @@ async fn a_default_page_size_cursor_resumes_without_a_size() {
 }
 
 #[tokio::test]
-async fn a_query_page_size_outside_the_bounds_is_a_bad_request_and_a_body_one_is_an_invalid_field()
-{
+async fn a_page_size_outside_the_bounds_is_a_bad_request_from_the_query_or_the_body() {
     let upstream = UpstreamDouble::start();
     let served = start(&upstream).await;
     let token = served.token("records.read");
@@ -324,8 +323,8 @@ async fn a_query_page_size_outside_the_bounds_is_a_bad_request_and_a_body_one_is
         Some(&token),
         &json!({"search": "byCriteria", "criteria": {"org_unit": "slSrf7H9lMf"}, "pageSize": 101}),
     );
-    assert_eq!(status, 422, "{body}");
-    contract::assert_problem(&body, 422, "invalid-field");
+    assert_eq!(status, 400, "{body}");
+    contract::assert_problem(&body, 400, "bad-request");
     assert_eq!(upstream.request_count(), 0);
 }
 
@@ -657,4 +656,236 @@ async fn every_failed_exchange_leaves_one_value_free_warning() {
         assert!(!warning.contains("UPSTREAM-DETAIL-CANARY"), "{warning}");
         assert!(!warning.contains("EeBJ3Sn9uLg"), "no identifier: {warning}");
     }
+}
+
+#[tokio::test]
+async fn a_search_without_its_declared_filter_is_an_invalid_field_before_any_call() {
+    let upstream = UpstreamDouble::start();
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    let (status, _, body) = served.post(
+        SEARCH_PATH,
+        Some(&token),
+        &json!({"search": "byCriteria", "criteria": {}}),
+    );
+
+    assert_eq!(status, 422, "{body}");
+    contract::assert_problem(&body, 422, "invalid-field");
+    assert_eq!(upstream.request_count(), 0);
+}
+
+/// A copy of the example whose list binding filters on the org unit, so a
+/// GET carries a declared filter in its query string.
+fn filtered_list_project() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    served_harness::copy_govstack_project(directory.path());
+    let path = directory.path().join("project.yaml");
+    let text = std::fs::read_to_string(&path).expect("the project is readable");
+    let edited = text.replace(
+        "    route: person-list\n    maximumUpstreamCalls: 4",
+        "    route: person-search\n    filters:\n      - org_unit\n    maximumUpstreamCalls: 4",
+    );
+    assert_ne!(text, edited, "the list binding was found");
+    std::fs::write(&path, edited).expect("the project is written");
+    directory
+}
+
+#[tokio::test]
+async fn a_get_filter_reaches_the_source_and_a_missing_one_is_an_invalid_field() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![page_of(1, 3)]);
+    let directory = filtered_list_project();
+    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
+    let token = served.token("records.read");
+
+    let (status, _, body) = served.get(&format!("{LIST_PATH}?org_unit=slSrf7H9lMf"), Some(&token));
+
+    assert_eq!(status, 200, "{body}");
+    contract::assert_page(&body);
+    let target = &upstream.requests()[0].target;
+    assert!(target.contains("orgUnits=slSrf7H9lMf"), "{target}");
+    assert!(target.contains("orgUnitMode=SELECTED"), "{target}");
+
+    let (status, _, body) = served.get(LIST_PATH, Some(&token));
+    assert_eq!(status, 422, "{body}");
+    contract::assert_problem(&body, 422, "invalid-field");
+    assert_eq!(upstream.request_count(), 1, "the refusal made no call");
+}
+
+/// The upstream request targets a call sent since `before` requests.
+fn targets_since(upstream: &UpstreamDouble, before: usize) -> Vec<String> {
+    upstream
+        .requests()
+        .iter()
+        .skip(before)
+        .map(|request| request.target.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn hostile_filter_values_arrive_as_one_encoded_value_each() {
+    let upstream = UpstreamDouble::start();
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    for value in [
+        "x&orgUnitMode=ALL",
+        "a\"b",
+        "a\\b",
+        "a\nb",
+        "a\r\nX: y",
+        "a/b",
+        "../b",
+        "a%2Fb",
+        "a;b,c",
+        "{{recordId}}",
+        "{{??x}}",
+    ] {
+        upstream.respond_with(vec![page_of(1, 1)]);
+        let before = upstream.request_count();
+
+        let (status, _, body) = served.post(
+            SEARCH_PATH,
+            Some(&token),
+            &json!({"search": "byCriteria", "criteria": {"org_unit": value}}),
+        );
+
+        assert_eq!(status, 200, "{value:?}: {body}");
+        let targets = targets_since(&upstream, before);
+        assert_eq!(targets.len(), 1, "{value:?}: {targets:?}");
+        let (path, query) = targets[0].split_once('?').expect("a query");
+        assert_eq!(path, "/api/tracker/trackedEntities", "{value:?}");
+        let pairs: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
+            .into_owned()
+            .collect();
+        let named = |name: &str| -> Vec<&str> {
+            pairs
+                .iter()
+                .filter(|(key, _)| key == name)
+                .map(|(_, text)| text.as_str())
+                .collect()
+        };
+        assert_eq!(named("orgUnits"), vec![value], "one value, intact: {query}");
+        assert_eq!(named("orgUnitMode"), vec!["SELECTED"], "{value:?}: {query}");
+        assert!(!query.contains('\n') && !query.contains('\r'), "{query}");
+    }
+}
+
+#[tokio::test]
+async fn hostile_lookup_values_are_encoded_into_one_path_segment_or_refused() {
+    let upstream = UpstreamDouble::start();
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    for (value, encoded) in [
+        ("a\"b", "a%22b"),
+        ("x&orgUnitMode=ALL", "x%26orgUnitMode%3DALL"),
+        ("{{recordId}}", "%7B%7BrecordId%7D%7D"),
+        ("a b", "a%20b"),
+    ] {
+        upstream.respond_with(vec![found()]);
+        let before = upstream.request_count();
+        let (status, _, body) = served.post(
+            LOOKUP_PATH,
+            Some(&token),
+            &json!({"selector": "byRecordId", "values": {"recordId": value}}),
+        );
+        assert_eq!(status, 200, "{value:?}: {body}");
+        assert_eq!(
+            targets_since(&upstream, before),
+            vec![format!("/api/tracker/trackedEntities/{encoded}")],
+            "{value:?}"
+        );
+    }
+
+    // A value that would not stay in one path segment, or that no header
+    // can carry, is refused before the source is called.
+    for value in ["a/b", "a\\b", "a\nb", "a\r\nX: y", "a;b,c", "a%2Fb", ".."] {
+        upstream.respond_with(vec![found()]);
+        let before = upstream.request_count();
+        let (status, _, body) = served.post(
+            LOOKUP_PATH,
+            Some(&token),
+            &json!({"selector": "byRecordId", "values": {"recordId": value}}),
+        );
+        assert!(status >= 400, "{value:?}: {status} {body}");
+        assert!(
+            targets_since(&upstream, before).is_empty(),
+            "{value:?} reached the source"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_source_refusal_of_the_criteria_is_an_invalid_field() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![Response::json(
+        400,
+        r#"{"httpStatus":"Bad Request","httpStatusCode":400,"status":"ERROR","message":"Org unit mode requires org units"}"#,
+    )]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    let (status, _, body) = served.post(
+        SEARCH_PATH,
+        Some(&token),
+        &json!({"search": "byCriteria", "criteria": {"org_unit": "x&orgUnitMode=ALL"}}),
+    );
+
+    assert_eq!(status, 422, "{body}");
+    contract::assert_problem(&body, 422, "invalid-field");
+    let target = &upstream.requests()[0].target;
+    assert!(
+        target.contains("orgUnits=x%26orgUnitMode%3DALL&")
+            && target.contains("orgUnitMode=SELECTED"),
+        "{target}"
+    );
+}
+
+#[tokio::test]
+async fn an_unauthenticated_post_declaring_an_oversize_body_is_refused_without_reading_it() {
+    let upstream = UpstreamDouble::start();
+    let served = start(&upstream).await;
+    let declared = 64 * 1024 * 1024;
+    let sent = b"{\"search\":\"byCriteria\"";
+
+    // The request promises 64 MiB and sends 23 bytes. An answer arrives
+    // anyway: the refusal does not wait for, or buffer, the body.
+    let (status, _, body) = served.request_declaring(
+        "POST",
+        SEARCH_PATH,
+        None,
+        &[("content-type", "application/json")],
+        declared,
+        sent,
+    );
+
+    assert_eq!(status, 401, "{body}");
+    contract::assert_problem(&body, 401, "unauthorized");
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_path_parameter_that_is_not_utf8_is_a_bad_request_problem() {
+    let upstream = UpstreamDouble::start();
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    for path in [
+        "/v1/collections/persons/records/%ff",
+        "/v1/collections/%ff/records",
+    ] {
+        let (status, head, body) = served.get(path, Some(&token));
+
+        assert_eq!(status, 400, "{path}: {body}");
+        contract::assert_problem(&body, 400, "bad-request");
+        assert_eq!(
+            header(&head, "content-type"),
+            Some("application/problem+json"),
+            "{path}"
+        );
+        assert_eq!(header(&head, "cache-control"), Some("no-store"), "{path}");
+    }
+    assert_eq!(upstream.request_count(), 0);
 }

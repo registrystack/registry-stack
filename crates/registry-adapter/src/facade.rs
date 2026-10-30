@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use axum::body::Body;
+use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, RawQuery};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -71,11 +72,25 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         for index in indexes {
             let shared = Arc::clone(&state);
             let handler = move |headers: HeaderMap,
-                                Path(params): Path<HashMap<String, String>>,
+                                params: Result<Path<HashMap<String, String>>, PathRejection>,
                                 RawQuery(query): RawQuery,
                                 body: Body| {
                 let shared = Arc::clone(&shared);
-                async move { handle(shared, index, headers, params, query, body).await }
+                async move {
+                    // A path segment that is not UTF-8 never reaches a
+                    // call: it answers the profile's bad-request problem,
+                    // not the framework's bare rejection.
+                    let Ok(Path(params)) = params else {
+                        return facade_problem(
+                            shared.loaded.problems(),
+                            ErrorClass::FacadeInvalidRequest,
+                            StatusCode::BAD_REQUEST,
+                            "",
+                            &new_id(),
+                        );
+                    };
+                    handle(shared, index, headers, params, query, body).await
+                }
             };
             let method = state.loaded.served[index].method;
             allowed.push(if method == HttpMethod::Post {
@@ -307,7 +322,6 @@ async fn answer(
                 inputs.cursor = captured.cursor;
                 inputs.page_size = captured.page_size;
                 inputs.filters = captured.filters.unwrap_or_default();
-                inputs.from_body = true;
             }
             Err(refusal) => {
                 return refuse_request(
@@ -751,9 +765,6 @@ struct RequestInputs {
     cursor: Option<String>,
     page_size: Option<u64>,
     filters: serde_json::Map<String, Value>,
-    /// Whether the inputs came from a request body, which decides the
-    /// status of an out-of-bounds page size.
-    from_body: bool,
 }
 
 /// What a search request carries once validated.
@@ -856,6 +867,15 @@ fn open_search(
     record_type: &str,
     inputs: RequestInputs,
 ) -> Result<SearchInputs, Refusal> {
+    // Every filter the binding declares is required: a search that leaves
+    // one out is refused here, before any script runs or source is called.
+    if operation
+        .filters
+        .iter()
+        .any(|filter| !inputs.filters.contains_key(&filter.name))
+    {
+        return Err(Refusal::invalid_field("a declared filter is absent"));
+    }
     // The digest leaves the page size out: the cursor carries it, so a
     // call may omit it, and a supplied size is compared to the carried one.
     let filters = filter_digest(
@@ -881,12 +901,9 @@ fn open_search(
     };
     if let Some(supplied) = inputs.page_size {
         if !(pagination.page_size_minimum..=pagination.page_size_maximum).contains(&supplied) {
-            let reason = "the page size is outside the profile's bounds";
-            return Err(if inputs.from_body {
-                Refusal::invalid_field(reason)
-            } else {
-                Refusal::invalid_request(reason)
-            });
+            return Err(Refusal::invalid_request(
+                "the page size is outside the profile's bounds",
+            ));
         }
     }
     let page_size = match (inputs.page_size, carried_size) {

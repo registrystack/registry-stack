@@ -497,6 +497,21 @@ audit:
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> (u16, String, Value) {
+        self.request_declaring(method, path, bearer, headers, body.len(), body)
+    }
+
+    /// Like [`Self::request`], but the request declares `declared_length`
+    /// body bytes and sends only `body`: a server that answers without
+    /// waiting for the rest has not buffered the declared body.
+    pub fn request_declaring(
+        &self,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        headers: &[(&str, &str)],
+        declared_length: usize,
+        body: &[u8],
+    ) -> (u16, String, Value) {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).expect("connect");
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
@@ -509,8 +524,8 @@ audit:
         for (name, value) in headers {
             request.push_str(&format!("{name}: {value}\r\n"));
         }
-        if !body.is_empty() {
-            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        if declared_length > 0 {
+            request.push_str(&format!("Content-Length: {declared_length}\r\n"));
         }
         request.push_str("\r\n");
         stream.write_all(request.as_bytes()).expect("write");

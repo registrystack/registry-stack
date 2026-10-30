@@ -671,7 +671,7 @@ fn the_graphql_experiment_exposes_its_filters_as_query_parameters() {
             json!({
                 "name": "status",
                 "in": "query",
-                "required": false,
+                "required": true,
                 "schema": {"type": "string"},
             }),
         ],

@@ -342,7 +342,7 @@ fn slot_schema(
     }
 }
 
-/// The closed schema of a read request's `filters` object: one optional,
+/// The closed schema of a read request's `filters` object: one required,
 /// typed member per filter the binding declares, and no other member.
 fn filters_schema(
     binding: Option<&Binding>,
@@ -364,11 +364,20 @@ fn filters_schema(
             .ok_or_else(|| "the binding declares a filter no record field carries".to_string())?;
         properties.insert(filter.as_str().to_string(), field_schema(field.r#type));
     }
-    Ok(json!({
+    let mut schema = json!({
         "type": "object",
         "properties": Value::Object(properties),
         "additionalProperties": false,
-    }))
+    });
+    if !binding.filters.is_empty() {
+        let required: Vec<&str> = binding
+            .filters
+            .iter()
+            .map(|filter| filter.as_str())
+            .collect();
+        schema["required"] = json!(required);
+    }
+    Ok(schema)
 }
 
 /// The closed schema of one record the bound record type declares: every
