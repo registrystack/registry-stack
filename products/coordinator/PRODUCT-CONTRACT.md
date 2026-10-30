@@ -225,11 +225,14 @@ identity, so the request is refused as `invalid-command` before BReg is contacte
 BReg answers one value-free `lookup.unresolved` whether no record matched, two matched, the row is
 hidden from the profile, or a claim was missing, so Coordinator cannot tell those apart and
 neither can the workflow. For that reason `check` refuses an `onDeclaredRefusal` that routes
-`unresolved` straight to a step whose operation changes data (`definition.unresolved-route`):
-"not found, so create" makes a duplicate when two records match or one is hidden. The builder
-cost is one extra step: route to a finish or another read, and change data from a later step
-once a person or that read has decided. Only the direct route is refused; a mutation later on
-the path is allowed.
+`unresolved` straight to a step that creates or changes a record (`definition.unresolved-route`):
+`breg.invoke-action/v1`, `breg.start-proposal/v1`, `breg.submit-proposal/v1` and
+`external.command/v1`, whose effect Coordinator cannot see. "Not found, so create" makes a
+duplicate when two records match or one is hidden. The builder cost is one extra step: route to
+a finish or another read, and change data from a later step once a person or that read has
+decided. Only the direct route is refused; a step that cannot write a record (a Casework review
+request, a message, a scheduling call, a proposal cancellation) is allowed, and so is a mutation
+later on the path.
 
 `breg.read-record/v2` takes the same input as `breg.read-record/v1` and returns the same record
 envelope plus a `provenance` member. `breg.read-record/v1` is unchanged, so existing bindings
@@ -245,6 +248,11 @@ Grants: `breg.lookup-record/v1` needs the BReg profile operation `lookup` and
 `breg.read-record/v2` needs `get`. `coordinatorctl check` does not read BReg profiles, so a
 missing grant is not found offline. It shows at run time as the failure `product-forbidden`,
 never as `unresolved`.
+
+`breg.lookup-record/v1` and `breg.read-in-force/v1` run under the connection's service identity
+and take no grant. `check` refuses them on a connection that sets `taskAuthority`
+(`workflow-binding`); `breg.read-record/v2` follows `breg.read-record/v1` and takes a grant on a
+task-authority connection.
 
 ### Connection, codes and catalog
 

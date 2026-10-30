@@ -566,6 +566,25 @@ mod tests {
                 .get("maximumRequestBytes")
                 .is_none()
         );
+        for operation in [
+            Operation::InvokeBregAction,
+            Operation::StartProposal,
+            Operation::SubmitProposal,
+            Operation::ExternalCommand,
+        ] {
+            assert!(operation.writes_records(), "{}", operation.as_str());
+        }
+        for operation in [
+            Operation::CancelProposal,
+            Operation::SubmitReviewRequest,
+            Operation::SubmitMessage,
+            Operation::CreateHold,
+            Operation::LookupRecord,
+            Operation::ReadRecordV2,
+            Operation::EvaluateDecision,
+        ] {
+            assert!(!operation.writes_records(), "{}", operation.as_str());
+        }
         assert!(Operation::EvaluateDecision.is_evaluation());
         assert!(!Operation::EvaluateDecision.is_mutating());
         assert!(!Operation::EvaluateDecision.is_read());

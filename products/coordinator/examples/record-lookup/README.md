@@ -26,7 +26,7 @@ that on as the declared refusal `unresolved`, and `onDeclaredRefusal` routes it
 to the `not-registered` finish.
 
 Route `unresolved` to a finish or to another read, never straight to a step
-that creates or changes data. `coordinatorctl check` refuses the direct route
+that creates or changes a record. `coordinatorctl check` refuses the direct route
 with `definition.unresolved-route`, because "not found, so create" makes a
 duplicate when two records match or one is hidden. A mutation can still follow
 once a person or another read has decided; that costs one extra step before a

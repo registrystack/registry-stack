@@ -62,6 +62,18 @@ impl Operation {
         self.descriptor().effect == crate::operations::EffectKind::Mutation
     }
 
+    /// Calls that create or change a record, or whose effect is unknown. The
+    /// check refuses an unresolved lookup routed straight to one of these.
+    pub fn writes_records(self) -> bool {
+        matches!(
+            self,
+            Self::InvokeBregAction
+                | Self::StartProposal
+                | Self::SubmitProposal
+                | Self::ExternalCommand
+        )
+    }
+
     pub fn is_read(self) -> bool {
         self.descriptor().effect == crate::operations::EffectKind::Read
     }
