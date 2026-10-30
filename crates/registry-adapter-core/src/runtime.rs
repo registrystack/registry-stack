@@ -37,6 +37,12 @@ impl Cidr {
     pub fn contains(&self, address: std::net::IpAddr) -> bool {
         self.0.contains(&address)
     }
+
+    /// The parsed network, as the platform destination policy takes it.
+    #[must_use]
+    pub fn network(&self) -> ipnet::IpNet {
+        self.0
+    }
 }
 
 impl serde::Serialize for Cidr {

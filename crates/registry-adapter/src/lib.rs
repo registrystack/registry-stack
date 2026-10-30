@@ -44,6 +44,7 @@
 
 pub mod auth;
 pub mod component;
+pub mod egress;
 pub mod envelope;
 pub mod errorhandler;
 pub mod exchange;
