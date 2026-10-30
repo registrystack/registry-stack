@@ -833,9 +833,13 @@ mod tests {
 
     /// Reader agreement (CFG-YAML-1 in spirit): every authored artifact
     /// this crate's fixture corpus carries decodes through the platform
-    /// reader and satisfies the generated schema of its kind. The command
-    /// itself runs one reader; this test is where the generator is held to
-    /// it.
+    /// reader as its own type, the way `check` reads it, and satisfies the
+    /// generated schema of its kind. The command itself runs one reader;
+    /// this test is where the generator is held to it. Decoding is per
+    /// kind, not through a plain `Value`: a fixture's recorded body opens
+    /// the reader's foreign-value region, where the explicit `null` a
+    /// recorded exchange may carry is a body, and only the type's own
+    /// decode accepts it.
     #[test]
     fn the_generated_schemas_accept_what_the_reader_decodes() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal");
@@ -860,9 +864,22 @@ mod tests {
         let generated = crate::schemas::documents().expect("the schemas generate");
         for (file, format, schema_file) in cases {
             let bytes = std::fs::read(root.join(file)).expect("the corpus file exists");
-            let decoded = Reader::new(file.to_owned())
-                .decode::<Value>(&bytes, &Expect::one(format))
-                .unwrap_or_else(|refused| panic!("{file}: {}", refused.render_human()));
+            let reader = Reader::new(file.to_owned());
+            let document = match file {
+                "project.yaml" => reader
+                    .decode::<registry_adapter_core::AdapterProject>(&bytes, &Expect::one(format))
+                    .map(|decoded| decoded.document),
+                "profile.yaml" => reader
+                    .decode::<registry_adapter_core::AdapterProfile>(&bytes, &Expect::one(format))
+                    .map(|decoded| decoded.document),
+                "pack.yaml" => reader
+                    .decode::<registry_adapter_core::AdapterPack>(&bytes, &Expect::one(format))
+                    .map(|decoded| decoded.document),
+                _ => reader
+                    .decode::<registry_adapter_core::AdapterFixture>(&bytes, &Expect::one(format))
+                    .map(|decoded| decoded.document),
+            }
+            .unwrap_or_else(|refused| panic!("{file}: {}", refused.render_human()));
             let schema: Value = serde_json::from_str(
                 generated
                     .get(schema_file)
@@ -874,7 +891,7 @@ mod tests {
                 .compile(&schema)
                 .expect("the generated schema compiles");
             let errors: Vec<String> = validator
-                .validate(&decoded.document.to_json_value())
+                .validate(&document.to_json_value())
                 .err()
                 .map(|errors| errors.map(|error| error.to_string()).collect())
                 .unwrap_or_default();

@@ -8532,6 +8532,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -8571,6 +8572,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");
@@ -8658,6 +8660,7 @@ mod tests {
             operation: id("cases-find"),
             record_type: local("case"),
             route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
         }])
         .expect("unique");

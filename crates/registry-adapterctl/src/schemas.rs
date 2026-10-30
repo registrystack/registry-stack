@@ -277,6 +277,12 @@ fn apply_manual_wire_forms(schema: &mut Value, file: &str) {
                     .expect("the fixture schema defines the intercept"),
                 "type",
             );
+            internally_tagged(
+                definitions
+                    .get_mut("ExpectedFacade")
+                    .expect("the fixture schema defines the expected facade answer"),
+                "type",
+            );
         }
         _ => {}
     }
