@@ -33,10 +33,12 @@ use registry_platform_config::SecretResolver;
 use registry_platform_httputil::{
     TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
-use registry_platform_yaml::SecretReference;
+use registry_platform_yaml::{ExternalId, SecretReference};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
@@ -294,15 +296,64 @@ pub(crate) struct TokenRequestParameters {
     pub(crate) resource: Option<String>,
 }
 
-/// One endpoint's fixed token endpoint plan.
-#[derive(Debug, Clone, PartialEq)]
+/// One endpoint's fixed token endpoint plan, owning that endpoint's
+/// token cache. The cache lives in the plan, not in the caller's
+/// context, so a credential cached for one endpoint can never be served
+/// to another: the pairing of cache and endpoint is structural, and
+/// every clone of a plan shares its one cache.
 pub struct TokenEndpointPlan {
+    endpoint: ExternalId,
     url: String,
     client_id_ref: SecretReference,
     client_authentication: ClientAuthentication,
     parameters: TokenRequestParameters,
     maximum_cache: Duration,
     assumed_lifetime: Option<Duration>,
+    cache: Arc<TokenCache>,
+}
+
+impl fmt::Debug for TokenEndpointPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The cache is omitted from every rendering: it holds an issued
+        // credential.
+        formatter
+            .debug_struct("TokenEndpointPlan")
+            .field("endpoint", &self.endpoint)
+            .field("url", &self.url)
+            .field("client_id_ref", &self.client_id_ref)
+            .field("client_authentication", &self.client_authentication)
+            .field("parameters", &self.parameters)
+            .field("maximum_cache", &self.maximum_cache)
+            .field("assumed_lifetime", &self.assumed_lifetime)
+            .finish()
+    }
+}
+
+impl Clone for TokenEndpointPlan {
+    fn clone(&self) -> Self {
+        Self {
+            endpoint: self.endpoint.clone(),
+            url: self.url.clone(),
+            client_id_ref: self.client_id_ref.clone(),
+            client_authentication: self.client_authentication.clone(),
+            parameters: self.parameters.clone(),
+            maximum_cache: self.maximum_cache,
+            assumed_lifetime: self.assumed_lifetime,
+            cache: Arc::clone(&self.cache),
+        }
+    }
+}
+
+/// The operator's cache bounds of one OAuth2 credential: the ceiling a
+/// response's lifetime is clamped to and the lifetime assumed when the
+/// response states none. Bundled so the plan constructors stay within
+/// the argument-count bound.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CacheBounds {
+    /// The `maximumCacheSeconds` ceiling.
+    pub(crate) maximum: Duration,
+    /// The `assumedLifetimeSeconds` stand-in.
+    pub(crate) assumed: Option<Duration>,
 }
 
 impl TokenEndpointPlan {
@@ -310,15 +361,16 @@ impl TokenEndpointPlan {
     /// [`crate::auth::AuthPlan::compile`].
     #[must_use]
     pub(crate) fn client_secret(
+        endpoint: ExternalId,
         url: String,
         client_id_ref: SecretReference,
         secret_ref: SecretReference,
         placement: CredentialPlacement,
         parameters: TokenRequestParameters,
-        maximum_cache: Duration,
-        assumed_lifetime: Option<Duration>,
+        bounds: CacheBounds,
     ) -> Self {
         Self {
+            endpoint,
             url,
             client_id_ref,
             client_authentication: ClientAuthentication::ClientSecret {
@@ -326,8 +378,9 @@ impl TokenEndpointPlan {
                 placement,
             },
             parameters,
-            maximum_cache,
-            assumed_lifetime,
+            maximum_cache: bounds.maximum,
+            assumed_lifetime: bounds.assumed,
+            cache: Arc::new(TokenCache::new()),
         }
     }
 
@@ -336,15 +389,16 @@ impl TokenEndpointPlan {
     /// the operator wrote it.
     #[must_use]
     pub(crate) fn private_key_jwt(
+        endpoint: ExternalId,
         url: String,
         client_id_ref: SecretReference,
         key_ref: SecretReference,
         assertion_audience: String,
         parameters: TokenRequestParameters,
-        maximum_cache: Duration,
-        assumed_lifetime: Option<Duration>,
+        bounds: CacheBounds,
     ) -> Self {
         Self {
+            endpoint,
             url,
             client_id_ref,
             client_authentication: ClientAuthentication::PrivateKeyJwt {
@@ -352,15 +406,29 @@ impl TokenEndpointPlan {
                 audience: assertion_audience,
             },
             parameters,
-            maximum_cache,
-            assumed_lifetime,
+            maximum_cache: bounds.maximum,
+            assumed_lifetime: bounds.assumed,
+            cache: Arc::new(TokenCache::new()),
         }
+    }
+
+    /// The endpoint this plan's cache and budget allowance are keyed by.
+    #[must_use]
+    pub fn endpoint(&self) -> &ExternalId {
+        &self.endpoint
     }
 
     /// The fixed destination, absolute, as the runtime config bound it.
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// The endpoint's token cache this plan owns; every clone of the
+    /// plan shares it.
+    #[must_use]
+    pub fn cache(&self) -> &TokenCache {
+        &self.cache
     }
 
     /// The cache ceiling the operator set.
@@ -458,32 +526,46 @@ impl TokenEndpointPlan {
     }
 }
 
-/// The exchange's token budget: at most two token sends per endpoint per
-/// exchange, outside `maximumUpstreamCalls` and bounded separately
-/// (`products/adapter/CONCEPT.md` section 10.2).
-#[derive(Debug)]
+/// How many token sends one endpoint's allowance holds per exchange.
+const TOKEN_SENDS_PER_EXCHANGE: u8 = 2;
+
+/// The exchange's token budget: at most [`TOKEN_SENDS_PER_EXCHANGE`]
+/// token sends per endpoint per exchange, outside `maximumUpstreamCalls`
+/// and bounded separately (`products/adapter/CONCEPT.md` section 10.2).
+/// Keyed by endpoint: one endpoint's refreshes never spend another
+/// endpoint's allowance.
+#[derive(Debug, Default)]
 pub struct TokenBudget {
-    remaining: u8,
+    remaining: BTreeMap<ExternalId, u8>,
 }
 
 impl TokenBudget {
     /// A fresh exchange's budget.
     #[must_use]
     pub const fn new_exchange() -> Self {
-        Self { remaining: 2 }
+        Self {
+            remaining: BTreeMap::new(),
+        }
     }
 
-    /// Sends left in this exchange.
+    /// Sends left for one endpoint in this exchange.
     #[must_use]
-    pub const fn remaining(&self) -> u8 {
+    pub fn remaining(&self, endpoint: &ExternalId) -> u8 {
         self.remaining
+            .get(endpoint)
+            .copied()
+            .unwrap_or(TOKEN_SENDS_PER_EXCHANGE)
     }
 
-    fn consume(&mut self) -> Result<(), AuthError> {
-        if self.remaining == 0 {
+    fn consume(&mut self, endpoint: &ExternalId) -> Result<(), AuthError> {
+        let allowance = self
+            .remaining
+            .entry(endpoint.clone())
+            .or_insert(TOKEN_SENDS_PER_EXCHANGE);
+        if *allowance == 0 {
             return Err(AuthError::BudgetExhausted);
         }
-        self.remaining -= 1;
+        *allowance -= 1;
         Ok(())
     }
 }
@@ -495,11 +577,12 @@ struct CachedToken {
     expires_at: Instant,
 }
 
-/// The endpoint's token cache, shared by every exchange. One cache per
-/// endpoint: every binding with the same credential shares freshness,
-/// because the deployment holds one client identity per endpoint. The
-/// lock never poisons: a send that panics releases it, and the next
-/// waiter starts a fresh acquisition.
+/// One endpoint's token cache, owned by that endpoint's
+/// [`TokenEndpointPlan`] and shared by every exchange over it: every
+/// binding with the same credential shares freshness, because the
+/// deployment holds one client identity per endpoint. The lock never
+/// poisons: a send that panics releases it, and the next waiter starts
+/// a fresh acquisition.
 pub struct TokenCache {
     state: Mutex<Option<CachedToken>>,
     admission_timeout: Duration,
@@ -549,13 +632,13 @@ impl Default for TokenCache {
 /// credential can never outlive its real expiry.
 pub(crate) async fn acquire_token(
     plan: &TokenEndpointPlan,
-    cache: &TokenCache,
     budget: &mut TokenBudget,
     resolver: &SecretResolver,
     send: &dyn TokenSend,
     signer: &dyn ClientAssertionSigner,
     events: &mut Vec<AuthEvent>,
 ) -> Result<ProtectedText, AuthError> {
+    let cache = plan.cache.as_ref();
     let mut guard = match timeout(cache.admission_timeout, cache.state.lock()).await {
         Ok(guard) => guard,
         Err(_elapsed) => {
@@ -574,7 +657,7 @@ pub(crate) async fn acquire_token(
         }
     }
     budget
-        .consume()
+        .consume(&plan.endpoint)
         .inspect_err(|_| events.push(AuthEvent::TokenBudgetExhausted))?;
     let request = plan.render(resolver, signer)?;
     let anchored = Instant::now();
@@ -779,19 +862,26 @@ mod tests {
         SecretResolver::new([SecretProvider::Environment], "").expect("resolver")
     }
 
+    fn endpoint_id(name: &str) -> ExternalId {
+        ExternalId::new(name).expect("endpoint id")
+    }
+
     fn client_secret_plan(
         placement: CredentialPlacement,
         cache_seconds: u64,
         assumed: Option<u64>,
     ) -> TokenEndpointPlan {
         TokenEndpointPlan::client_secret(
+            endpoint_id("case-api"),
             "https://token.example.invalid/token".to_owned(),
             secret("CLIENT_ID"),
             secret("CLIENT_SECRET"),
             placement,
             TokenRequestParameters::default(),
-            Duration::from_secs(cache_seconds),
-            assumed.map(Duration::from_secs),
+            CacheBounds {
+                maximum: Duration::from_secs(cache_seconds),
+                assumed: assumed.map(Duration::from_secs),
+            },
         )
     }
 
@@ -1032,19 +1122,38 @@ mod tests {
         );
     }
 
-    /// A budget starts at two and refuses the third.
+    /// A budget starts at two for an endpoint and refuses the third; the
+    /// allowance is the endpoint's own, so spending one leaves the other
+    /// untouched.
     #[test]
-    fn budgets_hold_two_sends() {
+    fn budgets_hold_two_sends_per_endpoint() {
+        let case_api = endpoint_id("case-api");
+        let audit_api = endpoint_id("audit-api");
         let mut budget = TokenBudget::new_exchange();
-        assert_eq!(budget.remaining(), 2);
-        budget.consume().expect("the first send is in budget");
-        budget.consume().expect("the second send is in budget");
-        assert_eq!(budget.remaining(), 0);
-        assert_eq!(budget.consume().unwrap_err(), AuthError::BudgetExhausted);
+        assert_eq!(budget.remaining(&case_api), 2);
+        budget
+            .consume(&case_api)
+            .expect("the first send is in budget");
+        budget
+            .consume(&case_api)
+            .expect("the second send is in budget");
+        assert_eq!(budget.remaining(&case_api), 0);
+        assert_eq!(
+            budget.consume(&case_api).unwrap_err(),
+            AuthError::BudgetExhausted
+        );
+        assert_eq!(
+            budget.remaining(&audit_api),
+            2,
+            "another endpoint's allowance is untouched"
+        );
+        budget
+            .consume(&audit_api)
+            .expect("the other endpoint still sends");
     }
 
     /// One acquisition, one cache hit: the second send under the same
-    /// cache asks the endpoint nothing.
+    /// plan's cache asks the endpoint nothing.
     #[tokio::test]
     async fn the_cache_answers_the_second_send() {
         std::env::set_var("CLIENT_ID", "cid");
@@ -1054,12 +1163,11 @@ mod tests {
             Some("application/json"),
             r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
         );
-        let cache = TokenCache::new();
+        let plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let first = acquire_token(
-            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
-            &cache,
+            &plan,
             &mut budget,
             &resolver(),
             &send,
@@ -1070,8 +1178,7 @@ mod tests {
         .expect("the first acquisition issues");
         assert_eq!(first.as_bytes(), b"at");
         let second = acquire_token(
-            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
-            &cache,
+            &plan,
             &mut budget,
             &resolver(),
             &send,
@@ -1096,13 +1203,11 @@ mod tests {
             Some("application/json"),
             r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
         );
-        let cache = TokenCache::new();
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let plan = client_secret_plan(CredentialPlacement::FormBody, 0, None);
         acquire_token(
             &plan,
-            &cache,
             &mut budget,
             &resolver(),
             &send,
@@ -1113,7 +1218,6 @@ mod tests {
         .expect("the first acquisition issues");
         acquire_token(
             &plan,
-            &cache,
             &mut budget,
             &resolver(),
             &send,
@@ -1140,7 +1244,6 @@ mod tests {
         let mut events = Vec::new();
         let error = acquire_token(
             &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
-            &TokenCache::new(),
             &mut TokenBudget::new_exchange(),
             &resolver(),
             &refused,
@@ -1169,7 +1272,6 @@ mod tests {
         let redirect = ScriptedSend::always(302, Some("application/json"), "");
         let error = acquire_token(
             &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
-            &TokenCache::new(),
             &mut TokenBudget::new_exchange(),
             &resolver(),
             &redirect,
@@ -1190,7 +1292,6 @@ mod tests {
         );
         let error = acquire_token(
             &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
-            &TokenCache::new(),
             &mut TokenBudget::new_exchange(),
             &resolver(),
             &html,
@@ -1205,8 +1306,9 @@ mod tests {
         );
     }
 
-    /// Concurrent acquisitions over one cache make exactly one token
-    /// request: the refresh is single-flight.
+    /// Concurrent acquisitions over one endpoint's cache make exactly one
+    /// token request: the refresh is single-flight, and clones of the
+    /// plan share the one cache.
     #[tokio::test(flavor = "current_thread")]
     async fn acquisition_is_single_flight() {
         std::env::set_var("CLIENT_ID", "cid");
@@ -1242,11 +1344,15 @@ mod tests {
             peak: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
         });
-        let cache = std::sync::Arc::new(TokenCache::new());
+        let plan = std::sync::Arc::new(client_secret_plan(
+            CredentialPlacement::BasicHeader,
+            3600,
+            None,
+        ));
         let mut tasks = Vec::new();
         for _ in 0..4 {
-            let plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
-            let cache = std::sync::Arc::clone(&cache);
+            // Clones share the endpoint's one cache.
+            let plan = std::sync::Arc::clone(&plan);
             let send = std::sync::Arc::clone(&send);
             tasks.push(tokio::spawn(async move {
                 let signer = FixedSigner;
@@ -1254,7 +1360,6 @@ mod tests {
                 let mut events = Vec::new();
                 acquire_token(
                     &plan,
-                    &cache,
                     &mut budget,
                     &resolver(),
                     send.as_ref(),
@@ -1284,17 +1389,17 @@ mod tests {
             Some("application/json"),
             r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
         );
-        let cache = TokenCache {
+        let mut plan = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None);
+        plan.cache = Arc::new(TokenCache {
             state: Mutex::new(None),
             admission_timeout: Duration::from_millis(30),
-        };
+        });
         // Hold the cache lock the way a stalled refresh would.
-        let held = cache.state.lock().await;
+        let held = plan.cache.state.lock().await;
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let error = acquire_token(
-            &client_secret_plan(CredentialPlacement::BasicHeader, 3600, None),
-            &cache,
+            &plan,
             &mut budget,
             &resolver(),
             &send,
@@ -1314,7 +1419,11 @@ mod tests {
             vec![AuthEvent::TokenTransportFailed { kind: "timeout" }]
         );
         assert_eq!(send.token_request_count(), 0);
-        assert_eq!(budget.remaining(), 2, "no budget was spent waiting");
+        assert_eq!(
+            budget.remaining(plan.endpoint()),
+            2,
+            "no budget was spent waiting"
+        );
         drop(held);
     }
 
@@ -1328,13 +1437,16 @@ mod tests {
         std::env::set_var("ASSERTION_KEY", "key-pem");
         let url = "https://token.example.invalid/token";
         let plan = TokenEndpointPlan::private_key_jwt(
+            endpoint_id("case-api"),
             url.to_owned(),
             secret("CLIENT_ID"),
             secret("ASSERTION_KEY"),
             url.to_owned(),
             TokenRequestParameters::default(),
-            Duration::from_secs(3600),
-            None,
+            CacheBounds {
+                maximum: Duration::from_secs(3600),
+                assumed: None,
+            },
         );
         let request = plan
             .render(&resolver(), &FixedSigner)
@@ -1358,13 +1470,16 @@ mod tests {
         std::env::set_var("CLIENT_ID", "cid");
         std::env::set_var("HUGE_CLIENT_SECRET", "k".repeat(20 * 1024));
         let plan = TokenEndpointPlan::client_secret(
+            endpoint_id("case-api"),
             "https://token.example.invalid/token".to_owned(),
             secret("CLIENT_ID"),
             secret("HUGE_CLIENT_SECRET"),
             CredentialPlacement::FormBody,
             TokenRequestParameters::default(),
-            Duration::from_secs(3600),
-            None,
+            CacheBounds {
+                maximum: Duration::from_secs(3600),
+                assumed: None,
+            },
         );
         assert_eq!(
             plan.render(&resolver(), &FixedSigner),

@@ -17,7 +17,7 @@ mod upstream;
 
 use registry_adapter::auth::{
     AuthError, AuthEvent, AuthPlan, AuthorizeContext, ClientAssertion, ClientAssertionSigner,
-    ProtectedText, TokenBudget, TokenCache, CREDENTIAL_REJECTED_CLASS,
+    ProtectedText, TokenBudget, CREDENTIAL_REJECTED_CLASS,
 };
 use registry_adapter_core::{
     CredentialPlacement, EndpointAuthentication, EndpointBinding, RuntimeCredential,
@@ -95,11 +95,9 @@ async fn authorize_with_plan(
     send: &dyn registry_adapter::auth::TokenSend,
     events: &mut Vec<AuthEvent>,
 ) -> Result<Option<registry_adapter::auth::AuthHeader>, AuthError> {
-    let cache = TokenCache::new();
     let mut budget = TokenBudget::new_exchange();
     let mut context = AuthorizeContext {
         resolver: &resolver(),
-        cache: &cache,
         budget: &mut budget,
         send,
         signer: &KeyBindingSigner,
@@ -401,13 +399,15 @@ mod oauth2_client_credentials {
         )
         .expect("a usable plan");
 
-        let cache = TokenCache::new();
+        let cache = plan
+            .token_plan()
+            .expect("the OAuth2 plan carries its token endpoint")
+            .cache();
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let send = LoopbackSend::new();
         let mut first = AuthorizeContext {
             resolver: &resolver(),
-            cache: &cache,
             budget: &mut budget,
             send: &send,
             signer: &KeyBindingSigner,
@@ -419,7 +419,6 @@ mod oauth2_client_credentials {
             .expect("a header is sent");
         let mut second = AuthorizeContext {
             resolver: &resolver(),
-            cache: &cache,
             budget: &mut budget,
             send: &send,
             signer: &KeyBindingSigner,
@@ -439,12 +438,21 @@ mod oauth2_client_credentials {
             "invalid_client",
             "server text about the credential",
         )]);
-        let fresh_cache = TokenCache::new();
-        let mut budget = TokenBudget::new_exchange();
+        // The engine's loop reaches the refusal through the 401 rule:
+        // the rule invalidates the plan's cached credential before the
+        // one refresh, whose send is the one the endpoint refuses.
         let mut events = Vec::new();
+        let mut refresh_used = false;
+        let action = plan
+            .on_upstream_status(401, &mut refresh_used, &mut events)
+            .await;
+        assert_eq!(
+            action,
+            registry_adapter::auth::UpstreamStatusAction::RetryWithFreshCredential
+        );
+        assert!(cache.remaining_lifetime().await.is_none());
         let mut context = AuthorizeContext {
             resolver: &resolver(),
-            cache: &fresh_cache,
             budget: &mut budget,
             send: &send,
             signer: &KeyBindingSigner,
@@ -485,14 +493,13 @@ mod oauth2_client_credentials {
             ),
         )
         .expect("a usable plan");
-        let cache = TokenCache::new();
+        let endpoint = ExternalId::new("case-api").expect("id");
         let mut budget = TokenBudget::new_exchange();
         let send = LoopbackSend::new();
         for expected_remaining in [1, 0] {
             let mut events = Vec::new();
             let mut context = AuthorizeContext {
                 resolver: &resolver(),
-                cache: &cache,
                 budget: &mut budget,
                 send: &send,
                 signer: &KeyBindingSigner,
@@ -505,12 +512,11 @@ mod oauth2_client_credentials {
                     code: "invalid_client"
                 })
             );
-            assert_eq!(budget.remaining(), expected_remaining);
+            assert_eq!(budget.remaining(&endpoint), expected_remaining);
         }
         let mut events = Vec::new();
         let mut context = AuthorizeContext {
             resolver: &resolver(),
-            cache: &cache,
             budget: &mut budget,
             send: &send,
             signer: &KeyBindingSigner,
@@ -545,13 +551,15 @@ mod oauth2_client_credentials {
             ),
         )
         .expect("a usable plan");
-        let cache = TokenCache::new();
+        let cache = plan
+            .token_plan()
+            .expect("the OAuth2 plan carries its token endpoint")
+            .cache();
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let send = LoopbackSend::new();
         let mut context = AuthorizeContext {
             resolver: &resolver(),
-            cache: &cache,
             budget: &mut budget,
             send: &send,
             signer: &KeyBindingSigner,
@@ -565,7 +573,7 @@ mod oauth2_client_credentials {
 
         let mut refresh_used = false;
         let action = plan
-            .on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+            .on_upstream_status(401, &mut refresh_used, &mut events)
             .await;
         assert_eq!(
             action,
@@ -574,7 +582,7 @@ mod oauth2_client_credentials {
         assert!(refresh_used);
         assert!(cache.remaining_lifetime().await.is_none());
         let action = plan
-            .on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+            .on_upstream_status(401, &mut refresh_used, &mut events)
             .await;
         assert_eq!(
             action,
@@ -586,7 +594,7 @@ mod oauth2_client_credentials {
             "the class a route cannot catch"
         );
         let action = plan
-            .on_upstream_status(403, &mut refresh_used, &cache, &mut events)
+            .on_upstream_status(403, &mut refresh_used, &mut events)
             .await;
         assert_eq!(
             action,

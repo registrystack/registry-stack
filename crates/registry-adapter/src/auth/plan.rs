@@ -17,7 +17,7 @@
 use crate::auth::{
     material::{basic_value, is_header_value_bytes, scheme_value, AuthHeader},
     token::{
-        acquire_token, resolve_protected, ClientAssertionSigner, TokenBudget, TokenCache,
+        acquire_token, resolve_protected, CacheBounds, ClientAssertionSigner, TokenBudget,
         TokenEndpointPlan, TokenRequestParameters, TokenSend, UpstreamStatusAction,
     },
     AuthError, AuthEvent,
@@ -169,8 +169,10 @@ pub enum StaticCredential {
     },
 }
 
-/// One endpoint's frozen authentication plan.
-#[derive(Debug, Clone, PartialEq)]
+/// One endpoint's frozen authentication plan. An OAuth2 plan owns its
+/// endpoint's token cache, so a credential cached for one endpoint can
+/// never be served to another.
+#[derive(Debug, Clone)]
 pub struct AuthPlan {
     kind: AuthKind,
     static_credential: Option<StaticCredential>,
@@ -178,18 +180,15 @@ pub struct AuthPlan {
 }
 
 /// Everything one authorization needs from the engine: the secret
-/// resolver, the endpoint's token cache shared across exchanges, the
-/// exchange's token budget, the token send through the endpoint's own
-/// outbound client, the assertion signer, and the value-free event log
-/// the journal keeps.
+/// resolver, the exchange's token budget, the token send through the
+/// endpoint's own outbound client, the assertion signer, and the
+/// value-free event log the journal keeps. The endpoint's cache is the
+/// plan's own, not the caller's to supply.
 pub struct AuthorizeContext<'a> {
     /// Resolves `secret:` references under the deployment's providers.
     pub resolver: &'a SecretResolver,
-    /// The endpoint's token cache; one per endpoint, shared by every
-    /// exchange.
-    pub cache: &'a TokenCache,
     /// The exchange's token budget: at most two token sends per endpoint
-    /// per exchange.
+    /// per exchange, keyed by endpoint.
     pub budget: &'a mut TokenBudget,
     /// Sends one token request through the endpoint's own outbound
     /// client: the same trust profile and the same mTLS identity.
@@ -291,13 +290,17 @@ impl AuthPlan {
                     kind: AuthKind::Oauth2ClientCredentials,
                     static_credential: None,
                     token: Some(TokenEndpointPlan::client_secret(
+                        binding.endpoint.clone(),
                         token_endpoint.as_str().to_owned(),
                         client_id_ref.clone(),
                         client_secret_ref.clone(),
                         *credential_placement,
                         parameters,
-                        Duration::from_secs(maximum_cache_seconds.get()),
-                        assumed_lifetime_seconds.map(|seconds| Duration::from_secs(seconds.get())),
+                        CacheBounds {
+                            maximum: Duration::from_secs(maximum_cache_seconds.get()),
+                            assumed: assumed_lifetime_seconds
+                                .map(|seconds| Duration::from_secs(seconds.get())),
+                        },
                     )),
                 })
             }
@@ -333,13 +336,17 @@ impl AuthPlan {
                     kind: AuthKind::Oauth2PrivateKeyJwt,
                     static_credential: None,
                     token: Some(TokenEndpointPlan::private_key_jwt(
+                        binding.endpoint.clone(),
                         token_endpoint.as_str().to_owned(),
                         client_id_ref.clone(),
                         client_assertion_key_ref.clone(),
                         assertion_audience,
                         parameters,
-                        Duration::from_secs(maximum_cache_seconds.get()),
-                        assumed_lifetime_seconds.map(|seconds| Duration::from_secs(seconds.get())),
+                        CacheBounds {
+                            maximum: Duration::from_secs(maximum_cache_seconds.get()),
+                            assumed: assumed_lifetime_seconds
+                                .map(|seconds| Duration::from_secs(seconds.get())),
+                        },
                     )),
                 })
             }
@@ -390,7 +397,6 @@ impl AuthPlan {
             .expect("an OAuth2 plan carries its token endpoint");
         let token = acquire_token(
             plan,
-            context.cache,
             context.budget,
             context.resolver,
             context.send,
@@ -415,7 +421,6 @@ impl AuthPlan {
         &self,
         status: u16,
         refresh_used: &mut bool,
-        cache: &TokenCache,
         events: &mut Vec<AuthEvent>,
     ) -> UpstreamStatusAction {
         if status != 401 {
@@ -426,7 +431,9 @@ impl AuthPlan {
         }
         if self.kind.is_oauth2() && !*refresh_used {
             *refresh_used = true;
-            cache.invalidate().await;
+            if let Some(plan) = &self.token {
+                plan.cache().invalidate().await;
+            }
             events.push(AuthEvent::TokenInvalidatedAfterUnauthorized);
             return UpstreamStatusAction::RetryWithFreshCredential;
         }
@@ -691,13 +698,13 @@ mod tests {
             Some(RuntimeCredential::None {}),
         );
         assert_eq!(
-            AuthPlan::compile(&EndpointAuthentication::Basic {}, &mismatch),
-            Err(AuthPlanFault::KindMismatch)
+            AuthPlan::compile(&EndpointAuthentication::Basic {}, &mismatch).unwrap_err(),
+            AuthPlanFault::KindMismatch
         );
         let missing = binding("https://cases.example.invalid", None);
         assert_eq!(
-            AuthPlan::compile(&EndpointAuthentication::Basic {}, &missing),
-            Err(AuthPlanFault::KindMismatch)
+            AuthPlan::compile(&EndpointAuthentication::Basic {}, &missing).unwrap_err(),
+            AuthPlanFault::KindMismatch
         );
     }
 
@@ -713,8 +720,8 @@ mod tests {
         }
         let named = binding("http://localhost:9/", Some(RuntimeCredential::None {}));
         assert_eq!(
-            AuthPlan::compile(&EndpointAuthentication::None {}, &named),
-            Err(AuthPlanFault::NoneNotAdmitted),
+            AuthPlan::compile(&EndpointAuthentication::None {}, &named).unwrap_err(),
+            AuthPlanFault::NoneNotAdmitted,
             "a loopback name is resolved off-host and is not numeric loopback"
         );
         let public = binding(
@@ -722,8 +729,8 @@ mod tests {
             Some(RuntimeCredential::None {}),
         );
         assert_eq!(
-            AuthPlan::compile(&EndpointAuthentication::None {}, &public),
-            Err(AuthPlanFault::NoneNotAdmitted)
+            AuthPlan::compile(&EndpointAuthentication::None {}, &public).unwrap_err(),
+            AuthPlanFault::NoneNotAdmitted
         );
         let mut with_mtls = binding(
             "https://cases.example.invalid",
@@ -748,8 +755,8 @@ mod tests {
                 scheme: Some(scheme.to_owned()),
             };
             assert_eq!(
-                AuthPlan::compile(&endpoint, &binding),
-                Err(AuthPlanFault::SchemeOutOfBounds),
+                AuthPlan::compile(&endpoint, &binding).unwrap_err(),
+                AuthPlanFault::SchemeOutOfBounds,
                 "scheme {scheme:?} must refuse"
             );
         }
@@ -836,8 +843,9 @@ mod tests {
                 AuthPlan::compile(
                     &EndpointAuthentication::Oauth2ClientCredentials {},
                     &binding
-                ),
-                Err(AuthPlanFault::TokenEndpointNotUsable),
+                )
+                .unwrap_err(),
+                AuthPlanFault::TokenEndpointNotUsable,
                 "{endpoint} must refuse"
             );
         }
@@ -856,8 +864,9 @@ mod tests {
             AuthPlan::compile(
                 &EndpointAuthentication::Oauth2ClientCredentials {},
                 &binding
-            ),
-            Err(AuthPlanFault::ResourceInvalid)
+            )
+            .unwrap_err(),
+            AuthPlanFault::ResourceInvalid
         );
     }
 
@@ -880,8 +889,9 @@ mod tests {
                 AuthPlan::compile(
                     &EndpointAuthentication::Oauth2ClientCredentials {},
                     &binding
-                ),
-                Err(AuthPlanFault::ScopeInvalid),
+                )
+                .unwrap_err(),
+                AuthPlanFault::ScopeInvalid,
                 "scope {scope:?} must refuse"
             );
         }
@@ -914,8 +924,9 @@ mod tests {
                 AuthPlan::compile(
                     &EndpointAuthentication::Oauth2ClientCredentials {},
                     &binding
-                ),
-                Err(AuthPlanFault::AudienceInvalid),
+                )
+                .unwrap_err(),
+                AuthPlanFault::AudienceInvalid,
                 "audience {audience:?} must refuse"
             );
         }
@@ -944,8 +955,9 @@ mod tests {
                 Some(pkjwt_credential(Some(audience.to_owned()))),
             );
             assert_eq!(
-                AuthPlan::compile(&EndpointAuthentication::Oauth2PrivateKeyJwt {}, &binding),
-                Err(AuthPlanFault::AssertionAudienceInvalid),
+                AuthPlan::compile(&EndpointAuthentication::Oauth2PrivateKeyJwt {}, &binding)
+                    .unwrap_err(),
+                AuthPlanFault::AssertionAudienceInvalid,
                 "audience {audience:?} must refuse"
             );
         }
@@ -1002,14 +1014,12 @@ mod tests {
             credential: Option<RuntimeCredential>,
             resolver: &SecretResolver,
         ) -> Option<AuthHeader> {
-            let cache = TokenCache::new();
             let mut budget = TokenBudget::new_exchange();
             let mut events = Vec::new();
             let binding = binding("https://cases.example.invalid", credential);
             let plan = AuthPlan::compile(endpoint, &binding).expect("a usable plan");
             let mut context = AuthorizeContext {
                 resolver,
-                cache: &cache,
                 budget: &mut budget,
                 send: &NeverSend,
                 signer: &NeverSigns,
@@ -1076,12 +1086,10 @@ mod tests {
         let loopback = binding("http://127.0.0.1:9/", Some(RuntimeCredential::None {}));
         let plan =
             AuthPlan::compile(&EndpointAuthentication::None {}, &loopback).expect("a usable plan");
-        let cache = TokenCache::new();
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let mut context = AuthorizeContext {
             resolver: &resolver,
-            cache: &cache,
             budget: &mut budget,
             send: &NeverSend,
             signer: &NeverSigns,
@@ -1139,7 +1147,6 @@ mod tests {
         }
 
         let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
-        let cache = TokenCache::new();
         let mut budget = TokenBudget::new_exchange();
         let mut events = Vec::new();
         let oauth_binding = binding(
@@ -1151,9 +1158,12 @@ mod tests {
             &oauth_binding,
         )
         .expect("a usable plan");
+        let cache = plan
+            .token_plan()
+            .expect("the OAuth2 plan carries its token endpoint")
+            .cache();
         let mut context = AuthorizeContext {
             resolver: &resolver,
-            cache: &cache,
             budget: &mut budget,
             send: &IssuesOne,
             signer: &NeverSigns,
@@ -1168,7 +1178,7 @@ mod tests {
 
         let mut refresh_used = false;
         assert_eq!(
-            plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+            plan.on_upstream_status(401, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::RetryWithFreshCredential
         );
@@ -1180,14 +1190,14 @@ mod tests {
         assert_eq!(events, vec![AuthEvent::TokenInvalidatedAfterUnauthorized]);
 
         assert_eq!(
-            plan.on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+            plan.on_upstream_status(401, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::CredentialRejected
         );
         assert_eq!(events.last(), Some(&AuthEvent::CredentialRejected));
 
         assert_eq!(
-            plan.on_upstream_status(403, &mut refresh_used, &cache, &mut events)
+            plan.on_upstream_status(403, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::Continue,
             "a 403 stays the caller's upstream.http"
@@ -1205,16 +1215,230 @@ mod tests {
         let mut refresh_used = false;
         assert_eq!(
             basic
-                .on_upstream_status(401, &mut refresh_used, &cache, &mut events)
+                .on_upstream_status(401, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::CredentialRejected,
             "a static kind holds nothing to refresh"
         );
         assert_eq!(
             basic
-                .on_upstream_status(403, &mut refresh_used, &cache, &mut events)
+                .on_upstream_status(403, &mut refresh_used, &mut events)
                 .await,
             UpstreamStatusAction::Continue
+        );
+    }
+
+    /// Two OAuth2 endpoints over one exchange keep separate caches and
+    /// separate budget allowances: a credential issued to one endpoint
+    /// never serves the other, and one endpoint's spent sends never
+    /// starve the other's refresh.
+    #[tokio::test]
+    async fn two_endpoints_keep_separate_caches_and_budgets() {
+        use crate::auth::{TokenRequest, TokenWire};
+        use std::future::Future;
+        use std::pin::Pin;
+
+        std::env::set_var("ADAPTER_TEST_TWO_A_ID", "cid-a");
+        std::env::set_var("ADAPTER_TEST_TWO_A_SECRET", "secret-a");
+        std::env::set_var("ADAPTER_TEST_TWO_B_ID", "cid-b");
+        std::env::set_var("ADAPTER_TEST_TWO_B_SECRET", "secret-b");
+
+        /// Answers each token endpoint with a credential naming the
+        /// host that issued it, recording every destination asked.
+        struct IssuesByName {
+            requests: std::sync::Mutex<Vec<String>>,
+        }
+        impl TokenSend for IssuesByName {
+            fn send<'a>(
+                &'a self,
+                request: &'a TokenRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    self.requests
+                        .lock()
+                        .expect("requests")
+                        .push(request.url.clone());
+                    let host = request.url.split('/').nth(2).unwrap_or_default();
+                    Ok(TokenWire {
+                        status: 200,
+                        media_type: Some("application/json".to_owned()),
+                        body: format!(
+                            r#"{{"access_token":"issued-{host}","token_type":"Bearer","expires_in":600}}"#
+                        )
+                        .into_bytes(),
+                    })
+                })
+            }
+        }
+
+        /// The client-credentials kind never signs an assertion; a call
+        /// is a bug.
+        struct NeverSigns;
+        impl ClientAssertionSigner for NeverSigns {
+            fn sign_client_assertion(
+                &self,
+                _request: crate::auth::ClientAssertion<'_>,
+            ) -> Result<crate::auth::ProtectedText, AuthError> {
+                panic!("client-credentials never signs an assertion");
+            }
+        }
+
+        fn endpoint_binding(
+            endpoint: &str,
+            token_endpoint: &str,
+            id_env: &str,
+            secret_env: &str,
+        ) -> EndpointBinding {
+            EndpointBinding {
+                endpoint: ExternalId::new(endpoint).expect("id"),
+                base_url: Url::new("https://cases.example.invalid").expect("url"),
+                credential: Some(RuntimeCredential::Oauth2ClientCredentials {
+                    token_endpoint: Url::new(token_endpoint).expect("url"),
+                    client_id_ref: secret(id_env),
+                    client_secret_ref: secret(secret_env),
+                    scope: None,
+                    audience: None,
+                    resource: None,
+                    credential_placement: CredentialPlacement::BasicHeader,
+                    maximum_cache_seconds: BoundedU64::new(3600).expect("cache"),
+                    assumed_lifetime_seconds: None,
+                }),
+                ca_bundle_ref: None,
+                mtls_identity: None,
+            }
+        }
+
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let send = IssuesByName {
+            requests: std::sync::Mutex::new(Vec::new()),
+        };
+        let plan_a = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &endpoint_binding(
+                "case-api",
+                "https://a.example.invalid/token",
+                "ADAPTER_TEST_TWO_A_ID",
+                "ADAPTER_TEST_TWO_A_SECRET",
+            ),
+        )
+        .expect("a usable plan");
+        let plan_b = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &endpoint_binding(
+                "audit-api",
+                "https://b.example.invalid/token",
+                "ADAPTER_TEST_TWO_B_ID",
+                "ADAPTER_TEST_TWO_B_SECRET",
+            ),
+        )
+        .expect("a usable plan");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+
+        // Each endpoint issues its own credential and then serves its
+        // own cache; a shared cache would have handed endpoint B the
+        // credential endpoint A issued.
+        for (plan, expected) in [
+            (&plan_a, &b"Bearer issued-a.example.invalid"[..]),
+            (&plan_b, b"Bearer issued-b.example.invalid"),
+        ] {
+            for _ in 0..2 {
+                let mut context = AuthorizeContext {
+                    resolver: &resolver,
+                    budget: &mut budget,
+                    send: &send,
+                    signer: &NeverSigns,
+                    events: &mut events,
+                };
+                let header = plan
+                    .authorize(&mut context)
+                    .await
+                    .expect("a credential issues")
+                    .expect("a header is sent");
+                assert_eq!(header.value().as_bytes(), expected);
+            }
+        }
+        // Count the asks inside a block, so the recorder's lock is
+        // released before the awaits that follow.
+        let (asked_a, asked_b) = {
+            let requests = send.requests.lock().expect("requests");
+            (
+                requests
+                    .iter()
+                    .filter(|url| url.contains("a.example.invalid"))
+                    .count(),
+                requests
+                    .iter()
+                    .filter(|url| url.contains("b.example.invalid"))
+                    .count(),
+            )
+        };
+        assert_eq!(asked_a, 1, "endpoint A was asked once");
+        assert_eq!(asked_b, 1, "endpoint B was asked once");
+        let endpoint_a = ExternalId::new("case-api").expect("id");
+        let endpoint_b = ExternalId::new("audit-api").expect("id");
+        assert_eq!(budget.remaining(&endpoint_a), 1);
+        assert_eq!(budget.remaining(&endpoint_b), 1);
+
+        // Spend endpoint A's remaining allowance through the 401 rule's
+        // invalidation; endpoint B's cache keeps answering, and B's
+        // allowance is still whole.
+        let mut refresh_used = false;
+        assert_eq!(
+            plan_a
+                .on_upstream_status(401, &mut refresh_used, &mut events)
+                .await,
+            UpstreamStatusAction::RetryWithFreshCredential
+        );
+        let mut context = AuthorizeContext {
+            resolver: &resolver,
+            budget: &mut budget,
+            send: &send,
+            signer: &NeverSigns,
+            events: &mut events,
+        };
+        plan_a
+            .authorize(&mut context)
+            .await
+            .expect("the refreshed credential issues");
+        assert_eq!(budget.remaining(&endpoint_a), 0, "A's allowance is spent");
+
+        let mut refresh_used = false;
+        assert_eq!(
+            plan_a
+                .on_upstream_status(401, &mut refresh_used, &mut events)
+                .await,
+            UpstreamStatusAction::RetryWithFreshCredential
+        );
+        let mut context = AuthorizeContext {
+            resolver: &resolver,
+            budget: &mut budget,
+            send: &send,
+            signer: &NeverSigns,
+            events: &mut events,
+        };
+        assert_eq!(
+            plan_a.authorize(&mut context).await.unwrap_err(),
+            AuthError::BudgetExhausted,
+            "A cannot spend B's allowance"
+        );
+
+        let mut context = AuthorizeContext {
+            resolver: &resolver,
+            budget: &mut budget,
+            send: &send,
+            signer: &NeverSigns,
+            events: &mut events,
+        };
+        let header = plan_b
+            .authorize(&mut context)
+            .await
+            .expect("B's cache still answers")
+            .expect("a header is sent");
+        assert_eq!(
+            header.value().as_bytes(),
+            b"Bearer issued-b.example.invalid"
         );
     }
 }
