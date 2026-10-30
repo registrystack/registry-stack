@@ -225,8 +225,11 @@ syntax (Camel property placeholders, the port table in section 8.10); the
 profile check resolves each `{name}` in an operation path against that
 operation's path parameters. An operation names, among its path
 parameters, the one carrying the record type (`recordTypeParameter`) and,
-for get, update, and patch, the one carrying the record identifier
-(`recordIdParameter`); no rule reads meaning from a parameter's position.
+exactly when the operation declares a path parameter beyond that one, the
+one carrying the record identifier (`recordIdParameter`; for
+`breg-records`, the get, update, and patch operations); the facade places
+the `recordId` input of section 8.11.1 where `recordIdParameter` is
+declared, and no rule reads meaning from a parameter's position.
 `adapterctl compile` substitutes the bound record type into the path, so
 the contract carries concrete paths (`/v1/records/persons`), as BReg's
 per-package OpenAPI does. An operation also declares its `successStatus`
@@ -290,7 +293,11 @@ are checked against declared field types at check time (CFG-VAL-9).
 built package, held byte-identical by a drift gate: by default
 `<project-dir>/generated/openapi.json`, pretty-printed with sorted keys and
 a trailing newline so its diff is the contract review, for any project
-directory and not only the repository's. One concrete operation per bound
+directory and not only the repository's. Key order is canonicalized
+explicitly wherever bytes are digested or emitted: `serde_json`'s
+`preserve_order` feature is enabled in the runtime's dependency graph
+(through `rhai`), so no digest or generated output relies on map iteration
+order, and the compile output is identical with the feature on or off. One concrete operation per bound
 (profile operation, record type) pair, `operationId`
 `<operation>.<recordType>`. A parameterized part is a deployment value the
 contract cannot know, so the schema types it as a string, never as the
@@ -1272,6 +1279,14 @@ from the fixture in order; the outgoing request must match the recorded
 method, path, query, and body digest; the facade response must equal the
 expected one byte for byte and validate against the generated schema; error
 fixtures must map to the expected problem codes.
+
+A token request matches by endpoint, method, and path alone, because replay
+runs without a credential. A recorded token exchange carries no credential
+header or body (`adapter.fixture.credential-recorded`), and the token in
+its reply is a synthetic value that a captured recording must replace
+before it is committed (section 10.2). Until the route engine drives sends,
+`fixtures replay` checks the fixture contracts only and reports
+`drive: not-run`; it never reports a send-by-send replay it did not run.
 
 Provenance is mandatory and honest: each fixture records `type` (`captured`
 from a running instance, or `documented`, synthesized from the source's
