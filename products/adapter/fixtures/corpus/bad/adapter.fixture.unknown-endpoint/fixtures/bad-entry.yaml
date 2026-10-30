@@ -17,15 +17,19 @@ intercepts:
   - type: endpoint
     endpoint: cases
 entries:
-  - operation: cases-get
-    given:
-      endpoint: nope
-      method: GET
-      path: /v2/cases/x/case_1
-    upstreamResponse:
-      status: 200
-      body: {}
-    expectedFacadeResponse:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case/case_1
+    upstream:
+      - request:
+          endpoint: nope
+          method: GET
+          path: /v2/cases/x/case_1
+        response:
+          status: 200
+          body: {}
+    expected:
+      type: response
       status: 200
       body:
         case:

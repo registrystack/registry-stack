@@ -16,25 +16,26 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records-get
-    given:
-      endpoint: tracker
-      method: GET
-      path: /api/tracker/trackedEntities/Uid00000002
-    upstreamResponse:
-      status: 200
-      body:
-        trackedEntity: Uid00000002
-        trackedEntityType: person
-        orgUnit: OqVpUaAYv2B
-        createdAt: "2025-11-02T08:00:00.000"
-        updatedAt: "2026-01-20T16:45:00.000"
-        deleted: true
-        inactive: false
-        attributes: []
-    expectedFacadeResponse:
-      status: 404
-      body:
-        title: No record with that identifier exists at the source.
-        status: 404
-        code: source.not-found
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/person/Uid00000002
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/Uid00000002
+        response:
+          status: 200
+          body:
+            trackedEntity: Uid00000002
+            trackedEntityType: person
+            orgUnit: OqVpUaAYv2B
+            createdAt: "2025-11-02T08:00:00.000"
+            updatedAt: "2026-01-20T16:45:00.000"
+            deleted: true
+            inactive: false
+            attributes: []
+    expected:
+      type: problem
+      class: outcome.not-found
+      code: source.not-found

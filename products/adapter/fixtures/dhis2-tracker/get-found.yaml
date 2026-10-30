@@ -15,23 +15,27 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records-get
-    given:
-      endpoint: tracker
-      method: GET
-      path: /api/tracker/trackedEntities/Uid00000001
-    upstreamResponse:
-      status: 200
-      body:
-        trackedEntity: Uid00000001
-        trackedEntityType: person
-        orgUnit: OqVpUaAYv2B
-        createdAt: "2026-01-05T10:00:00.000"
-        updatedAt: "2026-02-11T09:30:00.000"
-        deleted: false
-        inactive: false
-        attributes: []
-    expectedFacadeResponse:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/person/Uid00000001
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/Uid00000001
+        response:
+          status: 200
+          body:
+            trackedEntity: Uid00000001
+            trackedEntityType: person
+            orgUnit: OqVpUaAYv2B
+            createdAt: "2026-01-05T10:00:00.000"
+            updatedAt: "2026-02-11T09:30:00.000"
+            deleted: false
+            inactive: false
+            attributes: []
+    expected:
+      type: response
       status: 200
       body:
         data:

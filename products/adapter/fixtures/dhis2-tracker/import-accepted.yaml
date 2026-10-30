@@ -16,32 +16,36 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records-create
-    given:
-      endpoint: tracker
-      method: POST
-      path: /api/tracker
-      query: async=false
-      body:
-        trackedEntities:
-          - trackedEntity: Uid00000003
-            orgUnit: OqVpUaAYv2B
-            attributes: []
-    upstreamResponse:
-      status: 200
-      body:
-        status: OK
-        stats:
-          created: 1
-          updated: 0
-          deleted: 0
-          ignored: 0
-          total: 1
-        bundle-report:
-          typeReportMap:
-            TRACKED_ENTITY:
+  - facadeRequest:
+      operation: records-create
+      path: /v1/records/person
+    upstream:
+      - request:
+          endpoint: tracker
+          method: POST
+          path: /api/tracker
+          query: async=false
+          body:
+            trackedEntities:
+              - trackedEntity: Uid00000003
+                orgUnit: OqVpUaAYv2B
+                attributes: []
+        response:
+          status: 200
+          body:
+            status: OK
+            stats:
               created: 1
-    expectedFacadeResponse:
+              updated: 0
+              deleted: 0
+              ignored: 0
+              total: 1
+            bundle-report:
+              typeReportMap:
+                TRACKED_ENTITY:
+                  created: 1
+    expected:
+      type: response
       status: 201
       body:
         data:

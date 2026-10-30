@@ -21,29 +21,33 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records-search
-    given:
-      endpoint: tracker
-      method: GET
-      path: /api/tracker/trackedEntities
-      query: order=createdAt%3Adesc&page=1&pageSize=50&program=qyVpUaAYv2A&totalPages=true
-    upstreamResponse:
-      status: 200
-      body:
-        instances:
-          - trackedEntity: Uid00000001
-            trackedEntityType: person
-            orgUnit: OqVpUaAYv2B
-            createdAt: "2026-01-05T10:00:00.000"
-            updatedAt: "2026-02-11T09:30:00.000"
-            deleted: false
-            inactive: false
-            attributes: []
-        page:
-          page: 1
-          pageSize: 50
-          totalPage: 1
-    expectedFacadeResponse:
+  - facadeRequest:
+      operation: records-search
+      path: /v1/records/person
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities
+          query: order=createdAt%3Adesc&page=1&pageSize=50&program=qyVpUaAYv2A&totalPages=true
+        response:
+          status: 200
+          body:
+            instances:
+              - trackedEntity: Uid00000001
+                trackedEntityType: person
+                orgUnit: OqVpUaAYv2B
+                createdAt: "2026-01-05T10:00:00.000"
+                updatedAt: "2026-02-11T09:30:00.000"
+                deleted: false
+                inactive: false
+                attributes: []
+            page:
+              page: 1
+              pageSize: 50
+              totalPage: 1
+    expected:
+      type: response
       status: 200
       body:
         items:

@@ -511,6 +511,30 @@ exceptions:
   class: protocol-constant
   reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
+- rule: CFG-ID-1
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/ExpectedFacade/oneOf/0/properties/headers
+  class: protocol-constant
+  reason: Recorded header names are written as RFC 9110 defines field-name tokens, with dashes and mixed case; they are protocol spellings the recorded exchange fixed, not authored identifiers
+  resolution: Permanent.
+- rule: CFG-ID-1
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/RecordedFacadeRequest/properties/headers
+  class: protocol-constant
+  reason: Recorded header names are written as RFC 9110 defines field-name tokens, with dashes and mixed case; they are protocol spellings the recorded exchange fixed, not authored identifiers
+  resolution: Permanent.
+- rule: CFG-ID-1
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/RecordedRequest/properties/headers
+  class: protocol-constant
+  reason: Recorded header names are written as RFC 9110 defines field-name tokens, with dashes and mixed case; they are protocol spellings the recorded exchange fixed, not authored identifiers
+  resolution: Permanent.
+- rule: CFG-ID-1
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/RecordedResponse/properties/headers
+  class: protocol-constant
+  reason: Recorded header names are written as RFC 9110 defines field-name tokens, with dashes and mixed case; they are protocol spellings the recorded exchange fixed, not authored identifiers
+  resolution: Permanent.
 - rule: CFG-NAME-2
   format: adapter/fixture
   location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/HttpMethod/enum/GET

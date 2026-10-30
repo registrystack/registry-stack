@@ -4055,7 +4055,7 @@ formats:
     conformance:
       requiredText: /id
       optionalText: none
-      integer: /entries/0/upstreamResponse/status
+      integer: /entries/0/upstream/0/response/status
       boolean: none
     securityMembers: []
     restrictingMembers: []

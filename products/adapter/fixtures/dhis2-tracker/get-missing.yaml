@@ -22,21 +22,22 @@ intercepts:
   - type: endpoint
     endpoint: tracker
 entries:
-  - operation: records-get
-    given:
-      endpoint: tracker
-      method: GET
-      path: /api/tracker/trackedEntities/Uid00000004
-    upstreamResponse:
-      status: 404
-      body:
-        httpStatus: Not Found
-        httpStatusCode: 404
-        status: ERROR
-        message: The requested tracked entity does not exist.
-    expectedFacadeResponse:
-      status: 404
-      body:
-        title: No record with that identifier exists at the source.
-        status: 404
-        code: source.not-found
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/person/Uid00000004
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/Uid00000004
+        response:
+          status: 404
+          body:
+            httpStatus: Not Found
+            httpStatusCode: 404
+            status: ERROR
+            message: The requested tracked entity does not exist.
+    expected:
+      type: problem
+      class: outcome.not-found
+      code: source.not-found

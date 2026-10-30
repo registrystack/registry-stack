@@ -14,18 +14,27 @@ provenance:
   type: documented
   reference: https://case-api.example.invalid/docs
 intercepts:
+  # The suite declares the intercept its recorded exchange needs, so the
+  # member refuses for the unknown intercept alone and not for a send no
+  # intercept covers.
+  - type: endpoint
+    endpoint: cases
   - type: endpoint
     endpoint: nope
 entries:
-  - operation: cases-get
-    given:
-      endpoint: cases
-      method: GET
-      path: /v2/cases/x/case_1
-    upstreamResponse:
-      status: 200
-      body: {}
-    expectedFacadeResponse:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case/case_1
+    upstream:
+      - request:
+          endpoint: cases
+          method: GET
+          path: /v2/cases/x/case_1
+        response:
+          status: 200
+          body: {}
+    expected:
+      type: response
       status: 200
       body:
         case:
