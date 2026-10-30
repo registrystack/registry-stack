@@ -8,8 +8,8 @@
 # carries a `nextPage` link here, so pageCount is not the only
 # another-page signal; the route reads pageCount. The link names the
 # capture's own program parameter, which the request above does not send:
-# the body is the captured byte and stays unedited. The captured page
-# size is the capture server's cap of 5.
+# the body is the captured byte and stays unedited. The capture kept
+# the page size at 5, so it never answered one.
 #
 # The expected facade body follows the real bytes: each item carries the
 # captured entity's type UID, org unit, and stamps, and the reply being
