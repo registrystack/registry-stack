@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use axum::extract::Path;
+use axum::extract::{Path, RawQuery};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -24,9 +24,14 @@ use registry_adapter_core::{
 };
 use serde_json::{json, Value};
 
-use crate::exchange::Exchange;
+use crate::component::rest::continuation::{
+    filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
+};
+use crate::exchange::{
+    Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
+};
 use crate::journal::{self, JournalEvent};
-use crate::load::{Loaded, ServedOperation};
+use crate::load::{Loaded, ServedOperation, ServedPagination};
 use crate::route::{run_route, RouteContext, RouteFailure};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
 
@@ -35,6 +40,9 @@ pub struct FacadeState {
     pub loaded: Loaded,
     pub authenticator: Authenticator,
     pub journal: Pool,
+    /// Seals and opens pagination cursors; present when the runtime
+    /// config declares `cursorKeyRef`, which a paginated operation needs.
+    pub codec: Option<ContinuationCodec>,
 }
 
 /// The router for every served operation.
@@ -46,9 +54,11 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         router = router.route(
             &path,
             get(
-                move |headers: HeaderMap, Path(params): Path<HashMap<String, String>>| {
+                move |headers: HeaderMap,
+                      Path(params): Path<HashMap<String, String>>,
+                      RawQuery(query): RawQuery| {
                     let shared = Arc::clone(&shared);
-                    async move { handle(&shared, index, &headers, &params).await }
+                    async move { handle(&shared, index, &headers, &params, query.as_deref()).await }
                 },
             ),
         );
@@ -61,6 +71,7 @@ async fn handle(
     index: usize,
     headers: &HeaderMap,
     params: &HashMap<String, String>,
+    query: Option<&str>,
 ) -> Response {
     let operation = &state.loaded.served[index];
     let profile = &state.loaded.profile;
@@ -100,6 +111,32 @@ async fn handle(
     }
 
     let mut exchange = Exchange::new(request_id.clone());
+    let mut search_binding: Option<SearchBinding> = None;
+    if let Some(pagination) = &operation.pagination {
+        match open_search(state, operation, pagination, &caller, &record_type, query) {
+            Ok(search) => {
+                exchange
+                    .message
+                    .set_header(PAGE_SIZE_HEADER, json!(search.page_size));
+                exchange.set_property(FILTERS_PROPERTY, json!({}));
+                if let Some(continuation) = search.continuation {
+                    exchange.set_property(CONTINUATION_PROPERTY, continuation);
+                }
+                search_binding = Some(search.binding);
+            }
+            Err(reason) => {
+                return refuse_search(
+                    state,
+                    operation,
+                    &caller,
+                    &record_type,
+                    &request_id,
+                    &reason,
+                )
+                .await;
+            }
+        }
+    }
     exchange
         .message
         .set_header("recordType", Value::String(record_type.clone()));
@@ -153,7 +190,29 @@ async fn handle(
         );
     }
     match rendered {
-        Ok(done) => success(profile, operation, &done, &record_type, &request_id),
+        Ok(done) => {
+            let next_cursor = match seal_next(state, operation, &caller, search_binding, &done) {
+                Ok(cursor) => cursor,
+                Err(error) => {
+                    tracing::error!(%error, "the next cursor could not be sealed");
+                    return facade_problem(
+                        profile,
+                        ErrorClass::Facade,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &record_type,
+                        &request_id,
+                    );
+                }
+            };
+            success(
+                profile,
+                operation,
+                &done,
+                next_cursor,
+                &record_type,
+                &request_id,
+            )
+        }
         Err(failure) => route_problem(profile, &failure, &record_type, &request_id),
     }
 }
@@ -221,26 +280,209 @@ fn refusal_response(
     response
 }
 
-fn success(
-    profile: &AdapterProfile,
-    operation: &ServedOperation,
-    exchange: &Exchange,
-    record_type: &str,
-    request_id: &str,
-) -> Response {
-    // A route may end with a record that wraps its domain fields under
-    // `domainData` beside the source's identifiers; the facade's record is
-    // the domain fields.
-    let body = &exchange.message.body;
-    let record = match body {
+/// A record as the facade serves it: a route may end with a record that
+/// wraps its domain fields under `domainData` beside the source's
+/// identifiers; the facade's record is the domain fields.
+fn record_of(body: &Value) -> Value {
+    match body {
         Value::Object(map) if map.contains_key("recordIdentifier") => map
             .get("domainData")
             .cloned()
             .unwrap_or_else(|| body.clone()),
         other => other.clone(),
+    }
+}
+
+/// What a search request carries once validated.
+struct SearchInputs {
+    page_size: u64,
+    continuation: Option<Value>,
+    binding: SearchBinding,
+}
+
+/// What the cursor the route's answer may be sealed under is bound to.
+struct SearchBinding {
+    filters: crate::component::rest::continuation::FilterDigest,
+}
+
+/// Validate a search's query against the operation's declared pagination
+/// and restore the continuation its cursor carries. Only the cursor and
+/// page-size parameters exist (the person-search binding declares no
+/// filters), so any other, a repeated one, or a missing or out-of-bounds
+/// page size is refused. The reason is value-free, for the journal.
+fn open_search(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    pagination: &ServedPagination,
+    caller: &Caller,
+    record_type: &str,
+    query: Option<&str>,
+) -> Result<SearchInputs, String> {
+    let mut cursor: Option<String> = None;
+    let mut limit: Option<String> = None;
+    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        let slot = if name == pagination.cursor_parameter {
+            &mut cursor
+        } else if name == pagination.page_size_parameter {
+            &mut limit
+        } else {
+            return Err("an undeclared query parameter".to_owned());
+        };
+        if slot.replace(value.into_owned()).is_some() {
+            return Err("a repeated query parameter".to_owned());
+        }
+    }
+    let page_size = limit
+        .ok_or("the page size is absent and the profile declares no default")?
+        .parse::<u64>()
+        .map_err(|_| "the page size is not an integer".to_owned())?;
+    if !(pagination.page_size_minimum..=pagination.page_size_maximum).contains(&page_size) {
+        return Err("the page size is outside the profile's bounds".to_owned());
+    }
+    let filters = filter_digest(
+        &json!({"recordType": record_type, "filters": {}}),
+        u32::try_from(page_size).map_err(|_| "the page size is too large".to_owned())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let codec = state
+        .codec
+        .as_ref()
+        .ok_or("the runtime has no cursor key")?;
+    let continuation = match cursor {
+        Some(cursor) => {
+            let binding = cursor_binding(state, operation, caller, filters);
+            Some(
+                codec
+                    .open(&cursor, &binding, SystemTime::now())
+                    .map_err(|refusal: CursorRefusal| refusal.reason().to_owned())?,
+            )
+        }
+        None => None,
     };
+    Ok(SearchInputs {
+        page_size,
+        continuation,
+        binding: SearchBinding { filters },
+    })
+}
+
+fn cursor_binding<'a>(
+    state: &'a FacadeState,
+    operation: &'a ServedOperation,
+    caller: &'a Caller,
+    filters: crate::component::rest::continuation::FilterDigest,
+) -> CursorBinding<'a> {
+    CursorBinding {
+        operation: &operation.operation,
+        binding_id: &operation.binding,
+        issuer: state.loaded.runtime.oidc.issuer.as_str(),
+        subject: &caller.reference,
+        deployment: &state.loaded.deployment,
+        filters,
+    }
+}
+
+/// Seal the continuation the route set for the next page; `None` on the
+/// last page and for an operation that is not paginated.
+fn seal_next(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    caller: &Caller,
+    binding: Option<SearchBinding>,
+    done: &Exchange,
+) -> Result<Option<String>, String> {
+    let (Some(binding), Some(codec)) = (binding, state.codec.as_ref()) else {
+        return Ok(None);
+    };
+    let cursor_binding = cursor_binding(state, operation, caller, binding.filters);
+    codec
+        .seal(
+            done.property(NEXT_CONTINUATION_PROPERTY),
+            &cursor_binding,
+            SystemTime::now(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+/// Answer a refused search as `facade.invalid-request`, journaling the
+/// refusal first with its value-free reason.
+async fn refuse_search(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    caller: &Caller,
+    record_type: &str,
+    request_id: &str,
+    reason: &str,
+) -> Response {
+    let profile = &state.loaded.profile;
+    let event = |kind: &'static str, detail: Option<Value>| JournalEvent {
+        event_kind: kind,
+        exchange_id: request_id.to_owned(),
+        operation: operation.operation.clone(),
+        caller_ref: caller.reference.clone(),
+        route_id: operation.route_id.clone(),
+        detail: detail.map(|value| value.to_string()),
+    };
+    let events = vec![
+        event("exchangeCreated", None),
+        event(
+            "exchangeFailed",
+            Some(json!({
+                "class": ErrorClass::FacadeInvalidRequest.class(),
+                "reason": reason,
+            })),
+        ),
+    ];
+    if let Err(error) = append_all(&state.journal, events).await {
+        tracing::error!(%error, "the audit journal could not record the refusal");
+        return facade_problem(
+            profile,
+            ErrorClass::Facade,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            record_type,
+            request_id,
+        );
+    }
+    facade_problem(
+        profile,
+        ErrorClass::FacadeInvalidRequest,
+        StatusCode::BAD_REQUEST,
+        record_type,
+        request_id,
+    )
+}
+
+fn success(
+    profile: &AdapterProfile,
+    operation: &ServedOperation,
+    exchange: &Exchange,
+    next_cursor: Option<String>,
+    record_type: &str,
+    request_id: &str,
+) -> Response {
+    let body = &exchange.message.body;
     let mut slots: BTreeMap<&str, Value> = BTreeMap::new();
-    slots.insert("record", record);
+    if operation.pagination.is_some() {
+        let Value::Array(records) = body else {
+            tracing::error!("a search route did not end with an array of records");
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                record_type,
+                request_id,
+            );
+        };
+        slots.insert(
+            "records",
+            Value::Array(records.iter().map(record_of).collect()),
+        );
+        if let Some(cursor) = next_cursor {
+            slots.insert("nextCursor", Value::String(cursor));
+        }
+    } else {
+        slots.insert("record", record_of(body));
+    }
     slots.insert("recordType", Value::String(record_type.to_owned()));
     slots.insert("requestId", Value::String(request_id.to_owned()));
     match render_envelope(&operation.response_envelope, &slots) {

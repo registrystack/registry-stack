@@ -13,16 +13,21 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use jsonwebtoken::Algorithm;
 use registry_adapter_core::AdapterRuntimeConfig;
 use registry_platform_authcommon::validate_compact_access_token;
-use registry_platform_config::{DatabaseConfig, JwksSource, SecretResolver};
+use registry_platform_config::{
+    DatabaseConfig, JwksSource, SecretReference as ConfigSecretReference, SecretResolver,
+};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
     JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError, TokenVerifier,
     TokenVerifierConfig,
 };
+use registry_platform_yaml::SecretReference;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_postgres::Config as PgConfig;
+use zeroize::Zeroizing;
 
+use crate::component::rest::continuation::{ContinuationCodec, CursorKey, CursorTtl};
 use crate::facade::{router, FacadeState};
 use crate::journal;
 use crate::load::{load, LoadError};
@@ -145,6 +150,40 @@ async fn authenticator(
     Ok(Authenticator {
         verifier: TokenVerifier::new(config, Arc::new(keys)),
     })
+}
+
+/// The cursor codec the runtime config declares, if any: the current key
+/// seals, the previous key still opens.
+fn codec(
+    runtime: &AdapterRuntimeConfig,
+    resolver: &SecretResolver,
+) -> Result<Option<ContinuationCodec>, ServeError> {
+    let invalid = |what: &str| ServeError::Configuration(format!("cursor key: {what}"));
+    let key = |reference: &SecretReference| -> Result<CursorKey, ServeError> {
+        // The key is raw bytes, so a file or variable may hold any 32.
+        let parsed = ConfigSecretReference::parse(reference.as_str())
+            .map_err(|_| invalid("a reference was refused"))?;
+        let secret = resolver
+            .resolve_binary_reference(&parsed)
+            .map_err(|_| invalid("a reference could not be resolved"))?;
+        CursorKey::new(Zeroizing::new(secret.expose_secret().to_vec()))
+            .map_err(|error| invalid(&error.to_string()))
+    };
+    let Some(current) = &runtime.cursor_key_ref else {
+        return Ok(None);
+    };
+    let previous = runtime
+        .previous_cursor_key_ref
+        .as_ref()
+        .map(key)
+        .transpose()?;
+    let ttl = match runtime.cursor_ttl_seconds {
+        Some(seconds) => {
+            CursorTtl::from_seconds(seconds.get()).map_err(|error| invalid(&error.to_string()))?
+        }
+        None => CursorTtl::default(),
+    };
+    Ok(Some(ContinuationCodec::new(key(current)?, previous, ttl)))
 }
 
 fn pool(
@@ -275,6 +314,7 @@ pub async fn run(
     }
     tracing::info!(address = %local, "listening");
     let state = Arc::new(FacadeState {
+        codec: codec(&loaded.runtime, &loaded.resolver)?,
         loaded,
         authenticator,
         journal,

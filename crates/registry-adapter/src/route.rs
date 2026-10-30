@@ -22,7 +22,8 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use registry_adapter_core::{
-    ErrorClass, Expression, HttpMethod, OnExceptionStep, SendComponent, Step, ToParameters, ToStep,
+    ErrorClass, Expression, HttpMethod, OnExceptionStep, SendComponent, SetPropertyStep, Step,
+    ToParameters, ToStep,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -33,7 +34,8 @@ use crate::auth::{
     TransportFailure, UpstreamStatusAction,
 };
 use crate::exchange::{
-    Exchange, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER, REDELIVERY_MAX_COUNTER_HEADER,
+    Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
+    REDELIVERY_MAX_COUNTER_HEADER, RESERVED_PROPERTY_PREFIX,
 };
 use crate::scripts::ScriptSet;
 use crate::upstream::{EgressError, OutboundSend, SendMethod, UpstreamSend};
@@ -82,6 +84,7 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
         match step {
             Step::To(to) => check_to(to)?,
             Step::SetBody(expression) => check_expression("setBody", expression)?,
+            Step::SetProperty(property) => check_set_property(property)?,
             Step::ThrowException(_) => {}
             Step::OnException(clause) if !in_clause => check_clause(clause)?,
             other => {
@@ -102,6 +105,20 @@ fn check_expression(site: &str, expression: &Expression) -> Result<(), String> {
         )),
         _ => Ok(()),
     }
+}
+
+/// A route sets its own properties and the one reserved property the
+/// facade reads back; every other `Adapter` name belongs to the engine.
+fn check_set_property(property: &SetPropertyStep) -> Result<(), String> {
+    if property.name.starts_with(RESERVED_PROPERTY_PREFIX)
+        && property.name != NEXT_CONTINUATION_PROPERTY
+    {
+        return Err(format!(
+            "setProperty may not write the reserved property {}",
+            property.name
+        ));
+    }
+    check_expression("setProperty", &property.value)
 }
 
 fn check_clause(clause: &OnExceptionStep) -> Result<(), String> {
@@ -140,10 +157,12 @@ fn check_to(to: &ToStep) -> Result<(), String> {
     }
     if parameters.http_uri.is_some()
         || parameters.body.is_some()
-        || !parameters.query.is_empty()
         || !parameters.resume_bindings.is_empty()
     {
-        return Err("a to step with httpUri, body, query or resumeBindings is not served".into());
+        return Err("a to step with httpUri, body or resumeBindings is not served".into());
+    }
+    for expression in parameters.query.values() {
+        check_expression("query", expression)?;
     }
     for expression in parameters.path_parameters.values() {
         check_expression("pathParameters", expression)?;
@@ -349,6 +368,11 @@ impl Run<'_, '_> {
                 self.exchange.message.body = self.eval(expression)?;
                 Ok(())
             }
+            Step::SetProperty(property) => {
+                let value = self.eval(&property.value)?;
+                self.exchange.set_property(&property.name, value);
+                Ok(())
+            }
             Step::ThrowException(throw) => Err(RouteFailure {
                 class: throw.exception_type,
                 message: throw.message.clone(),
@@ -398,7 +422,8 @@ impl Run<'_, '_> {
             return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
         }
         let path = self.render_path(parameters)?;
-        let link = format!("{}{path}", endpoint.base);
+        let query = self.render_query(parameters)?;
+        let link = format!("{}{path}{query}", endpoint.base);
         let ok_range = parse_ok_range(parameters).unwrap_or(DEFAULT_OK_RANGE);
 
         let mut budget = TokenBudget::new_exchange();
@@ -491,6 +516,34 @@ impl Run<'_, '_> {
                 }
                 Err(RouteFailure::of(class))
             }
+        }
+    }
+
+    /// The query string of the send: each declared parameter in name
+    /// order, its value rendered from the expression and percent-encoded.
+    /// A null value leaves the parameter out.
+    fn render_query(&self, parameters: &ToParameters) -> Result<String, RouteFailure> {
+        let mut pairs = Vec::new();
+        for (name, expression) in &parameters.query {
+            let text = match self.eval(expression)? {
+                Value::Null => continue,
+                Value::String(text) => text,
+                Value::Number(number) => number.to_string(),
+                Value::Bool(flag) => flag.to_string(),
+                Value::Array(_) | Value::Object(_) => {
+                    return Err(RouteFailure::of(ErrorClass::Validation))
+                }
+            };
+            pairs.push(format!(
+                "{}={}",
+                percent_encode(name.as_str()),
+                percent_encode(&text)
+            ));
+        }
+        if pairs.is_empty() {
+            Ok(String::new())
+        } else {
+            Ok(format!("?{}", pairs.join("&")))
         }
     }
 
@@ -596,6 +649,44 @@ mod served_tests {
         let refusal = check_servable(&steps).expect_err("refused");
         assert!(refusal.contains("idempotentConsumer"), "{refusal}");
         assert!(refusal.contains("not served"), "{refusal}");
+    }
+
+    #[test]
+    fn a_route_may_set_its_own_property_and_the_next_continuation_only() {
+        let own = steps(json!([{"setProperty": {"name": "page", "value": {"constant": 1}}}]));
+        check_servable(&own).expect("served");
+        let next = steps(json!([
+            {"setProperty": {"name": "AdapterNextContinuation", "value": {"constant": 2}}}
+        ]));
+        check_servable(&next).expect("served");
+        for reserved in ["AdapterContinuation", "AdapterFilters", "AdapterAnything"] {
+            let steps = steps(json!([
+                {"setProperty": {"name": reserved, "value": {"constant": 1}}}
+            ]));
+            let refusal = check_servable(&steps).expect_err("refused");
+            assert!(refusal.contains(reserved), "{refusal}");
+        }
+    }
+
+    #[test]
+    fn a_send_with_query_expressions_is_served_and_a_jsonpath_one_is_not() {
+        let served = steps(json!([
+            {"to": {"uri": "http:tracker", "parameters": {
+                "httpMethod": "GET",
+                "path": "/api/items",
+                "query": {"page": {"exchangeProperty": "page"}, "all": {"constant": true}}
+            }}}
+        ]));
+        check_servable(&served).expect("served");
+        let refused = steps(json!([
+            {"to": {"uri": "http:tracker", "parameters": {
+                "httpMethod": "GET",
+                "path": "/api/items",
+                "query": {"page": {"jsonpath": "$.page"}}
+            }}}
+        ]));
+        let refusal = check_servable(&refused).expect_err("refused");
+        assert!(refusal.contains("jsonpath"), "{refusal}");
     }
 
     #[test]

@@ -20,6 +20,19 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+/// The prefix of the exchange properties the engine owns.
+pub const RESERVED_PROPERTY_PREFIX: &str = "Adapter";
+/// The facade's filter inputs, as an object of the declared filters the
+/// caller sent.
+pub const FILTERS_PROPERTY: &str = "AdapterFilters";
+/// The continuation the caller's cursor restored; absent on a first page.
+pub const CONTINUATION_PROPERTY: &str = "AdapterContinuation";
+/// The one reserved property a route sets: the continuation the engine
+/// seals as the next cursor. Absent or null is the last page.
+pub const NEXT_CONTINUATION_PROPERTY: &str = "AdapterNextContinuation";
+/// The page size header the facade sets on a search.
+pub const PAGE_SIZE_HEADER: &str = "pageSize";
+
 /// Headers the redelivery loop sets while an upstream send is retried
 /// (section 8.7).
 pub const REDELIVERED_HEADER: &str = "camelredelivered";

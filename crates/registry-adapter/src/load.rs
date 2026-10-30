@@ -35,7 +35,8 @@ use crate::component::http::uri::PinnedOrigin;
 use crate::interim_loopback::LoopbackSender;
 use crate::route::{check_servable, is_served_auth, EndpointRuntime};
 use crate::scripts::ScriptSet;
-use registry_adapter_core::Expression;
+use registry_adapter_core::{Expression, RouteTemplate};
+use serde_json::Value;
 
 /// One upstream attempt's wall-clock bound.
 const ATTEMPT: Duration = Duration::from_secs(10);
@@ -66,6 +67,16 @@ pub struct ServedOperation {
     pub steps: Vec<Step>,
     pub maximum_upstream_calls: u64,
     pub response_envelope: String,
+    /// The cursor and page-size parameters of a search operation.
+    pub pagination: Option<ServedPagination>,
+}
+
+/// The pagination parameters one served search operation declares.
+pub struct ServedPagination {
+    pub cursor_parameter: String,
+    pub page_size_parameter: String,
+    pub page_size_minimum: u64,
+    pub page_size_maximum: u64,
 }
 
 /// Everything startup produced.
@@ -79,6 +90,9 @@ pub struct Loaded {
     /// `(binding id, why)` for every binding left unserved.
     pub unserved: Vec<(String, String)>,
     pub resolver: SecretResolver,
+    /// A digest of the project, profile and pack bytes, so a cursor
+    /// minted under other artifacts is refused.
+    pub deployment: String,
 }
 
 fn format_spec(kind: &'static str, api_version: &'static str) -> FormatSpec<'static> {
@@ -124,7 +138,7 @@ fn digest_of(bytes: &[u8]) -> Digest {
 /// `profile.yaml`, `pack.yaml` and `scripts/`; `runtime_path` is the
 /// operator runtime config.
 pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, LoadError> {
-    let (project, _): (AdapterProject, _) = read(
+    let (project, project_bytes): (AdapterProject, _) = read(
         &project_directory.join("project.yaml"),
         &format_spec(ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_API_VERSION),
     )?;
@@ -219,6 +233,18 @@ pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, Loa
         );
     }
 
+    let deployment = sha256_uri(
+        &[project_bytes.as_slice(), &profile_bytes, &pack_bytes]
+            .iter()
+            .flat_map(|bytes| {
+                let mut framed = (bytes.len() as u64).to_be_bytes().to_vec();
+                framed.extend_from_slice(bytes);
+                framed
+            })
+            .collect::<Vec<u8>>(),
+    );
+    let has_cursor_key = runtime.cursor_key_ref.is_some();
+
     let mut scripts = ScriptSet::default();
     let mut served = Vec::new();
     let mut unserved = Vec::new();
@@ -231,6 +257,7 @@ pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, Loa
             project_directory,
             &endpoints,
             &endpoint_refusals,
+            has_cursor_key,
             &mut scripts,
         );
         match outcome {
@@ -247,6 +274,7 @@ pub fn load(project_directory: &Path, runtime_path: &Path) -> Result<Loaded, Loa
         served,
         unserved,
         resolver,
+        deployment,
     })
 }
 
@@ -259,6 +287,7 @@ fn compile_binding(
     project_directory: &Path,
     endpoints: &BTreeMap<String, EndpointRuntime>,
     endpoint_refusals: &BTreeMap<String, String>,
+    has_cursor_key: bool,
     scripts: &mut ScriptSet,
 ) -> Result<ServedOperation, String> {
     let operation = profile
@@ -271,26 +300,18 @@ fn compile_binding(
             .route_templates
             .get(templated.route_template.as_str())
             .ok_or("the templated route names no pack template")?;
-        // Instantiation values are not substituted yet. A template whose
-        // parameters are all optional, with no default and no supplied
-        // value, keeps its `{{name}}` placeholders, which a send's
-        // `pathParameters` bind per request.
-        if !templated.parameters.is_empty()
-            || template
-                .parameters
-                .iter()
-                .any(|parameter| parameter.required || parameter.default_value.is_some())
-        {
-            return Err(
-                "a route template instantiated with parameter values is not served yet".to_owned(),
-            );
-        }
-        template.steps.clone()
+        instantiate(template, &templated.parameters)?
     } else if let Some(route) = pack.routes.get(route_id) {
         route.steps.clone()
     } else {
         return Err("the binding names no route".to_owned());
     };
+    if operation.pagination.is_some() && !has_cursor_key {
+        return Err(
+            "a paginated operation needs cursorKeyRef in the runtime config to seal its cursors"
+                .to_owned(),
+        );
+    }
     check_servable(&steps)?;
 
     let mut refusal: Option<String> = None;
@@ -332,7 +353,66 @@ fn compile_binding(
         steps,
         maximum_upstream_calls: binding.maximum_upstream_calls.get(),
         response_envelope: operation.response_envelope.text().to_owned(),
+        pagination: operation
+            .pagination
+            .as_ref()
+            .map(|pagination| ServedPagination {
+                cursor_parameter: pagination.cursor_parameter.as_str().to_owned(),
+                page_size_parameter: pagination.page_size_parameter.as_str().to_owned(),
+                page_size_minimum: pagination.page_size_minimum.get(),
+                page_size_maximum: pagination.page_size_maximum.get(),
+            }),
     })
+}
+
+/// The template's steps with each parameter's supplied value (or its
+/// default) written in. A `{{name}}` that is a whole string takes the
+/// value with its type; inside longer text it takes the value's text. A
+/// placeholder of a parameter with neither a supplied value nor a
+/// default stays for the send to bind per request.
+fn instantiate(
+    template: &RouteTemplate,
+    supplied: &BTreeMap<String, Value>,
+) -> Result<Vec<Step>, String> {
+    let mut values: BTreeMap<&str, &Value> = BTreeMap::new();
+    for parameter in &template.parameters {
+        let name = parameter.name.as_str();
+        if let Some(value) = supplied.get(name).or(parameter.default_value.as_ref()) {
+            values.insert(name, value);
+        }
+    }
+    let mut document = serde_json::to_value(&template.steps)
+        .map_err(|error| format!("the template could not be read back: {error}"))?;
+    substitute(&mut document, &values);
+    serde_json::from_value(document)
+        .map_err(|error| format!("the instantiated template is not a route: {error}"))
+}
+
+fn substitute(node: &mut Value, values: &BTreeMap<&str, &Value>) {
+    match node {
+        Value::String(text) => {
+            for (name, value) in values {
+                for placeholder in [format!("{{{{{name}}}}}"), format!("{{{{?{name}}}}}")] {
+                    if *text == placeholder {
+                        *node = (*value).clone();
+                        return;
+                    }
+                    if text.contains(&placeholder) {
+                        let rendered = match value {
+                            Value::String(plain) => plain.clone(),
+                            other => other.to_string(),
+                        };
+                        *text = text.replace(&placeholder, &rendered);
+                    }
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| substitute(item, values)),
+        Value::Object(members) => members
+            .values_mut()
+            .for_each(|member| substitute(member, values)),
+        _ => {}
+    }
 }
 
 /// The expressions one step carries directly (the walker visits nested
@@ -340,12 +420,67 @@ fn compile_binding(
 fn step_expressions(step: &Step) -> Vec<&Expression> {
     match step {
         Step::SetBody(expression) => vec![expression],
+        Step::SetProperty(property) => vec![&property.value],
         Step::To(to) => to
             .parameters
             .iter()
-            .flat_map(|parameters| parameters.path_parameters.values())
+            .flat_map(|parameters| {
+                parameters
+                    .path_parameters
+                    .values()
+                    .chain(parameters.query.values())
+            })
             .collect(),
         Step::OnException(clause) => clause.on_when.iter().collect(),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn template() -> RouteTemplate {
+        serde_json::from_value(json!({
+            "id": "search",
+            "parameters": [
+                {"name": "program", "type": "string", "required": true},
+                {"name": "size", "type": "number", "defaultValue": 25},
+                {"name": "id", "type": "string"}
+            ],
+            "steps": [
+                {"setProperty": {"name": "program", "value": {"constant": "{{program}}"}}},
+                {"setProperty": {"name": "size", "value": {"constant": "{{size}}"}}},
+                {"to": {"uri": "http:tracker", "parameters": {
+                    "httpMethod": "GET",
+                    "path": "/api/{{program}}/{{id}}",
+                    "pathParameters": {"id": {"header": "recordId"}}
+                }}}
+            ]
+        }))
+        .expect("the template parses")
+    }
+
+    fn supplied(program: &str) -> BTreeMap<String, Value> {
+        BTreeMap::from([("program".to_owned(), json!(program))])
+    }
+
+    #[test]
+    fn a_whole_placeholder_takes_the_typed_value_and_a_default_fills_an_omission() {
+        let steps = instantiate(&template(), &supplied("abc")).expect("instantiates");
+        let document = serde_json::to_value(&steps).expect("serializes");
+        assert_eq!(document[0]["setProperty"]["value"]["constant"], "abc");
+        assert_eq!(document[1]["setProperty"]["value"]["constant"], 25);
+    }
+
+    #[test]
+    fn a_placeholder_inside_text_takes_the_text_and_an_unsupplied_one_stays() {
+        let steps = instantiate(&template(), &supplied("abc")).expect("instantiates");
+        let document = serde_json::to_value(&steps).expect("serializes");
+        assert_eq!(
+            document[2]["to"]["parameters"]["path"], "/api/abc/{{id}}",
+            "{{id}} is bound per request by pathParameters"
+        );
     }
 }
