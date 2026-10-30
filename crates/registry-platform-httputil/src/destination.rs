@@ -1640,6 +1640,53 @@ impl BoundedDestinationRequestTemplate<CredentialDestination> {
             max_request_bytes,
         )
     }
+
+    /// Compile the client-credentials shape that carries one Basic
+    /// authorization value beside the url-encoded body.
+    ///
+    /// Some token endpoints take the client credential as
+    /// `Authorization: Basic` rather than a body member. The Basic value
+    /// rides the reviewed authorization slot, so its bytes stay in
+    /// zeroizing storage and its bound is compiled, while the body keeps
+    /// the reviewed url-encoded form shape. The pairing is closed: the
+    /// JSON format carries no authorization, and a Bearer value is refused
+    /// outright, so an access token can never be presented to a token
+    /// endpoint as a client credential.
+    ///
+    /// # Errors
+    /// [`DestinationRequestError`] when the path or any bound is unusable.
+    pub fn oauth2_client_credentials_form_basic(
+        fixed_path: &str,
+        max_authorization_value_bytes: usize,
+        max_body_bytes: usize,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        let headers = [
+            HeaderTemplateInput::Exact {
+                name: "accept",
+                value: b"application/json",
+            },
+            HeaderTemplateInput::Exact {
+                name: "content-type",
+                value: b"application/x-www-form-urlencoded",
+            },
+        ];
+        Self::new_with_headers(
+            RequestTemplateKind::OAuth2ClientCredentials(
+                OAuth2ClientCredentialsBodyFormat::FormClientSecretBody,
+            ),
+            fixed_path,
+            &[],
+            &headers,
+            DestinationAuthorizationTemplate::Basic {
+                max_value_bytes: max_authorization_value_bytes,
+            },
+            DestinationBodyTemplate::Required {
+                max_bytes: max_body_bytes,
+            },
+            max_request_bytes,
+        )
+    }
 }
 
 impl BoundedDestinationRequestTemplate<EventDestination> {
@@ -2290,6 +2337,28 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         )
     }
 
+    /// Which authorization template an OAuth2 client-credentials template
+    /// may carry.
+    ///
+    /// The closed slot admits no authorization, as reviewed, or one Basic
+    /// value riding the url-encoded form format: the Basic credential
+    /// travels in the header while the client secret stays in the body.
+    /// The JSON format stays authorization-free, and Bearer is refused on
+    /// the slot outright, so an access token can never be presented to a
+    /// token endpoint as a client credential.
+    fn oauth2_credential_authorization_admissible(
+        authorization: DestinationAuthorizationTemplate,
+        format: OAuth2ClientCredentialsBodyFormat,
+    ) -> bool {
+        match authorization {
+            DestinationAuthorizationTemplate::Forbidden => true,
+            DestinationAuthorizationTemplate::Basic { .. } => {
+                format == OAuth2ClientCredentialsBodyFormat::FormClientSecretBody
+            }
+            DestinationAuthorizationTemplate::Bearer { .. } => false,
+        }
+    }
+
     fn new_with_headers(
         kind: RequestTemplateKind,
         fixed_path: &str,
@@ -2359,7 +2428,10 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             }
             DestinationMethod::OAuth2ClientCredentialsPost
                 if !S::CREDENTIAL_EXCHANGE
-                    || authorization != DestinationAuthorizationTemplate::Forbidden
+                    || !Self::oauth2_credential_authorization_admissible(
+                        authorization,
+                        oauth_format.ok_or(DestinationRequestError::MethodSlotMismatch)?,
+                    )
                     || !matches!(body, DestinationBodyTemplate::Required { max_bytes } if max_bytes > 0) =>
             {
                 return Err(DestinationRequestError::MethodSlotMismatch);
@@ -6536,6 +6608,228 @@ mod tests {
         assert_eq!(
             captured.lock().expect("capture lock").as_deref(),
             Some(expected.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_form_basic_credential_template_delivers_the_exact_header_and_body() {
+        const BASIC_VALUE: &[u8] = b"dXNlcjpwYXNz";
+        const FORM_BODY: &[u8] =
+            b"grant_type=client_credentials&client_id=doctor&client_secret=secret";
+        let captured_authorization = Arc::new(Mutex::new(None));
+        let captured_body = Arc::new(Mutex::new(None));
+        let route_authorization = Arc::clone(&captured_authorization);
+        let route_body = Arc::clone(&captured_body);
+        let app = Router::new().route(
+            "/oauth/token",
+            post(move |headers: HeaderMap, body: Bytes| {
+                let route_authorization = Arc::clone(&route_authorization);
+                let route_body = Arc::clone(&route_body);
+                async move {
+                    *route_authorization.lock().expect("capture lock") = headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    *route_body.lock().expect("capture lock") = Some(body.to_vec());
+                    (StatusCode::OK, "accepted")
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind form-basic test server");
+        let address = listener.local_addr().expect("form-basic test address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve form-basic test app");
+        });
+
+        let policy = CredentialDestinationPolicy::new(
+            "dev-oauth-basic",
+            &format!("http://localhost:{}/", address.port()),
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("development credential policy validates");
+        let template = CredentialDestinationRequestTemplate::oauth2_client_credentials_form_basic(
+            "/oauth/token",
+            128,
+            1_024,
+            2_048,
+        )
+        .expect("closed form-basic credential template");
+        let request = template
+            .render_zeroizing(
+                &[],
+                &[],
+                Some(
+                    DestinationAuthorizationValue::basic(BASIC_VALUE.to_vec())
+                        .expect("a basic value validates"),
+                ),
+                Some(Zeroizing::new(FORM_BODY.to_vec())),
+            )
+            .expect("form-basic credential request renders");
+        let resolver = FakeResolver {
+            answers: vec![address],
+            calls: AtomicUsize::new(0),
+        };
+
+        let response = policy
+            .send_with_resolver(
+                request,
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::System,
+            )
+            .await
+            .expect("form-basic credential send succeeds");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            captured_authorization
+                .lock()
+                .expect("capture lock")
+                .as_deref(),
+            Some("Basic dXNlcjpwYXNz"),
+        );
+        assert_eq!(
+            captured_body.lock().expect("capture lock").as_deref(),
+            Some(FORM_BODY)
+        );
+    }
+
+    #[test]
+    fn a_form_basic_slot_refuses_bearer_and_json_basic_at_compile() {
+        let basic = DestinationAuthorizationTemplate::Basic {
+            max_value_bytes: 128,
+        };
+        let bearer = DestinationAuthorizationTemplate::Bearer {
+            max_value_bytes: 128,
+        };
+        let headers = [
+            HeaderTemplateInput::Exact {
+                name: "accept",
+                value: b"application/json",
+            },
+            HeaderTemplateInput::Exact {
+                name: "content-type",
+                value: b"application/x-www-form-urlencoded",
+            },
+        ];
+        // The reviewed shape is unchanged: no authorization on the slot.
+        CredentialDestinationRequestTemplate::new_with_headers(
+            RequestTemplateKind::OAuth2ClientCredentials(
+                OAuth2ClientCredentialsBodyFormat::FormClientSecretBody,
+            ),
+            "/oauth/token",
+            &[],
+            &headers,
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Required { max_bytes: 1_024 },
+            2_048,
+        )
+        .expect("the reviewed forbidden pairing stays admitted");
+        // Basic rides the form format only.
+        CredentialDestinationRequestTemplate::new_with_headers(
+            RequestTemplateKind::OAuth2ClientCredentials(
+                OAuth2ClientCredentialsBodyFormat::FormClientSecretBody,
+            ),
+            "/oauth/token",
+            &[],
+            &headers,
+            basic,
+            DestinationBodyTemplate::Required { max_bytes: 1_024 },
+            2_048,
+        )
+        .expect("basic with the form format is the admitted pairing");
+        // JSON carries no authorization.
+        assert_eq!(
+            CredentialDestinationRequestTemplate::new_with_headers(
+                RequestTemplateKind::OAuth2ClientCredentials(
+                    OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
+                ),
+                "/oauth/token",
+                &[],
+                &headers,
+                basic,
+                DestinationBodyTemplate::Required { max_bytes: 1_024 },
+                2_048,
+            )
+            .expect_err("json with basic is refused at compile"),
+            DestinationRequestError::MethodSlotMismatch,
+        );
+        // Bearer is refused on the slot outright, in either format.
+        for format in [
+            OAuth2ClientCredentialsBodyFormat::FormClientSecretBody,
+            OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
+        ] {
+            assert_eq!(
+                CredentialDestinationRequestTemplate::new_with_headers(
+                    RequestTemplateKind::OAuth2ClientCredentials(format),
+                    "/oauth/token",
+                    &[],
+                    &headers,
+                    bearer,
+                    DestinationBodyTemplate::Required { max_bytes: 1_024 },
+                    2_048,
+                )
+                .expect_err("bearer is refused on the credential slot"),
+                DestinationRequestError::MethodSlotMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn a_form_basic_render_without_the_value_is_refused() {
+        let template = CredentialDestinationRequestTemplate::oauth2_client_credentials_form_basic(
+            "/oauth/token",
+            128,
+            1_024,
+            2_048,
+        )
+        .expect("closed form-basic credential template");
+        assert_eq!(
+            template
+                .render_zeroizing(
+                    &[],
+                    &[],
+                    None,
+                    Some(Zeroizing::new(b"grant_type=client_credentials".to_vec())),
+                )
+                .expect_err("a compiled basic slot demands its value"),
+            DestinationRequestError::AuthorizationShapeMismatch,
+        );
+    }
+
+    #[test]
+    fn form_basic_diagnostics_carry_no_credential() {
+        const BASIC_VALUE: &[u8] = b"dXNlcjpwYXNz";
+        let template = CredentialDestinationRequestTemplate::oauth2_client_credentials_form_basic(
+            "/oauth/token",
+            128,
+            1_024,
+            2_048,
+        )
+        .expect("closed form-basic credential template");
+        let request = template
+            .render_zeroizing(
+                &[],
+                &[],
+                Some(
+                    DestinationAuthorizationValue::basic(BASIC_VALUE.to_vec())
+                        .expect("a basic value validates"),
+                ),
+                Some(Zeroizing::new(b"grant_type=client_credentials".to_vec())),
+            )
+            .expect("form-basic credential request renders");
+        let diagnostic = format!("{template:?} {request:?}");
+        assert!(
+            !diagnostic.contains(std::str::from_utf8(BASIC_VALUE).expect("ascii canary")),
+            "the rendered basic value must not appear in diagnostics"
+        );
+        assert!(
+            !diagnostic.contains("Basic dXNlcjpwYXNz"),
+            "the rendered authorization value must not appear in diagnostics"
         );
     }
 
