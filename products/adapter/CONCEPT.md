@@ -952,9 +952,13 @@ The same names are refused as a `static-api-key` `headerName` (section
 `requestHeaders` also refuses the names the platform transport owns on a
 request: `Content-Type`, which belongs to the body codec, and the
 forwarding, encoding, and signing headers. `responseHeaders` refuses
-`Camel*` names and the authentication-challenge, infrastructure, and
-tracing headers the transport owns on a response. A name listed twice is
-refused.
+`Camel*` names, the facade inputs of 8.11.1 (an upstream value never
+stands in for a validated caller input), and the
+authentication-challenge, infrastructure, and tracing headers the
+transport owns on a response. A name listed twice, compared without case,
+is refused, and a list holds at most the transport's 32 names. `check`
+and the runtime's filter build refuse the same names, so a pack that
+passes `check` never fails on these rules at load.
 
 On a send, an exchange value that is not a strict RFC 9110 field value, or
 exceeds the transport's value bound, raises the uncatchable
