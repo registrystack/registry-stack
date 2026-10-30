@@ -194,6 +194,18 @@ fn static_api_key_binding(endpoint: &str, base_url: &str, value_env: &str) -> En
     }
 }
 
+fn static_api_key_binding(endpoint: &str, base_url: &str, value_env: &str) -> EndpointBinding {
+    EndpointBinding {
+        endpoint: ExternalId::new(endpoint).expect("endpoint id"),
+        base_url: Url::new(base_url).expect("base url"),
+        credential: Some(RuntimeCredential::StaticApiKey {
+            value_ref: secret(value_env),
+        }),
+        tls_trust_profile: None,
+        mtls_identity: None,
+    }
+}
+
 /// The attempt timeout and response bound every send in this file
 /// carries, until the pack's endpoint keys land.
 const ATTEMPT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -1353,3 +1365,4 @@ fn a_binding_above_the_declared_limit_is_refused_at_load() {
         );
     }
 }
+||||||| parent of c7e1ff5c9 (fix(adapter): fail closed on undecodable replies, over-limit attempts, and dot-segment links)
