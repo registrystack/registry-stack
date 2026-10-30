@@ -566,19 +566,45 @@ mod tests {
                 .get("maximumRequestBytes")
                 .is_none()
         );
-        for operation in [
+        // Every mutation in the catalog is classified by name, so an operation
+        // added later fails here until someone decides whether routing an
+        // unresolved lookup straight to it can create a duplicate record.
+        let writers = [
             Operation::InvokeBregAction,
             Operation::StartProposal,
             Operation::SubmitProposal,
             Operation::ExternalCommand,
-        ] {
+        ];
+        let allowed_mutations = [
+            Operation::SubmitMessage,
+            Operation::CreateAppointment,
+            Operation::CreateHold,
+            Operation::ReleaseHold,
+            Operation::ConfirmHold,
+            Operation::RescheduleAppointment,
+            Operation::CancelAppointment,
+            Operation::SubmitReviewRequest,
+            Operation::CancelReviewRequest,
+            Operation::CancelProposal,
+        ];
+        for descriptor in descriptors()
+            .iter()
+            .filter(|descriptor| descriptor.effect == EffectKind::Mutation)
+        {
+            let operation = Operation::parse(descriptor.id).expect("catalog identifier");
+            let writes = writers.contains(&operation);
+            let allowed = allowed_mutations.contains(&operation);
+            assert!(
+                writes != allowed,
+                "{} must be in exactly one of the writers and the allowed mutations",
+                descriptor.id
+            );
+            assert_eq!(operation.writes_records(), writes, "{}", descriptor.id);
+        }
+        for operation in writers {
             assert!(operation.writes_records(), "{}", operation.as_str());
         }
         for operation in [
-            Operation::CancelProposal,
-            Operation::SubmitReviewRequest,
-            Operation::SubmitMessage,
-            Operation::CreateHold,
             Operation::LookupRecord,
             Operation::ReadRecordV2,
             Operation::EvaluateDecision,
