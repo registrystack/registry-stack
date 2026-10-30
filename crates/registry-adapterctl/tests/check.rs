@@ -1489,7 +1489,7 @@ fn graphql_project(query: &str, digest: &str, operation_name: &str) -> (tempfile
         &copy.join("pack.yaml"),
         "      - id: cases-read\n        idempotentUpstream: true\n",
         &format!(
-            "      - id: cases-read\n        idempotentUpstream: true\n  - id: case-graphql\n    component: graphql\n    authentication:\n      type: none\n    operationName: {operation_name}\n    queryFile: queries/cases-by-type.graphql\n    operations:\n      - id: cases-by-type\n        idempotentUpstream: true\n        graphql: query\n"
+            "      - id: cases-read\n        idempotentUpstream: true\n  - id: case-graphql\n    component: graphql\n    authentication:\n      type: none\n    attemptTimeoutMilliseconds: 10000\n    maximumResponseBytes: 1048576\n    operationName: {operation_name}\n    queryFile: queries/cases-by-type.graphql\n    operations:\n      - id: cases-by-type\n        idempotentUpstream: true\n        graphql: query\n"
         ),
     );
     edit(

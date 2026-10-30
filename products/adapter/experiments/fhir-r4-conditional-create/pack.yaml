@@ -33,6 +33,8 @@ endpoints:
     component: http
     authentication:
       type: oauth2-client-credentials
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
     responseHeaders:
       - location
       - etag

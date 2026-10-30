@@ -23,6 +23,8 @@ endpoints:
     authentication:
       type: static-api-key
       headerName: X-Api-Key
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
     queryFile: queries/find-cases.graphql
     operationName: FindCases
     variables:
@@ -39,6 +41,8 @@ endpoints:
     authentication:
       type: static-api-key
       headerName: X-Api-Key
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
     queryFile: queries/get-case.graphql
     operationName: GetCase
     variables:

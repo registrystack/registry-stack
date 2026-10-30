@@ -88,6 +88,16 @@ pub struct EndpointBinding {
     /// The credential; its kind must match the endpoint's declared kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<RuntimeCredential>,
+    /// A lower attempt timeout than the pack declares, in milliseconds;
+    /// absent, the declared one applies. A value above the declared one is
+    /// refused when the deployment loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_timeout_milliseconds: Option<BoundedU64<1, 10_000>>,
+    /// A lower response bound than the pack declares, in bytes; absent, the
+    /// declared one applies. A value above the declared one is refused when
+    /// the deployment loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_response_bytes: Option<BoundedU64<1, 1_048_576>>,
     /// A trust profile under `outboundTls.trustProfiles` whose CA bundle
     /// the endpoint trusts beside the system roots; absent, the endpoint
     /// trusts the system roots alone.
@@ -276,6 +286,8 @@ mod tests {
             }),
             tls_trust_profile: Some(LocalId::new("private-ca").expect("id")),
             mtls_identity: None,
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
         }
     }
 

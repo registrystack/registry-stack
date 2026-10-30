@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member config.out-of-range-maximum-response-bytes: this artifact set must be refused with
+# exactly config.out-of-range-maximum-response-bytes. The project is the clean baseline.
+#
+# Verify with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/config.out-of-range-maximum-response-bytes/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:062b16d9fc61937ded0d6f2bb98edab399e85ced9b8e236d015c9d7e761f8d69
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:e9992120e624c274b7c6e511ab7a0fddbad592176435b3e5ba8b3a19cbfe1daf
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

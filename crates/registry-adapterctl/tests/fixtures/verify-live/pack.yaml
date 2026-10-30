@@ -14,6 +14,8 @@ endpoints:
     component: http
     authentication:
       type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
     operations:
       - id: cases-search
         idempotentUpstream: true

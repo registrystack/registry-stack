@@ -65,6 +65,8 @@ fn pack_endpoint(
         id: LocalId::new(id).expect("endpoint id"),
         component: ComponentKind::Http,
         authentication,
+        attempt_timeout_milliseconds: BoundedU64::new(10_000).expect("attempt timeout"),
+        maximum_response_bytes: BoundedU64::new(1_048_576).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
         request_headers: UniqueList::new(
             request_headers
@@ -153,6 +155,8 @@ fn oauth_binding(
         }),
         tls_trust_profile: None,
         mtls_identity: None,
+        attempt_timeout_milliseconds: None,
+        maximum_response_bytes: None,
     }
 }
 
@@ -171,6 +175,8 @@ fn basic_binding(
         }),
         tls_trust_profile: None,
         mtls_identity: None,
+        attempt_timeout_milliseconds: None,
+        maximum_response_bytes: None,
     }
 }
 
@@ -183,6 +189,8 @@ fn static_api_key_binding(endpoint: &str, base_url: &str, value_env: &str) -> En
         }),
         tls_trust_profile: None,
         mtls_identity: None,
+        attempt_timeout_milliseconds: None,
+        maximum_response_bytes: None,
     }
 }
 
@@ -1288,4 +1296,60 @@ fn an_unusable_ca_bundle_refuses_the_load_value_free() {
         "the refusal is value-free: {rendered}"
     );
     std::fs::remove_file(&path).expect("remove bundle");
+}
+
+/// One basic endpoint declared at `attempt` milliseconds and `bytes`
+/// response bytes, bound at the given optional lower limits.
+fn limited_deployment(
+    declared: (u64, u64),
+    bound: (Option<u64>, Option<u64>),
+) -> Result<Egress, EgressFault> {
+    std::env::set_var("EGR_LIMITS_USER", "limits-user");
+    std::env::set_var("EGR_LIMITS_PASSWORD", "limits-password");
+    let mut binding = basic_binding(
+        "limits-api",
+        "http://127.0.0.1:9/",
+        "EGR_LIMITS_USER",
+        "EGR_LIMITS_PASSWORD",
+    );
+    binding.attempt_timeout_milliseconds = bound
+        .0
+        .map(|value| BoundedU64::new(value).expect("bound attempt"));
+    binding.maximum_response_bytes = bound
+        .1
+        .map(|value| BoundedU64::new(value).expect("bound bytes"));
+    let mut endpoint = pack_endpoint("limits-api", EndpointAuthentication::Basic {}, &[]);
+    endpoint.attempt_timeout_milliseconds = BoundedU64::new(declared.0).expect("declared attempt");
+    endpoint.maximum_response_bytes = BoundedU64::new(declared.1).expect("declared bytes");
+    Egress::load(&[endpoint], &runtime_config(vec![binding]), &resolver())
+}
+
+/// The pack's declared limits are the endpoint's effective limits, and a
+/// binding may lower either.
+#[test]
+fn the_declared_limits_apply_and_a_binding_may_lower_them() {
+    let declared = limited_deployment((5_000, 65_536), (None, None)).expect("loads");
+    let bound = declared.endpoint("limits-api").expect("endpoint");
+    assert_eq!(bound.attempt(), std::time::Duration::from_millis(5_000));
+    assert_eq!(bound.maximum_response_bytes(), 65_536);
+
+    let lowered = limited_deployment((5_000, 65_536), (Some(2_000), Some(4_096))).expect("loads");
+    let bound = lowered.endpoint("limits-api").expect("endpoint");
+    assert_eq!(bound.attempt(), std::time::Duration::from_millis(2_000));
+    assert_eq!(bound.maximum_response_bytes(), 4_096);
+}
+
+/// A binding that raises either limit above the declared one is refused at
+/// load, never shortened.
+#[test]
+fn a_binding_above_the_declared_limit_is_refused_at_load() {
+    for bound in [(Some(5_001), None), (None, Some(65_537))] {
+        let error = limited_deployment((5_000, 65_536), bound)
+            .err()
+            .expect("the load refuses");
+        assert!(
+            matches!(error, EgressFault::LimitAboveDeclared { .. }),
+            "{error}"
+        );
+    }
 }

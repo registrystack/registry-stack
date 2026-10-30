@@ -405,6 +405,13 @@
       "additionalProperties": false,
       "description": "One endpoint a route may send to: the component, the authentication\nkind, the declared response headers, the endpoint operations with their\n`idempotentUpstream` claims, and the tested upstream versions\n(`products/adapter/CONCEPT.md` sections 6, 8.8, and 10.2).",
       "properties": {
+        "attemptTimeoutMilliseconds": {
+          "description": "The longest one attempt to this endpoint may take, in\nmilliseconds. Required, no default; a value above the platform\nceiling is refused, never shortened. The runtime binding may lower\nit, never raise it.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
         "authentication": {
           "$ref": "#/$defs/EndpointAuthentication",
           "description": "The upstream authentication kind, with its non-secret parameters."
@@ -416,6 +423,13 @@
         "id": {
           "$ref": "#/$defs/LocalId",
           "description": "The endpoint identifier `http:` and `graphql:` URIs name."
+        },
+        "maximumResponseBytes": {
+          "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform ceiling is\nrefused, never shortened. The runtime binding may lower it, never\nraise it.",
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
         },
         "operationName": {
           "description": "The GraphQL operation name.",
@@ -463,7 +477,9 @@
       "required": [
         "id",
         "component",
-        "authentication"
+        "authentication",
+        "attemptTimeoutMilliseconds",
+        "maximumResponseBytes"
       ],
       "type": "object"
     },

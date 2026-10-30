@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
@@ -38,10 +37,10 @@ use crate::scripts::ScriptSet;
 use registry_adapter_core::{Expression, RouteTemplate};
 use serde_json::Value;
 
-/// One upstream attempt's wall-clock bound.
-const ATTEMPT: Duration = Duration::from_secs(10);
-/// The largest upstream reply body a send keeps.
-pub(crate) const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
+/// The ceiling on any upstream reply body a send keeps, and the unit the
+/// script bounds scale from; an endpoint declares its own bound beneath it.
+pub(crate) const MAXIMUM_RESPONSE_BYTES: usize =
+    registry_adapter_core::MAXIMUM_RESPONSE_BYTES as usize;
 
 /// Why one binding is not compiled for serving.
 enum BindingRefusal {
@@ -361,13 +360,14 @@ pub fn load(
             egress.origin().origin_url().trim_end_matches('/'),
             egress.origin().base_path()
         );
+        let (attempt, maximum_response_bytes) = (egress.attempt(), egress.maximum_response_bytes());
         endpoints.insert(
             id,
             EndpointRuntime {
                 egress,
                 base,
-                attempt: ATTEMPT,
-                maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+                attempt,
+                maximum_response_bytes,
             },
         );
     }

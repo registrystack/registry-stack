@@ -242,6 +242,8 @@ mod tests {
             credential: Some(RuntimeCredential::None {}),
             tls_trust_profile,
             mtls_identity,
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
         }
     }
 

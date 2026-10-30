@@ -67,6 +67,8 @@ fn binding(base_url: &str, credential: Option<RuntimeCredential>) -> EndpointBin
         credential,
         tls_trust_profile: None,
         mtls_identity: None,
+        attempt_timeout_milliseconds: None,
+        maximum_response_bytes: None,
     }
 }
 

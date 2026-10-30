@@ -32,6 +32,8 @@ endpoints:
     component: http
     authentication:
       type: oauth2-client-credentials
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
     operations:
       - id: fhir-search
     testedVersions:

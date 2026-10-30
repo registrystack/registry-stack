@@ -95,6 +95,13 @@ pub enum EgressFault {
     /// wire the token send yet: the deployment refuses to start, so the
     /// gap is visible at startup and never at a first request.
     TokenSendUnwired,
+    /// The binding raises a limit above the one the pack declares; a
+    /// binding may only lower it.
+    LimitAboveDeclared {
+        /// The key the binding wrote, `attemptTimeoutMilliseconds` or
+        /// `maximumResponseBytes`.
+        key: &'static str,
+    },
     /// The endpoint binding at `position` names no declared endpoint.
     BindingUnmatched {
         /// The position of the binding in the runtime config.
@@ -117,6 +124,10 @@ impl fmt::Display for EgressFault {
             Self::TokenSendUnwired => {
                 formatter.write_str("the endpoint's token send is not wired in this build")
             }
+            Self::LimitAboveDeclared { key } => write!(
+                formatter,
+                "the binding's {key} is above the pack's declared one; a binding may only lower it"
+            ),
             Self::BindingUnmatched { position } => write!(
                 formatter,
                 "the endpoint binding at position {position} names no declared endpoint"
@@ -438,6 +449,17 @@ impl fmt::Debug for OutboundSend<'_> {
     }
 }
 
+/// The binding's limit when it lowers the declared one, the declared one
+/// when the binding is silent; a binding above the declared limit is a
+/// refusal, never a shortening.
+fn lowered(declared: u64, bound: Option<u64>, key: &'static str) -> Result<u64, EgressFault> {
+    match bound {
+        Some(value) if value > declared => Err(EgressFault::LimitAboveDeclared { key }),
+        Some(value) => Ok(value),
+        None => Ok(declared),
+    }
+}
+
 /// One endpoint's outbound state, compiled once at startup.
 pub struct EndpointEgress {
     endpoint: ExternalId,
@@ -449,6 +471,8 @@ pub struct EndpointEgress {
     authorization_scheme: Option<DestinationAuthorizationScheme>,
     get_template: DataDestinationRequestTemplate,
     post_template: DataDestinationRequestTemplate,
+    attempt: Duration,
+    maximum_response_bytes: usize,
 }
 
 impl EndpointEgress {
@@ -459,6 +483,18 @@ impl EndpointEgress {
         config: &AdapterRuntimeConfig,
         resolver: &SecretResolver,
     ) -> Result<Self, EgressFault> {
+        let attempt_milliseconds = lowered(
+            declared.attempt_timeout_milliseconds.get(),
+            binding
+                .attempt_timeout_milliseconds
+                .map(|value| value.get()),
+            "attemptTimeoutMilliseconds",
+        )?;
+        let maximum_response_bytes = lowered(
+            declared.maximum_response_bytes.get(),
+            binding.maximum_response_bytes.map(|value| value.get()),
+            "maximumResponseBytes",
+        )?;
         let plan = AuthPlan::compile(&declared.authentication, binding)
             .map_err(|fault| EgressFault::Auth(AuthError::Plan(fault)))?;
         let filter = HeaderFilter::for_endpoint(declared).map_err(EgressFault::Allowlist)?;
@@ -521,7 +557,27 @@ impl EndpointEgress {
             authorization_scheme,
             get_template,
             post_template,
+            attempt: Duration::from_millis(attempt_milliseconds),
+            maximum_response_bytes: usize::try_from(maximum_response_bytes).map_err(|_| {
+                EgressFault::LimitAboveDeclared {
+                    key: "maximumResponseBytes",
+                }
+            })?,
         })
+    }
+
+    /// The longest one attempt to this endpoint may take: the pack's
+    /// declared timeout, lowered by the binding when it says so.
+    #[must_use]
+    pub const fn attempt(&self) -> Duration {
+        self.attempt
+    }
+
+    /// The largest response body one send to this endpoint may take in:
+    /// the pack's declared bound, lowered by the binding when it says so.
+    #[must_use]
+    pub const fn maximum_response_bytes(&self) -> usize {
+        self.maximum_response_bytes
     }
 
     /// Derive the destination profile from the pinned origin and freeze

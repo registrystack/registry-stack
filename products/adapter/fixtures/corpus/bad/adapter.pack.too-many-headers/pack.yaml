@@ -17,6 +17,8 @@ endpoints:
     component: http
     authentication:
       type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
     requestHeaders:
       - x-case-header-0
       - x-case-header-1

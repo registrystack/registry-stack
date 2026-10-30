@@ -402,6 +402,8 @@ fn a_filter_reads_an_endpoint_declaration() {
         "id": "fhir",
         "component": "http",
         "authentication": {"type": "static-api-key", "headerName": "X-Api-Key"},
+        "attemptTimeoutMilliseconds": 10000,
+        "maximumResponseBytes": 1048576,
         "requestHeaders": ["Accept"],
         "responseHeaders": ["ETag", "Location"],
     }))
@@ -416,6 +418,8 @@ fn a_filter_reads_an_endpoint_declaration() {
         "id": "fhir",
         "component": "http",
         "authentication": {"type": "static-api-key", "headerName": "X-Api-Key"},
+        "attemptTimeoutMilliseconds": 10000,
+        "maximumResponseBytes": 1048576,
         "requestHeaders": ["X-API-Key"],
     }))
     .expect("the endpoint parses");
@@ -583,6 +587,10 @@ fn check_pack_and_the_filter_build_refuse_the_same_allowlists() {
                 },
                 None => EndpointAuthentication::Oauth2ClientCredentials {},
             },
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(response.iter().map(|name| id(name)).collect())
                 .expect("unique"),
             request_headers: UniqueList::new(request.iter().map(|name| id(name)).collect())

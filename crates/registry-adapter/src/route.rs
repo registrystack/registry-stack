@@ -871,6 +871,7 @@ mod credential_order_tests {
     use registry_adapter_core::{AdapterRuntimeConfig, Endpoint};
     use registry_platform_yaml::SecretProvider;
 
+    #[allow(clippy::disallowed_methods)]
     fn runtime_config(base_url: &str, key_env: &str) -> AdapterRuntimeConfig {
         serde_norway::from_str(&format!(
             r#"
@@ -898,6 +899,7 @@ audit:
         .expect("the runtime config parses")
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn pack_endpoint() -> Endpoint {
         serde_norway::from_str(
             r#"
@@ -906,6 +908,8 @@ component: http
 authentication:
   type: static-api-key
   headerName: x-api-key
+attemptTimeoutMilliseconds: 10000
+maximumResponseBytes: 1024
 responseHeaders: []
 requestHeaders: []
 operations: []

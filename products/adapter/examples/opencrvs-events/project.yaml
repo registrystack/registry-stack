@@ -58,7 +58,7 @@ profile:
 pack:
   id: opencrvs-events
   version: "1"
-  digest: sha256:473ff6124384227abefcd88dc024756964bde5bb59c312ae3f73da748784c918
+  digest: sha256:89730445d04cbcf537a20bc64e2cd4dd8dc06ce2b922ac055d2a779f20ddfab1
 recordTypes:
   - name: birth
     fields:

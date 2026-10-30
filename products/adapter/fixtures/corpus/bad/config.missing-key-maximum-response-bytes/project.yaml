@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member config.missing-key-maximum-response-bytes: this artifact set must be refused with
+# exactly config.missing-key-maximum-response-bytes. The project is the clean baseline.
+#
+# Verify with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/config.missing-key-maximum-response-bytes/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:2eab1db7e99407d78361353ae1652d7df01e8444458f7448b96863c0340dec37
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:b1e25ec7e9a988b62c23aac58b813021771e51c9731b9e3ad0be95c018b28ffd
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

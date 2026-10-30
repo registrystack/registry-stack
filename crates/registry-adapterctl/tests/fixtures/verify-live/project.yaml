@@ -17,7 +17,7 @@ profile:
 pack:
   id: verify-pack
   version: "1.0.0"
-  digest: sha256:004388d03c62d3e4f7125e5819553663beefb1883a4f358fa5461911d768f9b4
+  digest: sha256:27abcf32d4b3a2fc1098b9e964f8681638560e54e0e6ada6b0c02f3a96d5343f
 recordTypes:
   - name: case
     fields:

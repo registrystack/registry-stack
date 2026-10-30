@@ -17,6 +17,8 @@ endpoints:
     authentication:
       type: static-api-key
       headerName: bad=header
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
 routeTemplates:
   - id: find-cases
     parameters:

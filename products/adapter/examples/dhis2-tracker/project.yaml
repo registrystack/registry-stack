@@ -64,7 +64,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:cc4cc6ca25b23ab63a9b0105614881a49c4bc61146712bf52189de68aed4878e
+  digest: sha256:fd28b9b0b8ab6a12215a18da6f9ef76750869de922fc0a86017372e92c78148b
 recordTypes:
   - name: person
     fields:

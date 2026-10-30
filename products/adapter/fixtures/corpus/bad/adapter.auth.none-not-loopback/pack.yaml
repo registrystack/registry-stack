@@ -16,6 +16,8 @@ endpoints:
     component: http
     authentication:
       type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
 routeTemplates:
   - id: find-cases
     parameters:

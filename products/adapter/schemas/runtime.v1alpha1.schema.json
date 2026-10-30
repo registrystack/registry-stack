@@ -69,6 +69,13 @@
       "additionalProperties": false,
       "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions (`products/adapter/CONCEPT.md` section 10.2).",
       "properties": {
+        "attemptTimeoutMilliseconds": {
+          "description": "A lower attempt timeout than the pack declares, in milliseconds;\nabsent, the declared one applies. A value above the declared one is\nrefused when the deployment loads.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
         "baseUrl": {
           "$ref": "#/$defs/Url",
           "description": "The upstream origin; a fixed destination the engine never derives\nfrom a response."
@@ -80,6 +87,13 @@
         "endpoint": {
           "$ref": "#/$defs/ExternalId",
           "description": "The pack endpoint this binding configures."
+        },
+        "maximumResponseBytes": {
+          "description": "A lower response bound than the pack declares, in bytes; absent, the\ndeclared one applies. A value above the declared one is refused when\nthe deployment loads.",
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
         },
         "mtlsIdentity": {
           "$ref": "#/$defs/MtlsIdentity",

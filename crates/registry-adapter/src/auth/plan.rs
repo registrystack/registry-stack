@@ -719,6 +719,8 @@ mod tests {
             credential,
             tls_trust_profile: None,
             mtls_identity: None,
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
         }
     }
 
@@ -1911,6 +1913,8 @@ mod tests {
                 }),
                 tls_trust_profile: None,
                 mtls_identity: None,
+                attempt_timeout_milliseconds: None,
+                maximum_response_bytes: None,
             }
         }
 

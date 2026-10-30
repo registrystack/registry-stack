@@ -40,6 +40,11 @@ const _: () = assert!(
     MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS == MAX_DESTINATION_OPERATION_TIMEOUT.as_millis() as u64
 );
 
+/// The largest response body one outbound send may take in, in bytes: the
+/// ceiling an endpoint's `maximumResponseBytes` may not exceed
+/// (`products/adapter/CONCEPT.md` section 8.8).
+pub const MAXIMUM_RESPONSE_BYTES: u64 = 1_048_576;
+
 /// The headers the rest consumer places on the exchange before a route
 /// runs; a route reads them, never writes them
 /// (`products/adapter/CONCEPT.md` section 8.11.1). Lowercase; names
@@ -4375,6 +4380,10 @@ mod tests {
             id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
@@ -4395,6 +4404,10 @@ mod tests {
             id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Basic {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
@@ -4415,6 +4428,10 @@ mod tests {
             id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::None {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
@@ -8415,6 +8432,10 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
@@ -8630,6 +8651,8 @@ mod tests {
             }),
             tls_trust_profile: None,
             mtls_identity: None,
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
         }
     }
 
@@ -8684,6 +8707,8 @@ mod tests {
                 certificate_ref: SecretReference::new("secret:env/CERT").expect("secret"),
                 key_ref: SecretReference::new("secret:env/KEY").expect("secret"),
             }),
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
         };
         let none_finds = |binding: EndpointBinding, expected: CheckCode| {
             let runtime = runtime_builder(vec![binding]);
@@ -9091,6 +9116,10 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
@@ -9173,6 +9202,10 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
@@ -9407,6 +9440,10 @@ mod tests {
             id: local("graph-api"),
             component: ComponentKind::GraphQl,
             authentication: EndpointAuthentication::None {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {

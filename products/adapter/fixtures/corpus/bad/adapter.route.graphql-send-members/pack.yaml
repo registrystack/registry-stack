@@ -16,6 +16,8 @@ endpoints:
     component: graphql
     authentication:
       type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
     queryFile: queries/find-cases.graphql
     operationName: FindCases
 routeTemplates:

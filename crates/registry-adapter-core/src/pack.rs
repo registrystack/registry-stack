@@ -8,7 +8,7 @@
 use crate::auth::EndpointAuthentication;
 use crate::model::{ComponentKind, Eip, Language};
 use crate::route::{RouteDefinition, RouteTemplate};
-use registry_platform_yaml::{Digest, ExternalId, LocalId, UniqueIdList, UniqueList};
+use registry_platform_yaml::{BoundedU64, Digest, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
 
 /// One endpoint a route may send to: the component, the authentication
@@ -25,6 +25,16 @@ pub struct Endpoint {
     pub component: ComponentKind,
     /// The upstream authentication kind, with its non-secret parameters.
     pub authentication: EndpointAuthentication,
+    /// The longest one attempt to this endpoint may take, in
+    /// milliseconds. Required, no default; a value above the platform
+    /// ceiling is refused, never shortened. The runtime binding may lower
+    /// it, never raise it.
+    pub attempt_timeout_milliseconds: BoundedU64<1, 10_000>,
+    /// The largest response body one send to this endpoint may take in, in
+    /// bytes. Required, no default; a value above the platform ceiling is
+    /// refused, never shortened. The runtime binding may lower it, never
+    /// raise it.
+    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
     /// The response headers the engine copies onto the exchange, Camel's
     /// `HeaderFilterStrategy` as an allowlist, unique (CFG-ID-6).
     #[serde(default, skip_serializing_if = "headers_empty")]
@@ -212,6 +222,10 @@ mod tests {
             id: LocalId::new("case-api").expect("id"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Oauth2ClientCredentials {},
+            attempt_timeout_milliseconds: registry_platform_yaml::BoundedU64::new(10_000)
+                .expect("attempt timeout"),
+            maximum_response_bytes: registry_platform_yaml::BoundedU64::new(1_048_576)
+                .expect("response bound"),
             response_headers: UniqueList::new(vec![ExternalId::new("etag").expect("header")])
                 .expect("unique"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
@@ -226,6 +240,35 @@ mod tests {
             operation_name: None,
             variables: None,
         }
+    }
+
+    /// An endpoint declares both limits; neither has a default, and a value
+    /// outside its range is refused, never shortened.
+    #[test]
+    fn endpoint_requires_both_limits_within_their_ceilings() {
+        let read = |attempt: &str, bytes: &str| {
+            let document = format!(
+                r#"{{"id":"case-api","component":"http","authentication":{{"type":"none"}}{attempt}{bytes}}}"#
+            );
+            serde_json::from_str::<Endpoint>(&document)
+        };
+        let attempt = r#","attemptTimeoutMilliseconds":10000"#;
+        let bytes = r#","maximumResponseBytes":1048576"#;
+        read(attempt, bytes).expect("both limits at their ceilings parse");
+        assert!(read("", bytes).is_err(), "the attempt timeout is required");
+        assert!(read(attempt, "").is_err(), "the response bound is required");
+        assert!(
+            read(r#","attemptTimeoutMilliseconds":10001"#, bytes).is_err(),
+            "an attempt timeout above the ceiling is refused"
+        );
+        assert!(
+            read(r#","attemptTimeoutMilliseconds":0"#, bytes).is_err(),
+            "a zero attempt timeout is refused"
+        );
+        assert!(
+            read(attempt, r#","maximumResponseBytes":1048577"#).is_err(),
+            "a response bound above the ceiling is refused"
+        );
     }
 
     /// The pack declares its own version (the artifact table: authored,

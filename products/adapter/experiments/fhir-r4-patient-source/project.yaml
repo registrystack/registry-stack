@@ -23,7 +23,7 @@ profile:
 pack:
   id: fhir-r4-patient
   version: "1"
-  digest: sha256:d56f7a69eee1c0aff49d2f4099a26009f8200d04f94e8bd8e6772ef413b1253a
+  digest: sha256:dc5c1e9e77082265157343a9953cb243e820863e21496ce2f4d4d499176794c9
 recordTypes:
   - name: patient
     fields:
