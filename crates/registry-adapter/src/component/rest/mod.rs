@@ -39,3 +39,5 @@
 //! signatures in `registry-platform-crypto`; no crate seals with
 //! AES-GCM today. The codec is security-sensitive (it carries source
 //! state through the caller) and carries review notes (section 13.7).
+
+pub mod continuation;

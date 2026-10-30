@@ -17,6 +17,15 @@ workspace = true
 postgres-test = []
 
 [dependencies]
+# The continuation cursor codec (CONCEPT.md section 8.11.2): XChaCha20-Poly1305
+# with its zeroize feature, so the cipher wipes its copy of the key on drop.
+base64.workspace = true
+chacha20poly1305 = { workspace = true, features = ["zeroize"] }
+getrandom.workspace = true
+hmac.workspace = true
+registry-platform-canonical-json.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
 deadpool-postgres.workspace = true
 jsonpath-rust.workspace = true
 # Steering pin, unused in code: holds jsonpath-rust's pest at 2.8.5; see

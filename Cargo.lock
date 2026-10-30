@@ -5068,11 +5068,16 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "registry-adapter"
 version = "0.45.0"
 dependencies = [
+ "base64 0.23.1",
+ "chacha20poly1305",
  "deadpool-postgres",
+ "getrandom 0.4.3",
+ "hmac",
  "jsonpath-rust",
  "pest",
  "registry-adapter-core",
  "registry-platform-audit",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httpsec",
  "registry-platform-httputil",
@@ -5082,8 +5087,10 @@ dependencies = [
  "registry-platform-yaml",
  "rhai",
  "serde_json",
+ "sha2 0.11.1",
  "tokio",
  "tokio-postgres",
+ "zeroize",
 ]
 
 [[package]]
