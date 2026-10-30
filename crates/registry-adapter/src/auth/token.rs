@@ -801,6 +801,14 @@ pub(crate) async fn acquire_token(
             return Ok((cached.token.clone(), Some(cached.generation)));
         }
     }
+    // An exhausted allowance refuses before the render: no secret is
+    // resolved and no assertion is signed for a send that cannot be
+    // paid for. The check spends nothing; the charge below still happens
+    // only once the request renders.
+    if budget.remaining(&plan.endpoint) == 0 {
+        events.push(AuthEvent::TokenBudgetExhausted);
+        return Err(AuthError::BudgetExhausted);
+    }
     // The allowance is spent only once the request actually renders: a
     // secret that cannot resolve never spends a send that never went out.
     let request = plan.render(resolver, signer)?;
@@ -1493,6 +1501,66 @@ mod tests {
         assert!(
             !events.contains(&AuthEvent::TokenBudgetExhausted),
             "the budget was never consulted with a failure"
+        );
+    }
+
+    /// An exhausted allowance refuses before the render: no assertion is
+    /// signed and nothing is sent for a send that cannot be paid for,
+    /// and the refusal's check leaves the allowance untouched.
+    #[tokio::test]
+    async fn an_exhausted_budget_refuses_before_the_render() {
+        use super::super::BUDGET_EXHAUSTED_CLASS;
+        std::env::set_var("ADAPTER_TEST_SPEND_ID", "cid-spend");
+        std::env::set_var("ADAPTER_TEST_SPEND_KEY", "key-pem");
+        struct Counts(std::sync::Mutex<usize>);
+        impl ClientAssertionSigner for Counts {
+            fn sign_client_assertion(
+                &self,
+                _request: ClientAssertion<'_>,
+            ) -> Result<ProtectedText, AuthError> {
+                *self.0.lock().expect("signs") += 1;
+                Ok(ProtectedText::from_str_value("assertion"))
+            }
+        }
+        let signer = Counts(std::sync::Mutex::new(0));
+        let url = "https://token.example.invalid/token";
+        let plan = TokenEndpointPlan::private_key_jwt(
+            endpoint_id("case-api"),
+            url.to_owned(),
+            secret("ADAPTER_TEST_SPEND_ID"),
+            secret("ADAPTER_TEST_SPEND_KEY"),
+            url.to_owned(),
+            TokenRequestParameters::default(),
+            CacheBounds {
+                maximum: Duration::from_secs(3600),
+                assumed: None,
+            },
+        );
+        let mut budget = TokenBudget::new_exchange();
+        budget
+            .consume(plan.endpoint())
+            .expect("the first send is in budget");
+        budget
+            .consume(plan.endpoint())
+            .expect("the second send is in budget");
+        let send = ScriptedSend::always(
+            200,
+            Some("application/json"),
+            r#"{"access_token":"at","token_type":"Bearer","expires_in":600}"#,
+        );
+        let mut events = Vec::new();
+        let error = acquire_token(&plan, &mut budget, &resolver(), &send, &signer, &mut events)
+            .await
+            .unwrap_err();
+        assert_eq!(error, AuthError::BudgetExhausted);
+        assert_eq!(error.class(), BUDGET_EXHAUSTED_CLASS);
+        assert_eq!(events, vec![AuthEvent::TokenBudgetExhausted]);
+        assert_eq!(*signer.0.lock().expect("signs"), 0, "nothing was signed");
+        assert_eq!(send.token_request_count(), 0, "nothing was sent");
+        assert_eq!(
+            budget.remaining(plan.endpoint()),
+            0,
+            "the refusal is a check, not a charge"
         );
     }
 
