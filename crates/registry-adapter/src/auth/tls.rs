@@ -448,6 +448,70 @@ mod tests {
         );
     }
 
+    /// A marker inside the TLS material reaches no rendering: a
+    /// PEM-shaped bundle whose certificate body is garbage refuses at
+    /// load, and so does an identity whose certificate is garbage, and
+    /// neither fault's rendering or Debug carries the bytes.
+    #[test]
+    fn a_marker_in_tls_material_reaches_no_rendering() {
+        const MARKER: &str = "c4a-tls-marker-4b8e22";
+        let path = bundle_path("marker");
+        std::fs::write(
+            &path,
+            format!("-----BEGIN CERTIFICATE-----\n{MARKER}\n-----END CERTIFICATE-----\n"),
+        )
+        .expect("write bundle");
+        let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
+        let fault = EndpointTls::resolve(&binding(Some(private_ca()), None), &runtime, &resolver())
+            .unwrap_err();
+        std::fs::remove_file(&path).expect("remove bundle");
+        assert_eq!(
+            fault,
+            AuthError::Tls(TlsFault::Material),
+            "a garbage certificate body is unusable at load"
+        );
+        assert_eq!(
+            fault.to_string(),
+            "the endpoint's outbound TLS material is not usable",
+            "the rendering is fixed text"
+        );
+        assert!(
+            !format!("{fault:?}").contains(MARKER),
+            "the marker leaked into the fault's Debug: {fault:?}"
+        );
+
+        std::env::set_var(
+            "ADAPTER_TEST_MARK_CERT",
+            format!("-----BEGIN CERTIFICATE-----\n{MARKER}\n-----END CERTIFICATE-----\n"),
+        );
+        std::env::set_var("ADAPTER_TEST_CLIENT_KEY", CLIENT_PRIVATE_KEY_PEM);
+        let fault = EndpointTls::resolve(
+            &binding(
+                None,
+                Some(identity_refs(
+                    "ADAPTER_TEST_MARK_CERT",
+                    "ADAPTER_TEST_CLIENT_KEY",
+                )),
+            ),
+            &runtime_config(None),
+            &resolver(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            fault,
+            AuthError::Tls(TlsFault::Material),
+            "a garbage certificate reference is unusable at load"
+        );
+        assert_eq!(
+            fault.to_string(),
+            "the endpoint's outbound TLS material is not usable"
+        );
+        assert!(
+            !format!("{fault:?}").contains(MARKER),
+            "the marker leaked into the fault's Debug: {fault:?}"
+        );
+    }
+
     /// Undeclared profiles and unreadable, non-regular, or oversized
     /// bundle paths refuse value-free: the rendering names neither the
     /// profile, the path, nor the content.

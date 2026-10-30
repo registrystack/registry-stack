@@ -1190,4 +1190,117 @@ mod marker_secret_absence {
             "the fault renderings",
         );
     }
+
+    /// The marker riding a token endpoint's answer body reaches no
+    /// rendering: a 2xx page, an unparseable 2xx body, and an outage's
+    /// error page each refuse, and every rendering of the refusal is
+    /// fixed text; neither does a marker in the request body survive a
+    /// send that never completes on the transport.
+    #[tokio::test]
+    async fn body_markers_reach_no_rendering() {
+        use registry_adapter::auth::TokenFault;
+        std::env::set_var("ADAPTER_MARK_BODY_ID", "cid-body");
+        std::env::set_var("ADAPTER_MARK_BODY_SECRET", MARKER_SECRET);
+        let double = UpstreamDouble::start();
+        let cases: [(Response, TokenFault, &'static str); 3] = [
+            // A WAF or captive portal answers 200 with the marker in its
+            // html: the 2xx carries no usable credential, so it is the
+            // credential fault, and the page never surfaces.
+            (
+                Response {
+                    status: 200,
+                    media_type: "text/html",
+                    body: format!("<html>{MARKER_SECRET} blocked this client</html>"),
+                },
+                TokenFault::Invalid,
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            // A 2xx body that is not a JSON object at all is the same
+            // credential fault, and the bytes stay unread by any
+            // rendering.
+            (
+                Response {
+                    status: 200,
+                    media_type: "application/json",
+                    body: format!("not a json object, sorry: {MARKER_SECRET}"),
+                },
+                TokenFault::Invalid,
+                CREDENTIAL_REJECTED_CLASS,
+            ),
+            // An outage's error page answers 503 with the marker on it:
+            // unavailable, catchable and retryable, and the page stays
+            // off the record.
+            (
+                Response {
+                    status: 503,
+                    media_type: "text/html",
+                    body: format!("<html>upstream down {MARKER_SECRET}</html>"),
+                },
+                TokenFault::Unavailable { status: 503 },
+                "upstream.http",
+            ),
+        ];
+        for (response, fault, class) in cases {
+            double.respond_with(vec![response]);
+            let plan = AuthPlan::compile(
+                &EndpointAuthentication::Oauth2ClientCredentials {},
+                &oauth_binding(
+                    &double.url("/token"),
+                    "ADAPTER_MARK_BODY_ID",
+                    "ADAPTER_MARK_BODY_SECRET",
+                    CredentialPlacement::BasicHeader,
+                ),
+            )
+            .expect("a usable plan");
+            let mut events = Vec::new();
+            let error = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+                .await
+                .unwrap_err();
+            assert_eq!(error, AuthError::Token(fault));
+            assert_eq!(error.class(), class);
+            assert_marker_absent(
+                &[
+                    error.to_string(),
+                    format!("{error:?}"),
+                    format!("{events:?}"),
+                ],
+                &format!("the {fault:?} renderings"),
+            );
+        }
+
+        // A send that never completes on the transport: the request body
+        // carried the marker to a destination that refuses the
+        // connection, and the refusal's renderings are the fixed
+        // transport text alone.
+        let plan = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &oauth_binding(
+                "http://127.0.0.1:1/token",
+                "ADAPTER_MARK_BODY_ID",
+                "ADAPTER_MARK_BODY_SECRET",
+                CredentialPlacement::BasicHeader,
+            ),
+        )
+        .expect("a usable plan");
+        let mut events = Vec::new();
+        let error = authorize_with_plan(&plan, &LoopbackSend::new(), &mut events)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            AuthError::Token(TokenFault::Transport {
+                kind: registry_platform_httputil::TransportKind::Connect
+            }),
+            "a closed loopback port refuses the connection"
+        );
+        assert_eq!(error.class(), "upstream.connection");
+        assert_marker_absent(
+            &[
+                error.to_string(),
+                format!("{error:?}"),
+                format!("{events:?}"),
+            ],
+            "the transport renderings",
+        );
+    }
 }
