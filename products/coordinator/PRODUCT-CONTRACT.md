@@ -244,6 +244,10 @@ refused as `invalid-response` rather than overwritten.
 in UTC. It says when the workflow looked, not when the fact became true. A lookup's provenance
 omits `etag`, because lookup sends and receives none.
 
+`breg.read-record/v2` and `breg.lookup-record/v1` accept `record: {contract: <import>}` as
+`breg.read-record/v1` does: `domainData` is limited to the record type's API names, omitted fields
+are allowed and value types stay open.
+
 Grants: `breg.lookup-record/v1` needs the BReg profile operation `lookup` and
 `breg.read-record/v2` needs `get`. `coordinatorctl check` does not read BReg profiles, so a
 missing grant is not found offline. It shows at run time as the failure `product-forbidden`,

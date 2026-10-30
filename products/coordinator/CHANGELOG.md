@@ -55,7 +55,9 @@
 - Add `breg.read-record/v2`: the input and record envelope of
   `breg.read-record/v1` plus a `provenance` member with the record and
   revision identifiers, the ETag and `observedAt`, the Coordinator's clock when
-  the read returned. `breg.read-record/v1` is unchanged.
+  the read returned. `breg.read-record/v1` is unchanged. Both new operations
+  accept `record: {contract: <import>}`, which limits `domainData` to the
+  record type's API names as it does for `breg.read-record/v1`.
 - The BReg profile must grant `lookup` for `breg.lookup-record/v1` and `get`
   for `breg.read-record/v2`. Check does not read profiles, so a missing grant
   shows at run time as `product-forbidden`.

@@ -104,6 +104,122 @@ fn read_record_import_checks_names_without_requiring_visible_fields_or_value_typ
     assert_eq!(restored.digest, definition.digest);
 }
 
+/// The operations that return a record's `domainData` besides
+/// `breg.read-record/v1`, each with a request and a reply builder.
+fn provenance_reads() -> Vec<(&'static str, Value, fn(Value) -> Value)> {
+    fn read_v2(domain_data: Value) -> Value {
+        let mut reply = record(domain_data);
+        reply["provenance"] = json!({"recordIdentifier": "r-1", "revisionIdentifier": "v-1",
+            "observedAt": "2026-10-09T09:00:00Z"});
+        reply
+    }
+    fn lookup(domain_data: Value) -> Value {
+        json!({"recordIdentifier": "r-1", "revisionIdentifier": "v-1", "domainData": domain_data,
+            "provenance": {"recordIdentifier": "r-1", "revisionIdentifier": "v-1",
+                "observedAt": "2026-10-09T09:00:00Z"}})
+    }
+    vec![
+        (
+            "breg.read-record/v2",
+            json!({"collection": "licences", "recordId": "r-1"}),
+            read_v2,
+        ),
+        (
+            "breg.lookup-record/v1",
+            json!({"entity": "licences", "selector": "by-number",
+                "values": {"licenceNumber": "LIC-1"}}),
+            lookup,
+        ),
+    ]
+}
+
+#[test]
+fn a_record_import_narrows_the_record_a_provenance_read_returns() {
+    for (uses, input, reply) in provenance_reads() {
+        let root = tempfile::tempdir().unwrap();
+        let mut project = workflow(uses);
+        project["contracts"] = json!({"licence": {"type": "breg", "source": "contract.json"}});
+        project["operations"]["request"]["record"] = json!({"contract": "licence"});
+        write_project(
+            root.path(),
+            &project,
+            &record_schema(),
+            input.clone(),
+            reply(json!({"licence-number": "LIC-1"})),
+        );
+        let (exit, report) = cli(root.path(), "test");
+        assert_eq!(exit, 1, "{uses}: {report}");
+        assert_eq!(
+            report["diagnostics"][0]["code"], "coordinator.scenario.reply-output",
+            "{uses}: {report}"
+        );
+        for data in [
+            json!({"licenceNumber": "LIC-1"}),
+            json!({}),
+            json!({"licenceNumber": 7}),
+        ] {
+            write_project(
+                root.path(),
+                &project,
+                &record_schema(),
+                input.clone(),
+                reply(data),
+            );
+            let (exit, report) = cli(root.path(), "test");
+            assert_eq!(exit, 0, "{uses}: {report}");
+        }
+        let definition = Definition::load(root.path()).unwrap();
+        let restored = Definition::from_snapshot(&definition.snapshot().unwrap()).unwrap();
+        assert_eq!(restored.digest, definition.digest, "{uses}");
+    }
+}
+
+#[test]
+fn a_provenance_read_without_a_record_import_keeps_its_open_contract() {
+    for (uses, input, reply) in provenance_reads() {
+        let root = tempfile::tempdir().unwrap();
+        write_project(
+            root.path(),
+            &workflow(uses),
+            &json!({}),
+            input,
+            reply(json!({"licence-number": "LIC-1"})),
+        );
+        let (exit, report) = cli(root.path(), "test");
+        assert_eq!(exit, 0, "{uses}: {report}");
+    }
+}
+
+#[test]
+fn a_record_import_is_refused_on_an_operation_that_returns_no_record() {
+    let root = tempfile::tempdir().unwrap();
+    let mut project = workflow("breg.submit-proposal/v1");
+    project["contracts"] = json!({"licence": {"type": "breg", "source": "contract.json"}});
+    project["operations"]["request"]["record"] = json!({"contract": "licence"});
+    write_project(
+        root.path(),
+        &project,
+        &record_schema(),
+        json!({}),
+        json!({}),
+    );
+    let (exit, report) = cli(root.path(), "check");
+    assert_eq!(exit, 1, "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["path"],
+        "/operations/request/record"
+    );
+    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    for operation in [
+        "breg.read-record/v1",
+        "breg.read-record/v2",
+        "breg.lookup-record/v1",
+        "breg.read-in-force/v1",
+    ] {
+        assert!(message.contains(operation), "{message}");
+    }
+}
+
 #[test]
 fn read_record_selection_refuses_other_contracts_and_wrong_operations() {
     let root = tempfile::tempdir().unwrap();
