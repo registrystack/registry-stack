@@ -457,8 +457,12 @@ impl TokenEndpointPlan {
     /// Every resolved secret is folded into the rendered request and
     /// dropped here; nothing the caller keeps outlives the request
     /// except the request itself. The client id is identifying, not
-    /// authenticating, and travels as text; the secret and the private
-    /// key stay in zeroizing buffers from resolution to the wire.
+    /// authenticating, and travels as text, in the body or as the Basic
+    /// username; under the Basic placement the body omits it, because
+    /// RFC 6749 section 2.3.1 allows one client authentication method
+    /// per request and Evidence's `token_request` omits it there too.
+    /// The secret and the private key stay in zeroizing buffers from
+    /// resolution to the wire.
     fn render(
         &self,
         resolver: &SecretResolver,
@@ -521,7 +525,19 @@ impl TokenEndpointPlan {
         if let Some(resource) = self.parameters.resource.as_deref() {
             pairs.push(("resource", resource));
         }
-        pairs.push(("client_id", &client_id));
+        // RFC 6749 section 2.3.1 allows one client authentication
+        // method per request: the Basic placement names the client in
+        // the header alone, so the body omits client_id there.
+        let authenticates_by_basic_header = matches!(
+            &self.client_authentication,
+            ClientAuthentication::ClientSecret {
+                placement: CredentialPlacement::BasicHeader,
+                ..
+            }
+        );
+        if !authenticates_by_basic_header {
+            pairs.push(("client_id", &client_id));
+        }
         if let Some(secret) = secret_text {
             pairs.push(("client_secret", secret));
         }
@@ -1619,6 +1635,42 @@ mod tests {
             "grant_type=client_credentials&client_id=cid\
              &client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer\
              &client_assertion=assertion.cid.https%3A%2F%2Ftoken.example.invalid%2Ftoken.key-pem"
+        );
+    }
+
+    /// The Basic placement names the client in the header alone: the
+    /// body carries no client_id, because RFC 6749 section 2.3.1 allows
+    /// one authentication method per request. The form-body placement
+    /// carries client_id beside the secret, with no header.
+    #[test]
+    fn the_body_carries_client_id_except_under_the_basic_placement() {
+        std::env::set_var("CLIENT_ID", "cid");
+        std::env::set_var("CLIENT_SECRET", "csecret");
+        let basic = client_secret_plan(CredentialPlacement::BasicHeader, 3600, None)
+            .render(&resolver(), &FixedSigner)
+            .expect("a rendered request");
+        assert!(
+            basic.authorization.is_some(),
+            "the Basic header carries the pair"
+        );
+        let body = str::from_utf8(basic.body.as_bytes()).expect("form bytes");
+        assert!(body.contains("grant_type=client_credentials"), "{body}");
+        assert!(
+            !body.contains("client_id"),
+            "the Basic placement never repeats the client id in the body: {body}"
+        );
+
+        let form = client_secret_plan(CredentialPlacement::FormBody, 3600, None)
+            .render(&resolver(), &FixedSigner)
+            .expect("a rendered request");
+        assert!(
+            form.authorization.is_none(),
+            "the form placement has no header"
+        );
+        let body = str::from_utf8(form.body.as_bytes()).expect("form bytes");
+        assert!(
+            body.contains("client_id=cid&client_secret=csecret"),
+            "the form placement names the client beside its secret: {body}"
         );
     }
 

@@ -327,7 +327,10 @@ mod oauth2_client_credentials {
             body.starts_with("grant_type=client_credentials"),
             "the grant comes first: {body}"
         );
-        assert!(body.contains("client_id=cid-bh"));
+        assert!(
+            !body.contains("client_id"),
+            "the Basic placement names the client in the header alone, never in the body: {body}"
+        );
         assert!(
             !body.contains("cc-secret-1"),
             "the Basic placement never repeats the secret in the body"
