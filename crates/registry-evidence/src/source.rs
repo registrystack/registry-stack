@@ -261,17 +261,33 @@ impl SourceError {
 /// means public unavailability or a dependency inconsistency.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SourceResponse {
-    Data(JsonValue),
+    Data(SourceData),
     DeclaredUnresolved,
 }
 
 impl SourceResponse {
     pub fn into_data(self) -> Option<JsonValue> {
         match self {
-            Self::Data(value) => Some(value),
+            Self::Data(data) => Some(data.value),
             Self::DeclaredUnresolved => None,
         }
     }
+
+    fn ordinary(value: JsonValue) -> Self {
+        Self::Data(SourceData {
+            value,
+            valid_until: None,
+        })
+    }
+}
+
+/// Projected source data plus verified lifecycle metadata retained only for
+/// downstream issuance. The deadline never enters Rhai, audit, or the public
+/// source projection.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SourceData {
+    pub value: JsonValue,
+    pub valid_until: Option<DateTime<Utc>>,
 }
 
 /// Carry a statement-source failure across into the closed source vocabulary.
@@ -1086,7 +1102,7 @@ impl SourceExecutor {
                 SourceTransport::Statement(statement) => statement
                     .execute(&materialized, evaluation_instant)
                     .await
-                    .map(SourceResponse::Data),
+                    .map(SourceResponse::ordinary),
             }
         }
         .await;
@@ -1395,9 +1411,14 @@ impl HttpTransport {
                     .await
                     .map_err(map_bounded_read_error)?,
             );
-            let value = evidence.verified_values(&verification, &bytes)?;
+            let (value, valid_until) = evidence.verified_values(&verification, &bytes)?;
             return project_bounded_response(&value, projection, &mut ProjectionDrift::default())
-                .map(SourceResponse::Data);
+                .map(|value| {
+                    SourceResponse::Data(SourceData {
+                        value,
+                        valid_until: Some(valid_until),
+                    })
+                });
         }
         parse_data_response(
             response,
@@ -2937,7 +2958,7 @@ async fn parse_data_response(
             observer.shape_drift(&drift.findings());
         }
     }
-    projected.map(SourceResponse::Data)
+    projected.map(SourceResponse::ordinary)
 }
 
 /// Accept a 404 only as the exact unresolved problem the bundle declares.

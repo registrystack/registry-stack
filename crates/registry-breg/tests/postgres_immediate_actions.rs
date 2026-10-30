@@ -1482,6 +1482,30 @@ async fn action_conditions_and_invocation_refuse_aliases_wrong_records_and_bound
     )
     .await;
     assert_eq!(boundary_escape.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(boundary_escape.body["code"], "precondition.failed");
+    assert_eq!(
+        boundary_escape.body["detail"],
+        "The mutation precondition failed."
+    );
+    assert_eq!(
+        boundary_escape
+            .body
+            .as_object()
+            .expect("problem is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        ["type", "title", "status", "detail", "code", "traceId"]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+    for concealed in ["zone-b", "P-ESCAPE", "Boundary Escape"] {
+        assert!(
+            !boundary_escape.body.to_string().contains(concealed),
+            "Action boundary refusal disclosed {concealed}: {}",
+            boundary_escape.body
+        );
+    }
     assert_eq!(
         action_counts(&database, &registry).await.without_audit(),
         before.without_audit()

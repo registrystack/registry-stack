@@ -1177,16 +1177,17 @@ access while proving that default inspection and console formatting omit them.
 
 ## Row-boundary write refusals
 
-The change refuses a direct create, patch, or batch item whose resulting row
-falls outside the caller's row boundary with `412 precondition.failed`,
+The runtime refuses a direct create, a direct batch item, or a patch that moves
+a visible row outside the selected access profile's row boundary with
+`403 write.outside-boundary`,
 checked in Rust before any write (`authorize_record_snapshot` in
 `crates/registry-breg/src/mutation.rs`, over
 `ClaimContext::authorizes_record_snapshot` in
 `crates/registry-breg/src/postgres/context.rs`; mapped by `mutation_problem`
 in `crates/registry-breg/src/api/mod.rs`). Before it, the generated RLS
 `WITH CHECK` policy refused the write inside PostgreSQL and the caller saw
-`503 service.unavailable`, indistinguishable from an outage (#1771). It
-changes authorization and what a refusal tells the caller.
+`503 service.unavailable`, indistinguishable from an outage (#1771). It changes
+only the direct write response classification, not authorization.
 
 ### Threat
 
@@ -1194,8 +1195,8 @@ A write outside the boundary lands, or its refusal becomes a probe: it echoes
 the prospective value, answers differently for a row that exists but is
 hidden than for one that does not, or answers a unique-value conflict with a
 row the caller cannot see. A second threat is the opposite mistake: turning a
-real privilege failure into a `412`, so an operator misreads a broken role
-grant as caller error.
+real privilege failure into a caller boundary refusal, so an operator
+misreads a broken role grant as caller error.
 
 ### Enforcement and defaults
 
@@ -1206,14 +1207,17 @@ grant as caller error.
   changes no field, checks the current row before the object store or the
   attachment table is written. A batch runs each item through the same path
   in one transaction, so one refused item commits none.
-- The refusal is the fixed `precondition.failed` problem a stale `If-Match`
-  answers, with no field name, value, or boundary claim in the body or the
-  audit record. It is audited as a refusal and caches no idempotency result.
+- The refusal is the fixed `write.outside-boundary` problem with status `403`
+  and detail `The resulting record falls outside the selected access profile's
+  row boundary.` It carries only the fixed problem members, with no field name,
+  field path, submitted value, or boundary claim. It is audited as a refusal
+  and caches no idempotency result.
 - RLS stays the storage backstop. A row the Rust check admits still meets the
   generated `WITH CHECK` policy, and a PostgreSQL failure of it, or of a
-  table privilege, stays `503`: only `MutationError::AuthorizationRefused`,
-  raised by the Rust check, maps to `412`. A malformed compiled claim context
-  is an internal error and also stays `503`.
+  table privilege, stays `503`: only `MutationError::WriteOutsideBoundary`,
+  raised by the direct prospective-row check, maps to `403`. Other internal
+  authorization refusals retain their established mappings. A malformed
+  compiled claim context is an internal error and also stays `503`.
 - A row the boundary hides stays invisible. A read of it answers
   `404 resource.not_found`, byte-identical to an absent id. A patch of it
   answers the `412` a patch of an absent id answers, because the guarded
@@ -1221,15 +1225,21 @@ grant as caller error.
   outcome mutations already used, not a new one.
 - The boundary check runs before any unique constraint is consulted, so an
   out-of-boundary create that collides with a hidden row's unique value
-  answers the same `412` as one that collides with nothing.
-- Ingestion maps the refusal to a refused item, like a failed precondition.
+  answers the same `403` as one that collides with nothing.
+- A stale `If-Match` remains `412 precondition.failed`. Immediate Action and
+  Proposal target and effect checks also retain their value-free `412`, and
+  Proposal-level authority stays concealed as `404 resource.not_found`.
+- Ingestion consumes a batch mutation outcome through its run protocol, so it
+  maps the new internal refusal to its existing item-level
+  `412 precondition.failed` and records the attempt as refused.
 
 ### Tests
 
 `crates/registry-breg/tests/postgres_mutation.rs`:
 `real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic`
-(BREG-SEC-138) pins the value-free `412` for a create and a patch, the
-unchanged durable counts apart from the refusal audit, and a revoked table
+(BREG-SEC-138) pins the value-free `403` for a create and visible-row patch,
+the unchanged `412` for a stale condition, the unchanged durable counts apart
+from the refusal audit, and a revoked table
 privilege still answering `503`.
 `real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_write_nothing`
 pins a batch with one out-of-boundary item committing nothing, a patch and a

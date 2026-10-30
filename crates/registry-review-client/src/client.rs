@@ -10,14 +10,15 @@ use registry_platform_httputil::{
 };
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_PRODUCER_HEADER,
-    REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH,
+    ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestLifecycle,
+    ReviewRequestView, ReviewResult, ReviewResultFeedPage, ReviewResultStatus, SubmissionDigest,
+    REVIEW_PRODUCER_HEADER, REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH,
     REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::model::check_result_page;
@@ -32,6 +33,182 @@ const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
+
+trait ClientResponse: Sized {
+    type Wire: DeserializeOwned;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error>;
+}
+
+fn validate_wire<T: serde::de::DeserializeOwned, W: Serialize>(
+    wire: W,
+) -> Result<T, serde_json::Error> {
+    serde_json::from_value(serde_json::to_value(wire)?)
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubjectBindingWire {
+    source: String,
+    #[serde(rename = "type")]
+    subject_type: String,
+    id: String,
+    version: String,
+    digest: registry_review_protocol::ContentDigest,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingWire {
+    id: String,
+    version: String,
+    digest: registry_review_protocol::ContentDigest,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewRequestAcceptedWire {
+    request_id: Uuid,
+    subject: SubjectBindingWire,
+    policy: PolicyBindingWire,
+    submission_digest: SubmissionDigest,
+}
+
+impl ClientResponse for ReviewRequestAccepted {
+    type Wire = ReviewRequestAcceptedWire;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
+        validate_wire(wire)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewRequestViewWire {
+    request_id: Uuid,
+    subject: SubjectBindingWire,
+    policy: PolicyBindingWire,
+    submission_digest: SubmissionDigest,
+    requester_reference: String,
+    lifecycle: ReviewRequestLifecycle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_stage: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl ClientResponse for ReviewRequestView {
+    type Wire = ReviewRequestViewWire;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
+        validate_wire(wire)
+    }
+}
+
+#[derive(Default)]
+enum OptionalValueWire {
+    #[default]
+    Missing,
+    Present(Value),
+}
+
+impl OptionalValueWire {
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionalValueWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(Self::Present)
+    }
+}
+
+impl Serialize for OptionalValueWire {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Missing => serializer.serialize_none(),
+            Self::Present(value) => value.serialize(serializer),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewResultWire {
+    result_id: Uuid,
+    request_id: Uuid,
+    subject: SubjectBindingWire,
+    policy: PolicyBindingWire,
+    submission_digest: SubmissionDigest,
+    status: ReviewResultStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "OptionalValueWire::is_missing")]
+    result: OptionalValueWire,
+    completed_at: String,
+    available_until: String,
+}
+
+impl ClientResponse for ReviewResult {
+    type Wire = ReviewResultWire;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
+        validate_wire(wire)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewResultFeedEntryWire {
+    event_id: Uuid,
+    request_id: Uuid,
+    result_id: Uuid,
+    completed_at: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewResultFeedPageWire {
+    items: Vec<ReviewResultFeedEntryWire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<Uuid>,
+}
+
+impl ClientResponse for ReviewResultFeedPage {
+    type Wire = ReviewResultFeedPageWire;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
+        validate_wire(wire)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(
+    tag = "outcome",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+enum ReviewCancelResponseWire {
+    Cancelled { result: ReviewResultWire },
+    AlreadyTerminal { result: ReviewResultWire },
+}
+
+impl ClientResponse for ReviewCancelResponse {
+    type Wire = ReviewCancelResponseWire;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
+        validate_wire(wire)
+    }
+}
 
 pub struct ReviewClient {
     http: reqwest::Client,
@@ -405,7 +582,7 @@ impl ReviewClient {
             .map_err(|_| ReviewClientError::invalid_request("a route identifier is invalid"))
     }
 
-    async fn send_json<T: DeserializeOwned>(
+    async fn send_json<T: ClientResponse>(
         &self,
         request: RequestBuilder,
         expected_status: StatusCode,
@@ -413,7 +590,7 @@ impl ReviewClient {
         self.send_json_one_of(request, &[expected_status]).await
     }
 
-    async fn send_json_one_of<T: DeserializeOwned>(
+    async fn send_json_one_of<T: ClientResponse>(
         &self,
         request: RequestBuilder,
         expected_statuses: &[StatusCode],
@@ -423,7 +600,7 @@ impl ReviewClient {
             .map(|(complete, _)| complete)
     }
 
-    async fn send_json_one_of_with_status<T: DeserializeOwned>(
+    async fn send_json_one_of_with_status<T: ClientResponse>(
         &self,
         request: RequestBuilder,
         expected_statuses: &[StatusCode],
@@ -445,7 +622,7 @@ impl ReviewClient {
         Ok((ReviewComplete { value, trace_id }, status))
     }
 
-    async fn read_json<T: DeserializeOwned>(
+    async fn read_json<T: ClientResponse>(
         &self,
         response: Response,
         status: StatusCode,
@@ -463,7 +640,14 @@ impl ReviewClient {
                 Some(trace_id.to_owned()),
             )
         })?;
-        serde_json::from_value(value).map_err(|_| {
+        let wire = serde_json::from_value(value).map_err(|_| {
+            protocol(
+                status,
+                ReviewProtocolFailure::Body,
+                Some(trace_id.to_owned()),
+            )
+        })?;
+        T::from_wire(wire).map_err(|_| {
             protocol(
                 status,
                 ReviewProtocolFailure::Body,

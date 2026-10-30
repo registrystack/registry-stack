@@ -1147,15 +1147,15 @@ mod tests {
         for (pointer, expected) in [
             (
                 "/$defs/RawPoolBounds/properties/waitTimeoutMilliseconds/default",
-                Value::from(30_000_u64),
+                Value::from(1_000_u64),
             ),
             (
                 "/$defs/RawPoolBounds/properties/createTimeoutMilliseconds/default",
-                Value::from(30_000_u64),
+                Value::from(2_000_u64),
             ),
             (
                 "/$defs/RawPoolBounds/properties/recycleTimeoutMilliseconds/default",
-                Value::from(30_000_u64),
+                Value::from(2_000_u64),
             ),
             (
                 "/$defs/RawOidcVerifierConfig/properties/jwksCache/default/attemptTimeoutMilliseconds",
@@ -1235,7 +1235,7 @@ mod tests {
             "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef/default",
             "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef/default",
             "/$defs/RawOidcVerifierConfig/properties/allowedClients/default",
-            "/$defs/RawOidcVerifierConfig/properties/deniedKids/default",
+            "/$defs/RawOidcVerifierConfig/properties/revokedKeyIds/default",
             "/$defs/RawOidcVerifierConfig/properties/jwksSource/default",
             "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/default",
         ] {
@@ -1401,7 +1401,7 @@ mod tests {
             &schema,
             "OIDC denied key list that names no key",
             |instance| {
-                instance["authentication"]["oidc"]["deniedKids"] = serde_json::json!([]);
+                instance["authentication"]["oidc"]["revokedKeyIds"] = serde_json::json!([]);
             },
         );
         assert_schema_rejects_parser_refused_runtime(

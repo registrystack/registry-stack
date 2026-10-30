@@ -13,15 +13,13 @@ const metadata = {id: 'proposal-input', version: '1', revision, metadataVersion:
     actions: [{actionId: 'correct', accessProfile: 'writer', operations: ['get'], readableInputs: [], readableContextFields: []}],
   }};
 
-// JCS expands exponent-form 1e20 literals to twenty-one digits.
-const input = size => {
-  const value = Object.fromEntries(['a', 'b', 'c', 'd'].map(key => [key, Array(35746).fill(1e20)]));
-  value.d.push('x'.repeat(size - 3145673 - 3));
+const body = size => {
+  const value = {input: {value: ''}};
+  // The client measures canonical input values plus the shortest nonempty
+  // internal field names, not the surrounding transition body.
+  value.input.value = 'x'.repeat(size - 8);
   return value;
 };
-// JSON.stringify uses JCS number spelling, so retain compact exponent literals
-// explicitly in this known numeric fixture passed through the JSON-text API.
-const body = size => JSON.stringify({input: input(size)}).replaceAll('100000000000000000000', '1e20');
 
 test('Proposal input canonical bound is preserved through native preparation and recovery', async () => {
   let document;
@@ -50,7 +48,7 @@ test('Proposal input canonical bound is preserved through native preparation and
       const held = await client.getProposal(get, id);
       const before = requests;
       const oversized = body(maximum + 1);
-      assert.ok(Buffer.byteLength(oversized) < 2 * 1024 * 1024);
+      assert.equal(Buffer.byteLength(JSON.stringify(oversized.input.value)) + 6, maximum + 1);
       assert.throws(() => client.prepareProposal(held, operation, oversized, 'bounded-input'),
         error => error.kind === 'invalid-request');
       const attempt = client.prepareProposal(held, operation, body(maximum), 'bounded-input');
@@ -59,7 +57,7 @@ test('Proposal input canonical bound is preserved through native preparation and
       const recovered = client.recoverProposal(held, restored);
       assert.deepEqual(recovered.toBytes(), saved);
       const invalid = JSON.parse(saved.toString());
-      invalid.body = oversized;
+      invalid.body = JSON.stringify(oversized);
       assert.throws(() => BRegPreparedProposal.fromBytes(Buffer.from(JSON.stringify(invalid))),
         error => error.kind === 'invalid-request');
       assert.equal(requests, before);

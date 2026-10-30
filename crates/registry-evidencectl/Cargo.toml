@@ -16,6 +16,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+registry-cli-report.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true

@@ -96,6 +96,10 @@ fn current_offline_reports_match_the_typed_contract_and_committed_check_example(
         }
         assert_eq!(report["command"], command);
         assert_eq!(report["ok"], exit == 0);
+        assert!(report.get("data").is_none());
+        assert!(report["version"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty()));
         if exit == 0 {
             assert_eq!(report["status"], "complete");
             assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(0));
@@ -138,8 +142,7 @@ fn advanced_calendar_revision_example_is_readable() {
 fn explain_reports_policy_usage_and_project_level_resources() {
     let root = repo_root();
     let (report, _) = output(&root, &["explain", ADVANCED], 0);
-    let data = &report["data"];
-    let policy = &data["reviewPolicies"][0];
+    let policy = &report["reviewPolicies"][0];
 
     assert_eq!(policy["label"], "Regional review");
     assert_eq!(policy["stages"][0]["label"], "Technical review");
@@ -156,15 +159,13 @@ fn explain_reports_policy_usage_and_project_level_resources() {
         policy["eligibleDecidingProfiles"],
         serde_json::json!(["staff", "supervisor"])
     );
-    assert_eq!(data["clocks"].as_array().map(Vec::len), Some(2));
-    assert_eq!(data["calendars"].as_array().map(Vec::len), Some(1));
-    assert_eq!(data["trustedProducers"].as_array().map(Vec::len), Some(1));
+    assert_eq!(report["clocks"].as_array().map(Vec::len), Some(2));
+    assert_eq!(report["calendars"].as_array().map(Vec::len), Some(1));
+    assert_eq!(report["trustedProducers"].as_array().map(Vec::len), Some(1));
 
     let (unlabelled, _) = output(&root, &["explain", STANDALONE], 0);
-    assert!(unlabelled["data"]["reviewPolicies"][0]
-        .get("label")
-        .is_none());
-    assert!(unlabelled["data"]["reviewPolicies"][0]["stages"][0]
+    assert!(unlabelled["reviewPolicies"][0].get("label").is_none());
+    assert!(unlabelled["reviewPolicies"][0]["stages"][0]
         .get("label")
         .is_none());
 }

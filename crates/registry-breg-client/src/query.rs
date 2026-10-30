@@ -451,7 +451,7 @@ impl fmt::Debug for BRegLookupRequest {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BRegContinuationProjection {
-    /// Logical Base Registry Engine entity route segment.
+    /// Logical Base Registry Engine record route segment.
     pub route: String,
     /// Opaque Base Registry Engine `$skiptoken`.
     pub skiptoken: String,
@@ -464,8 +464,8 @@ pub struct BRegContinuationProjection {
     pub registry_identifier: String,
     /// Dataset identifier returned with the first page.
     pub dataset_identifier: String,
-    /// Entity identifier returned with the first page.
-    pub entity_type_identifier: String,
+    /// Record type identifier returned with the first page.
+    pub record_type_identifier: String,
 }
 
 impl fmt::Debug for BRegContinuationProjection {
@@ -495,7 +495,7 @@ pub struct BRegContinuation {
     access_profile: Option<String>,
     registry_identifier: String,
     dataset_identifier: String,
-    entity_type_identifier: String,
+    record_type_identifier: String,
 }
 
 impl BRegContinuation {
@@ -513,7 +513,7 @@ impl BRegContinuation {
             access_profile,
             registry_identifier: meta.registry_identifier.clone(),
             dataset_identifier: meta.dataset_identifier.clone(),
-            entity_type_identifier: meta.entity_type_identifier.clone(),
+            record_type_identifier: meta.record_type_identifier.clone(),
         })
     }
 
@@ -531,7 +531,7 @@ impl BRegContinuation {
         if [
             &value.registry_identifier,
             &value.dataset_identifier,
-            &value.entity_type_identifier,
+            &value.record_type_identifier,
         ]
         .into_iter()
         .any(|identifier| !valid_collection_identifier(identifier))
@@ -545,7 +545,7 @@ impl BRegContinuation {
             access_profile: value.access_profile,
             registry_identifier: value.registry_identifier,
             dataset_identifier: value.dataset_identifier,
-            entity_type_identifier: value.entity_type_identifier,
+            record_type_identifier: value.record_type_identifier,
         })
     }
 
@@ -559,11 +559,11 @@ impl BRegContinuation {
             access_profile: self.access_profile.clone(),
             registry_identifier: self.registry_identifier.clone(),
             dataset_identifier: self.dataset_identifier.clone(),
-            entity_type_identifier: self.entity_type_identifier.clone(),
+            record_type_identifier: self.record_type_identifier.clone(),
         }
     }
 
-    /// Logical Base Registry Engine entity route selected for the original page.
+    /// Logical Base Registry Engine record route selected for the original page.
     #[must_use]
     pub fn route(&self) -> &str {
         &self.route
@@ -584,7 +584,7 @@ impl BRegContinuation {
     pub(crate) fn matches_meta(&self, meta: &RegistryRecordMeta) -> bool {
         self.registry_identifier == meta.registry_identifier
             && self.dataset_identifier == meta.dataset_identifier
-            && self.entity_type_identifier == meta.entity_type_identifier
+            && self.record_type_identifier == meta.record_type_identifier
     }
 
     pub(crate) fn query_pairs(&self) -> Result<Vec<(String, String)>, BRegRequestError> {
@@ -998,7 +998,7 @@ mod tests {
         RegistryRecordMeta {
             registry_identifier: "business-registry".into(),
             dataset_identifier: "legal-entities".into(),
-            entity_type_identifier: "company".into(),
+            record_type_identifier: "company".into(),
             extensions: BTreeMap::new(),
         }
     }
@@ -1214,7 +1214,7 @@ mod tests {
                 "accessProfile": "caseworker.v1",
                 "registryIdentifier": "business-registry",
                 "datasetIdentifier": "legal-entities",
-                "entityTypeIdentifier": "company"
+                "recordTypeIdentifier": "company"
             })
         );
     }
@@ -1245,7 +1245,7 @@ mod tests {
             "format": "json",
             "registryIdentifier": "business-registry",
             "datasetIdentifier": "legal-entities",
-            "entityTypeIdentifier": "company",
+            "recordTypeIdentifier": "company",
             "firstPageFilter": "status eq 'secret'"
         }))
         .is_err());

@@ -20,6 +20,7 @@ mod config;
 mod error;
 mod model;
 mod task_assertion_source;
+mod wire;
 
 pub use client::CaseworkClient;
 pub use config::CaseworkClientConfig;

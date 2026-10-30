@@ -750,13 +750,25 @@ A product code is `<product>.<area>.<condition>` with the product token
 `render`, `evidence`, `manifest`, `platform`); a shared reader code is
 `<namespace>.<condition>`, with `yaml` for syntax and `config` for envelope,
 key, and type problems. A code is never reused for a different condition.
+An operator CLI reports an internal failure as `<binary>.internal-error`, using
+its executable name as the namespace.
 
 **CFG-DIAG-4 (MUST). Exit codes:** 0 when no error was reported (warnings
 allowed), 1 when the input was refused, 2 for a usage error, 3 when something
-the command depends on was unavailable. Every checking command takes
+the command depends on was unavailable or an internal error stopped it. An
+internal error uses the value-free `<binary>.internal-error` diagnostic; a
+panic reports that code and exits 3 without repeating its payload or location.
+Every checking command takes
 `--deny-warnings`, which makes an unaccepted warning exit 1. An accepted
 warning retains `severity: warning` and its `acceptedReason`, and does not
 contribute to the active warning count. Errors always refuse the input.
+
+Machine-readable operator reports open with `ok`, `command`, `status`,
+`apiVersion`, and `kind`, in that order. Command members are flat; every report
+also carries the binary's displayed `version` and a `diagnostics` array, empty
+when there are no diagnostics. `status` is `complete`, `domain-refusal`,
+`usage-error`, or `operational-failure`, corresponding to exit codes 0 through
+3. Command-specific results such as `declined` or `ready` use `outcome`.
 
 **CFG-DIAG-5 (MUST). A check reports every problem it can find in one run.**
 Structural problems are those the reader finds before decoding: every `yaml.`

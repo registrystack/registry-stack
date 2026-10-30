@@ -238,7 +238,7 @@ export interface ListContinuation {
   accessProfile?: string | null
   registryIdentifier: string
   datasetIdentifier: string
-  entityTypeIdentifier: string
+  recordTypeIdentifier: string
 }
 export type CurrentListContinuation = ListContinuation
 export interface AsOfListContinuation extends ListContinuation { asOf: string }
@@ -266,7 +266,7 @@ export interface RegistryRecord {
 export interface RecordMetadata {
   registryIdentifier: string
   datasetIdentifier: string
-  entityTypeIdentifier: string
+  recordTypeIdentifier: string
   readonly [member: string]: JsonValue | undefined
 }
 
@@ -559,8 +559,8 @@ export interface BRegBatchCreateItem {
 export interface BRegBatchPatchItem {
   readonly operation: 'patch'
   readonly recordIdentifier: string
-  readonly etag: string
-  readonly operations: ReadonlyArray<PatchOperation | RemovePatchOperation>
+  readonly ifMatch: string
+  readonly patch: ReadonlyArray<PatchOperation | RemovePatchOperation>
 }
 export type BRegBatchItem = BRegBatchCreateItem | BRegBatchPatchItem
 export type BRegChangeContext =
@@ -583,10 +583,10 @@ export interface BRegBatchReceipt {
   readonly snapshot: string
   readonly results: ReadonlyArray<{
     readonly operation: 'create' | 'patch'
-    readonly id: string
-    readonly revision: SafeInteger
+    readonly recordIdentifier: string
+    readonly revisionIdentifier: string
     readonly etag: string
-    readonly data: Readonly<Record<string, JsonValue>>
+    readonly domainData: Readonly<Record<string, JsonValue>>
   }>
 }
 
@@ -881,12 +881,12 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
 }
 
 export declare class BaseRegistryClient {
-  startProposal(binding: BRegActionBinding, inputsJson: string, key: string): Promise<BRegProposal>
+  startProposal(binding: BRegActionBinding, inputs: JsonObject, key: string): Promise<BRegProposal>
   getProposal(binding: BRegProposalGetBinding, id: string): Promise<BRegProposal>
   readProposal(proposal: BRegProposal): Promise<BRegProposal>
   /** Read one retained submission version under the access profile of the Proposal's self link. */
   readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome<BRegProposalSubmission>>
-  listProposals(collection: BRegProposalCollection, queryJson: string): Promise<BRegProposalPage>
+  listProposals(collection: BRegProposalCollection, query: JsonObject): Promise<BRegProposalPage>
   /**
    * Bind an available transition without I/O. Throws locally when the operation
    * is not a legal transition from the Proposal's observed state; `cancel` is
@@ -894,7 +894,7 @@ export declare class BaseRegistryClient {
    * Cancelled Proposal never reaches the server. Call the HTTP route directly to
    * exercise the server's terminal-state refusal.
    */
-  prepareProposal(proposal: BRegProposal, operation: BRegProposalTransition, bodyJson: string, key: string): BRegPreparedProposal
+  prepareProposal(proposal: BRegProposal, operation: BRegProposalTransition, body: JsonObject, key: string): BRegPreparedProposal
   recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
   executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   constructor(config: BaseRegistryClientConfig)
@@ -907,7 +907,7 @@ export declare class BaseRegistryClient {
    * `{recordType, recordId, revision, createdAt}` JSON text, or null when the
    * caller may not read it (403 or 404).
    */
-  eventRecordCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<string | null>
+  eventRecordCreationRevision(recordRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<string | null>
   statisticsLive(dataset: string, from?: string | null, to?: string | null, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
   statisticsReleases(dataset: string, top?: SafeInteger | null, skipToken?: string | null, accessProfile?: string | null): Promise<RawOutcome>
   statisticsLatestRelease(dataset: string, period: string, selection: StatisticsReleaseSelection, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
@@ -916,24 +916,24 @@ export declare class BaseRegistryClient {
   statisticsPublish(dataset: string, period: string, status: StatisticsReleaseStatus, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   statisticsWithdraw(dataset: string, period: string, version: SafeInteger, reason: StatisticsWithdrawalReason, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | null): Promise<BRegMetadata>
-  entitySchema(recordTypeIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
-  recordRevisions(entityRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
-  getRecordRevision(entityRoute: string, recordIdentifier: string, revision: SafeInteger, options?: RecordProjectionOptions | null): Promise<RawOutcome>
-  getRecord(entityRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
-  listRecords(entityRoute: string, options?: ListOptions | null): Promise<PageOutcome>
+  recordSchema(recordTypeIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
+  recordRevisions(recordRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
+  getRecordRevision(recordRoute: string, recordIdentifier: string, revision: SafeInteger, options?: RecordProjectionOptions | null): Promise<RawOutcome>
+  getRecord(recordRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
+  listRecords(recordRoute: string, options?: ListOptions | null): Promise<PageOutcome>
   continueList(continuation: ListContinuation): Promise<PageOutcome>
-  getGeoJsonRecord(entityRoute: string, recordIdentifier: string, options?: GeoJsonOptions | null): Promise<CompleteOutcome<GeoJsonFeature>>
-  listGeoJsonRecords(entityRoute: string, options?: GeoJsonListOptions | null): Promise<PageOutcome<GeoJsonFeatureCollection, GeoJsonListContinuation>>
+  getGeoJsonRecord(recordRoute: string, recordIdentifier: string, options?: GeoJsonOptions | null): Promise<CompleteOutcome<GeoJsonFeature>>
+  listGeoJsonRecords(recordRoute: string, options?: GeoJsonListOptions | null): Promise<PageOutcome<GeoJsonFeatureCollection, GeoJsonListContinuation>>
   continueGeoJsonList(continuation: GeoJsonListContinuation): Promise<PageOutcome<GeoJsonFeatureCollection, GeoJsonListContinuation>>
-  listCurrentRecords(entityRoute: string, options?: CollectionOptions | null): Promise<PageOutcome<RecordCollection, CurrentListContinuation>>
+  listCurrentRecords(recordRoute: string, options?: CollectionOptions | null): Promise<PageOutcome<RecordCollection, CurrentListContinuation>>
   continueCurrentList(continuation: CurrentListContinuation): Promise<PageOutcome<RecordCollection, CurrentListContinuation>>
-  listRecordsAsOf(entityRoute: string, options: AsOfListOptions): Promise<PageOutcome<RecordCollection, AsOfListContinuation>>
+  listRecordsAsOf(recordRoute: string, options: AsOfListOptions): Promise<PageOutcome<RecordCollection, AsOfListContinuation>>
   continueAsOfList(continuation: AsOfListContinuation): Promise<PageOutcome<RecordCollection, AsOfListContinuation>>
-  listSnapshotRecords(entityRoute: string, options?: SnapshotListOptions | null): Promise<PageOutcome<RecordCollection, SnapshotListContinuation>>
+  listSnapshotRecords(recordRoute: string, options?: SnapshotListOptions | null): Promise<PageOutcome<RecordCollection, SnapshotListContinuation>>
   continueSnapshotList(continuation: SnapshotListContinuation): Promise<PageOutcome<RecordCollection, SnapshotListContinuation>>
-  listRelationshipRecords(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: CollectionOptions | null): Promise<PageOutcome<RecordCollection, RelationshipListContinuation>>
+  listRelationshipRecords(recordRoute: string, recordIdentifier: string, pathRoute: string, options?: CollectionOptions | null): Promise<PageOutcome<RecordCollection, RelationshipListContinuation>>
   continueRelationshipList(continuation: RelationshipListContinuation): Promise<PageOutcome<RecordCollection, RelationshipListContinuation>>
-  lookupRecord(entityRoute: string, selector: string, values?: JsonObject | null, options?: RecordProjectionOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
+  lookupRecord(recordRoute: string, selector: string, values?: JsonObject | null, options?: RecordProjectionOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
   actionTargetConditions(binding: BRegActionBinding, inputs: JsonObject): Promise<BRegActionTargetConditions>
   actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
   actionAvailability(binding: BRegActionBinding, targetInput: string, inputs: JsonObject): Promise<CompleteOutcome<BRegActionAvailability>>
@@ -966,36 +966,36 @@ export declare class BaseRegistryClient {
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: ReadonlyArray<PatchOperation | RemovePatchOperation>, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   batchRecords(binding: BRegBatchBinding, request: BRegBatchInput, idempotencyKey: string): Promise<CompleteOutcome<BRegBatchReceipt>>
   batchRecordsJson(binding: BRegBatchBinding, requestJson: string, idempotencyKey: string): Promise<JsonOutcome>
-  createIngestionRun(entityRoute: string, request: BRegIngestionRunInput): Promise<CompleteOutcome<BRegIngestionRun>>
-  listIngestionRuns(entityRoute: string, query?: BRegIngestionRunListInput | null): Promise<CompleteOutcome<BRegIngestionRunPage>>
-  readIngestionRun(entityRoute: string, runId: string, accessProfile?: string | null): Promise<CompleteOutcome<BRegIngestionRun>>
-  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk, profileId: string): Promise<CompleteOutcome<BRegIngestionChunkSubmission>>
-  cancelIngestionRun(entityRoute: string, runId: string, accessProfile?: string | null): Promise<CompleteOutcome<BRegIngestionRun>>
-  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: SafeInteger, profileId: string): Promise<CompleteOutcome<BRegIngestionChunkReceipt>>
+  createIngestionRun(recordRoute: string, request: BRegIngestionRunInput): Promise<CompleteOutcome<BRegIngestionRun>>
+  listIngestionRuns(recordRoute: string, query?: BRegIngestionRunListInput | null): Promise<CompleteOutcome<BRegIngestionRunPage>>
+  readIngestionRun(recordRoute: string, runId: string, accessProfile?: string | null): Promise<CompleteOutcome<BRegIngestionRun>>
+  submitIngestionChunk(recordRoute: string, runId: string, chunk: BRegIngestionChunk, profileId: string): Promise<CompleteOutcome<BRegIngestionChunkSubmission>>
+  cancelIngestionRun(recordRoute: string, runId: string, accessProfile?: string | null): Promise<CompleteOutcome<BRegIngestionRun>>
+  ingestionChunkReceipt(recordRoute: string, runId: string, chunkIndex: SafeInteger, profileId: string): Promise<CompleteOutcome<BRegIngestionChunkReceipt>>
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   tombstoneRecordJson(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
-  getRecordJson(entityRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<JsonOutcome>
-  listRecordsJson(entityRoute: string, options?: ListOptions | null): Promise<JsonOutcome>
+  getRecordJson(recordRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<JsonOutcome>
+  listRecordsJson(recordRoute: string, options?: ListOptions | null): Promise<JsonOutcome>
   continueListJson(continuation: ListContinuation): Promise<JsonOutcome>
-  getGeoJsonRecordJson(entityRoute: string, recordIdentifier: string, options?: GeoJsonOptions | null): Promise<JsonOutcome>
-  listGeoJsonRecordsJson(entityRoute: string, options?: GeoJsonListOptions | null): Promise<JsonOutcome<GeoJsonListContinuation>>
+  getGeoJsonRecordJson(recordRoute: string, recordIdentifier: string, options?: GeoJsonOptions | null): Promise<JsonOutcome>
+  listGeoJsonRecordsJson(recordRoute: string, options?: GeoJsonListOptions | null): Promise<JsonOutcome<GeoJsonListContinuation>>
   continueGeoJsonListJson(continuation: GeoJsonListContinuation): Promise<JsonOutcome<GeoJsonListContinuation>>
-  listCurrentRecordsJson(entityRoute: string, options?: CollectionOptions | null): Promise<JsonOutcome<CurrentListContinuation>>
+  listCurrentRecordsJson(recordRoute: string, options?: CollectionOptions | null): Promise<JsonOutcome<CurrentListContinuation>>
   continueCurrentListJson(continuation: CurrentListContinuation): Promise<JsonOutcome<CurrentListContinuation>>
-  listRecordsAsOfJson(entityRoute: string, options: AsOfListOptions): Promise<JsonOutcome<AsOfListContinuation>>
+  listRecordsAsOfJson(recordRoute: string, options: AsOfListOptions): Promise<JsonOutcome<AsOfListContinuation>>
   continueAsOfListJson(continuation: AsOfListContinuation): Promise<JsonOutcome<AsOfListContinuation>>
-  listSnapshotRecordsJson(entityRoute: string, options?: SnapshotListOptions | null): Promise<JsonOutcome<SnapshotListContinuation>>
+  listSnapshotRecordsJson(recordRoute: string, options?: SnapshotListOptions | null): Promise<JsonOutcome<SnapshotListContinuation>>
   continueSnapshotListJson(continuation: SnapshotListContinuation): Promise<JsonOutcome<SnapshotListContinuation>>
-  listRelationshipRecordsJson(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: CollectionOptions | null): Promise<JsonOutcome<RelationshipListContinuation>>
+  listRelationshipRecordsJson(recordRoute: string, recordIdentifier: string, pathRoute: string, options?: CollectionOptions | null): Promise<JsonOutcome<RelationshipListContinuation>>
   continueRelationshipListJson(continuation: RelationshipListContinuation): Promise<JsonOutcome<RelationshipListContinuation>>
-  lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | null, options?: RecordProjectionOptions | null): Promise<JsonOutcome>
+  lookupRecordJson(recordRoute: string, selector: string, valuesJson?: string | null, options?: RecordProjectionOptions | null): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
   patchRecordJson(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operationsJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
 }
 
 export type BRegProposalTransition = 'edit' | 'submit' | 'revise' | 'rebase' | 'retry' | 'cancel' | 'apply'
-export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'contract-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied'
-export type BRegRecoveryHint = 'refresh' | 'revise' | 'retry' | 'correct-input' | 'receipt-only'
+export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied'
+export type BRegRecoveryHint = 'refresh' | 'revise' | 'retry' | 'rebase' | 'correct-input' | 'receipt-only'
 export type BRegAvailability =
   | { readonly available: true; readonly observedRevision: number }
   | { readonly available: false; readonly observedRevision: number; readonly reason: BRegAvailabilityReason; readonly recovery: BRegRecoveryHint }
@@ -1014,8 +1014,8 @@ export interface BRegProposalApplication {
 export interface BRegProposalApplicationStatus {
   readonly state: 'awaiting-review' | 'pending' | 'applying' | 'blocked' | 'applied' | 'cancelled' | 'rejected'
   readonly mode: 'automatic' | 'manual'
-  readonly reason?: 'contract-changed' | 'dependency-outage' | 'lease-expired' | 'application-refused' | 'attempts-exhausted'
-  readonly recovery?: 'retry' | 'correct-input'
+  readonly reason?: 'package-changed' | 'dependency-outage' | 'lease-expired' | 'application-refused' | 'attempts-exhausted'
+  readonly recovery?: 'retry' | 'rebase' | 'correct-input'
   readonly automaticRetry?: {readonly scheduled: boolean; readonly attempts: number; readonly maximumAttempts: number}
 }
 export interface BRegProposalReviewDocument {

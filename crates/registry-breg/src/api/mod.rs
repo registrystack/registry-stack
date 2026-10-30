@@ -119,7 +119,7 @@ fn route_set(service: Arc<HttpService>) -> Router {
     let mut app = Router::new()
         .route("/openapi.json", get(openapi))
         .route("/v1/registry", get(registry_metadata))
-        .route("/v1/schemas/{entity_id}", get(entity_schema));
+        .route("/v1/schemas/{record_type_id}", get(record_schema));
 
     for route in &service.registry.routes().routes {
         app = match route.operation {
@@ -776,9 +776,9 @@ async fn registry_metadata(
         .into_response()
 }
 
-async fn entity_schema(
+async fn record_schema(
     State(service): State<Arc<HttpService>>,
-    Path(entity_id): Path<String>,
+    Path(record_type_id): Path<String>,
     Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
@@ -787,7 +787,7 @@ async fn entity_schema(
     };
     let surfaces = visible_surfaces(&service, &claims, &options)
         .into_iter()
-        .filter(|surface| surface.response_entity.id == entity_id)
+        .filter(|surface| surface.response_entity.id == record_type_id)
         .collect::<Vec<_>>();
     let Some(first) = surfaces.first() else {
         return concealed();
@@ -800,7 +800,7 @@ async fn entity_schema(
                 fields.extend(surface.readable_fields.iter().cloned());
                 fields
             });
-    match filtered_schema(&service, &entity_id, &readable) {
+    match filtered_schema(&service, &record_type_id, &readable) {
         Some(schema) => Json(schema).into_response(),
         None => concealed(),
     }
@@ -823,7 +823,7 @@ async fn read_dispatch(
                 &route,
                 &claims,
                 path.get("record_id"),
-                error.problem(),
+                error.record_problem(),
                 &correlation,
             )
             .await;
@@ -1099,7 +1099,7 @@ async fn lookup_dispatch(
                 &route,
                 &claims,
                 None,
-                error.problem(),
+                error.record_problem(),
                 &correlation,
             )
             .await;
@@ -1307,7 +1307,7 @@ async fn revision_dispatch(
                 &route,
                 &claims,
                 path.get("record_id"),
-                error.problem(),
+                error.record_problem(),
                 &correlation,
             )
             .await;
@@ -4610,6 +4610,16 @@ impl QueryParseError {
             Self::InvalidAt(parameter) => invalid_query_at(parameter),
         }
     }
+
+    fn record_problem(self) -> Response {
+        match self {
+            Self::InvalidAt("limit") => invalid_query_at_with_detail(
+                "limit",
+                "A record listing takes `$top` for its page size; `limit` is not accepted.",
+            ),
+            other => other.problem(),
+        }
+    }
 }
 
 /// A refused read query. `InvalidAt` names the one fixed parameter at fault.
@@ -4730,13 +4740,17 @@ fn invalid_query() -> Response {
 /// fault. A field name inside the parameter's value is never named, so an
 /// unknown and a withheld field answer the same problem.
 fn invalid_query_at(parameter: &'static str) -> Response {
+    invalid_query_at_with_detail(parameter, "The query request is invalid.")
+}
+
+fn invalid_query_at_with_detail(parameter: &'static str, detail: &'static str) -> Response {
     debug_assert!(crate::problem_location::is_query_parameter_location(
         parameter
     ));
     crate::correlation::problem_response_with_field_path(
         StatusCode::BAD_REQUEST,
         "Bad Request",
-        "The query request is invalid.",
+        detail,
         "query.invalid",
         parameter,
     )
@@ -5134,13 +5148,13 @@ fn parse_batch_body(
                 }
                 Some("patch") => {
                     let record_id = object
-                        .get("recordId")
+                        .get("recordIdentifier")
                         .and_then(Value::as_str)
                         .filter(|record_id| {
                             Uuid::parse_str(record_id)
                                 .is_ok_and(|identifier| identifier.to_string() == *record_id)
                         })
-                        .ok_or_else(|| at(Some(BatchItemMember::RecordId)))?;
+                        .ok_or_else(|| at(Some(BatchItemMember::RecordIdentifier)))?;
                     let expected_etag = object
                         .get("ifMatch")
                         .and_then(Value::as_str)
@@ -5301,6 +5315,7 @@ fn mutation_problem(error: MutationError) -> Response {
         | MutationError::FieldGuardFailed { .. }
         | MutationError::ProposalGuardFailed(_)
         | MutationError::TimerGenerationUnsupported => precondition_failed(),
+        MutationError::WriteOutsideBoundary => fixed_problem(ProblemCode::WriteOutsideBoundary),
         MutationError::Conflict | MutationError::ProposalUniqueConflict => {
             fixed_problem(ProblemCode::MutationConflict)
         }
@@ -5531,7 +5546,7 @@ mod held_body_encryption_tests {
         json!({
             "data": {
                 "recordIdentifier": RECORD_ID,
-                "revisionIdentifier": 1,
+                "revisionIdentifier": "1",
                 "domainData": domain_data
             },
             "meta": {"registryIdentifier": "held-encryption"}
@@ -5609,10 +5624,10 @@ mod held_body_encryption_tests {
         let body = json!({
             "snapshot": snapshot,
             "results": [
-                {"operation": "create", "id": RECORD_ID, "revision": 3,
-                 "etag": "\"etag-one\"", "data": first},
-                {"operation": "patch", "id": OTHER_RECORD_ID, "revision": 4,
-                 "etag": "\"etag-two\"", "data": second}
+                {"operation": "create", "recordIdentifier": RECORD_ID,
+                 "revisionIdentifier": "3", "etag": "\"etag-one\"", "domainData": first},
+                {"operation": "patch", "recordIdentifier": OTHER_RECORD_ID,
+                 "revisionIdentifier": "4", "etag": "\"etag-two\"", "domainData": second}
             ]
         });
         let held = HeldResponse::from_json(200, &body, BTreeMap::new()).unwrap();
@@ -5623,20 +5638,23 @@ mod held_body_encryption_tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let served = parse_json_strict(&bytes).unwrap();
-        // The erasure tombstone scan reads the snapshot and each item's id and
-        // revision directly from the body, beside the sealed members, so those
-        // positions survive opening unchanged.
+        // The erasure tombstone scan reads the snapshot and each item's record
+        // and revision identifiers directly from the body, beside the sealed
+        // members, so those positions survive opening unchanged.
         assert_eq!(served["snapshot"], json!(snapshot));
-        assert_eq!(served["results"][0]["id"], json!(RECORD_ID));
-        assert_eq!(served["results"][0]["revision"], json!(3));
-        assert_eq!(served["results"][1]["id"], json!(OTHER_RECORD_ID));
-        assert_eq!(served["results"][1]["revision"], json!(4));
+        assert_eq!(served["results"][0]["recordIdentifier"], json!(RECORD_ID));
+        assert_eq!(served["results"][0]["revisionIdentifier"], json!("3"));
         assert_eq!(
-            served["results"][0]["data"][&secret_key],
+            served["results"][1]["recordIdentifier"],
+            json!(OTHER_RECORD_ID)
+        );
+        assert_eq!(served["results"][1]["revisionIdentifier"], json!("4"));
+        assert_eq!(
+            served["results"][0]["domainData"][&secret_key],
             json!(FIRST_PLAINTEXT)
         );
         assert_eq!(
-            served["results"][1]["data"][&secret_key],
+            served["results"][1]["domainData"][&secret_key],
             json!(SECOND_PLAINTEXT)
         );
     }
@@ -5653,10 +5671,10 @@ mod held_body_encryption_tests {
                 let record_id = format!("00000000-0000-4000-8000-{position:012}");
                 json!({
                     "operation": "patch",
-                    "id": record_id,
-                    "revision": 2,
+                    "recordIdentifier": record_id,
+                    "revisionIdentifier": "2",
                     "etag": format!("\"etag-{position}\""),
-                    "data": {
+                    "domainData": {
                         secret_key.clone(): sealed_member(&service, &record_id, &plaintext),
                     },
                 })
@@ -5683,9 +5701,9 @@ mod held_body_encryption_tests {
             served["results"].as_array().unwrap().len(),
             usize::from(MAX_BATCH_ITEMS)
         );
-        assert_eq!(served["results"][0]["data"][&secret_key], plaintext);
+        assert_eq!(served["results"][0]["domainData"][&secret_key], plaintext);
         assert_eq!(
-            served["results"][usize::from(MAX_BATCH_ITEMS) - 1]["data"][&secret_key],
+            served["results"][usize::from(MAX_BATCH_ITEMS) - 1]["domainData"][&secret_key],
             plaintext
         );
     }

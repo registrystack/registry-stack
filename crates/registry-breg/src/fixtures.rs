@@ -3851,7 +3851,8 @@ impl SchemaTestRuntime {
             config.operational_timeouts().record_lock,
             audit,
             Some(event_destinations),
-        );
+        )
+        .with_http_request_timeout(config.operational_timeouts().http_request);
         let mutations = match review_authorities {
             Some(authorities) => mutations.with_review_result_source(authorities),
             None => mutations,
@@ -4903,8 +4904,16 @@ fn assert_response_with_observations(
                     return Err(FixtureError::ExpectationMismatch);
                 }
                 for result in results {
-                    let object =
-                        exact_object(result, &["operation", "id", "revision", "etag", "data"])?;
+                    let object = exact_object(
+                        result,
+                        &[
+                            "operation",
+                            "recordIdentifier",
+                            "revisionIdentifier",
+                            "etag",
+                            "domainData",
+                        ],
+                    )?;
                     if object.get("operation").and_then(Value::as_str) != Some("create")
                         || object
                             .get("etag")
@@ -4932,14 +4941,8 @@ fn assert_response_with_observations(
                     .ok_or(FixtureError::ResponseShapeRefused)?;
                 let member = exact_object(
                     member,
-                    &[
-                        "recordIdentifier",
-                        "revisionIdentifier",
-                        "domainData",
-                        "snapshot",
-                    ],
+                    &["recordIdentifier", "revisionIdentifier", "domainData"],
                 )?;
-                assert_snapshot_reference(member)?;
                 assert_record_members(member, &step.response_readable_fields, &step.expect.fields)?;
             }
             ActionSource::Get { .. } | ActionSource::Lookup { .. } => {
@@ -5131,15 +5134,21 @@ fn assert_batch_record_members(
     expected_fields: &Map<String, Value>,
 ) -> Result<(), FixtureError> {
     let identifier = object
-        .get("id")
+        .get("recordIdentifier")
         .and_then(Value::as_str)
         .ok_or(FixtureError::ResponseShapeRefused)?;
     let revision = object
-        .get("revision")
-        .and_then(Value::as_u64)
+        .get("revisionIdentifier")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|revision| revision.to_string() == value)
+        })
         .ok_or(FixtureError::ResponseShapeRefused)?;
     let data = object
-        .get("data")
+        .get("domainData")
         .and_then(Value::as_object)
         .ok_or(FixtureError::ResponseShapeRefused)?;
     if revision == 0
@@ -5171,7 +5180,7 @@ fn assert_record_meta(object: &Map<String, Value>) -> Result<(), FixtureError> {
         || [
             "registryIdentifier",
             "datasetIdentifier",
-            "entityTypeIdentifier",
+            "recordTypeIdentifier",
         ]
         .iter()
         .any(|key| {
@@ -7061,7 +7070,7 @@ journeys:
             "meta": {
                 "registryIdentifier": "fixture-registry",
                 "datasetIdentifier": "fixture-registry",
-                "entityTypeIdentifier": "widget"
+                "recordTypeIdentifier": "widget"
             }
         });
         assert_eq!(
@@ -7083,7 +7092,7 @@ journeys:
             "meta": {
                 "registryIdentifier": "fixture-registry",
                 "datasetIdentifier": "fixture-registry",
-                "entityTypeIdentifier": "widget"
+                "recordTypeIdentifier": "widget"
             }
         });
         assert_eq!(
@@ -7954,7 +7963,6 @@ journeys:
             "data": {
                 "recordIdentifier": identifier,
                 "revisionIdentifier": "1",
-                "snapshot": "breg1_00000000-0000-4000-8000-000000000001",
                 "domainData": {
                     "jurisdiction": "zone-a", "label": "first", "note": "initial",
                     "quantity": 1, "record_id": "canary"
@@ -7963,7 +7971,7 @@ journeys:
             "meta": {
                 "registryIdentifier": "fixture-registry",
                 "datasetIdentifier": "fixture-registry",
-                "entityTypeIdentifier": "widget"
+                "recordTypeIdentifier": "widget"
             },
         });
         assert_eq!(
@@ -7977,16 +7985,14 @@ journeys:
             .remove("record_id");
         assert_response(create, StatusCode::CREATED, &bounded)
             .expect("current closed mutation envelope is admitted");
-        bounded["data"]["snapshot"] = json!("not-a-snapshot-reference");
+        bounded["data"]["snapshot"] = json!("breg1_00000000-0000-4000-8000-000000000001");
         assert_eq!(
             assert_response(create, StatusCode::CREATED, &bounded),
             Err(FixtureError::ResponseShapeRefused)
         );
         bounded["data"].as_object_mut().unwrap().remove("snapshot");
-        assert_eq!(
-            assert_response(create, StatusCode::CREATED, &bounded),
-            Err(FixtureError::ResponseShapeRefused)
-        );
+        assert_response(create, StatusCode::CREATED, &bounded)
+            .expect("the exact three-member mutation record is admitted");
 
         let refusal = &suite.journeys[0].steps[5];
         let extra_refusal = json!({
@@ -8049,7 +8055,7 @@ journeys:
             "meta": {
                 "registryIdentifier": "fixture-registry",
                 "datasetIdentifier": "fixture-registry",
-                "entityTypeIdentifier": "widget"
+                "recordTypeIdentifier": "widget"
             }
         });
         assert!(
@@ -8073,7 +8079,7 @@ journeys:
                 "meta": {
                     "registryIdentifier": "fixture-registry",
                     "datasetIdentifier": "fixture-registry",
-                    "entityTypeIdentifier": "widget"
+                    "recordTypeIdentifier": "widget"
                 }
             })
         };
@@ -8803,7 +8809,7 @@ journeys:
         let meta = json!({
             "registryIdentifier": "fixture-registry",
             "datasetIdentifier": "fixture-registry",
-            "entityTypeIdentifier": "widget"
+            "recordTypeIdentifier": "widget"
         });
         let (status, document, etag) = match index {
             0 => (
@@ -8812,8 +8818,7 @@ journeys:
                     "data": {
                         "recordIdentifier": id,
                         "revisionIdentifier": "1",
-                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1},
-                        "snapshot":"breg1_00000000-0000-4000-8000-000000000001"
+                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}
                     },
                     "meta": meta
                 }),
@@ -8850,8 +8855,7 @@ journeys:
                     "data": {
                         "recordIdentifier": id,
                         "revisionIdentifier": "2",
-                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"revised","quantity":1},
-                        "snapshot":"breg1_00000000-0000-4000-8000-000000000002"
+                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"revised","quantity":1}
                     },
                     "meta": meta
                 }),
@@ -8860,8 +8864,8 @@ journeys:
             4 => (
                 200,
                 json!({"results":[
-                    {"operation":"create","id":second,"revision":1,"etag":"\"breg-second\"","data":{"jurisdiction":"zone-a","label":"second","quantity":2}},
-                    {"operation":"create","id":third,"revision":1,"etag":"\"breg-third\"","data":{"jurisdiction":"zone-a","label":"third","quantity":3}}
+                    {"operation":"create","recordIdentifier":second,"revisionIdentifier":"1","etag":"\"breg-second\"","domainData":{"jurisdiction":"zone-a","label":"second","quantity":2}},
+                    {"operation":"create","recordIdentifier":third,"revisionIdentifier":"1","etag":"\"breg-third\"","domainData":{"jurisdiction":"zone-a","label":"third","quantity":3}}
                 ],"snapshot":"breg1_00000000-0000-4000-8000-000000000003"}),
                 None,
             ),

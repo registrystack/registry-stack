@@ -754,7 +754,10 @@ fn the_starter_ships_a_readme_that_names_every_file_it_wrote() {
 fn the_retained_openapi_project_ships_a_readme_that_says_what_is_empty() {
     let workspace = TempDir::new().expect("temporary directory");
     let project = workspace.path().join("project");
-    let specification = write_spec(workspace.path(), OPENAPI.as_bytes());
+    let specification = write_spec(
+        workspace.path(),
+        br#"{"openapi":"3.1.0","info":{"title":"Records","version":"1.0.0"},"servers":[{"url":"https://records.example.test"}],"paths":{"/records":{"get":{"responses":{"200":{"description":"Record status","content":{"application/json":{"schema":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean"}}}}}}}}}}}"#,
+    );
     assert!(openapi_new(&project, path(&specification), &[])
         .status
         .success());
@@ -771,10 +774,36 @@ fn the_retained_openapi_project_ships_a_readme_that_says_what_is_empty() {
     ] {
         assert!(readme.contains(named), "the README names {named}");
     }
+    let template = readme
+        .lines()
+        .find(|line| line.starts_with("evidencectl source suggest "))
+        .expect("the README gives a source suggestion command");
+    let command = template
+        .replace("<id>", "records")
+        .replace("<METHOD /path>", "GET /records");
+    let (arguments, operation) = command
+        .strip_prefix("evidencectl ")
+        .expect("the command invokes evidencectl")
+        .split_once(" --operation '")
+        .expect("the command quotes its operation");
+    let operation = operation
+        .strip_suffix('\'')
+        .expect("the operation's closing quote");
+    // Listing pointers exercises the documented project and operation arguments
+    // without an interactive projection selection or a source request.
+    let suggested = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(arguments.split_whitespace())
+        .args(["--operation", operation, "--list-pointers"])
+        .current_dir(&project)
+        .output()
+        .expect("run the generated README command");
     assert!(
-        readme.contains("evidencectl source suggest source.openapi.yaml --project . --source-id"),
-        "the README names the next command: {readme}"
+        suggested.status.success(),
+        "the README command must run: {}{}",
+        stdout(&suggested),
+        stderr(&suggested)
     );
+    assert!(stdout(&suggested).contains("/active"));
 }
 
 #[test]

@@ -231,10 +231,10 @@ fn project_commands_report_the_same_positioned_manifest_omission_finding() {
     ]));
 
     let check_finding = one_finding(&check, "diagnostics");
-    let lock_finding = one_finding(&lock, "findings");
-    let diff_finding = one_finding(&diff, "findings");
-    let generate_finding = one_finding(&generate, "findings");
-    let evidence_source_finding = one_finding(&generate_evidence_source, "findings");
+    let lock_finding = one_finding(&lock, "diagnostics");
+    let diff_finding = one_finding(&diff, "diagnostics");
+    let generate_finding = one_finding(&generate, "diagnostics");
+    let evidence_source_finding = one_finding(&generate_evidence_source, "diagnostics");
     for finding in [
         check_finding,
         lock_finding,

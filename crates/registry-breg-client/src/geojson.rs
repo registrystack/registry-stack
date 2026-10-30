@@ -225,7 +225,7 @@ impl BRegGeoJsonContinuation {
             access_profile: value.access_profile,
             registry_identifier: "geojson".to_owned(),
             dataset_identifier: "geojson".to_owned(),
-            entity_type_identifier: "geojson".to_owned(),
+            record_type_identifier: "geojson".to_owned(),
         };
         Ok(Self {
             collection: BRegContinuation::try_from_projection(placeholder)?,

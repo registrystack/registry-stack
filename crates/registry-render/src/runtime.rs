@@ -389,6 +389,7 @@ pub const fn runtime_loader() -> RuntimeConfigLoader {
     RuntimeConfigLoader::new(RENDER_RUNTIME_ENVELOPE)
         .removed_keys(RENDER_REMOVED_KEYS)
         .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
+        .require_trusted_ownership()
 }
 
 /// What an offline check of one runtime file found.
@@ -848,6 +849,68 @@ mod tests {
         let problem = load_text(home, text).expect_err("the runtime file is refused");
         assert_eq!(problem.kind, ProblemKind::RuntimeInvalid);
         problem
+    }
+
+    #[cfg(unix)]
+    fn assert_unsafe_runtime(problem: RenderProblem) {
+        let diagnostic = problem
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "platform.runtime-config.unsafe-file")
+            .expect("the ownership refusal is reported");
+        assert!(diagnostic
+            .message
+            .contains("owned by root or the runtime user"));
+        assert!(diagnostic
+            .suggested_action
+            .contains("remove group and other write permission"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_ownership_accepts_an_owner_writable_file_in_a_private_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_directory, home) = home();
+        let path = home.join("runtime.yaml");
+        std::fs::write(&path, minimal(&home)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        load(&path).expect("an owner-writable runtime in a private directory loads");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_ownership_refuses_a_group_writable_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_directory, home) = home();
+        let path = home.join("runtime.yaml");
+        std::fs::write(&path, minimal(&home)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
+        let result = load(&path);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_ownership_refuses_a_group_writable_ancestor() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_directory, home) = home();
+        let writable = home.join("writable");
+        std::fs::create_dir(&writable).unwrap();
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let path = writable.join("runtime.yaml");
+        std::fs::write(&path, minimal(&home)).unwrap();
+        let result = load(&path);
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_unsafe_runtime(
+            result.expect_err("a runtime below a group-writable directory is refused"),
+        );
     }
 
     #[test]

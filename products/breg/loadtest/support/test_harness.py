@@ -212,6 +212,44 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.fresh_header(fake, project, "loadtest-driver")
 
+    def test_environment_records_only_the_owned_ready_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / ".run"
+            project = root / "project"
+            state = project / ".breg/dev/state.json"
+            state.parent.mkdir(parents=True)
+            (root / ".launcher-owned").write_text("registry-stack-breg-loadtest-v2\n", encoding="ascii")
+            state.write_text(json.dumps({"containerId": "a" * 64}), encoding="utf-8")
+            state.chmod(0o600)
+            bregctl = Path(directory) / "bregctl"
+            bregctl.write_text("", encoding="utf-8")
+            report = {
+                "ok": True,
+                "status": "complete",
+                "outcome": "ready",
+                "project": str(project),
+                "stateFile": str(state),
+                "bregUrl": "http://127.0.0.1:4321",
+            }
+            report_path = root / "dev-report.json"
+            for stale in (
+                {
+                    **{key: value for key, value in report.items() if key != "outcome"},
+                    "status": "ready",
+                },
+                {key: value for key, value in report.items() if key != "outcome"},
+                {**report, "outcome": "starting"},
+                {**report, "ok": False},
+            ):
+                report_path.write_text(json.dumps(stale), encoding="utf-8")
+                with self.assertRaises(loadenv.LoadtestError):
+                    loadenv.write_environment(root, report_path, bregctl, "release", "")
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            loadenv.write_environment(root, report_path, bregctl, "release", "")
+            environment = json.loads((root / "env.json").read_text(encoding="utf-8"))
+            self.assertEqual(environment["breg_url"], "http://127.0.0.1:4321")
+            self.assertEqual(environment["database"], {"container": "a" * 64, "database": "breg_dev"})
+
     def test_describe_accepts_only_the_recorded_build_of_this_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory).resolve()

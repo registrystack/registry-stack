@@ -94,7 +94,7 @@ class EventRecordViewTests(unittest.TestCase):
             },
             "meta": {
                 "registryIdentifier": "registry", "datasetIdentifier": "dataset",
-                "entityTypeIdentifier": "incorporation",
+                "recordTypeIdentifier": "incorporation",
             },
         }
         hidden = {

@@ -204,36 +204,42 @@ async fn list_runs(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let Ok(query) = parse_list_query(raw_query.as_deref()) else {
+    let admission = match ingestion_list_admission_options(raw_query.as_deref()) {
+        Ok(options) => options,
+        Err(()) => {
+            return audited_mutation_concealment(
+                mutations,
+                &binding.base,
+                &QueryOptions::default(),
+                &claims,
+                None,
+                &correlation,
+            )
+            .await;
+        }
+    };
+    let Some(surface) = authorize_route(&service, &binding.base, &claims, &admission) else {
         return audited_mutation_concealment(
             mutations,
             &binding.base,
-            &QueryOptions::default(),
+            &admission,
             &claims,
             None,
             &correlation,
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &binding.base, &claims, &query.options) else {
-        return audited_mutation_concealment(
-            mutations,
-            &binding.base,
-            &query.options,
-            &claims,
-            None,
-            &correlation,
-        )
-        .await;
+    let query = match parse_list_query(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(QueryParseError::InvalidAt("after")) => {
+            return invalid_query_at_with_detail(
+                "after",
+                "An ingestion run listing takes `cursor` for its keyset cursor; `after` is not accepted.",
+            );
+        }
+        Err(QueryParseError::Invalid) => return invalid_query_at("query"),
+        Err(error) => return error.problem(),
     };
-    // Refused only after authority, so an unauthorized caller still sees the
-    // same concealment as any other refused query.
-    if query.renamed_after {
-        return problem_with_detail(
-            ProblemCode::QueryInvalid,
-            "An ingestion run listing takes `cursor` for its keyset cursor; `after` is not accepted.",
-        );
-    }
     match mutations
         .list_ingestion_runs(
             &surface.context,
@@ -871,12 +877,65 @@ fn path_chunk_index(path: &HashMap<String, String>) -> Option<i64> {
 }
 
 struct IngestionListQuery {
-    options: QueryOptions,
     status: Option<String>,
     input_digest: Option<String>,
     after_run_id: Option<Uuid>,
     limit: i64,
-    renamed_after: bool,
+}
+
+fn ingestion_list_admission_options(raw: Option<&str>) -> Result<QueryOptions, ()> {
+    let Some(raw) = raw else {
+        return Ok(QueryOptions::default());
+    };
+    if raw.len() > MAX_RAW_QUERY_BYTES {
+        return Err(());
+    }
+    let mut access_profile = None;
+    for pair in raw.split('&') {
+        let Some((name, value)) = pair.split_once('=') else {
+            if percent_decode(pair).ok().as_deref() == Some("accessProfile") {
+                return Err(());
+            }
+            continue;
+        };
+        let Ok(name) = percent_decode(name) else {
+            continue;
+        };
+        if name != "accessProfile" {
+            continue;
+        }
+        let value = percent_decode(value).map_err(|_| ())?;
+        if !strict_query::valid_config_identifier(&value) || access_profile.replace(value).is_some()
+        {
+            return Err(());
+        }
+    }
+    Ok(QueryOptions {
+        parsed: strict_query::ParsedReadQuery {
+            access_profile,
+            as_of: None,
+            mode: strict_query::ParsedReadQueryMode::Query(
+                strict_query::ReadQueryOptions::default(),
+            ),
+        },
+        historical: None,
+    })
+}
+
+fn ingestion_list_parameter(name: &str) -> Option<&'static str> {
+    match name {
+        "accessProfile" => Some("accessProfile"),
+        "limit" => Some("limit"),
+        "cursor" => Some("cursor"),
+        "after" => Some("after"),
+        "status" => Some("status"),
+        "inputDigest" => Some("inputDigest"),
+        _ => None,
+    }
+}
+
+fn ingestion_list_error(name: &str) -> QueryParseError {
+    ingestion_list_parameter(name).map_or(QueryParseError::Invalid, QueryParseError::InvalidAt)
 }
 
 /// The query an ingestion listing admits: the access profile every ingestion
@@ -884,11 +943,10 @@ struct IngestionListQuery {
 /// and the status and input-digest filters. Any other member is invalid,
 /// exactly like the strict read query.
 fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseError> {
-    let mut access_profile = None;
+    let mut access_profile_seen = false;
     let mut limit = crate::ingestion_store::DEFAULT_RUN_PAGE_SIZE;
     let mut limit_seen = false;
     let mut after_run_id = None;
-    let mut renamed_after = false;
     let mut status = None;
     let mut input_digest = None;
     if let Some(raw) = raw {
@@ -897,38 +955,42 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
         }
         for pair in raw.split('&') {
             let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
-            let name = percent_decode(name)?;
-            let value = percent_decode(value)?;
+            let name = percent_decode(name).map_err(|_| QueryParseError::Invalid)?;
+            let value = percent_decode(value).map_err(|_| ingestion_list_error(&name))?;
             match name.as_str() {
                 "accessProfile" => {
-                    if access_profile.replace(value).is_some() {
-                        return Err(QueryParseError::Invalid);
+                    if !strict_query::valid_config_identifier(&value) || access_profile_seen {
+                        return Err(QueryParseError::InvalidAt("accessProfile"));
                     }
+                    access_profile_seen = true;
                 }
                 "limit" => {
-                    let parsed = parse_page_limit(&value)?;
+                    let parsed = parse_page_limit(&value)
+                        .map_err(|_| QueryParseError::InvalidAt("limit"))?;
                     if limit_seen {
-                        return Err(QueryParseError::Invalid);
+                        return Err(QueryParseError::InvalidAt("limit"));
                     }
                     limit_seen = true;
                     limit = parsed;
                 }
                 "cursor" => {
-                    if after_run_id.replace(parse_run_cursor(&value)?).is_some() {
-                        return Err(QueryParseError::Invalid);
+                    let cursor = parse_run_cursor(&value)
+                        .map_err(|_| QueryParseError::InvalidAt("cursor"))?;
+                    if after_run_id.replace(cursor).is_some() {
+                        return Err(QueryParseError::InvalidAt("cursor"));
                     }
                 }
-                "after" => renamed_after = true,
+                "after" => return Err(QueryParseError::InvalidAt("after")),
                 "status" => {
                     if crate::ingestion_store::IngestionRunStatus::parse(&value).is_none()
                         || status.replace(value).is_some()
                     {
-                        return Err(QueryParseError::Invalid);
+                        return Err(QueryParseError::InvalidAt("status"));
                     }
                 }
                 "inputDigest" => {
                     if !valid_digest(&value) || input_digest.replace(value).is_some() {
-                        return Err(QueryParseError::Invalid);
+                        return Err(QueryParseError::InvalidAt("inputDigest"));
                     }
                 }
                 _ => return Err(QueryParseError::Invalid),
@@ -936,21 +998,10 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
         }
     }
     Ok(IngestionListQuery {
-        options: QueryOptions {
-            parsed: strict_query::ParsedReadQuery {
-                access_profile,
-                as_of: None,
-                mode: strict_query::ParsedReadQueryMode::Query(
-                    strict_query::ReadQueryOptions::default(),
-                ),
-            },
-            historical: None,
-        },
         status,
         input_digest,
         after_run_id,
         limit,
-        renamed_after,
     })
 }
 

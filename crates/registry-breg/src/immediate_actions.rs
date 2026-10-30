@@ -165,7 +165,6 @@ fn compile_action(
             inputs: bound_inputs,
             writes,
             refusals,
-            capabilities,
         } = &action.plan
         {
             let Some(function_source) = functions.get(function) else {
@@ -177,17 +176,26 @@ fn compile_action(
                 return None;
             };
             let function = &function_source.source;
-            if !capabilities.is_subset(&function.capabilities)
+            let bound_capabilities = if action.evidence.is_empty() {
+                BTreeSet::new()
+            } else {
+                ["evidence".to_owned()].into_iter().collect()
+            };
+            let function_capabilities = function
+                .capabilities
+                .iter()
+                .map(|capability| capability.as_str().to_owned())
+                .collect::<BTreeSet<_>>();
+            if !bound_capabilities.is_subset(&function_capabilities)
                 || function.abi != crate::contract::ACTION_PLAN_ABI_V1
             {
                 errors.push(Diagnostic::error("breg.action.function-contract-invalid", "actions[].plan.function", "the function requires the action-plan ABI and a capability ceiling containing every bound capability"));
             }
             if action.is_proposal()
                 && (function.runtime != crate::contract::ActionHandlerKindSource::Rhai
-                    || !capabilities.is_empty()
                     || !action.evidence.is_empty())
             {
-                errors.push(Diagnostic::error("breg.action.proposal-capability-unsupported", "actions[].plan", "proposal planning is input-only Rhai; remove unsupported capabilities or runtime"));
+                errors.push(Diagnostic::error("breg.action.proposal-capability-unsupported", "actions[].plan", "proposal planning is input-only Rhai; remove the unsupported Evidence declaration or runtime"));
             }
             if bound_inputs.iter().collect::<BTreeSet<_>>().len() != bound_inputs.len()
                 || bound_inputs
@@ -232,7 +240,7 @@ fn compile_action(
                 function,
                 function_source.source_module.as_deref(),
                 bound_inputs,
-                capabilities,
+                &bound_capabilities,
                 &function_inputs,
                 entities,
                 assets,

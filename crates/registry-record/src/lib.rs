@@ -31,6 +31,7 @@ const INFRASTRUCTURE_MEMBERS: &[&str] = &[
     "meta",
     "registryIdentifier",
     "datasetIdentifier",
+    "recordTypeIdentifier",
     "entityTypeIdentifier",
     "recordIdentifier",
     "revisionIdentifier",
@@ -139,7 +140,7 @@ pub struct RegistryRecord {
     pub extensions: BTreeMap<String, Value>,
 }
 
-/// The homogeneous Registry, primary dataset, and entity context shared by a
+/// The homogeneous Registry, primary dataset, and record type context shared by a
 /// single response or every member of a collection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -147,7 +148,7 @@ pub struct RegistryRecord {
 pub struct RegistryRecordMeta {
     pub registry_identifier: String,
     pub dataset_identifier: String,
-    pub entity_type_identifier: String,
+    pub record_type_identifier: String,
     /// Product-owned response metadata, retained without interpretation.
     #[serde(flatten)]
     pub extensions: BTreeMap<String, Value>,
@@ -413,17 +414,17 @@ fn decode_meta(value: Value) -> Result<RegistryRecordMeta, RegistryRecordDecodeE
         &[
             "registryIdentifier",
             "datasetIdentifier",
-            "entityTypeIdentifier",
+            "recordTypeIdentifier",
         ],
         "meta",
     )?;
     let registry_identifier = take_identifier(&mut meta, "registryIdentifier", "meta")?;
     let dataset_identifier = take_identifier(&mut meta, "datasetIdentifier", "meta")?;
-    let entity_type_identifier = take_identifier(&mut meta, "entityTypeIdentifier", "meta")?;
+    let record_type_identifier = take_identifier(&mut meta, "recordTypeIdentifier", "meta")?;
     Ok(RegistryRecordMeta {
         registry_identifier,
         dataset_identifier,
-        entity_type_identifier,
+        record_type_identifier,
         extensions: into_extensions(meta),
     })
 }

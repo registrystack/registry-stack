@@ -167,6 +167,10 @@ pub mod retained;
 pub mod schema;
 pub mod token;
 
+/// Tolerant HTTP response shapes owned by this client. Runtime and verifier
+/// models remain closed at their governing and signed-payload boundaries.
+mod wire;
+
 /// One rule set for every outbound exchange. Which rules apply to a credential
 /// leaving the process is not a caller's choice, so the options and the client
 /// construction stay internal.

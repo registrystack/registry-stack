@@ -23,6 +23,13 @@ This crate is test-only. It fails to compile unless callers enable the
   released file is never edited: a schema change is the next version.
   `MIGRATION_PIN_RULE` is that rule as text, for a product whose schema is not
   a migration directory to state when it pins its DDL another way.
+- `verify_postgres_schema_equivalence` (feature `postgres-catalog`), which
+  compares the schema-owned relations, columns, constraints, indexes, triggers,
+  functions, views, sequences, row-security policies, privileges, and other
+  security-relevant catalog attributes left by two migration paths. It
+  normalizes only the fixture schema identity. Product tests still compare
+  meaningful retained rows and decide which migration-ledger values are mere
+  replay bookkeeping.
 
 ## Typical Use
 
@@ -137,6 +144,7 @@ response with:
 cargo test -p registry-platform-testing --features test-utils
 cargo test -p registry-platform-testing --all-features
 cargo test -p registry-platform-testing --features migration-pins --lib migration_pins
+cargo test -p registry-platform-testing --features postgres-catalog --lib postgres_catalog
 ```
 
 The crate also owns a cross-crate integration test that exercises middleware,

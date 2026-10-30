@@ -3,7 +3,7 @@
 
 #![deny(unsafe_code)]
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use breg_client_sdk::{
     event_record_view_from_json, verify_hook_delivery as verify_core_hook_delivery,
@@ -20,8 +20,8 @@ use breg_client_sdk::{
     BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest,
     BRegMetadata as CoreMetadata, BRegMetadataSelectionError, BRegMetadataSelectionErrorKind,
     BRegPage, BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
-    BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
-    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
+    BRegPreparedCreate as CorePreparedCreate, BRegProtocolFailure, BRegRawDocument,
+    BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
     BRegReleaseStatus, BRegSnapshotContinuation, BRegSnapshotContinuationProjection,
     BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding, BRegWithdrawalReason,
@@ -30,7 +30,7 @@ use breg_client_sdk::{
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
     prelude::*,
-    types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyString},
+    types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -147,55 +147,19 @@ fn token_error(py: Python<'_>, error: TokenError) -> PyErr {
 
 fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
     let outcome_unknown = error.is_outcome_unknown();
-    let mut mapped = MappedError::binding(
-        match &error {
-            RustClientError::Configuration { .. } => "configuration",
-            RustClientError::InvalidRequest { .. } => "invalid-request",
-            RustClientError::Token(_) => "token",
-            RustClientError::Transport { .. } => "transport",
-            // app-developer-22: a missing resource is its own kind, not-found,
-            // rather than the generic problem kind every other refusal shares.
-            RustClientError::Problem {
-                code: BRegProblemCode::ResourceNotFound,
-                ..
-            } => "not-found",
-            RustClientError::Problem { .. } | RustClientError::UnrecognizedProblem { .. } => {
-                "problem"
-            }
-            RustClientError::Protocol { .. } => "protocol",
-            _ => "client",
-        },
-        error.to_string(),
-    );
+    let mut mapped = MappedError::binding(error.kind(), error.to_string());
+    mapped.status = error.status();
+    mapped.code = error.problem_code().map(|value| value.code().to_owned());
+    mapped.refusal_code = error.refusal_code().map(|value| value.as_str().to_owned());
+    mapped.reason_code = error.reason_code().map(str::to_owned);
+    mapped.guard_reason = error.guard_reason().map(str::to_owned);
+    mapped.field_path = error.field_path().map(|value| value.as_str().to_owned());
+    mapped.constraint = error.constraint().cloned().map(Box::new);
+    mapped.trace_id = error.trace_id().map(|value| value.as_str().to_owned());
     match error {
         RustClientError::Token(error) => return token_error(py, error),
         RustClientError::Transport { kind } => mapped.transport_kind = Some(kind.kind()),
-        RustClientError::Problem {
-            status,
-            code,
-            trace_id,
-            field_path,
-            constraint,
-            refusal_code,
-        } => {
-            mapped.status = Some(status);
-            mapped.code = Some(code.code().to_owned());
-            mapped.trace_id = Some(trace_id.as_str().to_owned());
-            // Problem detail codes travel as bounded strings after their
-            // operation-specific vocabulary has been checked by the Rust client.
-            mapped.refusal_code = refusal_code.map(|value| value.as_str().to_owned());
-            if code == BRegProblemCode::StatisticalDatasetVersionWithdrawn {
-                mapped.reason_code = mapped.refusal_code.take();
-            } else if code == BRegProblemCode::ActionGuardFailed {
-                mapped.guard_reason = mapped.refusal_code.take();
-            }
-            mapped.field_path = field_path.map(|value| value.as_str().to_owned());
-            mapped.constraint = constraint;
-        }
-        RustClientError::UnrecognizedProblem { status, trace_id } => {
-            mapped.status = Some(status);
-            mapped.trace_id = Some(trace_id.as_str().to_owned());
-        }
+        RustClientError::Problem { .. } | RustClientError::UnrecognizedProblem { .. } => {}
         RustClientError::Protocol {
             status,
             failure,
@@ -743,7 +707,7 @@ fn batch_request(
             "patch" => {
                 if item
                     .keys()
-                    .any(|key| !matches!(key.as_str(), "record_identifier" | "etag" | "operations"))
+                    .any(|key| !matches!(key.as_str(), "record_identifier" | "if_match" | "patch"))
                 {
                     return Err(invalid(
                         py,
@@ -756,19 +720,19 @@ fn batch_request(
                     .and_then(|value| uuid::Uuid::parse_str(&value).ok())
                     .ok_or_else(|| invalid(py, "batch record_identifier must be a UUID"))?;
                 let etag = item
-                    .remove("etag")
+                    .remove("if_match")
                     .and_then(|value| value.as_str().map(str::to_owned))
-                    .ok_or_else(|| invalid(py, "batch etag must be a string"))?;
+                    .ok_or_else(|| invalid(py, "batch if_match must be a string"))?;
                 let etag = BRegEtag::parse(&etag).map_err(|_| {
                     invalid(
                         py,
-                        "batch etag must be a strong Base Registry Engine entity tag",
+                        "batch if_match must be a strong Base Registry Engine entity tag",
                     )
                 })?;
-                let operations = item
-                    .remove("operations")
-                    .ok_or_else(|| invalid(py, "patch batch item requires operations"))?;
-                let request = patch_request_from_value(py, operations)?;
+                let patch = item
+                    .remove("patch")
+                    .ok_or_else(|| invalid(py, "patch batch item requires patch"))?;
+                let request = patch_request_from_value(py, patch)?;
                 builder = builder
                     .patch(record_identifier, &etag, &request)
                     .map_err(|error| invalid(py, error.to_string()))?;
@@ -1010,11 +974,25 @@ fn hook_bytes<'py>(
         .map_err(|_| invalid(py, format!("hook {field} must be bytes")))
 }
 
-fn hook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BTreeMap<String, String>> {
-    let refused = || invalid(py, "hook headers must map string names to string values");
-    let headers = value.cast::<PyDict>().map_err(|_| refused())?;
-    let mut result = BTreeMap::new();
-    for (name, value) in headers.iter() {
+fn hook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Vec<(String, String)>> {
+    let refused = || {
+        invalid(
+            py,
+            "hook headers must be an ordered sequence of string pairs",
+        )
+    };
+    if !value.is_instance_of::<PyList>() && !value.is_instance_of::<PyTuple>() {
+        return Err(refused());
+    }
+    let mut result = Vec::new();
+    for pair in value.try_iter().map_err(|_| refused())? {
+        let pair = pair.map_err(|_| refused())?;
+        let pair = pair.cast::<PyTuple>().map_err(|_| refused())?;
+        if pair.len() != 2 {
+            return Err(refused());
+        }
+        let name = pair.get_item(0).map_err(|_| refused())?;
+        let value = pair.get_item(1).map_err(|_| refused())?;
         let name = name
             .cast::<PyString>()
             .ok()
@@ -1025,7 +1003,7 @@ fn hook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BTreeMap<S
             .ok()
             .and_then(|text| text.to_str().ok().map(str::to_owned))
             .ok_or_else(refused)?;
-        result.insert(name, value);
+        result.push((name, value));
     }
     Ok(result)
 }
@@ -1070,8 +1048,8 @@ fn event_record_view<'py>(
 /// Verify one exact Base Registry Engine Version 1 hook delivery with the
 /// shared Rust verifier and return its authenticated attributes and body.
 ///
-/// `path` is the request target the receiver was called on, `headers` maps
-/// header names (matched without regard to ASCII case) to values, `body` is
+/// `path` is the request target the receiver was called on, `headers` is an
+/// ordered sequence of name/value pairs (matched without regard to ASCII case), `body` is
 /// the exact request body, and `key` is the destination's HMAC key. Receiver
 /// policy is the caller's: bound `delivery_time` against the receiver clock
 /// and deduplicate before acting on `body`. Refusal raises
@@ -1824,11 +1802,11 @@ impl BaseRegistryClient {
     /// The first revision of one record as
     /// `{recordType, recordId, revision, createdAt}`, or `None` when the caller
     /// may not read it.
-    #[pyo3(signature = (entity_route, record_identifier, *, access_profile=None))]
+    #[pyo3(signature = (record_route, record_identifier, *, access_profile=None))]
     fn event_record_creation_revision<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         access_profile: Option<&str>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -1836,7 +1814,7 @@ impl BaseRegistryClient {
             .detach(|| {
                 self.runtime
                     .block_on(self.inner.event_record_creation_revision(
-                        entity_route,
+                        record_route,
                         record_identifier,
                         access_profile,
                     ))
@@ -2049,7 +2027,7 @@ impl BaseRegistryClient {
     }
 
     #[pyo3(signature = (record_type_identifier, access_profile=None))]
-    fn entity_schema<'py>(
+    fn record_schema<'py>(
         &self,
         py: Python<'py>,
         record_type_identifier: &str,
@@ -2059,19 +2037,19 @@ impl BaseRegistryClient {
             .detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .entity_schema(record_type_identifier, access_profile),
+                        .record_schema(record_type_identifier, access_profile),
                 )
             })
             .map_err(|error| sdk_error(py, error))?;
         raw_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, record_identifier, *, select=None, access_profile=None, format="json"))]
+    #[pyo3(signature = (record_route, record_identifier, *, select=None, access_profile=None, format="json"))]
     #[allow(clippy::too_many_arguments)]
     fn get_record<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         select: Option<Vec<String>>,
         access_profile: Option<String>,
@@ -2081,7 +2059,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.get_record(
-                    entity_route,
+                    record_route,
                     record_identifier,
                     &options,
                 ))
@@ -2090,11 +2068,11 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, record_identifier, *, select=None, access_profile=None))]
+    #[pyo3(signature = (record_route, record_identifier, *, select=None, access_profile=None))]
     fn get_geojson_record<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         select: Option<Vec<String>>,
         access_profile: Option<String>,
@@ -2113,7 +2091,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.get_geojson_record(
-                    entity_route,
+                    record_route,
                     record_identifier,
                     &options,
                 ))
@@ -2122,12 +2100,12 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, *, top=None, select=None, access_profile=None, filter=None, orderby=None, count=None, bbox=None))]
+    #[pyo3(signature = (record_route, *, top=None, select=None, access_profile=None, filter=None, orderby=None, count=None, bbox=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_geojson_records<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         top: Option<u32>,
         select: Option<Vec<String>>,
         access_profile: Option<String>,
@@ -2152,7 +2130,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.list_geojson_records(entity_route, &request))
+                    .block_on(self.inner.list_geojson_records(record_route, &request))
             })
             .map_err(|error| sdk_error(py, error))?;
         projected_page_value(
@@ -2186,18 +2164,18 @@ impl BaseRegistryClient {
         )
     }
 
-    #[pyo3(signature = (entity_route, record_identifier, access_profile=None))]
+    #[pyo3(signature = (record_route, record_identifier, access_profile=None))]
     fn record_revisions<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         access_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.record_revisions(
-                    entity_route,
+                    record_route,
                     record_identifier,
                     access_profile,
                 ))
@@ -2206,12 +2184,12 @@ impl BaseRegistryClient {
         raw_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, record_identifier, revision, *, select=None, access_profile=None, format="json"))]
+    #[pyo3(signature = (record_route, record_identifier, revision, *, select=None, access_profile=None, format="json"))]
     #[allow(clippy::too_many_arguments)]
     fn get_record_revision<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         revision: u64,
         select: Option<Vec<String>>,
@@ -2222,7 +2200,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.get_record_revision(
-                    entity_route,
+                    record_route,
                     record_identifier,
                     revision,
                     &options,
@@ -2232,12 +2210,12 @@ impl BaseRegistryClient {
         raw_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None, bbox=None))]
+    #[pyo3(signature = (record_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None, bbox=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_records<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         top: Option<u32>,
         select: Option<Vec<String>>,
         access_profile: Option<String>,
@@ -2261,18 +2239,18 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.list_records(entity_route, &request))
+                    .block_on(self.inner.list_records(record_route, &request))
             })
             .map_err(|error| sdk_error(py, error))?;
         page_value(py, value)
     }
 
-    #[pyo3(signature = (entity_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[pyo3(signature = (record_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_current_records<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         top: Option<u32>,
         select: Option<Vec<String>>,
         access_profile: Option<String>,
@@ -2297,7 +2275,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.list_current_records(entity_route, &request))
+                    .block_on(self.inner.list_current_records(record_route, &request))
             })
             .map_err(|error| sdk_error(py, error))?;
         projected_page_value(
@@ -2331,12 +2309,12 @@ impl BaseRegistryClient {
         )
     }
 
-    #[pyo3(signature = (entity_route, as_of, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[pyo3(signature = (record_route, as_of, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_records_as_of<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         as_of: &str,
         top: Option<u32>,
         select: Option<Vec<String>>,
@@ -2364,7 +2342,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.list_records_as_of(entity_route, &request))
+                    .block_on(self.inner.list_records_as_of(record_route, &request))
             })
             .map_err(|error| sdk_error(py, error))?;
         projected_page_value(
@@ -2398,12 +2376,12 @@ impl BaseRegistryClient {
         )
     }
 
-    #[pyo3(signature = (entity_route, *, snapshot=None, valid_at=None, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[pyo3(signature = (record_route, *, snapshot=None, valid_at=None, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_snapshot_records<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         snapshot: Option<String>,
         valid_at: Option<String>,
         top: Option<u32>,
@@ -2440,7 +2418,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.list_snapshot_records(entity_route, &request))
+                    .block_on(self.inner.list_snapshot_records(record_route, &request))
             })
             .map_err(|error| sdk_error(py, error))?;
         let result = projected_page_value(
@@ -2488,12 +2466,12 @@ impl BaseRegistryClient {
         Ok(result)
     }
 
-    #[pyo3(signature = (entity_route, record_identifier, path_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[pyo3(signature = (record_route, record_identifier, path_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_relationship_records<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         record_identifier: &str,
         path_route: &str,
         top: Option<u32>,
@@ -2520,7 +2498,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.list_relationship_records(
-                    entity_route,
+                    record_route,
                     record_identifier,
                     path_route,
                     &request,
@@ -2578,12 +2556,12 @@ impl BaseRegistryClient {
         page_value(py, value)
     }
 
-    #[pyo3(signature = (entity_route, selector, values=None, *, select=None, access_profile=None, format="json"))]
+    #[pyo3(signature = (record_route, selector, values=None, *, select=None, access_profile=None, format="json"))]
     #[allow(clippy::too_many_arguments)]
     fn lookup_record<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         selector: &str,
         values: Option<&Bound<'_, PyAny>>,
         select: Option<Vec<String>>,
@@ -2608,7 +2586,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.lookup_record(entity_route, &request))
+                    .block_on(self.inner.lookup_record(record_route, &request))
             })
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
@@ -3232,7 +3210,7 @@ impl BaseRegistryClient {
     fn create_ingestion_run<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = Arc::new(ingestion_run_request(py, request)?);
@@ -3240,20 +3218,20 @@ impl BaseRegistryClient {
             .detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .create_ingestion_run(entity_route, request.as_ref()),
+                        .create_ingestion_run(record_route, request.as_ref()),
                 )
             })
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
     }
 
-    /// Read one bounded page of ingestion runs for one entity route.
-    #[pyo3(signature = (entity_route, *, limit=None, cursor=None, status=None, input_digest=None, access_profile=None))]
+    /// Read one bounded page of ingestion runs for one record route.
+    #[pyo3(signature = (record_route, *, limit=None, cursor=None, status=None, input_digest=None, access_profile=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_ingestion_runs<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         limit: Option<u32>,
         cursor: Option<String>,
         status: Option<String>,
@@ -3265,18 +3243,18 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime
-                    .block_on(self.inner.list_ingestion_runs(entity_route, &query))
+                    .block_on(self.inner.list_ingestion_runs(record_route, &query))
             })
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
     }
 
     /// Read the current durable state of one ingestion run.
-    #[pyo3(signature = (entity_route, run_id, access_profile=None))]
+    #[pyo3(signature = (record_route, run_id, access_profile=None))]
     fn read_ingestion_run<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         run_id: &str,
         access_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -3284,7 +3262,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.read_ingestion_run(
-                    entity_route,
+                    record_route,
                     run_id,
                     access_profile,
                 ))
@@ -3299,7 +3277,7 @@ impl BaseRegistryClient {
     fn submit_ingestion_chunk<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         run_id: &str,
         chunk: PyRef<'_, IngestionChunk>,
         profile_id: &str,
@@ -3309,7 +3287,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.submit_ingestion_chunk(
-                    entity_route,
+                    record_route,
                     run_id,
                     chunk.as_ref(),
                     profile_id,
@@ -3320,11 +3298,11 @@ impl BaseRegistryClient {
     }
 
     /// Cancel an open ingestion run. Committed chunks stay committed.
-    #[pyo3(signature = (entity_route, run_id, access_profile=None))]
+    #[pyo3(signature = (record_route, run_id, access_profile=None))]
     fn cancel_ingestion_run<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         run_id: &str,
         access_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -3332,7 +3310,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.cancel_ingestion_run(
-                    entity_route,
+                    record_route,
                     run_id,
                     access_profile,
                 ))
@@ -3344,11 +3322,11 @@ impl BaseRegistryClient {
     /// Read the retained receipt of one committed chunk under the run's
     /// access profile. An erased receipt answers with the
     /// `ingestion.receipt_erased` problem instead.
-    #[pyo3(signature = (entity_route, run_id, chunk_index, profile_id))]
+    #[pyo3(signature = (record_route, run_id, chunk_index, profile_id))]
     fn ingestion_chunk_receipt<'py>(
         &self,
         py: Python<'py>,
-        entity_route: &str,
+        record_route: &str,
         run_id: &str,
         chunk_index: u64,
         profile_id: &str,
@@ -3357,7 +3335,7 @@ impl BaseRegistryClient {
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.ingestion_chunk_receipt(
-                    entity_route,
+                    record_route,
                     run_id,
                     chunk_index,
                     profile_id,

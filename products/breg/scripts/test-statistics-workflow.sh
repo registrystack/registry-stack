@@ -104,7 +104,11 @@ breg_url=$(
   python3 - "$temporary_root/dev.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-if report.get("ok") is not True or report.get("status") != "ready":
+if (
+    report.get("ok") is not True
+    or report.get("status") != "complete"
+    or report.get("outcome") != "ready"
+):
     raise SystemExit("bregctl dev did not reach ready")
 for member in ("bregUrl", "tokenEndpoint", "clientAssertionAudience", "resource"):
     if not isinstance(report.get(member), str) or not report[member]:
@@ -199,9 +203,14 @@ fi
 python3 - "$temporary_root/publish.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-if report.get("ok") is not True or report.get("command") != "statistics publish":
+if (
+    report.get("ok") is not True
+    or report.get("command") != "statistics publish"
+    or report.get("status") != "complete"
+    or report.get("outcome") != "final"
+):
     raise SystemExit("statistics publish did not complete")
-if report.get("period") != "2025-01" or report.get("version") != 1 or report.get("status") != "final":
+if report.get("period") != "2025-01" or report.get("releaseVersion") != 1:
     raise SystemExit(f"statistics publish returned the wrong release: {report}")
 PY
 
@@ -293,9 +302,14 @@ fi
 python3 - "$temporary_root/withdraw.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-if report.get("ok") is not True or report.get("command") != "statistics withdraw":
+if (
+    report.get("ok") is not True
+    or report.get("command") != "statistics withdraw"
+    or report.get("status") != "complete"
+    or report.get("outcome") != "final"
+):
     raise SystemExit("statistics withdraw did not complete")
-if report.get("dataset") != "monthly-discharge-reports" or report.get("period") != "2025-01" or report.get("version") != 1:
+if report.get("dataset") != "monthly-discharge-reports" or report.get("period") != "2025-01" or report.get("releaseVersion") != 1:
     raise SystemExit(f"statistics withdraw returned the wrong release: {report}")
 if report.get("withdrawal", {}).get("reason") != "source-data-error":
     raise SystemExit(f"statistics withdraw returned the wrong reason: {report}")

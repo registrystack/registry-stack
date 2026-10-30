@@ -13,24 +13,27 @@ scalar values and credentials.
   "status": "complete",
   "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
   "kind": "CaseworkReport",
-  "diagnostics": [],
-  "data": {
-    "project": "./review-project",
-    "policyBindings": [],
-    "filesChecked": 1,
-    "networkAccess": false,
-    "databaseAccess": false
-  }
+  "version": "0.44.0-dev",
+  "project": "./review-project",
+  "policyBindings": [],
+  "filesChecked": 1,
+  "networkAccess": false,
+  "databaseAccess": false,
+  "diagnostics": []
 }
 ```
 
 [report.schema.json](report.schema.json) is the command-tagged union of the
-owning Rust output DTOs. Command-specific data is under `data`; a failure that
-cannot produce data carries diagnostics without `data`. The commands are
+owning Rust output DTOs. Command-specific members are flat; a failure carries
+the common envelope and diagnostics, and may either omit command-specific
+members or carry one complete typed command payload. Partial payloads are
+invalid. The commands are
 `init`, `check`, `explain`, `test`, `types`, `provider-add`, `provider-pair`, `lifecycle`,
 `package`, `doctor`, `plan`, `apply`, `status`, `dev`, `dev-events`, `dev-token`,
-`dev-grant`, `dev-identity`, and `usage`. Dev reports expose session state as
-`data.state`; the envelope status remains the command outcome.
+`dev-grant`, `dev-identity`, and `usage`; `internal` is the closed failure-only
+variant used when a hidden command or panic stops unexpectedly. Dev and
+provider-add reports expose their command result as `outcome`; the envelope
+`status` remains the process result class.
 
 Policy, context, stage, outcome, routing, clock, staffing and activation shapes
 come from their owning DTO schemas. Presentation labels remain inspectable in

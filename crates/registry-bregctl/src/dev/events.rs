@@ -14,7 +14,7 @@ use registry_breg::model::{CompiledEventDelivery, CompiledRegistry};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_hooks::{
     receiver::{verify_delivery, DeliveryFreshness, SignedDelivery},
-    EnvelopeLimits, HookEnvelope,
+    EnvelopeLimits, EventSubject, HookEnvelope,
 };
 use serde_json::{json, Value};
 use std::{
@@ -391,13 +391,23 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
                     .compile(&registry_breg::proposal_hooks::proposal_event_schema())
                     .expect("fixed native Proposal event schema")
             });
+        let EventSubject::Proposal {
+            proposal_reference,
+            proposal_revision,
+        } = &envelope.subject
+        else {
+            bail!("webhook Proposal event subject shape is invalid");
+        };
         if !SCHEMA.is_valid(&data)
             || verified.event_type
                 != format!(
                     "proposal.{}",
                     data["transition"].as_str().unwrap_or_default()
                 )
-            || data["revision"].as_i64() != Some(envelope.subject.record_revision)
+            || data["revision"].as_i64() != Some(*proposal_revision)
+            || data["proposalId"].as_str().is_none_or(|proposal_id| {
+                proposal_reference != &format!("/v1/proposals/{proposal_id}")
+            })
         {
             bail!("webhook Proposal event data shape is invalid");
         }
@@ -433,6 +443,15 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         })
     {
         bail!("webhook envelope data shape is invalid");
+    }
+    let EventSubject::Record {
+        record_revision, ..
+    } = &envelope.subject
+    else {
+        bail!("webhook Record event subject shape is invalid");
+    };
+    if data["revision"].as_i64() != Some(*record_revision) {
+        bail!("webhook Record event revision does not match its subject");
     }
     let prefix = format!(
         "urn:breg:event-schema:{registry}:{}:{}:",
@@ -709,15 +728,20 @@ mod tests {
 
     /// The canonical envelope bytes a delivery with `headers` would carry.
     fn envelope_bytes(headers: &HeaderMap, data: Value) -> Vec<u8> {
+        envelope_bytes_with_subject(headers, data, EventSubject::record("0".repeat(63) + "2", 1))
+    }
+
+    fn envelope_bytes_with_subject(
+        headers: &HeaderMap,
+        data: Value,
+        subject: EventSubject,
+    ) -> Vec<u8> {
         HookEnvelope {
             id: headers["ce-id"].to_str().unwrap().to_owned(),
             event_type: headers["ce-type"].to_str().unwrap().to_owned(),
             source: headers["ce-source"].to_str().unwrap().to_owned(),
             time: OffsetDateTime::parse(headers["ce-time"].to_str().unwrap(), &Rfc3339).unwrap(),
-            subject: registry_platform_hooks::EventSubject {
-                record_reference: "0".repeat(63) + "2",
-                record_revision: 1,
-            },
+            subject,
             dataschema: headers["ce-dataschema"].to_str().unwrap().to_owned(),
             data,
             causation: registry_platform_hooks::Causation::root(headers["ce-id"].to_str().unwrap()),
@@ -1150,7 +1174,9 @@ mod tests {
             "fromState":"draft","state":"submitted","transition":"submitted","effectDigest":null,
             "authorityKind":"caller","systemApplyGrantRevision":null,"turn":"official"});
         let key = URL_SAFE_NO_PAD.encode([7; 32]);
-        let body = envelope_bytes(&headers, data.clone());
+        let proposal_subject =
+            EventSubject::proposal("/v1/proposals/00000000-0000-4000-8000-000000000002", 1);
+        let body = envelope_bytes_with_subject(&headers, data.clone(), proposal_subject.clone());
         sign(&mut headers, &body);
         let (record, projection) = verify(key.as_bytes(), &headers, &body).unwrap();
         assert_eq!(record["actionId"], "correct-name");
@@ -1159,12 +1185,28 @@ mod tests {
         for member in ["input", "context", "attachments", "actor"] {
             let mut widened = data.clone();
             widened[member] = json!("private-canary");
-            let body = envelope_bytes(&headers, widened);
+            let body = envelope_bytes_with_subject(&headers, widened, proposal_subject.clone());
             sign(&mut headers, &body);
             assert!(verify(key.as_bytes(), &headers, &body).is_err());
         }
+        let retired = envelope_bytes(&headers, data.clone());
+        sign(&mut headers, &retired);
+        assert!(
+            verify(key.as_bytes(), &headers, &retired).is_err(),
+            "a Proposal event cannot retain the Record subject family"
+        );
+        let mismatched = envelope_bytes_with_subject(
+            &headers,
+            data.clone(),
+            EventSubject::proposal("/v1/proposals/00000000-0000-4000-8000-000000000003", 1),
+        );
+        sign(&mut headers, &mismatched);
+        assert!(
+            verify(key.as_bytes(), &headers, &mismatched).is_err(),
+            "a Proposal subject must name the event data's Proposal"
+        );
         headers.insert("ce-type", HeaderValue::from_static("proposal.applied"));
-        let body = envelope_bytes(&headers, data);
+        let body = envelope_bytes_with_subject(&headers, data, proposal_subject);
         sign(&mut headers, &body);
         assert!(verify(key.as_bytes(), &headers, &body).is_err());
     }

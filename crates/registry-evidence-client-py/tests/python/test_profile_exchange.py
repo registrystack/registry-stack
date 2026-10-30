@@ -59,7 +59,7 @@ class ProfileExchangeTest(unittest.TestCase):
                                "grant_types_supported": ["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"],
                                "token_endpoint_auth_methods_supported": ["private_key_jwt"]}
                 elif self.path == "/.well-known/evidence/jwks.json":
-                    payload = JWKS
+                    payload = {**JWKS, "futureMember": {"safeToIgnore": True}}
                 elif self.path == "/token":
                     form = parse_qs(body.decode())
                     if form.get("grant_type") != ["urn:ietf:params:oauth:grant-type:token-exchange"]:
@@ -69,6 +69,7 @@ class ProfileExchangeTest(unittest.TestCase):
                                "scope": "evidence:invoke", "issued_token_type": "urn:ietf:params:oauth:token-type:access_token"}
                 elif self.path == "/v1/evidence-definitions":
                     payload = {**CONTRACTS, "schema": "registry.evidence-definitions/v1", "maximumHolderBoundBatchSize": 1,
+                               "futureMember": {"safeToIgnore": True},
                                "definitions": [dict(CONTRACTS["definitions"][0], configurationRevision=revision[0]),
                                                *CONTRACTS["definitions"][1:]]}
                 elif self.path == "/v1/evidence":
@@ -125,9 +126,15 @@ class ProfileExchangeTest(unittest.TestCase):
                         "first_party": {"key": KEY, "attributes": {"registry_actor_kind": "human"}},
                     }}
 
-                request = lambda client: client.request("farmer-status", **{"farmer-number": "F-123"})
+                request = lambda client: client.request(
+                    handle="farmer-status", **{"farmer-number": "F-123"}
+                )
                 mismatched = revc.EvidenceClient.from_profile_with_authorization(
                     str(profile_path), authorization("urn:wrong"))
+                with self.assertRaises(TypeError):
+                    mismatched.request(
+                        requirement="farmer-status", **{"farmer-number": "F-123"}
+                    )
                 with self.assertRaises(revc.ConfigurationError):
                     request(mismatched)
                 self.assertFalse(any(path == "/token" for _, path, _, _ in requests))

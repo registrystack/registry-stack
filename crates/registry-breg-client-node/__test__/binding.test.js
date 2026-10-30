@@ -16,6 +16,7 @@ const {
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`;
 const MISSING_RECORD_ID = '00000000-0000-4000-8000-000000000001';
+const OUTSIDE_WRITE_BOUNDARY_ID = '00000000-0000-4000-8000-000000000403';
 const EXTENDED_UNKNOWN_PROBLEM_ID = '00000000-0000-4000-8000-000000000003';
 const UNKNOWN_PROBLEM_STATUSES = new Map([
   ['00000000-0000-4000-8000-000000000422', 422],
@@ -34,6 +35,7 @@ before(async () => {
     if (request.url.endsWith('/health')) response.end(JSON.stringify({ status: 'alive' }));
     else if (request.url.endsWith('/ready')) response.end(JSON.stringify({ status: 'ready' }));
     else if (request.url.includes('/openapi.json')) response.end('{"openapi":"3.1.0"}');
+    else if (request.url.includes('/v1/schemas/person')) response.end('{"type":"object"}');
     else if (request.url.endsWith('/v1/records/people')) {
       response.setHeader(
         'link',
@@ -46,7 +48,7 @@ before(async () => {
         meta: {
           registryIdentifier: 'test-registry',
           datasetIdentifier: 'people',
-          entityTypeIdentifier: 'person',
+          recordTypeIdentifier: 'person',
         },
       }));
     }
@@ -68,6 +70,19 @@ before(async () => {
         status: 404,
         detail: 'The requested resource was not found.',
         code: 'resource.not_found',
+        traceId: TRACE_ID,
+      }));
+    }
+    else if (request.url.endsWith(`/v1/records/companies/${OUTSIDE_WRITE_BOUNDARY_ID}`)) {
+      response.statusCode = 403;
+      response.setHeader('content-type', 'application/problem+json');
+      response.setHeader('cache-control', 'no-store');
+      response.end(JSON.stringify({
+        type: 'https://id.registrystack.org/problems/registry-breg/write/outside-boundary',
+        title: 'Forbidden',
+        status: 403,
+        detail: "The resulting record falls outside the selected access profile's row boundary.",
+        code: 'write.outside-boundary',
         traceId: TRACE_ID,
       }));
     }
@@ -119,6 +134,13 @@ test('raw documents cross as Buffer values', async () => {
   assert.ok(Buffer.isBuffer(result.body));
   assert.equal(result.body.toString(), '{"openapi":"3.1.0"}');
   assert.equal(result.mediaType, 'application/json');
+});
+
+test('record schema uses the canonical public method only', async () => {
+  const client = new BaseRegistryClient({ baseUrl });
+  const result = await client.recordSchema('person');
+  assert.equal(result.body.toString(), '{"type":"object"}');
+  assert.equal(client.entitySchema, undefined);
 });
 
 test('invalid request graphs fail before I/O with a stable kind', async () => {
@@ -242,6 +264,23 @@ test('a missing record fails with its own not-found kind', async () => {
       && error.kind === 'not-found'
       && error.status === 404,
   );
+});
+
+test('a write boundary refusal uses the core problem projection without detail labels', async () => {
+  const client = new BaseRegistryClient({ baseUrl });
+  await assert.rejects(client.getRecord('companies', OUTSIDE_WRITE_BOUNDARY_ID), (error) => {
+    assert.ok(error instanceof BaseRegistryClientError);
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.status, 403);
+    assert.equal(error.code, 'write.outside-boundary');
+    assert.equal(error.traceId, TRACE_ID);
+    assert.equal(error.refusalCode, undefined);
+    assert.equal(error.reasonCode, undefined);
+    assert.equal(error.guardReason, undefined);
+    assert.equal(error.outcomeUnknown, false);
+    assert.equal(String(error).includes('row boundary'), false);
+    return true;
+  });
 });
 
 test('unknown problem codes fall back to HTTP status semantics', async () => {

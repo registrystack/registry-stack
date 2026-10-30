@@ -1033,7 +1033,7 @@ impl MappedError {
 
 /// A shape-level failure reports the same stable envelope every mapped
 /// failure uses, so a caller need not special-case where a failure
-/// originated. There is no dedicated "shape" kind among the eight the runtime
+/// originated. There is no dedicated "shape" kind among the ten the runtime
 /// client defines; a Python caller that supplied an unusable shape is, from
 /// the caller's side, exactly the "the client cannot be used as configured"
 /// case.
@@ -1066,7 +1066,7 @@ pub fn map_config_error(error: &ConfigError) -> MappedError {
 ///
 /// Never included: response bytes, a credential, a header value, a selector
 /// value, or a subject binding. Every message here is `Display` text over
-/// fixed, non-secret reasons; none of the eight kinds can carry one of those.
+/// fixed, non-secret reasons; none of the ten kinds can carry one of those.
 pub fn map_client_error(error: &EvidenceClientError) -> MappedError {
     let mut mapped = MappedError::bare(error.kind(), error.to_string());
     mapped.trace_id = error.trace_id().map(str::to_owned);
@@ -1092,6 +1092,11 @@ pub fn map_client_error(error: &EvidenceClientError) -> MappedError {
             mapped.retry_after_seconds = *retry_after_seconds;
         }
         EvidenceClientError::NotAvailable { .. } => {}
+        EvidenceClientError::InvalidRequest { status, code, .. }
+        | EvidenceClientError::Unavailable { status, code, .. } => {
+            mapped.status = Some(*status);
+            mapped.code = Some(code.clone());
+        }
         EvidenceClientError::Protocol {
             status,
             code,
@@ -2004,7 +2009,7 @@ mod tests {
     }
 
     /// The discriminant is what the Python exception's `kind` attribute
-    /// carries, so every one of the eight stable names must map to itself.
+    /// carries, so every one of the ten stable names must map to itself.
     /// `EvidenceClientError` is `#[non_exhaustive]` at the enum level, which
     /// only bears on match exhaustiveness (a wildcard arm is required
     /// elsewhere in this module); it does not block constructing a
@@ -2037,6 +2042,22 @@ mod tests {
             (
                 EvidenceClientError::NotAvailable { trace_id: None },
                 "not-available",
+            ),
+            (
+                EvidenceClientError::InvalidRequest {
+                    status: 400,
+                    code: "evidence.invalid-request".to_owned(),
+                    trace_id: None,
+                },
+                "invalid-request",
+            ),
+            (
+                EvidenceClientError::Unavailable {
+                    status: 503,
+                    code: "service.unavailable".to_owned(),
+                    trace_id: None,
+                },
+                "unavailable",
             ),
             (
                 EvidenceClientError::Protocol {

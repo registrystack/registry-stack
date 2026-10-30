@@ -304,10 +304,7 @@ impl DocumentEvent {
             }
             _ => return Err(HookCaptureError::InvalidCapture),
         };
-        Ok(EventSubject {
-            record_reference,
-            record_revision: self.revision,
-        })
+        Ok(EventSubject::record(record_reference, self.revision))
     }
 }
 
@@ -647,6 +644,8 @@ impl ActivatedHooks {
                 "document-version"
             }
         };
+        let subject_reference = subject.reference().to_owned();
+        let subject_revision = subject.revision();
         let changed = transaction
             .execute(
                 &sql,
@@ -655,8 +654,8 @@ impl ActivatedHooks {
                     &hook.id,
                     &hook.trigger.as_str(),
                     &entity_id,
-                    &subject.record_reference,
-                    &subject.record_revision,
+                    &subject_reference,
+                    &subject_revision,
                     &self.identity.package_digest,
                     &self.compiled.schema_fingerprint,
                     &payload,

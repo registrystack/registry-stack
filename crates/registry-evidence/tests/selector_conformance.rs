@@ -221,6 +221,7 @@ impl PreparedService {
                     },
                     issued_at,
                     observed_at,
+                    source_valid_until: None,
                     subjects,
                 },
             )

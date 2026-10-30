@@ -156,7 +156,7 @@ acceptances:
     ]);
     assert!(explained.status.success(), "{explained:?}");
     let explained_report = json_stdout(&explained);
-    let explained_warning = explained_report["findings"]
+    let explained_warning = explained_report["diagnostics"]
         .as_array()
         .and_then(|findings| {
             findings
@@ -2110,7 +2110,22 @@ fn test_candidate_command(
 }
 
 fn json_stdout(output: &Output) -> Value {
-    serde_json::from_slice(&output.stdout).expect("command stdout is JSON")
+    let report: Value = serde_json::from_slice(&output.stdout).expect("command stdout is JSON");
+    let status = match output.status.code().expect("command exited normally") {
+        0 => "complete",
+        1 => "domain-refusal",
+        2 => "usage-error",
+        3 => "operational-failure",
+        exit => panic!("unexpected command exit class: {exit}"),
+    };
+    assert_eq!(report["status"], status);
+    assert_eq!(
+        report["version"],
+        registry_platform_buildinfo::DISPLAY_VERSION
+    );
+    assert!(report["diagnostics"].is_array(), "{report}");
+    assert!(report.get("findings").is_none(), "{report}");
+    report
 }
 
 fn assert_tool_diagnostic(diagnostic: &Value, artifact: &str, suggested_action: &str) {
@@ -2335,9 +2350,9 @@ fn init_creates_the_complete_canonical_minimal_project_that_checks_immediately()
     let report = json_stdout(&output);
     assert_eq!(report["ok"], true);
     assert_eq!(report["command"], "init");
-    let findings = report["findings"]
+    let findings = report["diagnostics"]
         .as_array()
-        .expect("findings is an array")
+        .expect("diagnostics is an array")
         .iter()
         .map(|finding| {
             finding["code"]
@@ -3004,11 +3019,15 @@ fn every_json_report_names_the_ctl_report_format() {
         command.extend(arguments);
         let output = bregctl(&command);
         let rendered = String::from_utf8(output.stdout.clone()).expect("report is UTF-8");
+        let keys = ["ok", "command", "status", "apiVersion", "kind"];
+        let positions = keys.map(|key| {
+            rendered
+                .find(&format!("\"{key}\":"))
+                .expect("envelope member")
+        });
         assert!(
-            rendered.starts_with(
-                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \""
-            ),
-            "{name} opens with its format: {rendered}"
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{name}: {rendered}"
         );
         let report = json_stdout(&output);
         assert_eq!(
@@ -3893,7 +3912,7 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         !destination.join("modules").exists(),
         "a derived project locks no module"
     );
-    let findings = report["findings"]
+    let findings = report["diagnostics"]
         .as_array()
         .expect("findings")
         .iter()
@@ -4690,6 +4709,8 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
             "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
             "kind": "BRegCtlReport",
             "ok": false,
+            "status": "domain-refusal",
+            "version": registry_platform_buildinfo::DISPLAY_VERSION,
             "command": "init",
             "diagnostics": [{
                 "severity": "error",
@@ -4721,6 +4742,8 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
             "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
             "kind": "BRegCtlReport",
             "ok": false,
+            "status": "domain-refusal",
+            "version": registry_platform_buildinfo::DISPLAY_VERSION,
             "command": "generate",
             "diagnostics": [{
                 "severity": "error",
@@ -5388,7 +5411,7 @@ fn explain_access_includes_action_only_grants_and_target_reach() {
     assert!(targets
         .iter()
         .all(|target| target["surface"] == "action_target" && target["rows"] == "all"));
-    assert!(report["findings"]
+    assert!(report["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
@@ -7396,7 +7419,7 @@ fn test_fingerprint_only_needs_only_the_runtime_configuration() {
         "--runtime-config",
         path(&candidate_runtime),
     ]);
-    assert_eq!(measured.status.code(), Some(1), "{measured:?}");
+    assert_eq!(measured.status.code(), Some(3), "{measured:?}");
     let report = json_stdout(&measured);
     assert_eq!(report["command"], "test");
     assert_eq!(
@@ -7738,6 +7761,7 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
 
     assert_schema_test_refusal(
         result,
+        3,
         "test.database.unavailable",
         "schema-test-database",
         "recreate-disposable-database",
@@ -7791,6 +7815,7 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     );
     assert_schema_test_refusal(
         test_project,
+        1,
         "breg.source.file-bounds",
         "registry-project",
         "correct-authoring-source",
@@ -7824,6 +7849,7 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     );
     assert_schema_test_refusal(
         test_module,
+        1,
         "breg.source.file-bounds",
         "registry-project",
         "correct-authoring-source",
@@ -8388,7 +8414,7 @@ fn apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_databas
         // Without the flag, and with the digest of the package named, the
         // command reaches the database, which nothing serves.
         for reached in [run(None), run(Some(successor.package_digest.as_str()))] {
-            assert_eq!(reached.status.code(), Some(1), "{reached:?}");
+            assert_eq!(reached.status.code(), Some(3), "{reached:?}");
             assert_eq!(
                 json_stdout(&reached)["diagnostics"][0]["code"],
                 "apply.database.unavailable",
@@ -8790,6 +8816,9 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
             "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
             "kind": "BRegCtlReport",
             "ok": true,
+            "status": "complete",
+            "version": registry_platform_buildinfo::DISPLAY_VERSION,
+            "diagnostics": [],
             "command": "verify",
             "assurance": "runtime-bound",
             "packageDigest": fixture.package_digest,
@@ -8871,6 +8900,9 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
             "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
             "kind": "BRegCtlReport",
             "ok": true,
+            "status": "complete",
+            "version": registry_platform_buildinfo::DISPLAY_VERSION,
+            "diagnostics": [],
             "command": "migration explain",
             "assurance": "runtime-bound",
             "packageDigest": fixture.package_digest,
@@ -9920,13 +9952,14 @@ fn write_test_secret(project: &TestProject, name: &str, bytes: &[u8]) {
 
 fn assert_schema_test_refusal(
     output: Output,
+    expected_exit: i32,
     expected_code: &str,
     artifact: &str,
     action: &str,
     receipt: &Path,
     forbidden: &[&str],
 ) {
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.status.code(), Some(expected_exit), "{output:?}");
     assert!(output.stderr.is_empty());
     assert!(!receipt.exists(), "receipt was not published on refusal");
     let rendered = String::from_utf8(output.stdout).expect("refusal JSON is UTF-8");

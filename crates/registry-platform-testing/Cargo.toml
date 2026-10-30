@@ -17,6 +17,8 @@ test-utils = []
 test-authorization-server = ["test-utils", "dep:sha2", "dep:url", "dep:uuid"]
 # The sha256 pins every released migration file is held to; see `assert_migration_pins`.
 migration-pins = ["test-utils", "dep:sha2"]
+# Canonical PostgreSQL catalogs for migration replay-equivalence tests.
+postgres-catalog = ["test-utils", "dep:tokio-postgres"]
 
 [[test]]
 name = "test_authorization_server"
@@ -36,6 +38,7 @@ serde_json.workspace = true
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
+tokio-postgres = { workspace = true, optional = true }
 tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

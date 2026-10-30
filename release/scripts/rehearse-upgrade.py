@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -54,6 +55,7 @@ import tomllib
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -927,6 +929,7 @@ class TransitServer:
     KEY_NAME = "evidence-signing"
 
     def __init__(self, private_key: Path) -> None:
+        self._accept_historical_key_version = False
         public_pem = subprocess.run(["openssl", "ec", "-in", str(private_key), "-pubout"],
                                     check=True, capture_output=True, text=True).stdout
         metadata = json.dumps({"data": {
@@ -961,7 +964,15 @@ class TransitServer:
                 except (ValueError, KeyError, TypeError):
                     self.refuse("malformed sign request")
                     return
-                if (self.path != sign_path or request.get("key_version") != 1
+                key_version = request.get("key_version")
+                key_version_matches = (
+                    type(key_version) is str and key_version == "1"
+                ) or (
+                    transit._accept_historical_key_version
+                    and type(key_version) is int
+                    and key_version == 1
+                )
+                if (self.path != sign_path or not key_version_matches
                         or request.get("prehashed") is not True
                         or request.get("marshaling_algorithm") != "jws" or len(digest) != 32):
                     self.refuse("sign request does not match the rehearsal key")
@@ -981,12 +992,29 @@ class TransitServer:
         class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             daemon_threads = True
 
+        transit = self
         # A Unix socket path is limited to about 104 bytes on macOS.
         self.directory = Path(tempfile.mkdtemp(prefix="rehearsal-transit-", dir="/tmp"))
         self.socket_path = self.directory / "transit.sock"
         self.server = Server(str(self.socket_path), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    @contextlib.contextmanager
+    def historical_key_version_requests(self) -> Iterator[None]:
+        """Accept the numeric key version emitted by historical FROM binaries.
+
+        Current TO binaries must send the string form and run under the strict
+        default outside this bounded phase.
+        """
+
+        if self._accept_historical_key_version:
+            raise RehearsalError("historical Transit request policy is already active")
+        self._accept_historical_key_version = True
+        try:
+            yield
+        finally:
+            self._accept_historical_key_version = False
 
     def stop(self) -> None:
         self.server.shutdown()
@@ -1455,20 +1483,21 @@ def rehearse_evidence(work: Path, keys: Keys, tls: Path, old: Side, new: Side,
                       report: dict[str, Any]) -> None:
     evidence = Evidence(work, keys, tls)
     try:
-        evidence.author(old)
-        check = evidence_arguments(evidence.runtime, "check")
-        serve = evidence_arguments(evidence.runtime, "serve")
-        old.run("evidence", *check)
-        ready = f"http://127.0.0.1:{evidence.port}/ready"
-        service = Service(old, "evidence", serve, work / "evidence-old.log", ready)
-        try:
-            status, before = evidence.request()
-            expect_status("previous release evidence request", status, before, 200)
-            _status, _headers, jwks = http(
-                "GET", f"http://127.0.0.1:{evidence.port}/.well-known/evidence/jwks.json")
-        finally:
-            service.stop()
-        records_before = audit_record_count(evidence.audit, "evidence.jsonl")
+        with evidence.transit.historical_key_version_requests():
+            evidence.author(old)
+            check = evidence_arguments(evidence.runtime, "check")
+            serve = evidence_arguments(evidence.runtime, "serve")
+            old.run("evidence", *check)
+            ready = f"http://127.0.0.1:{evidence.port}/ready"
+            service = Service(old, "evidence", serve, work / "evidence-old.log", ready)
+            try:
+                status, before = evidence.request()
+                expect_status("previous release evidence request", status, before, 200)
+                _status, _headers, jwks = http(
+                    "GET", f"http://127.0.0.1:{evidence.port}/.well-known/evidence/jwks.json")
+            finally:
+                service.stop()
+            records_before = audit_record_count(evidence.audit, "evidence.jsonl")
 
         evidence.upgrade(new)
         new.run("evidence", *check)

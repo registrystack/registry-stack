@@ -21,8 +21,10 @@ test('profile and exchange compose without losing pins or authority binding', as
   const { apiVersion: _apiVersion, kind: _kind, ...contracts } = JSON.parse(fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'products',
     'breg', 'acceptance', 'farmer-landholding-evidence', 'evidence', 'farmer-contracts.json')));
-  const published = { ...contracts, schema: 'registry.evidence-definitions/v1', maximumHolderBoundBatchSize: 1 };
-  const jwks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tests', 'fixtures', 'jwks.json')));
+  const published = { ...contracts, schema: 'registry.evidence-definitions/v1', maximumHolderBoundBatchSize: 1,
+    futureMember: { safeToIgnore: true } };
+  const jwks = { ...JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tests', 'fixtures', 'jwks.json'))),
+    futureMember: { safeToIgnore: true } };
   let origin;
   let revision = contracts.definitions[0].configurationRevision;
   const stub = await startStubServer({
@@ -88,20 +90,23 @@ test('profile and exchange compose without losing pins or authority binding', as
     class ApplicationClient extends EvidenceClient {}
     const mismatched = ApplicationClient.fromProfileWithAuthorization(profilePath, authorization('urn:wrong'));
     assert.ok(mismatched instanceof ApplicationClient);
-    await assert.rejects(mismatched.request({ requirement: 'farmer-status',
+    assert.throws(() => mismatched.request({ requirement: 'farmer-status',
+      selectors: { 'farmer-number': 'F-123' } }),
+    error => error instanceof EvidenceClientError && error.kind === 'configuration');
+    await assert.rejects(mismatched.request({ handle: 'farmer-status',
       selectors: { 'farmer-number': 'F-123' } }),
     error => error instanceof EvidenceClientError && error.kind === 'configuration');
     assert.equal(stub.requests.filter(request => request.url === '/token').length, 0);
 
     const client = EvidenceClient.fromProfileWithAuthorization(profilePath, authorization('urn:registry:evidence'));
-    await assert.rejects(client.request({ requirement: 'farmer-status',
+    await assert.rejects(client.request({ handle: 'farmer-status',
       selectors: { 'farmer-number': 'F-123' } }), error => error instanceof EvidenceClientError);
     assert.equal(stub.requests.filter(request => request.url === '/token').length, 1);
     assert.equal(stub.requests.filter(request => request.url === '/v1/evidence').length, 1);
 
     revision = `sha256:${'2'.repeat(64)}`;
     const drifted = EvidenceClient.fromProfileWithAuthorization(profilePath, authorization('urn:registry:evidence'));
-    await assert.rejects(drifted.request({ requirement: 'farmer-status',
+    await assert.rejects(drifted.request({ handle: 'farmer-status',
       selectors: { 'farmer-number': 'F-123' } }),
     error => error instanceof EvidenceClientError && error.kind === 'configuration');
     assert.equal(stub.requests.filter(request => request.url === '/v1/evidence').length, 1,

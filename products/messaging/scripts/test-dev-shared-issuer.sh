@@ -178,7 +178,11 @@ require_breg_ready_report() {
   python3 - "$1" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-if report.get("ok") is not True or report.get("status") != "ready":
+if (
+    report.get("ok") is not True
+    or report.get("status") != "complete"
+    or report.get("outcome") != "ready"
+):
     raise SystemExit("BReg owner did not reach ready")
 for member in ("bregUrl", "issuer", "tokenEndpoint"):
     if not isinstance(report.get(member), str) or not report[member]:

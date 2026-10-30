@@ -75,14 +75,16 @@ path "transit/sign/evidence-signing/sha2-256" {
   required_parameters = ["input", "key_version", "marshaling_algorithm", "prehashed"]
   allowed_parameters = {
     "input"                 = []
-    "key_version"           = [12]
+    "key_version"           = ["12"]
     "marshaling_algorithm" = ["jws"]
     "prehashed"             = [true]
   }
 }
 ```
 
-The runtime also refuses a pinned key version below the key's `min_encryption_version`;
+Registry Evidence sends `key_version` as a string because OpenBao matches allowed parameter values
+by string. Keep the policy value quoted. The runtime also refuses a pinned key version below the
+key's `min_encryption_version`;
 [Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/) uses that control. The
 [Vault Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit) and the
 [OpenBao Transit API](https://openbao.org/api-docs/secret/transit/) document every other field;

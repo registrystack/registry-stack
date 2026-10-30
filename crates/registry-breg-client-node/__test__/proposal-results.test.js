@@ -59,7 +59,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
     assert.deepEqual(JSON.parse(proposal.documentJson).application.appliedBy, `hmac-sha256:${'a'.repeat(64)}`);
     assert.doesNotMatch(inspect(proposal), new RegExp(`${id}|${targetId}|person`));
     const count = requests.length;
-    assert.throws(() => client.prepareProposal(proposal, 'apply', '{}', 'ungranted'), error => error.kind === 'invalid-request');
+    assert.throws(() => client.prepareProposal(proposal, 'apply', {}, 'ungranted'), error => error.kind === 'invalid-request');
     assert.equal(requests.length, count);
     for (const state of ['awaiting-review', 'pending', 'blocked', 'applied', 'cancelled']) {
       value = statusDocument(state);
@@ -76,6 +76,26 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       const observed = JSON.parse((await client.getProposal(binding, id)).documentJson);
       assert.ok(!Object.hasOwn(observed, 'applicationStatus'), `${state}: erased retained evidence`);
     }
+
+    await t.test('package change exposes only the rebase recovery vocabulary', async () => {
+      value = statusDocument('blocked');
+      value.blockedReason = 'package-changed';
+      Object.assign(value.applicationStatus, {reason: 'package-changed', recovery: 'rebase'});
+      value.links.apply = {method: 'POST', path: `/v1/proposals/${id}/apply`, accessProfile: 'reader', operation: 'apply', ifMatch: '"blocked-condition"',
+        availability: {available: false, observedRevision: 8, reason: 'package-changed', recovery: 'rebase'}};
+      const observed = JSON.parse((await client.getProposal(binding, id)).documentJson);
+      assert.deepEqual(observed.applicationStatus, value.applicationStatus);
+      assert.deepEqual(observed.links.apply.availability, value.links.apply.availability);
+
+      for (const [reason, recovery] of [['contract-changed', 'rebase'], ['package-changed', 'correct-input'], ['package-changed', 'refresh']]) {
+        value.applicationStatus.reason = reason;
+        value.links.apply.availability.reason = reason;
+        value.applicationStatus.recovery = recovery;
+        value.links.apply.availability.recovery = recovery;
+        await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request', `${reason}/${recovery}`);
+      }
+    });
+
     value = document();
     value.application.resultLinks = [];
     assert.deepEqual(JSON.parse((await client.getProposal(binding, id)).documentJson).application.resultLinks, []);
@@ -98,7 +118,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       value = document(); value.state = 'submitted'; delete value.application;
       value.links.apply = {method: 'POST', path: `/v1/proposals/${id}/apply`, accessProfile: 'reader', operation: 'apply', ifMatch: '"apply-condition"'};
       const held = await client.getProposal(binding, id);
-      const attempt = client.prepareProposal(held, 'apply', JSON.stringify({submissionVersion: 2, effectDigest: digest}), 'canonical-application');
+      const attempt = client.prepareProposal(held, 'apply', {submissionVersion: 2, effectDigest: digest}, 'canonical-application');
       const canonical = '123e4567-e89b-42d3-a456-426614174000';
       const lifecycleApplication = structuredClone(document().application);
       delete lifecycleApplication.appliedBy; delete lifecycleApplication.appliedAt;
@@ -125,7 +145,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       value.attachments = {support: {id: 'support', required: false, maximumBytes: 1024, contentTypes: ['application/pdf'], classification: 'restricted',
         links: {upload: {method: 'PATCH', path: `/v1/proposals/${id}/attachments/support`, accessProfile: 'reader', operation: 'upload', ifMatch: '"upload-condition"'}}}};
       const held = await client.getProposal(binding, id);
-      const attempt = client.prepareProposal(held, 'edit', '{"input":{}}', 'availability-edit');
+      const attempt = client.prepareProposal(held, 'edit', {input: {}}, 'availability-edit');
       const original = structuredClone(value);
       for (const missing of ['reason', 'recovery']) {
         value = structuredClone(original);
@@ -257,7 +277,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
           remove: {method: 'DELETE', path: `/v1/proposals/${id}/attachments/support`, accessProfile: 'reader', operation: 'remove', ifMatch: '"attachment-condition"'}}}};
       const prior = await client.getProposal(binding, id);
       const current = structuredClone(value); current.revision++;
-      const attempt = client.prepareProposal(prior, 'edit', '{"input":{}}', 'edit-binding');
+      const attempt = client.prepareProposal(prior, 'edit', {input: {}}, 'edit-binding');
       for (const send of [() => client.executeProposal(attempt),
         () => client.uploadProposalAttachment(prior, 'support', 'application/pdf', Buffer.from('%PDF-fixture'), 'upload-binding'),
         () => client.deleteProposalAttachment(prior, 'support', 'remove-binding')]) {
@@ -295,11 +315,11 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         for (const invalid of [{}, {...draft, actionRevision: `sha256:${'b'.repeat(64)}`}, wrongProfile, {...draft, state: 'submitted', effectDigest: digest}]) {
           value = invalid;
           const count = requests.length;
-          await assert.rejects(client.startProposal(action, '{}', 'recover-start'), error => error.kind === 'protocol' && error.outcomeUnknown && error.status === 201);
+          await assert.rejects(client.startProposal(action, {}, 'recover-start'), error => error.kind === 'protocol' && error.outcomeUnknown && error.status === 201);
           assert.equal(requests.length, count + 1, 'malformed Start success is not resent');
           const sent = wireRequests.at(-1);
           value = structuredClone(draft);
-          assert.equal(JSON.parse((await client.startProposal(action, '{}', 'recover-start')).documentJson).state, 'draft');
+          assert.equal(JSON.parse((await client.startProposal(action, {}, 'recover-start')).documentJson).state, 'draft');
           assert.deepEqual(wireRequests.at(-1), sent);
         }
       } finally { replyStatus = 200; }
@@ -309,7 +329,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       value.links.submit = {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'reader', operation: 'submit', ifMatch: '"submit-condition"'};
       const prior = await client.getProposal(binding, id);
       const initial = structuredClone(value);
-      const attempt = client.prepareProposal(prior, 'submit', '{}', 'exact-submit');
+      const attempt = client.prepareProposal(prior, 'submit', {}, 'exact-submit');
       const saved = attempt.toBytes();
       const receipt = {...structuredClone(initial), revision: 9, state: 'submitted', effectDigest: digest};
       for (const invalid of [initial, {...receipt, revision: 8}, {...receipt, revision: 10},
@@ -355,7 +375,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         value.links.rebase = {method: 'POST', path: `/v1/proposals/${id}/rebase`, accessProfile: 'reader', operation: 'rebase', ifMatch: '"rebase-condition"',
           availability: {available: true, observedRevision: 8}};
         const prior = await client.getProposal(binding, id);
-        const attempt = client.prepareProposal(prior, 'rebase', '{"input":{}}', `rebase-${state}`);
+        const attempt = client.prepareProposal(prior, 'rebase', {input: {}}, `rebase-${state}`);
         const saved = attempt.toBytes();
         value.state = 'draft'; value.submissionVersion = after; value.revision = 9; delete value.effectDigest;
         value.actionRevision = `sha256:${'b'.repeat(64)}`; value.links.rebase.availability.observedRevision = 9;

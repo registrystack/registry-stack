@@ -16,6 +16,7 @@ members = [
     "crates/registry-casework-core",
     "crates/registry-cli-docs",
     "crates/registry-cli-reference",
+    "crates/registry-cli-report",
     "crates/registry-discovery",
     "crates/registry-discovery-client",
     "crates/registry-discovery-client-node",
@@ -107,6 +108,7 @@ unsafe_code = "forbid"
 
 [workspace.dependencies]
 registry-cli-api = { path = "crates/registry-cli-api", version = "0.45.0" }
+registry-cli-report = { path = "crates/registry-cli-report", version = "0.45.0" }
 registry-review-client = { path = "crates/registry-review-client", version = "0.45.0" }
 registry-review-protocol = { path = "crates/registry-review-protocol", version = "0.45.0" }
 registry-thunderid-tooling = { path = "crates/registry-thunderid-tooling", version = "0.45.0" }

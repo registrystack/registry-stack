@@ -9,7 +9,7 @@ const id = '00000000-0000-4000-8000-000000000001';
 const snapshot = 'breg1_00000000-0000-4000-8000-000000000002';
 const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 const link = '<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile", </v1/schemas/company>; rel="describedby"';
-const meta = { registryIdentifier: 'registry', datasetIdentifier: 'dataset', entityTypeIdentifier: 'company' };
+const meta = { registryIdentifier: 'registry', datasetIdentifier: 'dataset', recordTypeIdentifier: 'company' };
 const record = { recordIdentifier: id, revisionIdentifier: '1', domainData: { label: 'one' } };
 const feature = { type: 'Feature', id, geometry: null, properties: { wide: 9007199254740992 }, registry: { revision: 1 } };
 
@@ -32,16 +32,19 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
       return respond(response, 'application/geo+json', `{"type":"FeatureCollection","features":[{"type":"Feature","id":"${id}","geometry":null,"properties":{"wide":9007199254740992},"registry":{"revision":1}}],"numberReturned":1,"registry":{"pageInfo":{"nextCursor":${continuation ? 'null' : '"geo-next"'}}}}`);
     }
     const collection = !path.endsWith(id) && !path.includes('/revisions/');
+    const responseMeta = path.includes('/retired-meta/')
+      ? { ...meta, entityTypeIdentifier: 'company' }
+      : meta;
     if (collection) {
-      const document = { items: [record], pageInfo: { nextCursor: continuation ? null : 'next' }, meta };
+      const document = { items: [record], pageInfo: { nextCursor: continuation ? null : 'next' }, meta: responseMeta };
       if (path.includes(':snapshot')) {
         document.snapshot = snapshot;
         if (request.url.includes('validAt=')) document.validAt = '2026-09-10T00:00:00Z';
       }
       return respond(response, 'application/json', document, true);
     }
-    if (path.includes('/revisions/')) return respond(response, 'application/json', { data: record, meta }, true);
-    return respond(response, 'application/json', { data: record, meta }, true, true);
+    if (path.includes('/revisions/')) return respond(response, 'application/json', { data: record, meta: responseMeta }, true);
+    return respond(response, 'application/json', { data: record, meta: responseMeta }, true, true);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
@@ -85,6 +88,10 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
 
     assert(requests.some(item => item.url.includes('bbox=100.1%2C13.1%2C100.2%2C13.2')));
     assert(requests.some(item => item.url.includes('$select=name')));
+    await assert.rejects(
+      client.getRecord('retired-meta', id),
+      error => error.kind === 'protocol' && error.status === 200,
+    );
     const beforeRetiredOption = requests.length;
     await assert.rejects(client.getRecord('companies', id, {requestHistoryAfterProposalVersion: 3}), error => error.kind === 'invalid-request');
     assert.equal(requests.length, beforeRetiredOption);

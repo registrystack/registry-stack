@@ -538,6 +538,7 @@ async fn a_protected_registry_read_backs_a_full_signed_minimum_disclosure_assert
                 },
                 issued_at: observed_at,
                 observed_at,
+                source_valid_until: None,
                 subjects: vec![SubjectBinding {
                     role: "subject".to_owned(),
                     binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),

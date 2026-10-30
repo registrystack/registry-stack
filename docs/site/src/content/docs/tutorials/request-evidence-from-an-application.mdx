@@ -189,7 +189,7 @@ const { evidence } = require('@registrystack/client');
 (async () => {
   const client = evidence.EvidenceClient.fromProfile('age-check-client.json');
   const result = await client.request({
-    requirement: 'adult-status',
+    handle: 'adult-status',
     selectors: { 'record-id': 'adult' },
   });
   const decidedAt = Math.floor(Date.now() / 1000);

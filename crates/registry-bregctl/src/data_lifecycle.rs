@@ -2138,7 +2138,7 @@ mod tests {
             "meta": {
                 "registryIdentifier": "ctl-data",
                 "datasetIdentifier": "test-dataset",
-                "entityTypeIdentifier": ENTITY
+                "recordTypeIdentifier": ENTITY
             }
         }))
         .unwrap();

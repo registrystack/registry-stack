@@ -274,7 +274,7 @@ fn transit_metadata() -> Value {
 
 fn transit_signature(body: &[u8]) -> Value {
     let request: Value = serde_json::from_slice(body).expect("Transit signing request is JSON");
-    assert_eq!(request["key_version"], 1);
+    assert_eq!(request["key_version"], "1");
     assert_eq!(request["marshaling_algorithm"], "jws");
     assert_eq!(request["prehashed"], true);
     let digest = STANDARD

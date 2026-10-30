@@ -227,9 +227,10 @@ fn real_bregctl_facility_generates_and_reruns_every_approval_pattern() {
         );
         let report = json(&output);
         assert_eq!(report["ok"], true, "{pattern}: {report}");
-        assert_eq!(report["data"]["state"], "created", "{pattern}: {report}");
+        assert_eq!(report["outcome"], "created", "{pattern}: {report}");
+        assert!(report.get("state").is_none(), "{pattern}: {report}");
         assert_eq!(
-            report["data"]["providerId"], "correct-address-context",
+            report["providerId"], "correct-address-context",
             "{pattern}: {report}"
         );
 
@@ -298,10 +299,7 @@ fn real_bregctl_facility_generates_and_reruns_every_approval_pattern() {
             String::from_utf8_lossy(&rerun.stderr)
         );
         let report = json(&rerun);
-        assert_eq!(
-            report["data"]["state"], "in-agreement",
-            "{pattern}: {report}"
-        );
+        assert_eq!(report["outcome"], "in-agreement", "{pattern}: {report}");
         assert_eq!(
             files(&project),
             before,
@@ -367,10 +365,10 @@ fn unbound_reviewer_requires_a_human_client_binding() {
         "an unbound profile is not a human reviewer binding"
     );
     let report = json(&first);
-    assert_eq!(report["data"]["state"], "changes-needed");
+    assert_eq!(report["outcome"], "changes-needed");
     assert!(!project.exists());
     assert_eq!(files(&source), before);
-    let changes = report["data"]["changes"].as_array().unwrap();
+    let changes = report["changes"].as_array().unwrap();
     let reviewer = changes
         .iter()
         .flat_map(|change| {
@@ -395,7 +393,7 @@ fn unbound_reviewer_requires_a_human_client_binding() {
         second.status.success(),
         "the human-bound remedy compiles and composes"
     );
-    assert_eq!(json(&second)["data"]["state"], "created");
+    assert_eq!(json(&second)["outcome"], "created");
     for (kind, client, admitted) in [
         (
             "human",
@@ -756,7 +754,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         "{variant}: {first}"
     );
     if variant == "requirement-input" {
-        let proposed = first["data"]["changes"]
+        let proposed = first["changes"]
             .as_array()
             .unwrap()
             .iter()
@@ -771,8 +769,8 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
                 .any(|field| field["input"] == "expected-address"),
             "reviewers must see an input used only by a precondition comparison: {first}"
         );
-        let alternative = &first["data"]["inputsOnlyAlternative"]["yaml"]["actions"][0]
-            ["execution"]["proposal"]["reviewContext"]["fields"];
+        let alternative = &first["inputsOnlyAlternative"]["yaml"]["actions"][0]["execution"]
+            ["proposal"]["reviewContext"]["fields"];
         assert!(alternative
             .as_object()
             .unwrap()
@@ -781,7 +779,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
     }
     if variant == "reviewer-name-collision" {
         assert!(
-            first["data"]["changes"]
+            first["changes"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -797,7 +795,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         variant,
         "record-reference" | "reference-input-only" | "unprojected-reference"
     ) {
-        let reviewer = first["data"]["changes"]
+        let reviewer = first["changes"]
             .as_array()
             .unwrap()
             .iter()
@@ -827,7 +825,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
             "only record-backed context needs records.get on the referenced type"
         );
     }
-    apply_authoring_suggestions(&mut registry, first["data"]["changes"].as_array().unwrap());
+    apply_authoring_suggestions(&mut registry, first["changes"].as_array().unwrap());
     fs::write(&registry_path, serde_norway::to_string(&registry).unwrap()).unwrap();
 
     let mut check_command = Command::new(bregctl);
@@ -864,7 +862,7 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         "{}",
         String::from_utf8_lossy(&second.stderr)
     );
-    assert_eq!(json(&second)["data"]["state"], "created");
+    assert_eq!(json(&second)["outcome"], "created");
 }
 
 #[test]
@@ -916,10 +914,7 @@ fn real_bregctl_preserves_broad_source_namespace_behind_local_bindings() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        json(&output)["data"]["sourceNamespace"],
-        "facility.registry:v1"
-    );
+    assert_eq!(json(&output)["sourceNamespace"], "facility.registry:v1");
     let authored = read_yaml(&project.join("casework.yaml"));
     assert_eq!(
         authored["contextProviders"]["correct-address-context"]["sourceNamespace"],
@@ -985,7 +980,7 @@ fn exact_policy_selection_matches_the_generated_and_existing_policy() {
     assert!(first.status.success(), "{}", json(&first));
     let explained = caseworkctl(&["--format", "json", "explain", existing.to_str().unwrap()]);
     assert!(explained.status.success(), "{}", json(&explained));
-    let binding = json(&explained)["data"]["reviewPolicies"][0]["binding"].clone();
+    let binding = json(&explained)["reviewPolicies"][0]["binding"].clone();
     assert!(binding["digest"].as_str().is_some());
 
     for variant in ["matching", "wrong-version", "wrong-digest"] {
@@ -1017,7 +1012,7 @@ fn exact_policy_selection_matches_the_generated_and_existing_policy() {
             if variant == "matching" {
                 assert!(output.status.success(), "{variant}: {report}");
                 assert_eq!(
-                    report["data"]["state"],
+                    report["outcome"],
                     if destination == &existing {
                         "in-agreement"
                     } else {
@@ -1132,7 +1127,7 @@ fn reruns_revalidate_required_runtime_scopes_without_rewriting_operator_bindings
         "required scopes may be reordered and augmented: {}",
         json(&agreed)
     );
-    assert_eq!(json(&agreed)["data"]["state"], "in-agreement");
+    assert_eq!(json(&agreed)["outcome"], "in-agreement");
     assert_eq!(files(&project), updated);
 
     let status = registry["accessProfiles"]
@@ -1213,7 +1208,7 @@ fn external_policy_ids_receive_an_actionable_local_compatibility_refusal() {
                 result.status.success(),
                 "the maximum valid Casework policy ID is supported: {report}"
             );
-            assert_eq!(report["data"]["policyId"], policy_id);
+            assert_eq!(report["policyId"], policy_id);
             assert!(read_yaml(&project.join("casework.yaml"))["reviewPolicies"]
                 .get(&policy_id)
                 .is_some());

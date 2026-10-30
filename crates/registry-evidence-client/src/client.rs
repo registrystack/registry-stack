@@ -11,9 +11,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use registry_evidence_verifier::{
-    model::{
-        Evidence, EvidenceRequestBatchResponse, EvidenceRequestBatchResponseItem, JwksDocument,
-    },
+    model::{Evidence, JwksDocument},
     verifier::ExpectedSubjectDocument,
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
 };
@@ -62,6 +60,9 @@ use crate::{
     response_format::EvidenceResponseFormat,
     retained::RetainedEvidenceVerification,
     token::TokenProvider,
+    wire::{
+        EvidenceRequestBatchResponseItemWire, EvidenceRequestBatchResponseWire, JwksDocumentWire,
+    },
 };
 use registry_platform_crypto::PrivateJwk;
 
@@ -175,6 +176,12 @@ struct PublicDocument<T> {
     cache_seconds: u64,
 }
 
+trait PublicResponseDocument: Clone + Sized {
+    type Wire: serde::de::DeserializeOwned;
+
+    fn from_wire(wire: Self::Wire) -> Self;
+}
+
 #[derive(Clone, Deserialize)]
 struct ProtectedResourceMetadata {
     resource: String,
@@ -183,12 +190,45 @@ struct ProtectedResourceMetadata {
     bearer_methods_supported: Vec<String>,
 }
 
+impl PublicResponseDocument for ProtectedResourceMetadata {
+    type Wire = Self;
+
+    fn from_wire(wire: Self::Wire) -> Self {
+        wire
+    }
+}
+
 #[derive(Clone, Deserialize)]
 struct AuthorizationServerMetadata {
     issuer: String,
     token_endpoint: String,
     grant_types_supported: Vec<String>,
     token_endpoint_auth_methods_supported: Vec<String>,
+}
+
+impl PublicResponseDocument for AuthorizationServerMetadata {
+    type Wire = Self;
+
+    fn from_wire(wire: Self::Wire) -> Self {
+        wire
+    }
+}
+
+impl PublicResponseDocument for JwksDocument {
+    type Wire = JwksDocumentWire;
+
+    fn from_wire(wire: Self::Wire) -> Self {
+        wire.into()
+    }
+}
+
+#[cfg(test)]
+impl PublicResponseDocument for serde_json::Value {
+    type Wire = Self;
+
+    fn from_wire(wire: Self::Wire) -> Self {
+        wire
+    }
 }
 
 /// A signed response, read but not yet judged.
@@ -775,7 +815,7 @@ impl EvidenceClient {
         })
     }
 
-    async fn public_json<T: serde::de::DeserializeOwned + Clone>(
+    async fn public_json<T: PublicResponseDocument>(
         &self,
         url: Url,
         media_type: &str,
@@ -841,7 +881,9 @@ impl EvidenceClient {
         let body = read_bounded(response, self.config.max_metadata_bytes)
             .await
             .map_err(|error| EvidenceClientError::transport(outbound::read_failure_kind(&error)))?;
-        let value = serde_json::from_slice(&body).map_err(|_| metadata_protocol_failure())?;
+        let value = decode_response_json::<T::Wire>(&body)
+            .map(T::from_wire)
+            .map_err(|_| metadata_protocol_failure())?;
         Ok(PublicDocument {
             value,
             etag: response_etag,
@@ -954,10 +996,10 @@ impl EvidenceClient {
         // The published key set is public, and it is not a trust anchor here, so
         // there is nothing to gain by presenting the relying party's credential
         // to fetch it.
-        let (document, _trace_id) = self
+        let (document, _trace_id): (JwksDocumentWire, _) = self
             .get_json(JWKS_PATH, JWKS_MEDIA_TYPE, Credential::None)
             .await?;
-        Ok(document)
+        Ok(document.into())
     }
 
     /// Send one prepared request and read the signed response.
@@ -1117,9 +1159,11 @@ impl EvidenceClient {
         response: &RawEvidenceRequestBatchResponse,
         now: DateTime<Utc>,
     ) -> Result<VerifiedEvidenceRequestBatch, EvidenceClientError> {
-        let envelope: EvidenceRequestBatchResponse = serde_json::from_slice(&response.body)
+        let envelope: EvidenceRequestBatchResponseWire = decode_response_json(&response.body)
             .map_err(|_| batch_protocol_failure(response.trace_id.clone()))?;
         if envelope.schema != EVIDENCE_REQUEST_BATCH_SCHEMA_V1
+            || envelope.response_type
+                != registry_evidence_verifier::model::EvidenceRequestBatchResponseType::EvidenceRequestBatchResponse
             || envelope.items.len() != prepared.items().len()
         {
             return Err(batch_protocol_failure(response.trace_id.clone()));
@@ -1128,7 +1172,7 @@ impl EvidenceClient {
         let mut verified = Vec::with_capacity(envelope.items.len());
         for (prepared_item, response_item) in prepared.items().iter().zip(envelope.items) {
             match response_item {
-                EvidenceRequestBatchResponseItem::Evidence { evidence } => {
+                EvidenceRequestBatchResponseItemWire::Evidence { evidence } => {
                     let body = serde_json::to_vec(&evidence)
                         .map_err(|_| batch_protocol_failure(response.trace_id.clone()))?;
                     let raw = RawEvidenceResponse {
@@ -1139,7 +1183,7 @@ impl EvidenceClient {
                         self.verify_as_of(prepared_item, &raw, now)?,
                     ));
                 }
-                EvidenceRequestBatchResponseItem::EvidenceNotAvailable => {
+                EvidenceRequestBatchResponseItemWire::EvidenceNotAvailable {} => {
                     verified.push(VerifiedEvidenceRequestBatchItem::NotAvailable);
                 }
             }
@@ -1259,7 +1303,7 @@ impl EvidenceClient {
             .expect_success(response, media_type, self.config.max_metadata_bytes)
             .await?;
         let document =
-            serde_json::from_slice(&body.body).map_err(|_| EvidenceClientError::Protocol {
+            decode_response_json(&body.body).map_err(|_| EvidenceClientError::Protocol {
                 status: StatusCode::OK.as_u16(),
                 code: None,
                 trace_id: body.trace_id.clone(),
@@ -1390,6 +1434,11 @@ impl EvidenceClient {
         }
         Ok(RawEvidenceResponse { body, trace_id })
     }
+}
+
+fn decode_response_json<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, ()> {
+    let value = registry_platform_canonical_json::parse_json_strict(body).map_err(|_| ())?;
+    serde_json::from_value(value).map_err(|_| ())
 }
 
 /// A relying party that requests holder-bound credentials and does not verify
@@ -2377,6 +2426,60 @@ mod tests {
     }
 
     #[test]
+    fn request_batch_verification_ignores_additive_envelope_and_item_members() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(2))
+            .expect("the request batch is prepared");
+        let response = RawEvidenceRequestBatchResponse {
+            body: serde_json::to_vec(&serde_json::json!({
+                "schema": EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                "type": "EvidenceRequestBatchResponse",
+                "items": [
+                    available_batch_item(fixture.sign(
+                        prepared.request_nonce(0).expect("the first nonce")
+                    )),
+                    {"result": "evidence-not-available", "futureMember": true},
+                ],
+                "futureEnvelopeMember": {"safeToIgnore": true},
+            }))
+            .expect("the response envelope serializes"),
+            trace_id: Some(TRACE_ID.to_owned()),
+        };
+
+        let verified = client
+            .verify_batch_as_of(&prepared, &response, fixture.now)
+            .expect("additive response members are ignored");
+        assert!(matches!(
+            verified.item(0),
+            Some(VerifiedEvidenceRequestBatchItem::Available(_))
+        ));
+        assert!(matches!(
+            verified.item(1),
+            Some(VerifiedEvidenceRequestBatchItem::NotAvailable)
+        ));
+    }
+
+    #[test]
+    fn request_batch_verification_keeps_the_signed_jws_shape_closed() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(1))
+            .expect("the request batch is prepared");
+        let mut item = available_batch_item(
+            fixture.sign(prepared.request_nonce(0).expect("the request nonce")),
+        );
+        item["evidence"]["futureMember"] = serde_json::json!(true);
+
+        assert!(matches!(
+            client.verify_batch_as_of(&prepared, &raw_request_batch(vec![item]), fixture.now),
+            Err(EvidenceClientError::Protocol { status: 200, .. })
+        ));
+    }
+
+    #[test]
     fn request_batch_verification_refuses_swapped_nonces() {
         let fixture = signed_evidence();
         let client = client(&fixture);
@@ -2448,16 +2551,6 @@ mod tests {
                     "items": [unavailable(), unavailable()],
                 }))
                 .expect("the wrong-schema response serializes"),
-                trace_id: Some(TRACE_ID.to_owned()),
-            },
-            RawEvidenceRequestBatchResponse {
-                body: serde_json::to_vec(&serde_json::json!({
-                    "schema": EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
-                    "type": "EvidenceRequestBatchResponse",
-                    "items": [unavailable(), unavailable()],
-                    "extra": true,
-                }))
-                .expect("the malformed response serializes"),
                 trace_id: Some(TRACE_ID.to_owned()),
             },
         ];
@@ -2927,6 +3020,23 @@ mod tests {
             .expect("the document is the v1 shape");
         assert_eq!(document.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
         assert!(document.definitions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn discovery_ignores_additive_response_members() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let body = definitions_json(EVIDENCE_DEFINITIONS_SCHEMA_V1).replace(
+            r#","definitions":[]"#,
+            r#", "futureMember":{"safeToIgnore":true},"definitions":[]"#,
+        );
+        let client = discovery_client(&server, &fixture, body).await;
+
+        let document = client
+            .discover()
+            .await
+            .expect("additive response members are ignored");
+        assert_eq!(document.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
     }
 
     #[tokio::test]

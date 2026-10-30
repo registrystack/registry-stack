@@ -144,7 +144,7 @@ fn wide_export_body(payload_length: usize, item_count: usize) -> Vec<u8> {
         "meta": {
             "registryIdentifier": WIDE_REGISTRY,
             "datasetIdentifier": WIDE_DATASET,
-            "entityTypeIdentifier": WIDE_ENTITY
+            "recordTypeIdentifier": WIDE_ENTITY
         },
         "pageInfo": {"nextCursor": Value::Null}
     }))
@@ -284,7 +284,7 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
             "{}\n",
             serde_json::to_string(&json!({
                 "operation":"patch",
-                "recordId":"018f06d6-0248-7c7f-8a7e-df9dfbd83d2c",
+                "recordIdentifier":"018f06d6-0248-7c7f-8a7e-df9dfbd83d2c",
                 "ifMatch":"\"breg-revision\"",
                 "patch":[operation]
             }))
@@ -433,7 +433,7 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
         Err(DataError::InvalidItem)
     );
 
-    let patch = b"{\"operation\":\"patch\",\"recordId\":\"018f06d6-0248-7c7f-8a7e-df9dfbd83d2c\",\"ifMatch\":\"\\\"breg-revision\\\"\",\"patch\":[{\"op\":\"replace\",\"path\":\"/data/publicCode\",\"value\":\"BB\"}]}\n";
+    let patch = b"{\"operation\":\"patch\",\"recordIdentifier\":\"018f06d6-0248-7c7f-8a7e-df9dfbd83d2c\",\"ifMatch\":\"\\\"breg-revision\\\"\",\"patch\":[{\"op\":\"replace\",\"path\":\"/data/publicCode\",\"value\":\"BB\"}]}\n";
     DataImportPlan::from_jsonl(
         &registry,
         ENTITY,
@@ -442,6 +442,17 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
         patch,
     )
     .unwrap();
+    let retired_patch = b"{\"operation\":\"patch\",\"recordId\":\"018f06d6-0248-7c7f-8a7e-df9dfbd83d2c\",\"ifMatch\":\"\\\"breg-revision\\\"\",\"patch\":[{\"op\":\"replace\",\"path\":\"/data/publicCode\",\"value\":\"BB\"}]}\n";
+    assert_eq!(
+        DataImportPlan::from_jsonl(
+            &registry,
+            ENTITY,
+            DataImportOperation::Patch,
+            PROFILE,
+            retired_patch,
+        ),
+        Err(DataError::InvalidItem)
+    );
 
     let export = DataExportPlan::from_compiled(&registry, ENTITY, PROFILE, ["publicCode"])
         .expect("the exact compiled API name is exportable");

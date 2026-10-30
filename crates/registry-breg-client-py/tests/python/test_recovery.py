@@ -112,7 +112,7 @@ def record() -> dict:
         "meta": {
             "registryIdentifier": "business-registry",
             "datasetIdentifier": "legal-entities",
-            "entityTypeIdentifier": "company",
+            "recordTypeIdentifier": "company",
         },
     }
 

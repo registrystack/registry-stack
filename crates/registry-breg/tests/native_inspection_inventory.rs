@@ -6,7 +6,9 @@ use registry_breg::artifacts::{
 use registry_breg::compiler::{
     compile_project_with_assets, module_digest_with_assets, CompileProfile,
 };
-use registry_breg::contract::{parse_module_json, parse_project_json, ModuleAssetSource};
+use registry_breg::contract::{
+    parse_module_json, parse_project_json, read_project_yaml, ModuleAssetSource,
+};
 use serde_json::{json, Value};
 
 fn source() -> Value {
@@ -52,6 +54,15 @@ fn definition<'a>(definitions: &'a Value, id: &str) -> &'a Value {
 
 fn record_mut<'a>(source: &'a mut Value, id: &str) -> &'a mut Value {
     source["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|value| value["id"] == id)
+        .unwrap()
+}
+
+fn action_mut<'a>(source: &'a mut Value, id: &str) -> &'a mut Value {
+    source["actions"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -395,6 +406,40 @@ fn function_ceilings_fixed_clears_and_literal_null_remain_distinct() {
             .to_string()
             .contains("inspection-private-program-canary"));
         assert!(!output.to_string().contains("scriptBytes"));
+    }
+}
+
+#[test]
+fn function_capability_vocabulary_keeps_action_explanations_schema_valid() {
+    let mut source = source();
+    let canary = "private-capability-canary";
+    source["functions"][0]["capabilities"] = json!([canary]);
+    action_mut(&mut source, "correct-address")["plan"]["capabilities"] = json!([canary]);
+    let bytes = serde_json::to_vec(&source).unwrap();
+    match read_project_yaml("registry.json", &bytes) {
+        Err(report) => {
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.path == "/actions/1/plan/capabilities")
+                .unwrap_or_else(|| panic!("expected the removed plan capability: {report:?}"));
+            assert_eq!(diagnostic.code, "config.removed-key");
+            assert!(!report.render_human().contains(canary));
+        }
+        Ok(decoded) => {
+            let registry = compile_project_with_assets(
+                &decoded.value,
+                &[],
+                &[ModuleAssetSource {
+                    module: None,
+                    path: "plans/correct-address.rhai".into(),
+                    bytes: script(),
+                }],
+                CompileProfile::Authoring,
+            )
+            .expect("the current compiler accepts the unbounded capability");
+            validates("actions", inspect_registry(&registry));
+        }
     }
 }
 

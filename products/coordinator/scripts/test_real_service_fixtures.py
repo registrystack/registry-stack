@@ -20,6 +20,37 @@ finally:
 
 
 class NativeFixtureContracts(unittest.TestCase):
+    def test_cli_consumer_keeps_flat_casework_and_nested_coordinator_reports(self):
+        journey = native.Journey.__new__(native.Journey)
+        journey.bin = Path("/synthetic/bin")
+        journey.env = {}
+        journey.log_index = 0
+        with tempfile.TemporaryDirectory() as directory:
+            journey.root = Path(directory)
+            casework = {
+                "ok": True,
+                "command": "dev-token",
+                "status": "complete",
+                "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
+                "kind": "CaseworkReport",
+                "version": "1.0.0",
+                "headerFile": "casework.header",
+                "diagnostics": [],
+            }
+            coordinator = {
+                "ok": True,
+                "command": "check",
+                "status": "complete",
+                "kind": "CoordinatorReport",
+                "data": {"state": "ready"},
+            }
+            with patch.object(native.subprocess, "run", side_effect=[
+                SimpleNamespace(returncode=0, stdout=json.dumps(casework).encode(), stderr=b""),
+                SimpleNamespace(returncode=0, stdout=json.dumps(coordinator).encode(), stderr=b""),
+            ]):
+                self.assertEqual(journey.ctl("caseworkctl", "dev", "token"), casework)
+                self.assertEqual(journey.ctl("coordinatorctl", "check"), coordinator)
+
     def test_start_discovers_exact_revision_and_replays_same_command(self):
         journey = native.Journey.__new__(native.Journey)
         requests = []

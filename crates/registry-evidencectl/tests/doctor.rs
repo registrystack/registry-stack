@@ -331,10 +331,11 @@ fn doctor_json_puts_one_envelope_on_stdout_and_nothing_on_stderr() {
         "stdout must carry exactly one JSON document: {stdout}"
     );
     assert!(
-        lines[0].starts_with(r#"{"ok":true,"command":"doctor","status":"passed","#),
+        lines[0].starts_with(r#"{"ok":true,"command":"doctor","status":"complete","#),
         "the report opens with the shared envelope: {stdout}"
     );
     let report: serde_json::Value = serde_json::from_str(lines[0]).expect("parse the JSON report");
+    assert_eq!(report["outcome"], "passed");
     assert_eq!(report["passed"], serde_json::Value::Bool(true));
     let checks = report["checks"].as_array().expect("checks array");
     assert!(

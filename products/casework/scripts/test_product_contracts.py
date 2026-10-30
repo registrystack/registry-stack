@@ -129,7 +129,25 @@ class ProductContractTests(unittest.TestCase):
             "id.registrystack.org/formats/casework/report/v1alpha2",
         )
         self.assertEqual(schema["properties"]["kind"]["const"], "CaseworkReport")
+        self.assertEqual(
+            schema["required"],
+            ["ok", "command", "status", "apiVersion", "kind", "version", "diagnostics"],
+        )
         self.assertTrue(schema["oneOf"])
+        commands = {variant["properties"]["command"]["const"] for variant in schema["oneOf"]}
+        self.assertIn("internal", commands)
+        self.assertTrue(all("data" not in variant["properties"] for variant in schema["oneOf"]))
+        provider_add = next(
+            variant
+            for variant in schema["oneOf"]
+            if variant["properties"]["command"]["const"] == "provider-add"
+        )
+        self.assertIn("outcome", provider_add["properties"])
+        self.assertNotIn("state", provider_add["properties"])
+        self.assertIn(
+            {"required": ["outcome"]},
+            provider_add["allOf"][0]["if"]["anyOf"],
+        )
         self.assertIn("ExplainPolicy", schema["$defs"])
         for field in ("purpose", "context", "displaySchema", "resultSchema", "stages", "outcomes", "clocks", "dependencies"):
             self.assertIn(field, schema["$defs"]["ExplainPolicy"]["properties"])

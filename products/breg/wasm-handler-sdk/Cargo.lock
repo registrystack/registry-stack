@@ -2919,6 +2919,7 @@ dependencies = [
  "chrono",
  "getrandom 0.4.3",
  "registry-evidence-verifier",
+ "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",

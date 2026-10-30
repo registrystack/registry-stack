@@ -1090,37 +1090,35 @@ fn compiler_scopes_refusal_labels_by_action_across_project_and_module() {
 }
 
 #[test]
-fn function_and_bound_plan_capability_duplicates_are_not_collapsed() {
-    for path in ["/functions/0/capabilities", "/actions/1/plan/capabilities"] {
-        let mut source = facility();
-        let parent = path.rsplit_once('/').unwrap().0;
-        source.pointer_mut(parent).unwrap()["capabilities"] = json!(["evidence", "evidence"]);
-        refusal(&source, &format!("{path}/1"), "config.duplicate-item");
-        let yaml = bytes(&source);
-        let text = std::str::from_utf8(&yaml).unwrap();
-        let occurrences: Vec<_> = text
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.trim() == "- evidence")
-            .collect();
-        assert_eq!(occurrences.len(), 2);
-        let report = read_project_yaml("registry.yaml", &yaml).unwrap_err();
-        let diagnostic = &report.diagnostics()[0];
-        assert_eq!(diagnostic.related.len(), 1);
-        assert_eq!(diagnostic.related[0].path, format!("{path}/0"));
-        assert_eq!(diagnostic.related[0].file, "registry.yaml");
-        assert_eq!(diagnostic.related[0].line, Some(occurrences[0].0 + 1));
-        assert_eq!(
-            diagnostic.related[0].column,
-            Some(occurrences[0].1.find("evidence").unwrap() + 1)
-        );
-        let site = diagnostic.source.as_ref().unwrap();
-        assert_eq!(site.line, Some(occurrences[1].0 + 1));
-        assert_eq!(
-            site.column,
-            Some(occurrences[1].1.find("evidence").unwrap() + 1)
-        );
-    }
+fn function_capability_duplicates_are_not_collapsed() {
+    let path = "/functions/0/capabilities";
+    let mut source = facility();
+    source["functions"][0]["capabilities"] = json!(["evidence", "evidence"]);
+    refusal(&source, &format!("{path}/1"), "config.duplicate-item");
+    let yaml = bytes(&source);
+    let text = std::str::from_utf8(&yaml).unwrap();
+    let occurrences: Vec<_> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.trim() == "- evidence")
+        .collect();
+    assert_eq!(occurrences.len(), 2);
+    let report = read_project_yaml("registry.yaml", &yaml).unwrap_err();
+    let diagnostic = &report.diagnostics()[0];
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related[0].path, format!("{path}/0"));
+    assert_eq!(diagnostic.related[0].file, "registry.yaml");
+    assert_eq!(diagnostic.related[0].line, Some(occurrences[0].0 + 1));
+    assert_eq!(
+        diagnostic.related[0].column,
+        Some(occurrences[0].1.find("evidence").unwrap() + 1)
+    );
+    let site = diagnostic.source.as_ref().unwrap();
+    assert_eq!(site.line, Some(occurrences[1].0 + 1));
+    assert_eq!(
+        site.column,
+        Some(occurrences[1].1.find("evidence").unwrap() + 1)
+    );
 }
 
 #[test]

@@ -9,7 +9,7 @@
 const native = require('./index');
 
 /**
- * The stable eight-kind error envelope every mapped Evidence Node failure
+ * The stable ten-kind error envelope every mapped Evidence Node failure
  * carries (see `crates/registry-evidence-client-node/src/convert.rs`'s
  * `map_client_error`), as properties on a thrown `Error` rather than as JSON
  * text a caller has to `JSON.parse` out of `.message`.
@@ -45,7 +45,7 @@ class EvidenceClientError extends Error {
  * serialization defect, a caught panic, napi's own argument-type checking)
  * throws a plain, non-JSON reason instead, and is left exactly as thrown:
  * only a recognized envelope becomes an `EvidenceClientError`, so a caller
- * cannot mistake "some other native failure" for one of the eight stable
+ * cannot mistake "some other native failure" for one of the ten stable
  * kinds.
  */
 function normalize(error) {

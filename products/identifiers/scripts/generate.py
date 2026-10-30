@@ -168,21 +168,31 @@ def load_source_config(config_path: Path) -> dict[str, Any]:
         ].endswith("/"):
             raise CatalogError(f"problemSources[{index}] has an invalid URI prefix")
     for index, exclusion in enumerate(config["referenceExclusions"]):
-        if not isinstance(exclusion, dict) or set(exclusion) != {
-            "glob",
-            "classification",
-            "reason",
-        }:
+        if not isinstance(exclusion, dict) or set(exclusion) not in ({
+            "glob", "classification", "reason",
+        }, {
+            "path", "uri", "classification", "reason",
+        }):
             raise CatalogError(
                 f"referenceExclusions[{index}] has an invalid shape"
             )
         if not all(
             isinstance(exclusion[key], str) and exclusion[key].strip()
-            for key in ("glob", "classification", "reason")
+            for key in exclusion
         ):
             raise CatalogError(
                 f"referenceExclusions[{index}] has a blank value"
             )
+        if "path" in exclusion:
+            path = Path(exclusion["path"])
+            if path.is_absolute() or ".." in path.parts or path.as_posix() != exclusion["path"]:
+                raise CatalogError(
+                    f"referenceExclusions[{index}] has an invalid exact path"
+                )
+            if not exclusion["uri"].startswith(f"{BASE_URL}/"):
+                raise CatalogError(
+                    f"referenceExclusions[{index}] has an invalid exact URI"
+                )
     return config
 
 
@@ -190,7 +200,29 @@ def path_is_excluded(
     repo_root: Path, path: Path, exclusions: list[dict[str, str]]
 ) -> bool:
     relative = relative_path(repo_root, path)
-    return any(fnmatch.fnmatch(relative, exclusion["glob"]) for exclusion in exclusions)
+    return any(
+        "glob" in exclusion and fnmatch.fnmatch(relative, exclusion["glob"])
+        for exclusion in exclusions
+    )
+
+
+def reference_is_excluded(
+    repo_root: Path,
+    path: Path,
+    uri: str,
+    exclusions: list[dict[str, str]],
+) -> bool:
+    relative = relative_path(repo_root, path)
+    return any(
+        (
+            "glob" in exclusion
+            and fnmatch.fnmatch(relative, exclusion["glob"])
+        ) or (
+            exclusion.get("path") == relative
+            and exclusion.get("uri") == uri
+        )
+        for exclusion in exclusions
+    )
 
 
 def validate_reference_exclusions(
@@ -200,13 +232,31 @@ def validate_reference_exclusions(
 ) -> None:
     relative_paths = [relative_path(repo_root, path) for path in repository_paths]
     for index, exclusion in enumerate(exclusions):
-        if not any(
-            fnmatch.fnmatch(relative, exclusion["glob"])
-            for relative in relative_paths
-        ):
+        if "glob" in exclusion:
+            matched_paths = [
+                relative
+                for relative in relative_paths
+                if fnmatch.fnmatch(relative, exclusion["glob"])
+            ]
+            description = exclusion["glob"]
+        else:
+            matched_paths = [
+                relative for relative in relative_paths
+                if relative == exclusion["path"]
+            ]
+            description = exclusion["path"]
+        if not matched_paths:
             raise CatalogError(
                 f"referenceExclusions[{index}] matched no tracked files: "
-                f"{exclusion['glob']}"
+                f"{description}"
+            )
+        if "uri" in exclusion and not any(
+            exclusion["uri"] in reference_uris(repo_root / relative)
+            for relative in matched_paths
+        ):
+            raise CatalogError(
+                f"referenceExclusions[{index}] matched no identifier reference: "
+                f"{exclusion['path']}: {exclusion['uri']}"
             )
 
 
@@ -590,6 +640,7 @@ def validate_reference_closure(
     exclusions: list[dict[str, str]],
     problem_sources: list[dict[str, str]],
     repository_paths: tuple[Path, ...],
+    source_config_path: Path,
 ) -> None:
     validate_reference_exclusions(repo_root, repository_paths, exclusions)
     active_uris = {entry["uri"] for entry in entries}
@@ -598,21 +649,24 @@ def validate_reference_closure(
         for entry in entries
         if entry["kind"] == "vocabulary" and entry["uri"].endswith("/")
     }
+    exact_exclusion_uris = {
+        exclusion["uri"] for exclusion in exclusions if "uri" in exclusion
+    }
     unclassified: list[str] = []
     for path in repository_paths:
         if path == GENERATED_CATALOG:
             continue
         relative = relative_path(repo_root, path)
-        excluded = path_is_excluded(repo_root, path, exclusions)
         for uri in reference_uris(path):
             if (
                 uri in active_uris
                 or uri in REFERENCE_TEMPLATES
                 or uri in {source["uriPrefix"] for source in problem_sources}
                 or any(uri.startswith(prefix) for prefix in adopter_prefixes)
+                or (path == source_config_path and uri in exact_exclusion_uris)
             ):
                 continue
-            if not excluded:
+            if not reference_is_excluded(repo_root, path, uri, exclusions):
                 unclassified.append(f"{relative}: {uri}")
     if unclassified:
         raise CatalogError(
@@ -654,6 +708,7 @@ def build_catalog(
         config["referenceExclusions"],
         config["problemSources"],
         repository_paths,
+        config_path,
     )
     return catalog
 
@@ -712,6 +767,7 @@ def main() -> None:
             config["referenceExclusions"],
             config["problemSources"],
             repository_files(REPO_ROOT),
+            SOURCE_CONFIG,
         )
         print("Registry Stack identifier reference closure is complete.")
         return

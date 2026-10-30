@@ -961,6 +961,89 @@ mod files {
             .load_with::<Example>(&path, env(&[]))
             .expect("the ownership rule is opt-in");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_runtime_path_accepts_the_runtime_user_and_refuses_a_writable_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_guard, root) = directory();
+        let path = root.join("runtime.yaml");
+        std::fs::write(&path, header()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        crate::require_trusted_runtime_path(&path).expect("the runtime user owns the file");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
+        let result = crate::require_trusted_runtime_path(&path);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let error = result.expect_err("a group-writable runtime is refused");
+        assert_eq!(error.file(), Some(path.as_path()));
+        assert_eq!(
+            error.deciding_diagnostic().code,
+            "platform.runtime-config.unsafe-file"
+        );
+        assert!(error
+            .deciding_diagnostic()
+            .suggested_action
+            .contains("remove group and other write permission"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_runtime_path_refuses_a_writable_ancestor() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_guard, root) = directory();
+        let writable = root.join("writable");
+        std::fs::create_dir(&writable).unwrap();
+        let path = writable.join("runtime.yaml");
+        std::fs::write(&path, header()).unwrap();
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let result = crate::require_trusted_runtime_path(&path);
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let error = result.expect_err("a group-writable ancestor is refused");
+        assert_eq!(error.file(), Some(path.as_path()));
+        assert_eq!(
+            error.deciding_diagnostic().code,
+            "platform.runtime-config.unsafe-file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_runtime_path_refuses_non_lexical_and_symbolic_paths() {
+        let (_guard, root) = directory();
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("runtime.yaml"), header()).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("linked-dir")).unwrap();
+        std::os::unix::fs::symlink(real.join("runtime.yaml"), root.join("linked.yaml")).unwrap();
+
+        for (path, code) in [
+            (
+                PathBuf::from("runtime.yaml"),
+                "platform.runtime-config.path",
+            ),
+            (
+                root.join(".").join("runtime.yaml"),
+                "platform.runtime-config.path",
+            ),
+            (
+                root.join("linked-dir").join("runtime.yaml"),
+                "platform.runtime-config.unsafe-file",
+            ),
+            (
+                root.join("linked.yaml"),
+                "platform.runtime-config.unsafe-file",
+            ),
+        ] {
+            let error = crate::require_trusted_runtime_path(&path)
+                .expect_err("an untrusted path is refused");
+            assert_eq!(error.file(), Some(path.as_path()));
+            assert_eq!(error.deciding_diagnostic().code, code, "{path:?}");
+        }
+    }
 }
 
 #[test]

@@ -990,19 +990,6 @@
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
           "type": "string"
         },
-        "deniedKids": {
-          "description": "The signing key identifiers this registry refuses a token from.\nOmitted, no key is denied; written, it names at least one key.",
-          "items": {
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x20\\x7F]+$",
-            "type": "string"
-          },
-          "maxItems": 128,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
         "issuer": {
           "$ref": "#/$defs/Url",
           "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set.",
@@ -1036,6 +1023,19 @@
           "maximum": 7200,
           "minimum": 1,
           "type": "integer"
+        },
+        "revokedKeyIds": {
+          "description": "The signing key identifiers this registry refuses locally even while\nthe issuer publishes them. Omitted, no key is refused; written, it\nnames at least one key and does not revoke it at the issuer.",
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x20\\x7F]+$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
         },
         "scopeClaim": {
           "maxLength": 128,
@@ -1134,7 +1134,7 @@
       "additionalProperties": false,
       "properties": {
         "createTimeoutMilliseconds": {
-          "default": 30000,
+          "default": 2000,
           "description": "Defaults to the bounded PostgreSQL pool connection-creation timeout.",
           "format": "uint64",
           "maximum": 60000,
@@ -1148,7 +1148,7 @@
           "type": "integer"
         },
         "recycleTimeoutMilliseconds": {
-          "default": 30000,
+          "default": 2000,
           "description": "Defaults to the bounded PostgreSQL pool connection-recycle timeout.",
           "format": "uint64",
           "maximum": 60000,
@@ -1156,7 +1156,7 @@
           "type": "integer"
         },
         "waitTimeoutMilliseconds": {
-          "default": 30000,
+          "default": 1000,
           "description": "Defaults to the bounded PostgreSQL pool wait timeout.",
           "format": "uint64",
           "maximum": 60000,

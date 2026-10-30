@@ -40,6 +40,238 @@ const PRINCIPAL: &str = "receipt-principal-must-not-enter-run-rows";
 const PACKAGE_ID: &str = "ingestion-registry";
 const PACKAGE_REVISION: &str = "package-ingestion-1";
 
+/// The immediate predecessor stored the batch member map under `data`, with
+/// numeric revisions and the former record-id member. A successor still owes
+/// that retained answer its current readability projection on both release
+/// paths, and answers in the current wire shape without rewriting the receipt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_v044_receipt_projects_revoked_plaintext_on_replay_and_recovery() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("v044-revoked-readable", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let predecessor_receipt = rewrite_stored_receipt_as_v044(&harness, &run_id).await;
+
+    let successor = harness
+        .restart_with_registry(readability_revoked_registry())
+        .await;
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay_raw = body_bytes(replay).await;
+    assert!(!contains_envelope_marker(&replay_raw));
+    let replayed: Value = serde_json::from_slice(&replay_raw).expect("replay is JSON");
+    assert_eq!(replayed["receipt"]["replayed"], true);
+    let replayed_data = current_domain_data(&replayed["receipt"]["batch"]["results"][0]);
+    assert!(replayed_data.get("quantity").is_none());
+    assert_eq!(replayed_data["serialNumber"], "SN-0000");
+
+    let recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered_raw = body_bytes(recovered).await;
+    assert!(!contains_envelope_marker(&recovered_raw));
+    let recovered: Value = serde_json::from_slice(&recovered_raw).expect("recovery is JSON");
+    let recovered_data = current_domain_data(&recovered["batch"]["results"][0]);
+    assert!(recovered_data.get("quantity").is_none());
+    assert_eq!(recovered_data["serialNumber"], "SN-0000");
+    assert_stored_receipt_equals(&harness, &run_id, &predecessor_receipt).await;
+}
+
+/// A predecessor receipt's member-to-field binding remains authoritative
+/// when a successor reuses the API name for another logical field. Neither
+/// release path can reinterpret the retained value under the new identity.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_v044_receipt_does_not_cross_reused_field_identity() {
+    let harness = IngestionHarness::from_registry(plain_serial_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&serial_member_items("v044-identity-reuse", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let predecessor_receipt = rewrite_stored_receipt_as_v044(&harness, &run_id).await;
+
+    let successor_registry = reused_api_name_registry();
+    add_successor_column(&harness, &successor_registry).await;
+    let successor = harness.restart_with_registry(successor_registry).await;
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replayed = body_json(replay).await;
+    assert_eq!(replayed["receipt"]["replayed"], true);
+    let replayed_data = current_domain_data(&replayed["receipt"]["batch"]["results"][0]);
+    assert!(replayed_data.get("serialNumber").is_none());
+
+    let recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered = body_json(recovered).await;
+    let recovered_data = current_domain_data(&recovered["batch"]["results"][0]);
+    assert!(recovered_data.get("serialNumber").is_none());
+    assert_stored_receipt_equals(&harness, &run_id, &predecessor_receipt).await;
+}
+
+/// A predecessor receipt can retain ciphertext under a field a successor no
+/// longer encrypts. The compatibility reader must expose that member to the
+/// established retired-envelope refusal rather than skip the old map name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_v044_encrypted_receipt_fails_closed_after_encryption_retirement() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("v044-encryption-retired", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let predecessor_receipt = rewrite_stored_receipt_as_v044(&harness, &run_id).await;
+
+    let successor = harness
+        .restart_with_registry(encryption_retired_registry())
+        .await;
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_refusal_releases_no_retired_member(&body_bytes(replay).await);
+
+    let recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_refusal_releases_no_retired_member(&body_bytes(recovered).await);
+    assert_stored_receipt_equals(&harness, &run_id, &predecessor_receipt).await;
+}
+
+/// An unchanged successor still reads the immediate predecessor's retained
+/// bytes and opens their encrypted members, while answering only in the
+/// current wire shape and leaving the persisted predecessor receipt intact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_v044_encrypted_receipt_opens_under_an_unchanged_successor() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("v044-unchanged", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let predecessor_receipt = rewrite_stored_receipt_as_v044(&harness, &run_id).await;
+
+    let successor = harness
+        .restart_with_registry(encrypted_widget_registry())
+        .await;
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay_raw = body_bytes(replay).await;
+    assert!(!contains_envelope_marker(&replay_raw));
+    let replayed: Value = serde_json::from_slice(&replay_raw).expect("replay is JSON");
+    assert_eq!(
+        current_domain_data(&replayed["receipt"]["batch"]["results"][0])["serialNumber"],
+        "SN-0000"
+    );
+
+    let recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered_raw = body_bytes(recovered).await;
+    assert!(!contains_envelope_marker(&recovered_raw));
+    let recovered: Value = serde_json::from_slice(&recovered_raw).expect("recovery is JSON");
+    assert_eq!(
+        current_domain_data(&recovered["batch"]["results"][0])["serialNumber"],
+        "SN-0000"
+    );
+    assert_stored_receipt_equals(&harness, &run_id, &predecessor_receipt).await;
+}
+
+/// The compatibility reader recognizes one complete stored wire shape at a
+/// time. A mixed receipt or an unknown result shape is retained for operator
+/// diagnosis but never reaches either release path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mixed_and_unknown_stored_receipt_shapes_fail_closed() {
+    let harness = IngestionHarness::from_registry(plain_serial_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&serial_member_items("stored-shape-refusal", 2), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let (current_receipt, bindings) = stored_receipt_and_bindings(&harness, &run_id).await;
+
+    let mixed = receipt_with_v044_results(&current_receipt, 1);
+    replace_stored_receipt(&harness, &run_id, &mixed, &bindings).await;
+    assert_receipt_release_is_unavailable(&harness.app, &claims, &chunks, &run_id).await;
+
+    let unknown = receipt_with_unknown_result_shape(&current_receipt);
+    replace_stored_receipt(&harness, &run_id, &unknown, &bindings).await;
+    assert_receipt_release_is_unavailable(&harness.app, &claims, &chunks, &run_id).await;
+}
+
 /// A successor package that renames an encrypted field's API name leaves the
 /// stored envelope under a member name the current profile no longer reads:
 /// every release of the retained receipt then answers without that member and
@@ -88,7 +320,7 @@ async fn a_renamed_encrypted_member_drops_from_the_released_receipt() {
         .as_array()
         .expect("receipt results")
     {
-        let replayed_data = &replayed_result["data"];
+        let replayed_data = &replayed_result["domainData"];
         assert!(
             replayed_data.get("serialNumber").is_none()
                 && replayed_data.get("serialCode").is_none(),
@@ -115,7 +347,7 @@ async fn a_renamed_encrypted_member_drops_from_the_released_receipt() {
     );
     let recovered: Value = serde_json::from_slice(&recovered_raw).expect("recovery answer is JSON");
     for recovered_result in recovered["batch"]["results"].as_array().expect("results") {
-        let recovered_data = &recovered_result["data"];
+        let recovered_data = &recovered_result["domainData"];
         assert!(
             recovered_data.get("serialNumber").is_none()
                 && recovered_data.get("serialCode").is_none(),
@@ -158,7 +390,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     let fresh: Value =
         serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"], "SN-0000",
         "the fresh answer serves the field the producing package granted"
     );
 
@@ -184,7 +416,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     let replayed: Value =
         serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
     assert_eq!(replayed["receipt"]["replayed"], true);
-    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["data"];
+    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["domainData"];
     assert!(
         replayed_data.get("serialNumber").is_none(),
         "the retired member does not serve under the reused api name: {replayed_data}"
@@ -201,7 +433,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     assert_eq!(recovered.status(), StatusCode::OK);
     let recovered: Value =
         serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
-    let recovered_data = &recovered["batch"]["results"][0]["data"];
+    let recovered_data = &recovered["batch"]["results"][0]["domainData"];
     assert!(
         recovered_data.get("serialNumber").is_none(),
         "the retired member does not serve under the reused api name: {recovered_data}"
@@ -238,7 +470,7 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
     let fresh_successor: Value =
         serde_json::from_slice(&body_bytes(fresh_successor).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh_successor["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        fresh_successor["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"], "SN-0000",
         "the new field's own value serves under the reused api name"
     );
     let replayed_successor = successor
@@ -253,7 +485,8 @@ async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identitie
         serde_json::from_slice(&body_bytes(replayed_successor).await).expect("replay is JSON");
     assert_eq!(replayed_successor["receipt"]["replayed"], true);
     assert_eq!(
-        replayed_successor["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        replayed_successor["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
+        "SN-0000",
         "the successor's own receipt keeps serving the new field"
     );
 
@@ -345,7 +578,7 @@ async fn a_successor_that_revokes_a_readable_field_drops_it_from_released_receip
     let fresh: Value =
         serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["quantity"], 0,
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["quantity"], 0,
         "the fresh answer serves the field the producing package granted"
     );
 
@@ -366,7 +599,7 @@ async fn a_successor_that_revokes_a_readable_field_drops_it_from_released_receip
     let replayed: Value =
         serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
     assert_eq!(replayed["receipt"]["replayed"], true);
-    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["data"];
+    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["domainData"];
     assert!(
         replayed_data.get("quantity").is_none(),
         "the replayed receipt drops the revoked member: {replayed_data}"
@@ -387,7 +620,7 @@ async fn a_successor_that_revokes_a_readable_field_drops_it_from_released_receip
     assert_eq!(recovered.status(), StatusCode::OK);
     let recovered: Value =
         serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
-    let recovered_data = &recovered["batch"]["results"][0]["data"];
+    let recovered_data = &recovered["batch"]["results"][0]["domainData"];
     assert!(
         recovered_data.get("quantity").is_none(),
         "the recovered receipt drops the revoked member: {recovered_data}"
@@ -422,12 +655,12 @@ async fn a_tag_shaped_plaintext_member_serves_on_every_release() {
     let fresh: Value =
         serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["payload"],
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the fresh answer serves the tag-shaped caller data verbatim"
     );
     assert_eq!(
-        fresh["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        fresh["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -443,7 +676,7 @@ async fn a_tag_shaped_plaintext_member_serves_on_every_release() {
         serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
     assert_eq!(replayed["receipt"]["replayed"], true);
     assert_eq!(
-        replayed["receipt"]["batch"]["results"][0]["data"]["payload"],
+        replayed["receipt"]["batch"]["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the replayed receipt serves the tag-shaped caller data verbatim"
     );
@@ -458,7 +691,7 @@ async fn a_tag_shaped_plaintext_member_serves_on_every_release() {
     let recovered: Value =
         serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
     assert_eq!(
-        recovered["batch"]["results"][0]["data"]["payload"],
+        recovered["batch"]["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the recovered receipt serves the tag-shaped caller data verbatim"
     );
@@ -494,11 +727,14 @@ async fn an_exact_batch_replay_serves_a_tag_shaped_plaintext_member() {
     let first_bytes = body_bytes(first).await;
     let answered: Value = serde_json::from_slice(&first_bytes).expect("batch answer is JSON");
     assert_eq!(
-        answered["results"][0]["data"]["payload"],
+        answered["results"][0]["domainData"]["payload"],
         json!({"__bregEncryptedV1": "AAAA"}),
         "the fresh batch answer serves the tag-shaped caller data verbatim"
     );
-    assert_eq!(answered["results"][0]["data"]["serialNumber"], "SN-0000");
+    assert_eq!(
+        answered["results"][0]["domainData"]["serialNumber"],
+        "SN-0000"
+    );
 
     let replay = harness
         .post_batch_json(
@@ -555,7 +791,7 @@ async fn a_successor_without_the_rename_still_opens_the_stored_members() {
     let body: Value = serde_json::from_slice(&raw).expect("replay answer is JSON");
     assert_eq!(body["receipt"]["replayed"], true);
     assert_eq!(
-        body["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        body["receipt"]["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -573,7 +809,7 @@ async fn a_successor_without_the_rename_still_opens_the_stored_members() {
     );
     let body: Value = serde_json::from_slice(&raw).expect("recovery answer is JSON");
     assert_eq!(
-        body["batch"]["results"][0]["data"]["serialNumber"],
+        body["batch"]["results"][0]["domainData"]["serialNumber"],
         "SN-0000"
     );
 
@@ -618,6 +854,211 @@ fn contains_envelope_marker(bytes: &[u8]) -> bool {
     bytes
         .windows(ENVELOPE_MARKER.len())
         .any(|window| window == ENVELOPE_MARKER)
+}
+
+fn current_domain_data(result: &Value) -> &Value {
+    let object = result.as_object().expect("batch result is an object");
+    assert_eq!(
+        object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "domainData",
+            "etag",
+            "operation",
+            "recordIdentifier",
+            "revisionIdentifier",
+        ]),
+        "a released receipt uses exactly the current batch-result shape"
+    );
+    assert!(result["recordIdentifier"].is_string());
+    assert_eq!(
+        result["revisionIdentifier"], "1",
+        "the predecessor's exact numeric revision becomes the current canonical string"
+    );
+    &result["domainData"]
+}
+
+fn assert_refusal_releases_no_retired_member(body: &[u8]) {
+    assert!(
+        !contains_envelope_marker(body),
+        "a refused release carries no sealed envelope"
+    );
+    assert!(
+        !body
+            .windows(b"serialNumber".len())
+            .any(|window| window == b"serialNumber"),
+        "a refused release carries no retired member name"
+    );
+}
+
+async fn stored_receipt_and_bindings(
+    harness: &IngestionHarness,
+    run_id: &str,
+) -> (Vec<u8>, String) {
+    let row = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT receipt, receipt_field_bindings
+               FROM registry_internal.registry_ingestion_run_chunks
+              WHERE run_id = $1 AND chunk_index = 0 AND erased_at IS NULL",
+            &[&Uuid::parse_str(run_id).expect("run id parses")],
+        )
+        .await
+        .expect("the stored chunk receipt reads");
+    (row.get(0), row.get(1))
+}
+
+fn receipt_with_v044_results(receipt: &[u8], result_count: usize) -> Vec<u8> {
+    let mut batch: Value = serde_json::from_slice(receipt).expect("current receipt is JSON");
+    let batch_object = batch.as_object().expect("receipt is an object");
+    assert_eq!(
+        batch_object
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["results", "snapshot"]),
+        "the stored batch answer has its exact closed outer shape"
+    );
+    let results = batch["results"].as_array_mut().expect("receipt results");
+    assert!(
+        result_count > 0 && result_count <= results.len(),
+        "at least one existing result is rewritten"
+    );
+    for result in results.iter_mut().take(result_count) {
+        let object = result.as_object_mut().expect("batch result is an object");
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "domainData",
+                "etag",
+                "operation",
+                "recordIdentifier",
+                "revisionIdentifier",
+            ]),
+            "the source result is the exact current wire shape"
+        );
+        let operation = object.remove("operation").expect("operation");
+        let id = object
+            .remove("recordIdentifier")
+            .expect("record identifier");
+        let revision_identifier = object
+            .remove("revisionIdentifier")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .expect("revision identifier");
+        let revision = revision_identifier
+            .parse::<i64>()
+            .ok()
+            .filter(|revision| *revision > 0 && revision.to_string() == revision_identifier)
+            .expect("revision identifier is canonical and positive");
+        let etag = object.remove("etag").expect("etag");
+        let data = object.remove("domainData").expect("domain data");
+        assert!(object.is_empty());
+        *result = json!({
+            "operation": operation,
+            "id": id,
+            "revision": revision,
+            "etag": etag,
+            "data": data,
+        });
+    }
+    registry_platform_canonical_json::canonicalize_json(&batch)
+        .expect("predecessor receipt canonicalizes")
+}
+
+fn receipt_with_unknown_result_shape(receipt: &[u8]) -> Vec<u8> {
+    let mut batch: Value = serde_json::from_slice(receipt).expect("current receipt is JSON");
+    let result = batch["results"][0]
+        .as_object_mut()
+        .expect("receipt result is an object");
+    let data = result.remove("domainData").expect("domain data");
+    result.insert("payload".to_owned(), data);
+    registry_platform_canonical_json::canonicalize_json(&batch)
+        .expect("unknown receipt canonicalizes")
+}
+
+async fn replace_stored_receipt(
+    harness: &IngestionHarness,
+    run_id: &str,
+    receipt: &[u8],
+    expected_bindings: &str,
+) {
+    let run_id = Uuid::parse_str(run_id).expect("run id parses");
+    let changed = harness
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_ingestion_run_chunks
+                SET receipt = $1
+              WHERE run_id = $2 AND chunk_index = 0 AND erased_at IS NULL",
+            &[&receipt, &run_id],
+        )
+        .await
+        .expect("test fixture installs the stored receipt");
+    assert_eq!(changed, 1);
+    let row = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT receipt, receipt_field_bindings
+               FROM registry_internal.registry_ingestion_run_chunks
+              WHERE run_id = $1 AND chunk_index = 0 AND erased_at IS NULL",
+            &[&run_id],
+        )
+        .await
+        .expect("the installed receipt reads");
+    assert_eq!(row.get::<_, Vec<u8>>(0), receipt);
+    assert_eq!(row.get::<_, String>(1), expected_bindings);
+}
+
+async fn rewrite_stored_receipt_as_v044(harness: &IngestionHarness, run_id: &str) -> Vec<u8> {
+    let (current, bindings) = stored_receipt_and_bindings(harness, run_id).await;
+    let result_count = serde_json::from_slice::<Value>(&current).expect("current receipt is JSON")
+        ["results"]
+        .as_array()
+        .expect("receipt results")
+        .len();
+    let predecessor = receipt_with_v044_results(&current, result_count);
+    replace_stored_receipt(harness, run_id, &predecessor, &bindings).await;
+    predecessor
+}
+
+async fn assert_stored_receipt_equals(harness: &IngestionHarness, run_id: &str, expected: &[u8]) {
+    let (receipt, _) = stored_receipt_and_bindings(harness, run_id).await;
+    assert_eq!(
+        receipt, expected,
+        "releasing a predecessor receipt does not rewrite its retained bytes"
+    );
+}
+
+async fn assert_receipt_release_is_unavailable(
+    app: &axum::Router,
+    claims: &VerifiedRequestClaims,
+    chunks: &ChunkPlan,
+    run_id: &str,
+) {
+    let replay = send(
+        app,
+        Method::POST,
+        &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+        Some(claims.clone()),
+        &[("content-type", "application/json")],
+        serde_json::to_vec(&chunk_body(chunks, 0)).expect("chunk body serializes"),
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_refusal_releases_no_retired_member(&body_bytes(replay).await);
+
+    let recovered = send(
+        app,
+        Method::GET,
+        &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+        Some(claims.clone()),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_refusal_releases_no_retired_member(&body_bytes(recovered).await);
 }
 
 /// Assert one stored chunk receipt keeps its serial-number member sealed: the

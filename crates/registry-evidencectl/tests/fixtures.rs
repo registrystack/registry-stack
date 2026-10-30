@@ -655,7 +655,8 @@ fn json_output_is_one_parseable_document_on_stdout_with_expected_pass_fail_value
     assert!(output.stderr.is_empty(), "{}", stderr_of(&output));
     assert_eq!(report["ok"], serde_json::Value::Bool(false));
     assert_eq!(report["command"], "fixtures run");
-    assert_eq!(report["status"], "failed");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["outcome"], "failed");
 }
 
 /// The step counts measure artifacts, and a reader takes the summary line for

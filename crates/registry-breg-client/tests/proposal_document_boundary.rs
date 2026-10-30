@@ -57,7 +57,7 @@ impl Fixture {
                      ("cache-control", "no-store"), ("vary", "authorization, accept"),
                      ("etag", "\"breg-record-000000000001\""),
                      ("link", "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/item>; rel=\"describedby\"")],
-                    Json(json!({"meta":{"registryIdentifier":"directory", "datasetIdentifier":"items", "entityTypeIdentifier":"item"},
+                    Json(json!({"meta":{"registryIdentifier":"directory", "datasetIdentifier":"items", "recordTypeIdentifier":"item"},
                         "data":{"recordIdentifier":id, "revisionIdentifier":"4", "domainData":{}}})),
                 )
             }))
@@ -205,7 +205,7 @@ async fn submission_read_refuses_an_incoherent_application() {
         ("pending", json!({"state":"pending","mode":"manual"})),
         (
             "blocked",
-            json!({"state":"blocked","mode":"manual","reason":"contract-changed","recovery":"correct-input"}),
+            json!({"state":"blocked","mode":"manual","reason":"package-changed","recovery":"rebase"}),
         ),
         (
             "automatic",
@@ -253,7 +253,7 @@ async fn submission_read_refuses_an_incoherent_application() {
         ),
         (
             "reason-without-recovery",
-            json!({"state":"blocked","mode":"manual","reason":"contract-changed"}),
+            json!({"state":"blocked","mode":"manual","reason":"package-changed"}),
         ),
         (
             "automatic-without-retry",
@@ -360,10 +360,11 @@ async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_rea
             "current":true,"effectDigest":DIGEST,"review":null,"application":application});
         (current, submission)
     };
-    // The only pairs BReg emits: a dependency outage or an expired lease can
-    // be retried; everything else needs corrected input.
+    // The only pairs BReg emits: a package change is rebased, a dependency
+    // outage or an expired lease can be retried, and application failures need
+    // corrected input.
     for (reason, recovery) in [
-        ("contract-changed", "correct-input"),
+        ("package-changed", "rebase"),
         ("attempts-exhausted", "correct-input"),
         ("application-refused", "correct-input"),
         ("dependency-outage", "retry"),
@@ -387,7 +388,8 @@ async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_rea
     }
     let mut accepted = vec![];
     for (reason, recovery) in [
-        ("contract-changed", "retry"),
+        ("package-changed", "retry"),
+        ("package-changed", "correct-input"),
         ("attempts-exhausted", "retry"),
         ("application-refused", "retry"),
         ("dependency-outage", "correct-input"),
@@ -418,7 +420,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
     let collection = fixture.metadata.select_proposals("writer").unwrap();
     // The only pairs BReg emits. A rejected review reads receipt-only once the
     // Proposal is rejected and revise while it is still submitted; a changed
-    // contract is refreshed for Revise and corrected while the draft is blocked.
+    // package is rebased.
     let emitted = [
         ("pending-review", "refresh"),
         ("review-rejected", "receipt-only"),
@@ -426,8 +428,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         ("review-changes-requested", "revise"),
         ("review-ended", "revise"),
         ("stale-revision", "receipt-only"),
-        ("contract-changed", "refresh"),
-        ("contract-changed", "correct-input"),
+        ("package-changed", "rebase"),
         ("dependency-outage", "retry"),
         ("invalid-input", "correct-input"),
         ("already-applied", "receipt-only"),
@@ -444,7 +445,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         "review-changes-requested",
         "review-ended",
         "stale-revision",
-        "contract-changed",
+        "package-changed",
         "dependency-outage",
         "invalid-input",
         "already-applied",
@@ -453,6 +454,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
             "refresh",
             "revise",
             "retry",
+            "rebase",
             "correct-input",
             "receipt-only",
         ] {
@@ -533,7 +535,7 @@ async fn unavailable_link_reasons_follow_the_lifecycle_state_in_current_and_list
         ("rejected", "review-rejected", "receipt-only", true),
         ("cancelled", "stale-revision", "receipt-only", true),
         ("draft", "stale-revision", "receipt-only", true),
-        ("draft", "contract-changed", "correct-input", true),
+        ("draft", "package-changed", "rebase", true),
         ("submitted", "stale-revision", "receipt-only", true),
         ("submitted", "pending-review", "refresh", true),
         ("submitted", "review-rejected", "revise", true),

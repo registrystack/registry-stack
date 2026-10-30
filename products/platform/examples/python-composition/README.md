@@ -1,10 +1,11 @@
 # Direct Python composition
 
-This reference application uses released `registry-stack-client` 0.43.0 to
-prepare a BReg Proposal, expose Casework reviewer operations, apply an exact
-approved source version, and submit one reviewed notice to Messaging. It needs
-no Coordinator. Choose only the products your application uses; this example's
-apply-and-notify command deliberately uses all three.
+This reference application uses the `registry-stack-client` wheel from the
+matching Registry Stack release to prepare a BReg Proposal, expose Casework
+reviewer operations, apply an exact approved source version, and submit one
+reviewed notice to Messaging. It needs no Coordinator. Choose only the products
+your application uses; this example's apply-and-notify command deliberately uses
+all three.
 
 The application Record remains the original intake. An officer's issuance
 Action creates a separate Proposal whose inputs name the application and
@@ -16,11 +17,15 @@ authority and never bypasses the native SDK's lifecycle link or ETag.
 ## Install and configure
 
 Use an ordinary Registry Stack source archive or checkout, Python 3.11 or later,
-and `uv sync --locked` from this example directory. Retain the archive layout: the
-example reads BReg's maintained generated lifecycle schema at
-`products/breg/generated/event-schemas/proposal-lifecycle.schema.json`. This installs the published
-wheel; Rust is not required. Copy `config.example.json` to a private operator
-file and replace its service origins, profiles, and credential file paths.
+and `uv sync --locked` from this example directory. The project lock installs
+the pure-Python validation dependency. Select the published
+`registry-stack-client` wheel from the same Registry Stack release explicitly
+with `uv run --with`, as shown below; ordinary use does not require Rust. Retain
+the archive layout: the example reads BReg's maintained generated lifecycle
+schema at
+`products/breg/generated/event-schemas/proposal-lifecycle.schema.json`. Copy
+`config.example.json` to a private operator file and replace its service origins,
+profiles, and credential file paths.
 Each product gets a separate resource-bound provider. A `privateKeyJwt` object
 uses the released canonical helper's `token_endpoint`, `client_id`,
 `client_key`, `resource`, and `scopes` settings instead of a `headerFile`.
@@ -36,8 +41,10 @@ TLS edge; the edge owns network access limits. BReg owns the Casework completion
 for its Proposals. Configure a BReg signed event destination for this
 application's `/hooks/breg` route, with the same key bytes as `hookKeyFile`.
 Set `hookSource`, `hookType`, and `hookSchema` to the producer's exact envelope.
-The native `verify_webhook_delivery` helper verifies the method, path, headers,
-and raw bytes under the maintained BReg delivery contract. The receiver also
+The native `verify_hook_delivery` helper verifies the method, path, ordered
+header pairs, and raw bytes under the maintained BReg delivery contract. The
+ordered pairs preserve repeated names so the native verifier can refuse them.
+The receiver also
 checks the delivery time within five minutes and persists the event identity
 and body digest before returning an empty `204`. It validates the native Proposal
 payload against BReg's maintained generated lifecycle schema in the source archive, checks the
@@ -50,6 +57,9 @@ on a timer as well: a missing hook must not prevent an authoritative source rere
 
 Run commands from this directory. Use an officer configuration for preparation
 and an independently authorized applier configuration for reconciliation.
+Set `sdk` to the matching published release. A maintainer testing prepared source
+may instead set it to the absolute path of the exact candidate wheel assembled
+from that checkout. That is source-candidate proof, not a final release artifact.
 Supply domain inputs from the configured issuance Action; `inputs.json` is the
 inputs object itself. It follows the configured Action's schema; do not add
 fictitious provenance or attachment fields. The optional licensing adaptation
@@ -62,9 +72,11 @@ starter's Action and slot contract; generic preparation without that option
 copies no document.
 
 ```sh
-uv run --locked service.py --config officer.json prepare issue-licence inputs.json issue-example --intake-proposal <applied-intake-proposal-id>
-uv run --locked service.py --config staff.json review-tasks
-uv run --locked service.py --config staff.json review-context <task-id>
+sdk='registry-stack-client==<matching-release-version>'
+# For prepared source: sdk='/absolute/path/to/registry_stack_client-<candidate>-<wheel-tag>.whl'
+uv run --locked --with "$sdk" service.py --config officer.json prepare issue-licence inputs.json issue-example --intake-proposal <applied-intake-proposal-id>
+uv run --locked --with "$sdk" service.py --config staff.json review-tasks
+uv run --locked --with "$sdk" service.py --config staff.json review-context <task-id>
 ```
 
 The first command returns the Proposal id, exact submission version, and
@@ -72,8 +84,8 @@ effect digest. Register those immutable values with a complete Messaging
 request in `notice.json`:
 
 ```sh
-uv run --locked service.py --config applier.json register <proposal-id> <version> <effect-digest> notice.json
-uv run --locked service.py --config receiver.json serve-wakes
+uv run --locked --with "$sdk" service.py --config applier.json register <proposal-id> <version> <effect-digest> notice.json
+uv run --locked --with "$sdk" service.py --config receiver.json serve-wakes
 ```
 
 A reviewer reads the task and source context through their application's UI,
@@ -85,9 +97,9 @@ revision, a stable decision key, and the product's decision document. It is
 never invoked automatically by a wake.
 
 ```sh
-uv run --locked service.py --config staff.json claim <task-id> <displayed-revision> <claim-key>
-uv run --locked service.py --config staff.json decide <task-id> <claimed-revision> <decision-key> decision.json
-uv run --locked service.py --config applier.json reconcile
+uv run --locked --with "$sdk" service.py --config staff.json claim <task-id> <displayed-revision> <claim-key>
+uv run --locked --with "$sdk" service.py --config staff.json decide <task-id> <claimed-revision> <decision-key> decision.json
+uv run --locked --with "$sdk" service.py --config applier.json reconcile
 ```
 
 The wake only records a durable hint, keyed to the authenticated event identity
@@ -136,8 +148,8 @@ horizon and data retention still apply.
 
 ## Verify
 
-`uv run --locked python -m unittest discover -s tests -v` covers durable wake
-acceptance, restart persistence, replay conflicts, the pinned native constructors,
+`uv run --locked --with "$sdk" python -m unittest discover -s tests -v` covers durable wake
+acceptance, restart persistence, replay conflicts, the current native constructors,
 review context authority, HTTP acknowledgment ordering, and uncertain notice
 receipt recovery. Live composition proof requires configured BReg, Casework, and
 Messaging instances, separate least-privilege callers, and a real reviewed

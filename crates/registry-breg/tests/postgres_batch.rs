@@ -125,7 +125,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
             {"operation":"create", "data": {
                 "jurisdiction":"zone-a", "label":"batch-created", "secret":"not-disclosed", "quantity":2
             }},
-            {"operation":"patch", "recordId":seed_id, "ifMatch":seed_etag, "patch":[
+            {"operation":"patch", "recordIdentifier":seed_id, "ifMatch":seed_etag, "patch":[
                 {"op":"replace", "path":"/data/label", "value":"batch-patched"}
             ]}
         ]
@@ -149,15 +149,28 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         .expect("ordered batch results");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["operation"], "create");
-    assert_eq!(items[0]["data"]["label"], "batch-created");
-    assert_eq!(items[0]["revision"], 1);
-    assert_eq!(items[1]["id"], seed_id);
+    assert_eq!(items[0]["domainData"]["label"], "batch-created");
+    assert_eq!(items[0]["revisionIdentifier"], "1");
+    assert_eq!(items[1]["recordIdentifier"], seed_id);
     assert_eq!(items[1]["operation"], "patch");
-    assert_eq!(items[1]["data"]["label"], "batch-patched");
-    assert_eq!(items[1]["revision"], 2);
+    assert_eq!(items[1]["domainData"]["label"], "batch-patched");
+    assert_eq!(items[1]["revisionIdentifier"], "2");
     assert!(items
         .iter()
-        .all(|item| item["data"].get("secret").is_none()));
+        .all(|item| item["domainData"].get("secret").is_none()));
+    assert!(items.iter().all(|item| {
+        let object = item.as_object().expect("batch result is an object");
+        object.len() == 5
+            && [
+                "operation",
+                "recordIdentifier",
+                "revisionIdentifier",
+                "etag",
+                "domainData",
+            ]
+            .iter()
+            .all(|member| object.contains_key(*member))
+    }));
     let after = effect_counts(&database, table).await;
     assert_eq!(after.current, before.current + 1);
     assert_eq!(after.revisions, before.revisions + 2);
@@ -260,7 +273,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
             authorized_claims.clone(),
             json!({"items":[
                 batch_body["items"][0].clone(),
-                {"operation":"patch", "recordId":seed_id, "ifMatch":"\"breg-different\"", "patch":[
+                {"operation":"patch", "recordIdentifier":seed_id, "ifMatch":"\"breg-different\"", "patch":[
                     {"op":"replace", "path":"/data/label", "value":"batch-patched"}
                 ]}
             ]}),
@@ -367,7 +380,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         {"operation":"create", "data": {
             "jurisdiction":"zone-a", "label":"must-roll-back", "secret":"x", "quantity":4
         }},
-        {"operation":"patch", "recordId":seed_id, "ifMatch":"\"breg-stale\"", "patch":[
+        {"operation":"patch", "recordIdentifier":seed_id, "ifMatch":"\"breg-stale\"", "patch":[
             {"op":"replace", "path":"/data/label", "value":"never"}
         ]}
     ]});
@@ -408,8 +421,14 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
             json!({"items":[{"operation":"tombstone","recordId":seed_id}]}),
         ),
         (
+            "retired-patch-record-id",
+            json!({"items":[{"operation":"patch","recordId":seed_id,"ifMatch":"\"breg-etag\"","patch":[
+                {"op":"replace","path":"/data/label","value":"never"}
+            ]}]}),
+        ),
+        (
             "invalid-uuid",
-            json!({"items":[{"operation":"patch","recordId":"NOT-A-UUID","ifMatch":"\"breg-etag\"","patch":[
+            json!({"items":[{"operation":"patch","recordIdentifier":"NOT-A-UUID","ifMatch":"\"breg-etag\"","patch":[
                 {"op":"replace","path":"/data/label","value":"never"}
             ]}]}),
         ),
@@ -512,7 +531,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         "/v1/records/widgets:batch?accessProfile=batch-creator",
         Some(authorized_claims.clone()),
         "create-only-profile",
-        json!({"items":[{"operation":"patch","recordId":seed_id,"ifMatch":"\"breg-stale\"","patch":[
+        json!({"items":[{"operation":"patch","recordIdentifier":seed_id,"ifMatch":"\"breg-stale\"","patch":[
             {"op":"replace","path":"/data/label","value":"never"}
         ]}]}),
     )
@@ -539,7 +558,11 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         }}]}),
     )
     .await;
-    assert_eq!(wrong_boundary.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(wrong_boundary.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(wrong_boundary).await["code"],
+        "write.outside-boundary"
+    );
     let extra_query = send_json(
         &app,
         "/v1/records/widgets:batch?pageSize=1",
@@ -723,7 +746,7 @@ async fn timer_batch_stages_once_in_canonical_order_and_rolls_back_after_staging
 
     let rearm = json!({"items":records.iter().enumerate().map(|(index,(record_id,etag))| json!({
         "operation":"patch",
-        "recordId":record_id,
+        "recordIdentifier":record_id,
         "ifMatch":etag,
         "patch":[{"op":"replace","path":"/data/activationRevision",
             "value":format!("00000000-0000-4000-8000-{:012}", index + 11)}]
@@ -774,7 +797,7 @@ async fn timer_batch_stages_once_in_canonical_order_and_rolls_back_after_staging
     }
     let batch_for = |ordered: Vec<(String, String)>, description: &str| {
         json!({"items":ordered.into_iter().map(|(record_id,etag)| json!({
-            "operation":"patch","recordId":record_id,"ifMatch":etag,
+            "operation":"patch","recordIdentifier":record_id,"ifMatch":etag,
             "patch":[{"op":"replace","path":"/data/description","value":description}]
         })).collect::<Vec<_>>()})
     };

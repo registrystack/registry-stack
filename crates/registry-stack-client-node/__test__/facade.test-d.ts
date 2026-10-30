@@ -113,12 +113,15 @@ void schedulingClient.createAppointment('header.payload.signature', 'book-1', { 
 // the request shape and discriminates the result on its response format.
 async function readEvidence(): Promise<Buffer | string> {
   const result = await evidenceClient.request({
-    requirement: 'example.requirement',
+    handle: 'example-requirement',
     selectors: { identifier: 'example' },
   })
   return result.responseFormat === 'signed-jws' ? result.assertion : result.credential
 }
 void readEvidence
+
+// @ts-expect-error the pre-1.0 progressive `requirement` alias is removed
+void evidenceClient.request({ requirement: 'example-requirement', selectors: { identifier: 'example' } })
 
 // The unified package bypasses each standalone napi-rs loader, so its product
 // namespaces cannot expose the generated loader diagnostic.

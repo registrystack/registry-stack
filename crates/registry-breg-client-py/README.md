@@ -56,9 +56,9 @@ records application provenance, not a current ETag or write precondition.
 `verify_hook_delivery(method=..., path=..., headers=..., body=..., key=...)`
 authenticates one exact Base Registry Engine Version 1 delivery with the shared
 Rust verifier. Arguments are keyword-only. `path` is the request target the
-receiver was called on, `headers` is a `dict` of string names to string values
-(names match without regard to ASCII case, and a name repeated under another
-case is refused), and `body` and `key` are `bytes`. The result is a `dict` with
+receiver was called on, `headers` is an ordered sequence of string name/value
+pairs (names match without regard to ASCII case, and every repeated name is
+refused), and `body` and `key` are `bytes`. The result is a `dict` with
 `id`, `source`, `type`, `time`, `dataschema`, `generation`, `attempt`,
 `delivery_time`, `idempotency_key`, and the exact `body`. Generation and attempt
 remain decimal strings, as signed.
@@ -103,7 +103,7 @@ receipt = client.invoke_action(
 
 Tombstone and Batch are selected by Record type. Batch items are ordered mappings
 with `operation: "create"` plus `data`, or `operation: "patch"` plus
-`record_identifier`, `etag`, and JSON Patch `operations`. The optional shared
+`record_identifier`, `if_match`, and JSON Patch `patch`. The optional shared
 change context uses snake-case Python keys and is encoded to the wire contract.
 
 ```python

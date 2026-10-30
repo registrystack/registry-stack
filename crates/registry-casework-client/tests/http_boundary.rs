@@ -12,9 +12,11 @@ use registry_casework_client::{
     AbsencesQuery, AssignmentRequest, BearerToken, CaseworkAuth, CaseworkClient,
     CaseworkClientConfig, CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure,
     ContentDigest, DelegateRequest, DirectoryTargetPurpose, DirectoryTargetsQuery, IssuerPrincipal,
-    ReviewCancelRequest, ReviewCancelResponse, ReviewContext, ReviewCreateRequest,
-    ReviewHistoryAudience, ReviewNoteRequest, ReviewRequestAccepted, ReviewTaskContextData,
-    ReviewTaskDraftInput, ReviewValidationReason, SourceContextBinding,
+    ReviewCancelRequest, ReviewCancelResponse, ReviewCaseloadApplyRequest,
+    ReviewCaseloadMoveRequest, ReviewClockRecomputeApplyRequest, ReviewClockRecomputeRequest,
+    ReviewContext, ReviewCreateRequest, ReviewHistoryAudience, ReviewNoteRequest,
+    ReviewRequestAccepted, ReviewTaskContextData, ReviewTaskDraftInput, ReviewValidationReason,
+    SourceContextBinding,
 };
 use registry_casework_core::{
     ReviewContextPolicy, ReviewNegativeDecisionMode, ReviewOutcomePolicy, ReviewOutcomeSettlement,
@@ -27,6 +29,148 @@ use uuid::Uuid;
 
 const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
 type HistoryObservations = Arc<Mutex<Vec<(String, HeaderMap)>>>;
+
+#[tokio::test]
+async fn ordinary_nested_response_members_are_ignored() {
+    let description = json!({
+        "projectId": "client-fixture",
+        "policyVersion": "1",
+        "queues": [{"id": "reviews", "label": "Reviews", "futureQueueMember": true}],
+        "reviewPolicies": [{
+            "id": "registry-correction",
+            "version": "1",
+            "purpose": "approval",
+            "context": {"mode": "submitted", "futureContextMember": true},
+            "routing": [],
+            "stages": [{
+                "id": "review", "queue": "reviews", "decidingProfiles": ["staff"],
+                "requiredApprovals": 1, "futureStageMember": true
+            }],
+            "retention": {
+                "terminalRetentionDays": 30,
+                "accountabilityRetentionDays": 30,
+                "futureRetentionMember": true
+            },
+            "displaySchema": {"type": "object"},
+            "outcomes": [{
+                "id": "approved", "label": "Approve", "settlement": "approved",
+                "reasonRequired": false, "publicReason": "optional",
+                "futureOutcomeMember": true
+            }],
+            "futurePolicyMember": true
+        }],
+        "contextProviders": [{
+            "id": "registry", "capabilities": ["human-display"],
+            "sourceNamespace": "registry", "deploymentRef": "registry-context",
+            "futureProviderMember": true
+        }],
+        "calendars": [{
+            "id": "business-days", "timezone": "UTC", "workingWeekdays": ["monday"],
+            "holidaySet": "public-holidays", "futureCalendarMember": true
+        }],
+        "clocks": [],
+        "futureDescriptionMember": {"safeToIgnore": true}
+    });
+    let directory = json!({
+        "revision": 3,
+        "teams": [{
+            "id": "reviewers",
+            "members": [{
+                "issuer": "https://issuer.example", "subject": "reviewer",
+                "futureMemberMember": true
+            }],
+            "supervisors": [{
+                "issuer": "https://issuer.example", "subject": "supervisor",
+                "futureSupervisorMember": true
+            }],
+            "servedQueues": ["reviews"],
+            "revision": 2,
+            "futureTeamMember": true
+        }],
+        "futureDirectoryMember": true
+    });
+    let absences = json!({
+        "directoryRevision": 3,
+        "items": [{
+            "absenceId": Uuid::from_u128(4),
+            "person": {
+                "issuer": "https://issuer.example", "subject": "reviewer",
+                "futurePersonMember": true
+            },
+            "from": "2026-10-20T00:00:00Z",
+            "until": "2026-10-21T00:00:00Z",
+            "cover": {
+                "issuer": "https://issuer.example", "subject": "cover",
+                "futureCoverMember": true
+            },
+            "revision": 3,
+            "futureAbsenceMember": true
+        }],
+        "futureListMember": true
+    });
+    let app = Router::new()
+        .route(
+            "/v1/casework",
+            get(move || {
+                let description = description.clone();
+                async move { json_fixture_response(description) }
+            }),
+        )
+        .route(
+            "/v1/directory",
+            get(move || {
+                let directory = directory.clone();
+                async move { json_fixture_response(directory) }
+            }),
+        )
+        .route(
+            "/v1/directory/absences",
+            get(move || {
+                let absences = absences.clone();
+                async move { json_fixture_response(absences) }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    let returned = client
+        .description(CaseworkAuth::new(&token, "staff"))
+        .await
+        .expect("description with additive members");
+    assert_eq!(returned.value.review_policies[0].id, "registry-correction");
+    let returned = client
+        .directory(CaseworkAuth::new(&token, "staff"))
+        .await
+        .expect("directory with additive members");
+    assert_eq!(returned.value.teams[0].members[0].subject, "reviewer");
+    let returned = client
+        .absences(CaseworkAuth::new(&token, "staff"))
+        .await
+        .expect("absences with additive members");
+    assert_eq!(returned.value.items[0].cover.subject, "cover");
+    server.abort();
+}
+
+fn json_fixture_response(value: Value) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        value.to_string(),
+    )
+}
 
 #[tokio::test]
 async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
@@ -92,6 +236,142 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
     server.abort();
 }
 
+#[tokio::test]
+async fn review_policy_refuses_unverified_governed_response_members() {
+    let snapshot = fixture_closure(ReviewPolicy {
+        id: "requested-kind".to_owned(),
+        label: None,
+        version: "1".to_owned(),
+        purpose: ReviewPurpose::Approval,
+        context: ReviewContextPolicy::Submitted,
+        routing: Vec::new(),
+        stages: vec![ReviewStagePolicy {
+            id: "review".to_owned(),
+            label: None,
+            queue: "reviews".to_owned(),
+            deciding_profiles: vec!["staff".to_owned()],
+            required_approvals: 1,
+            negative_decisions: ReviewNegativeDecisionMode::Settle,
+            exclude_initiator: false,
+            exclude_previous_stage_reviewers: false,
+        }],
+        clocks: Vec::new(),
+        retention: ReviewRetentionPolicy {
+            terminal_retention_days: 30,
+            accountability_retention_days: 30,
+        },
+        display_schema: json!({
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{}
+        }),
+        result_schema: None,
+        outcomes: approval_outcomes(),
+    });
+    let mut response = serde_json::to_value(snapshot).expect("snapshot JSON");
+    response["futureMember"] = json!({"safeToIgnore": true});
+    response["identity"]["futureIdentityMember"] = json!(true);
+    let app = Router::new()
+        .route(
+            "/v1/review-policies/requested-kind",
+            get(review_policy_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_policy(CaseworkAuth::new(&token, "staff"), "requested-kind")
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_policy_refuses_duplicate_additive_response_members() {
+    let snapshot = fixture_closure(ReviewPolicy {
+        id: "requested-kind".to_owned(),
+        label: None,
+        version: "1".to_owned(),
+        purpose: ReviewPurpose::Approval,
+        context: ReviewContextPolicy::Submitted,
+        routing: Vec::new(),
+        stages: vec![ReviewStagePolicy {
+            id: "review".to_owned(),
+            label: None,
+            queue: "reviews".to_owned(),
+            deciding_profiles: vec!["staff".to_owned()],
+            required_approvals: 1,
+            negative_decisions: ReviewNegativeDecisionMode::Settle,
+            exclude_initiator: false,
+            exclude_previous_stage_reviewers: false,
+        }],
+        clocks: Vec::new(),
+        retention: ReviewRetentionPolicy {
+            terminal_retention_days: 30,
+            accountability_retention_days: 30,
+        },
+        display_schema: json!({
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{}
+        }),
+        result_schema: None,
+        outcomes: approval_outcomes(),
+    });
+    let encoded = serde_json::to_string(&snapshot).expect("snapshot JSON");
+    let response = format!(
+        r#"{{"futureMember":true,"futureMember":false,{}"#,
+        &encoded[1..]
+    );
+    let app = Router::new()
+        .route(
+            "/v1/review-policies/requested-kind",
+            get(review_policy_raw_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_policy(CaseworkAuth::new(&token, "staff"), "requested-kind")
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
 async fn review_policy_fixture_response(State(mut response): State<Value>) -> impl IntoResponse {
     enrich_tasks(&mut response);
     (
@@ -101,6 +381,17 @@ async fn review_policy_fixture_response(State(mut response): State<Value>) -> im
             ("traceparent", TRACEPARENT),
         ],
         response.to_string(),
+    )
+}
+
+async fn review_policy_raw_response(State(response): State<String>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response,
     )
 }
 
@@ -792,12 +1083,22 @@ async fn review_task_grant_approval_requires_the_selected_active_template() {
             "id": Uuid::from_u128(8),
             "templateId": template_id,
             "templateVersion": template_version,
-            "agent": {"issuer": "https://issuer.example", "subject": "agent-one"},
+            "agent": {
+                "issuer": "https://issuer.example", "subject": "agent-one",
+                "futureAgentMember": true
+            },
             "client": "agent-client",
             "resource": "urn:evidence",
             "scopes": ["evidence:invoke"],
             "purpose": "verify-status",
-            "bounds": {"type": "evidence", "requirement": "status"},
+            "bounds": {
+                "type": "evidence", "requirement": "status",
+                "futureBoundsMember": true
+            },
+            "evidenceContext": {
+                "requesterTags": ["review"], "audience": "casework",
+                "futureEvidenceContextMember": true
+            },
             "expiresAt": 2_000_000_900_u64,
             "invalidated": invalidated,
         })
@@ -858,6 +1159,134 @@ async fn review_task_grant_approval_requires_the_selected_active_template() {
     assert_eq!(approved.value.template_id, approval.template_id);
     assert_eq!(approved.value.template_version, approval.template_version);
     assert!(!approved.value.invalidated);
+    server.abort();
+}
+
+#[tokio::test]
+async fn staffing_operation_rows_ignore_additive_response_members() {
+    let task_id = Uuid::from_u128(7);
+    let caseload_preview_id = Uuid::from_u128(8);
+    let clock_preview_id = Uuid::from_u128(9);
+    let caseload_preview = json!({
+        "previewId": caseload_preview_id,
+        "directoryRevision": 3,
+        "tasks": [{"taskId": task_id, "revision": 2, "futureTaskMember": true}],
+        "expiresAt": "2026-10-27T12:00:00Z",
+        "futurePreviewMember": true
+    });
+    let caseload_result = json!({
+        "moved": [{"taskId": task_id, "revision": 3, "futureTaskMember": true}],
+        "futureResultMember": true
+    });
+    let clock_preview = json!({
+        "previewId": clock_preview_id,
+        "directoryRevision": 3,
+        "tasks": [{
+            "taskId": task_id, "revision": 3,
+            "deadlineAt": "2026-10-28T12:00:00Z", "futureTaskMember": true
+        }],
+        "expiresAt": "2026-10-27T12:00:00Z",
+        "futurePreviewMember": true
+    });
+    let clock_result = json!({
+        "tasks": [{
+            "taskId": task_id, "revision": 4,
+            "deadlineAt": "2026-10-29T12:00:00Z", "futureTaskMember": true
+        }],
+        "futureResultMember": true
+    });
+    let app = Router::new()
+        .route(
+            "/v1/directory/caseload/preview",
+            post(move || {
+                let response = caseload_preview.clone();
+                async move { json_fixture_response(response) }
+            }),
+        )
+        .route(
+            "/v1/directory/caseload/apply",
+            post(move || {
+                let response = caseload_result.clone();
+                async move { json_fixture_response(response) }
+            }),
+        )
+        .route(
+            "/v1/directory/clocks/recompute/preview",
+            post(move || {
+                let response = clock_preview.clone();
+                async move { json_fixture_response(response) }
+            }),
+        )
+        .route(
+            "/v1/directory/clocks/recompute/apply",
+            post(move || {
+                let response = clock_result.clone();
+                async move { json_fixture_response(response) }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let auth = || CaseworkAuth::new(&token, "administrator");
+    let movement = ReviewCaseloadMoveRequest {
+        from: IssuerPrincipal {
+            issuer: "https://issuer.example".into(),
+            subject: "reviewer".into(),
+        },
+        to: IssuerPrincipal {
+            issuer: "https://issuer.example".into(),
+            subject: "cover".into(),
+        },
+        queue: Some("reviews".into()),
+        reason: "planned absence".into(),
+    };
+
+    let preview = client
+        .preview_caseload_move(auth(), &movement)
+        .await
+        .expect("caseload preview with additive members");
+    assert_eq!(preview.value.tasks[0].task_id, task_id);
+    let applied = client
+        .apply_caseload_move(
+            auth(),
+            "caseload-apply",
+            &ReviewCaseloadApplyRequest {
+                preview_id: caseload_preview_id,
+            },
+        )
+        .await
+        .expect("caseload result with additive members");
+    assert_eq!(applied.value.moved[0].revision, 3);
+    let preview = client
+        .preview_clock_recompute(
+            auth(),
+            &ReviewClockRecomputeRequest {
+                task_ids: vec![task_id],
+            },
+        )
+        .await
+        .expect("clock preview with additive members");
+    assert_eq!(preview.value.tasks[0].task_id, task_id);
+    let applied = client
+        .apply_clock_recompute(
+            auth(),
+            "clock-apply",
+            &ReviewClockRecomputeApplyRequest {
+                preview_id: clock_preview_id,
+            },
+        )
+        .await
+        .expect("clock result with additive members");
+    assert_eq!(applied.value.tasks[0].revision, 4);
     server.abort();
 }
 
@@ -1472,7 +1901,14 @@ async fn own_decision_discovery_validates_scope_order_and_receipt_shape() {
             "decidedAt": "2026-10-10T01:00:00Z",
         },
     });
-    let valid = json!({"items": [row.clone()], "status": "complete"});
+    let mut additive_row = row.clone();
+    additive_row["futureDecisionMember"] = json!({"safeToIgnore": true});
+    additive_row["decisionReceipt"]["futureReceiptMember"] = json!(true);
+    additive_row["decisionReceipt"]["policy"]["futurePolicyMember"] = json!(true);
+    let valid = json!({
+        "items": [additive_row], "status": "complete",
+        "futurePageMember": true
+    });
     let mut wrong_queue = valid.clone();
     wrong_queue["items"][0]["queue"] = json!("another");
     let mut too_many = valid.clone();
@@ -1485,6 +1921,12 @@ async fn own_decision_discovery_validates_scope_order_and_receipt_shape() {
     empty_label["items"][0]["decisionReceipt"]["outcomeLabel"] = json!("");
     let mut leaked_reason = valid.clone();
     leaked_reason["items"][0]["privateReason"] = json!("PRIVATE_REASON_CANARY");
+    let mut null_private_reason = valid.clone();
+    null_private_reason["items"][0]["privateReason"] = Value::Null;
+    let mut leaked_result_digest = valid.clone();
+    leaked_result_digest["items"][0]["resultDigest"] = json!("RESULT_DIGEST_CANARY");
+    let mut null_result_digest = valid.clone();
+    null_result_digest["items"][0]["resultDigest"] = Value::Null;
     for (body, limit, permitted) in [
         (valid, 1, true),
         (wrong_queue, 1, false),
@@ -1492,6 +1934,9 @@ async fn own_decision_discovery_validates_scope_order_and_receipt_shape() {
         (wrong_order, 2, false),
         (empty_label, 1, false),
         (leaked_reason, 1, false),
+        (null_private_reason, 1, false),
+        (leaked_result_digest, 1, false),
+        (null_result_digest, 1, false),
     ] {
         let app = Router::new()
             .route(
@@ -1542,12 +1987,16 @@ async fn accountability_receipts_must_match_the_retained_action_and_time() {
         "policy": {"id": "review", "version": "1", "digest": ContentDigest::for_bytes(b"review")},
         "decision": "answer", "outcome": "return", "outcomeLabel": "Return for correction", "decidedAt": "2026-10-10T01:00:00Z",
     });
-    let valid = json!({
+    let mut valid = json!({
         "eventId": event_id, "requestId": Uuid::from_u128(9), "taskId": Uuid::from_u128(7),
         "actorRef": "audit-ref", "actor": {"issuer": "https://issuer.example", "subject": "reviewer"},
         "profileId": "staff", "decision": "answer", "decisionReceipt": receipt,
         "occurredAt": "2026-10-10T01:00:00Z", "retainedUntil": "2026-11-10T01:00:00Z",
     });
+    valid["actor"]["futureActorMember"] = json!(true);
+    valid["decisionReceipt"]["futureReceiptMember"] = json!(true);
+    valid["decisionReceipt"]["policy"]["futurePolicyMember"] = json!(true);
+    valid["futureAccountabilityMember"] = json!({"safeToIgnore": true});
     let mut legacy = valid.clone();
     legacy.as_object_mut().unwrap().remove("decisionReceipt");
     let mut wrong_action = valid.clone();
@@ -2253,7 +2702,7 @@ async fn capture_review_clocks(
             ("content-type", "application/json"),
             ("traceparent", TRACEPARENT),
         ],
-        r#"[{"clockOccurrenceId":"10000000-0000-4000-8000-000000000001","clockId":"review-deadline","requestId":"00000000-0000-0000-0000-000000000000","correlation":{"scope":"subject","source":"registry","subjectType":"record","id":"record-1"},"state":"running","policyDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","anchorAt":"2026-09-20T00:00:00Z"}]"#,
+        r#"[{"clockOccurrenceId":"10000000-0000-4000-8000-000000000001","clockId":"review-deadline","requestId":"00000000-0000-0000-0000-000000000000","correlation":{"scope":"subject","source":"registry","subjectType":"record","id":"record-1","futureCorrelationMember":true},"state":"running","policyDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","anchorAt":"2026-09-20T00:00:00Z","futureOccurrenceMember":true}]"#,
     )
 }
 
@@ -2768,7 +3217,7 @@ async fn invalid_directory_target_queries_fail_before_network_io() {
 }
 
 #[tokio::test]
-async fn exact_problem_document_maps_to_the_typed_runtime_code() {
+async fn problem_classification_ignores_prose_and_additive_members() {
     let app = Router::new().route("/v1/casework", get(problem_response));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -2872,10 +3321,11 @@ async fn problem_response() -> impl IntoResponse {
         ],
         concat!(
             "{\"type\":\"https://id.registrystack.org/problems/registry-casework/",
-            "authentication/refused\",\"title\":\"Authentication refused\",",
-            "\"status\":401,\"detail\":\"The bearer credential is missing, invalid, or expired. Sign in again.\",",
+            "authentication/refused\",\"title\":\"Sign-in required\",",
+            "\"status\":401,\"detail\":\"Refresh the current session.\",",
             "\"code\":\"authentication.refused\",",
-            "\"traceId\":\"0123456789abcdef0123456789abcdef\"}"
+            "\"traceId\":\"0123456789abcdef0123456789abcdef\",",
+            "\"futureMember\":true}"
         ),
     )
 }
@@ -3006,7 +3456,7 @@ async fn task_context_response() -> impl IntoResponse {
         result_schema: None,
         outcomes: approval_outcomes(),
     });
-    let body = json!({
+    let mut body = json!({
         "taskId": Uuid::nil(),
         "requestId": "10000000-0000-4000-8000-000000000001",
         "subject": {
@@ -3018,6 +3468,10 @@ async fn task_context_response() -> impl IntoResponse {
         "policyClosure": snapshot,
         "context": {"mode": "submitted", "snapshot": {"summary": "Frozen review"}}
     });
+    body["futureTaskContextMember"] = json!({"safeToIgnore": true});
+    body["subject"]["futureSubjectMember"] = json!(true);
+    body["policy"]["futurePolicyMember"] = json!(true);
+    body["context"]["futureContextMember"] = json!(true);
     (
         StatusCode::OK,
         [
@@ -3114,9 +3568,25 @@ fn enrich_tasks(value: &mut Value) {
                 && object.contains_key("state")
                 && object.contains_key("eligibleProfiles")
             {
-                object.insert("subject".into(), json!({"source":"registry","type":"record","id":"record-1","version":"1","digest":ContentDigest::for_bytes(b"record-1")}));
+                object.insert(
+                    "subject".into(),
+                    json!({
+                        "source":"registry", "type":"record", "id":"record-1", "version":"1",
+                        "digest":ContentDigest::for_bytes(b"record-1"), "futureSubjectMember":true
+                    }),
+                );
                 object.insert("requesterReference".into(), json!("record-1"));
                 object.insert("createdAt".into(), json!("2026-10-14T00:00:00Z"));
+                object.insert("futureTaskMember".into(), json!({"safeToIgnore": true}));
+                if let Some(Value::Object(state)) = object.get_mut("state") {
+                    if let Some(Value::Object(held)) = state.get_mut("held") {
+                        held.insert("futureHeldMember".into(), json!(true));
+                        if let Some(Value::Object(holder)) = held.get_mut("holder") {
+                            holder.insert("futureHolderMember".into(), json!(true));
+                        }
+                    }
+                    state.insert("futureStateMember".into(), json!(true));
+                }
             }
             for value in object.values_mut() {
                 enrich_tasks(value);

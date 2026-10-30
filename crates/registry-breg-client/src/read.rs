@@ -750,7 +750,7 @@ fn validate_route(value: &str) -> Result<(), BRegRequestError> {
         access_profile: None,
         registry_identifier: "registry".to_owned(),
         dataset_identifier: "dataset".to_owned(),
-        entity_type_identifier: "entity".to_owned(),
+        record_type_identifier: "entity".to_owned(),
     };
     BRegContinuation::try_from_projection(projection).map(|_| ())
 }
@@ -778,7 +778,7 @@ mod tests {
         RegistryRecordMeta {
             registry_identifier: "registry".into(),
             dataset_identifier: "dataset".into(),
-            entity_type_identifier: "entry".into(),
+            record_type_identifier: "entry".into(),
             extensions: BTreeMap::new(),
         }
     }

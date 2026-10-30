@@ -37,6 +37,16 @@ pub const MOCK_PLAN_SCHEMA_ID: &str =
 pub const MOCK_PLAN_API_VERSION: &str = "id.registrystack.org/formats/evidence/mock-plan/v1alpha1";
 /// The `kind` of a materialized source mock plan.
 pub const MOCK_PLAN_KIND: &str = "EvidenceMockPlan";
+/// The `apiVersion` of a Source fragment published for import.
+pub const SOURCE_FRAGMENT_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/source/v1alpha1";
+/// The `kind` of a Source fragment published for import.
+pub const SOURCE_FRAGMENT_KIND: &str = "EvidenceSource";
+/// The `apiVersion` of a selector fragment published for import.
+pub const SELECTOR_FRAGMENT_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/selector/v1alpha1";
+/// The `kind` of a selector fragment published for import.
+pub const SELECTOR_FRAGMENT_KIND: &str = "EvidenceSelector";
 
 const NO_FORMAT_VERSION: &str = "Remove `version`; `apiVersion` names the format version.";
 
@@ -64,6 +74,26 @@ pub const MOCK_PLAN: FormatSpec<'static> = FormatSpec {
         pointer: "/version",
         replacement: NO_FORMAT_VERSION,
     }],
+};
+
+/// A Source fragment carried by a local source export.
+pub const SOURCE_FRAGMENT: FormatSpec<'static> = FormatSpec {
+    kind: SOURCE_FRAGMENT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SOURCE_FRAGMENT_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// A selector fragment carried by a local source export.
+pub const SELECTOR_FRAGMENT: FormatSpec<'static> = FormatSpec {
+    kind: SELECTOR_FRAGMENT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SELECTOR_FRAGMENT_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
 };
 
 /// The formats an authoring project's files may declare by envelope, for a

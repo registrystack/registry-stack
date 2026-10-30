@@ -405,10 +405,7 @@ impl ActivatedHooks {
                 event_type: hook.id.clone(),
                 source: self.delivery_source.clone(),
                 time: created_at.into(),
-                subject: EventSubject {
-                    record_reference: record_reference.to_owned(),
-                    record_revision,
-                },
+                subject: EventSubject::record(record_reference, record_revision),
                 dataschema: hook.data_schema.clone(),
                 data,
                 causation: Causation::root(&id),

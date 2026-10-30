@@ -13,6 +13,33 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CaseworkClientError, 'function');
 });
 
+test('description ignores additive response members', async (context) => {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        projectId: 'fixture',
+        policyVersion: 'v1',
+        queues: [],
+        reviewPolicies: [],
+        contextProviders: [],
+        futureMember: { safeToIgnore: true },
+      }));
+    });
+  });
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
+  const description = await client.description('one-call-secret', 'staff');
+  assert.equal(description.value.projectId, 'fixture');
+});
+
 test('accepted-result binding diagnostics are bounded and precede token or HTTP effects', async () => {
   const { CaseworkClient, CaseworkClientError } = require('../client');
   const client = new CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });

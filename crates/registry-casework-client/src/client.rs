@@ -41,9 +41,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    CaseworkAuth, CaseworkClientConfig, CaseworkClientError, CaseworkComplete, CaseworkProblemCode,
-    CaseworkProtocolFailure, ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest,
-    SupervisoryReviewTaskQuery,
+    wire::ClientResponse, CaseworkAuth, CaseworkClientConfig, CaseworkClientError,
+    CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ReviewPageQuery,
+    ReviewResultResponse, ReviewTaskDecisionRequest, SupervisoryReviewTaskQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -645,7 +645,7 @@ impl CaseworkClient {
                     .map_err(|error| CaseworkClientError::Transport {
                         kind: read_failure_kind(&error),
                     })?;
-                let value: ReviewTaskDraft = decode_response_json(&body).map_err(|_| {
+                let value: ReviewTaskDraft = decode_client_response(&body).map_err(|_| {
                     protocol(
                         status,
                         CaseworkProtocolFailure::Body,
@@ -1394,7 +1394,7 @@ impl CaseworkClient {
         Ok(complete)
     }
 
-    async fn get_json<T: DeserializeOwned>(
+    async fn get_json<T: ClientResponse>(
         &self,
         auth: &CaseworkAuth<'_>,
         segments: &[&str],
@@ -1404,7 +1404,7 @@ impl CaseworkClient {
         self.send_json(request, StatusCode::OK).await
     }
 
-    async fn mutate<T: DeserializeOwned, B: Serialize + ?Sized>(
+    async fn mutate<T: ClientResponse, B: Serialize + ?Sized>(
         &self,
         auth: &CaseworkAuth<'_>,
         segments: &[&str],
@@ -1423,7 +1423,7 @@ impl CaseworkClient {
         .await
     }
 
-    async fn mutate_with_method<T: DeserializeOwned, B: Serialize + ?Sized>(
+    async fn mutate_with_method<T: ClientResponse, B: Serialize + ?Sized>(
         &self,
         auth: &CaseworkAuth<'_>,
         method: Method,
@@ -1508,7 +1508,7 @@ impl CaseworkClient {
     /// Send one idempotency-keyed mutation, resending the identical request
     /// under the same key while its outcome stays unknown, at most the
     /// configured number of times.
-    async fn send_keyed_json<T: DeserializeOwned>(
+    async fn send_keyed_json<T: ClientResponse>(
         &self,
         request: RequestBuilder,
         expected_status: StatusCode,
@@ -1564,7 +1564,7 @@ impl CaseworkClient {
         .await
     }
 
-    async fn send_json<T: DeserializeOwned>(
+    async fn send_json<T: ClientResponse>(
         &self,
         request: RequestBuilder,
         expected_status: StatusCode,
@@ -1573,7 +1573,7 @@ impl CaseworkClient {
         self.json_answer(response, expected_status).await
     }
 
-    async fn json_answer<T: DeserializeOwned>(
+    async fn json_answer<T: ClientResponse>(
         &self,
         response: Response,
         expected_status: StatusCode,
@@ -1595,7 +1595,7 @@ impl CaseworkClient {
             .map_err(|error| CaseworkClientError::Transport {
                 kind: read_failure_kind(&error),
             })?;
-        let value = decode_response_json(&body).map_err(|_| {
+        let value = decode_client_response::<T>(&body).map_err(|_| {
             protocol(
                 status,
                 CaseworkProtocolFailure::Body,
@@ -1708,8 +1708,6 @@ impl CaseworkClient {
             || code
                 .expected_status()
                 .is_some_and(|expected| expected != status.as_u16())
-            || expected_text
-                .is_some_and(|(title, detail)| document.title != title || document.detail != detail)
         {
             return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
         }
@@ -1781,6 +1779,10 @@ fn validation_allowed(value: &str) -> Option<Vec<String>> {
 fn decode_response_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, ()> {
     let value = registry_platform_canonical_json::parse_json_strict(body).map_err(|_| ())?;
     serde_json::from_value(value).map_err(|_| ())
+}
+
+fn decode_client_response<T: ClientResponse>(body: &[u8]) -> Result<T, ()> {
+    decode_response_json::<T::Wire>(body).map(T::from_wire)
 }
 
 fn require_review_task_id(

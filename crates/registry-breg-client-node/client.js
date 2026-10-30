@@ -216,7 +216,7 @@ function wrapAsync(name, jsonIndexes = [], requiredIndexes = []) {
 }
 
 for (const [method, jsonIndexes, requiredIndexes] of [
-  ['health'], ['ready'], ['openapi'], ['registryMetadata'], ['registryContract'], ['entitySchema'],
+  ['health'], ['ready'], ['openapi'], ['registryMetadata'], ['registryContract'], ['recordSchema'],
   ['statisticsLive'], ['statisticsReleases'], ['statisticsLatestRelease'],
   ['statisticsReleaseVersion'], ['statisticsReleaseSeries'], ['statisticsPublish'],
   ['statisticsWithdraw'],
@@ -232,7 +232,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['invokeAction', [1], [1]],
   ['executeRecoveredAction'], ['executeRecoveredProposalStart'], ['executeRecoveredCreate'],
   ['patchRecord', [3], [3]], ['batchRecords', [1], [1]], ['tombstoneRecord'],
-  ['startProposal'], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals'], ['executeProposal'],
+  ['startProposal', [1], [1]], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals', [1], [1]], ['executeProposal'],
   ['downloadProposalAttachment'], ['uploadProposalAttachment'], ['deleteProposalAttachment'],
   ['readProposalReviewStatus'], ['readProposalReviewContext'],
   ['readProposalReviewContextBatch', [1], [1]],
@@ -256,7 +256,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['prepareAction', [1], [1]], ['prepareActionJson'],
   ['recoverAction', [2], [2]], ['recoverActionJson'],
   ['prepareCreate', [1], [1]], ['prepareCreateJson'], ['recoverCreate'],
-  ['prepareProposal'], ['recoverProposal'],
+  ['prepareProposal', [2], [2]], ['recoverProposal'],
 ]) {
   const original = native.BaseRegistryClient.prototype[method];
   native.BaseRegistryClient.prototype[method] = function (...args) {

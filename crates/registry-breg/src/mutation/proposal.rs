@@ -3365,7 +3365,10 @@ impl MutationTransaction {
                         && review_refusal.is_none()
                         && review_available
                 }
-                ProposalOperation::GetReviewContext => document.header.state == "submitted",
+                ProposalOperation::GetReviewContext => {
+                    document.header.state == "submitted"
+                        && document.action_revision == action.definition_revision
+                }
                 ProposalOperation::GetTaskGrantContext => document.header.state == "submitted",
                 // The review-status read serves any submission whose frozen
                 // Proposal is retained, decided or not, so the link stays
@@ -3439,16 +3442,16 @@ impl MutationTransaction {
                 } else if operation == ProposalOperation::Revise
                     && document.action_revision != action.definition_revision
                 {
-                    link["availability"]["reason"] = json!("contract-changed");
-                    link["availability"]["recovery"] = json!("refresh");
+                    link["availability"]["reason"] = json!("package-changed");
+                    link["availability"]["recovery"] = json!("rebase");
                 } else if let Some(blocked_reason) = document.blocked_reason.as_deref() {
-                    link["availability"]["reason"] =
-                        json!(if blocked_reason == "application-refused" {
-                            "invalid-input"
-                        } else {
-                            "contract-changed"
-                        });
-                    link["availability"]["recovery"] = json!("correct-input");
+                    let (reason, recovery) = if blocked_reason == "application-refused" {
+                        ("invalid-input", "correct-input")
+                    } else {
+                        ("package-changed", "rebase")
+                    };
+                    link["availability"]["reason"] = json!(reason);
+                    link["availability"]["recovery"] = json!(recovery);
                 } else if operation == ProposalOperation::Retry && !retry_available {
                     // A review that has ended leaves nothing to retry: the
                     // same review outcome Apply reports names Revise.
@@ -3589,7 +3592,7 @@ async fn proposal_application_status(
     if document.blocked_reason.is_some() && !automatic {
         value["state"] = json!("blocked");
         value["reason"] = json!(blocked_application_reason(document));
-        value["recovery"] = json!("correct-input");
+        value["recovery"] = json!(blocked_application_recovery(document));
         return Ok(value);
     }
     if !automatic {
@@ -3675,9 +3678,13 @@ async fn proposal_application_status(
             value["reason"] = json!(if document.blocked_reason.is_some() {
                 blocked_application_reason(document)
             } else {
-                "contract-changed"
+                "package-changed"
             });
-            value["recovery"] = json!("correct-input");
+            value["recovery"] = json!(if document.blocked_reason.is_some() {
+                blocked_application_recovery(document)
+            } else {
+                "rebase"
+            });
         }
         return Ok(value);
     };
@@ -3711,9 +3718,13 @@ async fn proposal_application_status(
         value["reason"] = json!(if document.blocked_reason.is_some() {
             blocked_application_reason(document)
         } else {
-            "contract-changed"
+            "package-changed"
         });
-        value["recovery"] = json!("correct-input");
+        value["recovery"] = json!(if document.blocked_reason.is_some() {
+            blocked_application_recovery(document)
+        } else {
+            "rebase"
+        });
         value["automaticRetry"]["scheduled"] = json!(false);
         return Ok(value);
     }
@@ -3741,7 +3752,15 @@ fn blocked_application_reason(document: &ProposalDocument) -> &'static str {
     if document.blocked_reason.as_deref() == Some("application-refused") {
         "application-refused"
     } else {
-        "contract-changed"
+        "package-changed"
+    }
+}
+
+fn blocked_application_recovery(document: &ProposalDocument) -> &'static str {
+    if document.blocked_reason.as_deref() == Some("application-refused") {
+        "correct-input"
+    } else {
+        "rebase"
     }
 }
 

@@ -586,7 +586,7 @@ role bindings itself. Node spells it `subjectExpectations`, taking either `'acce
 
 ### One-call requests and progressive results
 
-`request` is the short path for an application configured from a profile: it names a requirement and
+`request` is the short path for an application configured from a profile: it names a configured handle and
 its selectors, and the client resolves the definition, prepares, sends, and verifies in one call.
 
 ```python
@@ -596,15 +596,15 @@ print(result.values)
 
 ```js
 const result = await client.request({
-  requirement: 'adult-status',
+  handle: 'adult-status',
   selectors: { personId: 'person-123' },
 });
 console.log(result.values);
 ```
 
-Python takes the requirement positionally and the selectors as keyword arguments, with
+Python takes the handle positionally or as `handle` and the selectors as keyword arguments, with
 `response_format`, `subjects`, and `binding_receipt` as named options. Node takes one
-`AudienceScopedRequest` object with `requirement`, `responseFormat`, `selectors`, `subjects`, and
+`AudienceScopedRequest` object with `handle`, `responseFormat`, `selectors`, `subjects`, and
 `bindingReceipt`. Use `subjects` when a request has several roles, or when a selector field needs a
 name the option map reserves.
 
@@ -632,9 +632,9 @@ operation identity, and it is not a substitute for the deployment's audit record
 
 ### Evidence error contract
 
-Python raises one of eight subclasses of `evidence.EvidenceClientError`, so an application can catch
+Python raises one of ten subclasses of `evidence.EvidenceClientError`, so an application can catch
 the category it handles and let the rest propagate. Node throws `evidence.EvidenceClientError` with
-`kind` carrying the same eight values.
+`kind` carrying the same ten values.
 
 | Kind | Python class | Meaning |
 | --- | --- | --- |
@@ -644,13 +644,15 @@ the category it handles and let the rest propagate. Node throws `evidence.Eviden
 | `transport` | `TransportError` | The exchange failed below HTTP |
 | `denied` | `DeniedError` | Evidence refused the request |
 | `not-available` | `NotAvailableError` | Evidence could not be produced: no match, an ambiguous match, a missing fact, or a source that answered with no record, all collapsed into one answer |
+| `invalid-request` | `InvalidRequestError` | Evidence refused the request shape, format, or named resource |
+| `unavailable` | `UnavailableError` | The Evidence service or an authoritative source is unavailable |
 | `protocol` | `ProtocolError` | The response violated the contract |
 | `verification` | `VerificationError` | The response did not satisfy the pinned verification |
 
 `kind` is always present. The rest are present only when the underlying failure carries them:
-`status` on `denied`, `protocol`, and a `token` failure whose token subcategory is `protocol`;
-`code` on `denied`, `protocol`, `verification`, and a `token` failure whose token subcategory is
-`refused`; the trace identifier on `denied`, `not-available`, and `protocol`; the retry delay on
+`status` on `denied`, `invalid-request`, `unavailable`, `protocol`, and a `token` failure whose token subcategory is `protocol`;
+`code` on `denied`, `invalid-request`, `unavailable`, `protocol`, `verification`, and a `token` failure whose token subcategory is
+`refused`; the trace identifier on `denied`, `not-available`, `invalid-request`, `unavailable`, and `protocol`; the retry delay on
 `denied` and `protocol`; the transport subcategory on `transport` and a `token` failure whose token
 subcategory is `transport`; and the token subcategory on every `token` failure. Python spells them
 `status`, `code`, `trace_id`, `retry_after_seconds`, `transport_kind`, and `token_kind`; Node spells
@@ -835,9 +837,10 @@ def receive_webhook(method, path, headers, body, key, event_store):
     )
 ```
 
-Python takes `headers` as a dict, which cannot hold a repeated header, so refuse a request that
-repeats one before building the dict, and bound the body size before reading it. Node refuses body
-and key buffers backed by shared memory and copies the rest before verifying.
+Python takes `headers` as an ordered sequence of name and value pairs. Pass the raw request pairs so
+the verifier retains header case and duplicates, and build a normalized map only after verification.
+Bound the body size before reading it. Node refuses body and key buffers backed by shared memory and
+copies the rest before verifying.
 
 Keep the key in server-side secret storage and never log the input or a failed delivery. A failure
 raises `BaseRegistryClientError` with kind `hook-verification`; its `code` and message name the
@@ -925,13 +928,13 @@ submissions, review reads, attachments, batch, tombstone, and
     crates/registry-breg-client/src/proposal.rs, prepare_proposal, execute_proposal,
     crates/registry-breg-client-node/client.d.ts, BRegProposalLink */}
 
-### Exact JSON in Node
+### Proposal objects in Node
 
-Three Node methods take JSON text rather than plain objects: `startProposal(binding, inputsJson,
-key)`, `listProposals(collection, queryJson)`, and `prepareProposal(proposal, operation, bodyJson,
-key)`. They return opaque Proposal objects; read `documentJson` for the validated representation.
-Many other methods have a `*Json` twin that returns the validated response as exact text in
-`valueJson`, for applications that parse JSON numbers losslessly.
+Three Node methods take plain JSON objects: `startProposal(binding, inputs, key)`,
+`listProposals(collection, query)`, and `prepareProposal(proposal, operation, body, key)`. They return
+opaque Proposal objects; read `documentJson` for the validated representation. Many other methods
+have a `*Json` twin that returns the validated response as exact text in `valueJson`, for
+applications that parse JSON numbers losslessly.
 
 {/* Evidence: crates/registry-breg-client-node/client.d.ts, startProposal, listProposals,
     prepareProposal, documentJson, JsonOutcome, valueJson,

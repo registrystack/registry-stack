@@ -203,7 +203,7 @@ for name, args in commands.items():
 report = json.loads(subprocess.check_output(
     ['bregctl', '--format', 'json', 'explain', 'actions', project]))
 root = Path.cwd().resolve()
-for finding in report['findings']:
+for finding in report['diagnostics']:
     locations = [finding['source']] if 'source' in finding else []
     locations += finding.get('related', [])
     for location in locations:

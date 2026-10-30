@@ -127,42 +127,42 @@
     },
     "action": {
       "rust": ["BRegProposalQuery.action"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "owner": {
       "rust": ["BRegProposalQuery.owner_is_caller"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "target": {
       "rust": ["BRegProposalQuery.target"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "state": {
       "rust": ["BRegProposalQuery.state"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "cursor": {
       "rust": ["BRegProposalQuery.cursor"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "limit": {
       "rust": ["BRegProposalQuery.limit"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "turn": {
       "rust": ["BRegProposalQuery.turn"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "pendingManualApplication": {
       "rust": ["BRegProposalQuery.pending_manual_application"],
-      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "node": ["BaseRegistryClient.listProposals.query"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },
     "submissionVersion": {

@@ -1351,7 +1351,7 @@ impl MutationTransaction {
             record_id: current.record_uuid,
             record_revision: current.record_revision,
         }];
-        let committed = allocate_revision_commit(
+        allocate_revision_commit(
             transaction.transaction(),
             CommitAllocation {
                 package_revision: &self.expected.activation_id,
@@ -1364,7 +1364,7 @@ impl MutationTransaction {
             },
         )
         .await?;
-        let held = self.held_response(request, &current, committed.reference.to_string())?;
+        let held = self.held_response(request, &current)?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
         let entry = terminal_entry(
             self.audit.profile(),
@@ -2133,10 +2133,10 @@ impl MutationTransaction {
                 BatchMutationItem::Create(_) => "create",
                 BatchMutationItem::Patch { .. } => "patch",
             },
-            "id": current.record_id,
-            "revision": current.record_revision,
+            "recordIdentifier": current.record_id,
+            "revisionIdentifier": current.record_revision.to_string(),
             "etag": etag,
-            "data": data,
+            "domainData": data,
         }))
     }
 
@@ -2144,7 +2144,6 @@ impl MutationTransaction {
         &self,
         request: &MutationRequest<'_>,
         current: &CurrentRow,
-        snapshot_reference: String,
     ) -> Result<HeldResponse, MutationError> {
         let data = response_data(
             &request.plan.entity,
@@ -2155,7 +2154,7 @@ impl MutationTransaction {
             current.record_id.clone(),
             current.record_revision.to_string(),
             data,
-            Map::from_iter([("snapshot".to_owned(), Value::String(snapshot_reference))]),
+            Map::new(),
         )
         .map_err(|_| MutationError::Unavailable)?;
         let body = record_profile::single_response(
@@ -2334,6 +2333,11 @@ pub enum MutationError {
     },
     #[error("mutation is outside the caller's authorized record boundary")]
     AuthorizationRefused,
+    /// A direct create or patch produced a row outside the selected access
+    /// profile's row boundary. This is distinct from concealed target and
+    /// stale-condition failures, which remain generic precondition refusals.
+    #[error("the resulting record is outside the selected access profile's row boundary")]
+    WriteOutsideBoundary,
     #[error("mutation precondition failed")]
     PreconditionFailed,
     /// Internal cause only. HTTP must retain the generic precondition refusal
@@ -2807,7 +2811,7 @@ fn authorize_record_snapshot(
         .authorizes_record_snapshot(&request.plan.entity, data, record_id)
     {
         Ok(true) => Ok(()),
-        Ok(false) => Err(MutationError::AuthorizationRefused),
+        Ok(false) => Err(MutationError::WriteOutsideBoundary),
         Err(_) => Err(MutationError::Unavailable),
     }
 }
@@ -3867,7 +3871,7 @@ impl BatchMutationItem {
                 patch,
             } => json!({
                 "operation": "patch",
-                "recordId": record_id,
+                "recordIdentifier": record_id,
                 "ifMatch": expected_etag,
                 "patch": mutation_body_json(&MutationBody::Patch(patch.clone())),
             }),

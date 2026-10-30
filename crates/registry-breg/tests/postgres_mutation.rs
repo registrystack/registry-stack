@@ -680,7 +680,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
     assert_eq!(patched_body["data"]["domainData"]["quantity"], 41);
     assert_eq!(patched_body["data"]["recordIdentifier"], patch_id);
     assert_eq!(patched_body["data"]["revisionIdentifier"], "2");
-    assert_snapshot_reference(&patched_body["data"]["snapshot"]);
+    assert!(patched_body["data"].get("snapshot").is_none());
     let patched_etag = response_etag(&patched);
     assert_one_complete_effect(before_patch, durable_counts(&database, table).await, 0, 2);
     assert_patch_preserved_omitted_field(&database, table, &patch_id).await;
@@ -1333,13 +1333,14 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
             .to_vec(),
     )
     .await;
-    assert_eq!(refused_create.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(refused_create.status(), StatusCode::FORBIDDEN);
     let refused_create = body_json(refused_create).await;
-    assert_eq!(refused_create["code"], "precondition.failed");
+    assert_eq!(refused_create["code"], "write.outside-boundary");
     assert_eq!(
         refused_create["detail"],
-        "The mutation precondition failed."
+        "The resulting record falls outside the selected access profile's row boundary."
     );
+    assert_fixed_problem_members(&refused_create);
     assert!(!refused_create.to_string().contains("zone-b"));
     assert_eq!(
         durable_counts(&database, &table).await,
@@ -1393,9 +1394,14 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
         br#"[{"op":"replace","path":"/data/jurisdiction","value":"zone-b"}]"#.to_vec(),
     )
     .await;
-    assert_eq!(refused_patch.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(refused_patch.status(), StatusCode::FORBIDDEN);
     let refused_patch = body_json(refused_patch).await;
-    assert_eq!(refused_patch["code"], "precondition.failed");
+    assert_eq!(refused_patch["code"], "write.outside-boundary");
+    assert_eq!(
+        refused_patch["detail"],
+        "The resulting record falls outside the selected access profile's row boundary."
+    );
+    assert_fixed_problem_members(&refused_patch);
     assert!(!refused_patch.to_string().contains("zone-b"));
     assert_eq!(
         durable_counts(&database, &table).await,
@@ -1434,6 +1440,34 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
     assert_eq!(
         preserved.body["data"]["domainData"]["label"],
         "boundary-seed"
+    );
+
+    let before_stale = durable_counts(&database, &table).await;
+    let stale = send(
+        &app,
+        Method::PATCH,
+        &format!("/v1/records/widgets/{record_id}"),
+        Some(claims.clone()),
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("idempotency-key", "boundary-stale-precondition"),
+            ("if-match", "\"breg-stale\""),
+        ],
+        br#"[{"op":"replace","path":"/data/label","value":"stale-canary"}]"#.to_vec(),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+    let stale = body_json(stale).await;
+    assert_eq!(stale["code"], "precondition.failed");
+    assert_eq!(stale["detail"], "The mutation precondition failed.");
+    assert_fixed_problem_members(&stale);
+    assert!(!stale.to_string().contains("stale-canary"));
+    assert_eq!(
+        durable_counts(&database, &table).await,
+        DurableCounts {
+            audit: before_stale.audit + 2,
+            ..before_stale
+        }
     );
 
     database
@@ -1542,8 +1576,8 @@ async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_wr
         .expect("created record id")
         .to_owned();
 
-    // A batch with one in-boundary and one out-of-boundary create answers
-    // the value-free precondition refusal and commits neither item.
+    // A direct batch with one in-boundary and one out-of-boundary create
+    // answers the value-free boundary refusal and commits neither item.
     let before_batch = durable_counts(&database, &table).await;
     let before_batch_refusals = refusal_audit_count(&database).await;
     let refused_batch = problem(
@@ -1562,9 +1596,14 @@ async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_wr
         .await,
     )
     .await;
-    assert_eq!(refused_batch.0, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(refused_batch.0, StatusCode::FORBIDDEN);
     let refused_batch_body: Value = serde_json::from_slice(&refused_batch.1).unwrap();
-    assert_eq!(refused_batch_body["code"], "precondition.failed");
+    assert_eq!(refused_batch_body["code"], "write.outside-boundary");
+    assert_eq!(
+        refused_batch_body["detail"],
+        "The resulting record falls outside the selected access profile's row boundary."
+    );
+    assert_fixed_problem_members(&refused_batch_body);
     let refused_batch_text = String::from_utf8(refused_batch.1.clone()).unwrap();
     for concealed in ["zone-b", "batch-concealed-value", "batch-in-boundary"] {
         assert!(
@@ -1667,7 +1706,7 @@ async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_wr
     let before_unique = durable_counts(&database, &table).await;
     let colliding = problem(create("oracle-colliding-create", "hidden-unique-label").await).await;
     let fresh = problem(create("oracle-fresh-create", "fresh-unique-label").await).await;
-    assert_eq!(colliding.0, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(colliding.0, StatusCode::FORBIDDEN);
     assert_identical_problems(&colliding, &fresh);
     let colliding_batch = problem(
         send(
@@ -1684,7 +1723,7 @@ async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_wr
         .await,
     )
     .await;
-    assert_eq!(colliding_batch.0, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(colliding_batch.0, StatusCode::FORBIDDEN);
     assert_eq!(
         durable_counts(&database, &table).await,
         DurableCounts {
@@ -2412,7 +2451,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         "mutation-registry"
     );
     assert_eq!(created.body["meta"]["datasetIdentifier"], "test-dataset");
-    assert_eq!(created.body["meta"]["entityTypeIdentifier"], "widget");
+    assert_eq!(created.body["meta"]["recordTypeIdentifier"], "widget");
     assert_eq!(created.body["data"]["domainData"]["label"], "http-created");
     assert_eq!(created.body["data"]["domainData"]["note"], Value::Null);
     assert!(created.etag.starts_with("\"breg-"));
@@ -3541,7 +3580,7 @@ async fn record_and_query_refusals_name_only_fixed_members_and_admitted_fields()
         batch(
             "located-batch-patch",
             json!({"items":[{
-                "operation":"patch","recordId":record_id,"ifMatch":created.etag,
+                "operation":"patch","recordIdentifier":record_id,"ifMatch":created.etag,
                 "patch":[{"op":"replace","path":"/label","value":"G"}]
             }]}),
         )
@@ -3768,6 +3807,20 @@ fn assert_identical_problems(left: &(StatusCode, Vec<u8>), right: &(StatusCode, 
         )
     };
     assert_eq!(strip(left), strip(right));
+}
+
+fn assert_fixed_problem_members(body: &Value) {
+    assert_eq!(
+        body.as_object()
+            .expect("problem is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        ["type", "title", "status", "detail", "code", "traceId"]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        "{body}"
+    );
 }
 
 fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
@@ -4842,7 +4895,7 @@ fn assert_created_response(outcome: &MutationOutcome, record_id: &str, label: &s
     assert_eq!(body["data"]["domainData"]["quantity"], quantity);
     assert_eq!(body["data"]["recordIdentifier"], record_id);
     assert_eq!(body["data"]["revisionIdentifier"], "1");
-    assert_snapshot_reference(&body["data"]["snapshot"]);
+    assert!(body["data"].get("snapshot").is_none());
     assert_eq!(
         outcome.response().headers()[&PermittedResponseHeader::ContentType],
         b"application/json"
@@ -4852,15 +4905,6 @@ fn assert_created_response(outcome: &MutationOutcome, record_id: &str, label: &s
         outcome.response().headers()[&PermittedResponseHeader::Location],
         format!("/v1/records/widgets/{record_id}").as_bytes()
     );
-}
-
-fn assert_snapshot_reference(value: &Value) {
-    let snapshot = value.as_str().expect("response carries snapshot reference");
-    let suffix = snapshot
-        .strip_prefix("breg1_")
-        .expect("snapshot reference carries the breg1_ prefix");
-    assert_eq!(suffix.len(), 36);
-    Uuid::parse_str(suffix).expect("snapshot suffix is a UUID");
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

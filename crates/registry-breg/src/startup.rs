@@ -1728,6 +1728,7 @@ async fn finish_prepared_server(
         audit,
         Some(event_destinations),
     )
+    .with_http_request_timeout(config.operational_timeouts().http_request)
     .with_idempotency_policy(idempotency)
     .with_task_status(task_status)
     .with_attachment_storage(attachment_storage)

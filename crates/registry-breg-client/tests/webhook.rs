@@ -1,12 +1,10 @@
-use std::collections::BTreeMap;
-
 use registry_breg_client::{verify_hook_delivery, BRegHookDelivery, BRegHookVerificationError};
 
 const KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
 const BODY: &[u8] = br#"{"entity":"case","values":{"label":"value"}}"#;
 const SIGNATURE: &str = "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM";
 
-fn headers() -> BTreeMap<String, String> {
+fn headers() -> Vec<(String, String)> {
     [
         ("Ce-Specversion", "1.0"),
         ("CE-ID", "00000000-0000-4000-8000-000000000001"),
@@ -36,7 +34,7 @@ fn headers() -> BTreeMap<String, String> {
 }
 
 fn delivery<'a>(
-    headers: &'a BTreeMap<String, String>,
+    headers: &'a [(String, String)],
     body: &'a [u8],
     key: &'a [u8],
 ) -> BRegHookDelivery<'a> {
@@ -47,6 +45,14 @@ fn delivery<'a>(
         body,
         key,
     }
+}
+
+fn set_header(headers: &mut [(String, String)], name: &str, value: impl Into<String>) {
+    headers
+        .iter_mut()
+        .find(|(candidate, _)| candidate == name)
+        .unwrap()
+        .1 = value.into();
 }
 
 #[test]
@@ -82,22 +88,23 @@ fn fixed_vector_verifies_and_returns_exact_delivery() {
 #[test]
 fn refusal_codes_are_closed_and_value_free() {
     let mut missing = headers();
-    missing.remove("ce-type");
+    missing.retain(|(name, _)| name != "ce-type");
     assert_eq!(
         verify_hook_delivery(delivery(&missing, BODY, KEY)),
         Err(BRegHookVerificationError::MissingHeader)
     );
 
     let mut malformed = headers();
-    malformed.insert("x-registry-signature".into(), "v1=truncated".into());
+    set_header(&mut malformed, "x-registry-signature", "v1=truncated");
     assert_eq!(
         verify_hook_delivery(delivery(&malformed, BODY, KEY)),
         Err(BRegHookVerificationError::MalformedSignature)
     );
 
     let mut unsupported = headers();
-    unsupported.insert(
-        "x-registry-signature".into(),
+    set_header(
+        &mut unsupported,
+        "x-registry-signature",
         SIGNATURE.replacen("v1=", "v2=", 1),
     );
     assert_eq!(
@@ -106,7 +113,7 @@ fn refusal_codes_are_closed_and_value_free() {
     );
 
     let mut tampered = headers();
-    tampered.insert("ce-type".into(), "case-patched-v1".into());
+    set_header(&mut tampered, "ce-type", "case-patched-v1");
     assert_eq!(
         verify_hook_delivery(delivery(&tampered, BODY, KEY)),
         Err(BRegHookVerificationError::SignatureMismatch)
@@ -136,13 +143,15 @@ fn invalid_delivery_time_names_the_delivery_time_fix() {
         .iter()
         .find(|value| value["valid"] == false)
         .unwrap();
-    invalid.insert(
-        "x-registry-delivery-time".into(),
-        vector["deliveryTime"].as_str().unwrap().into(),
+    set_header(
+        &mut invalid,
+        "x-registry-delivery-time",
+        vector["deliveryTime"].as_str().unwrap(),
     );
-    invalid.insert(
-        "x-registry-signature".into(),
-        vector["signature"].as_str().unwrap().into(),
+    set_header(
+        &mut invalid,
+        "x-registry-signature",
+        vector["signature"].as_str().unwrap(),
     );
     let error = verify_hook_delivery(delivery(&invalid, BODY, KEY)).unwrap_err();
     assert_eq!(error, BRegHookVerificationError::InvalidDeliveryTime);
@@ -156,7 +165,7 @@ fn invalid_delivery_time_names_the_delivery_time_fix() {
 #[test]
 fn duplicate_header_names_the_header_fix() {
     let mut duplicate = headers();
-    duplicate.insert("CE-TYPE".into(), "case-created-v1".into());
+    duplicate.push(("ce-type".into(), "case-created-v1".into()));
     let error = verify_hook_delivery(delivery(&duplicate, BODY, KEY)).unwrap_err();
     assert_eq!(error, BRegHookVerificationError::DuplicateHeader);
     assert_eq!(error.code(), "duplicate-header");

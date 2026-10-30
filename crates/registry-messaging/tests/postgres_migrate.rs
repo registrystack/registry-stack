@@ -27,6 +27,7 @@ use registry_messaging::runtime::{apply_activation, serve_from_path};
 use registry_messaging::store::{PostgresStore, StoreError};
 use registry_messaging_client::{MessagingClient, MessagingClientConfig};
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_testing::verify_postgres_schema_equivalence;
 use serde_json::json;
 use support::{
     email_submission, sender_token, sender_token_for, Harness, ISSUER, SENDER_PRINCIPAL,
@@ -98,6 +99,136 @@ async fn applied_versions(isolated: &Isolated) -> Vec<i64> {
         .iter()
         .map(|row| row.get(0))
         .collect()
+}
+
+async fn install_catalog_probe(isolated: &Isolated) {
+    isolated
+        .admin
+        .batch_execute(&format!(
+            r#"
+            CREATE TABLE {schema}.catalog_probe (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                state text NOT NULL DEFAULT 'pending',
+                source text NOT NULL DEFAULT 'domain.literal',
+                changed_at timestamptz,
+                CONSTRAINT catalog_probe_state CHECK (state IN ('pending', 'done'))
+            );
+            CREATE INDEX catalog_probe_pending_idx
+                ON {schema}.catalog_probe (id) WHERE state = 'pending';
+            CREATE FUNCTION {schema}.catalog_probe_touch() RETURNS trigger
+                LANGUAGE plpgsql AS $function$
+                BEGIN
+                    NEW.changed_at := transaction_timestamp();
+                    RETURN NEW;
+                END
+                $function$;
+            CREATE TRIGGER catalog_probe_touch
+                BEFORE UPDATE ON {schema}.catalog_probe
+                FOR EACH ROW EXECUTE FUNCTION {schema}.catalog_probe_touch();
+            CREATE FUNCTION {schema}.catalog_probe_increment(value integer) RETURNS integer
+                LANGUAGE sql IMMUTABLE STRICT
+                AS $function$ SELECT value + 1 $function$;
+            CREATE VIEW {schema}.catalog_probe_pending AS
+                SELECT id, source FROM {schema}.catalog_probe WHERE state = 'pending';
+            ALTER TABLE {schema}.catalog_probe ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE {schema}.catalog_probe FORCE ROW LEVEL SECURITY;
+            CREATE POLICY catalog_probe_pending_policy ON {schema}.catalog_probe
+                USING (state = 'pending') WITH CHECK (state = 'pending');
+            "#,
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("install the catalog comparison probe");
+}
+
+async fn equivalent_catalog_probes() -> (Isolated, Isolated) {
+    let left = isolated_schema().await;
+    let right = isolated_schema().await;
+    install_catalog_probe(&left).await;
+    install_catalog_probe(&right).await;
+    verify_postgres_schema_equivalence(&left.admin, &left.schema, &right.admin, &right.schema)
+        .await
+        .expect("independently installed equivalent schemas have one catalog");
+    (left, right)
+}
+
+async fn assert_catalog_difference(mutation: &str, expected: &str) {
+    let (left, right) = equivalent_catalog_probes().await;
+    right
+        .admin
+        .batch_execute(&mutation.replace("{schema}", &right.schema))
+        .await
+        .expect("mutate one comparison schema");
+    let report =
+        verify_postgres_schema_equivalence(&left.admin, &left.schema, &right.admin, &right.schema)
+            .await
+            .expect_err("the catalog mutation is visible");
+    assert!(report.contains(expected), "{report}");
+}
+
+#[tokio::test]
+async fn postgres_catalog_comparison_detects_migration_shape_and_security_drift() {
+    for (mutation, expected) in [
+        (
+            "ALTER TABLE {schema}.catalog_probe DROP CONSTRAINT catalog_probe_state",
+            "catalog_probe_state",
+        ),
+        ("DROP INDEX {schema}.catalog_probe_pending_idx", "catalog_probe_pending_idx"),
+        (
+            "DROP TRIGGER catalog_probe_touch ON {schema}.catalog_probe",
+            "catalog_probe_touch",
+        ),
+        (
+            "DROP FUNCTION {schema}.catalog_probe_increment(integer)",
+            "catalog_probe_increment",
+        ),
+        (
+            "CREATE OR REPLACE VIEW {schema}.catalog_probe_pending AS SELECT id, source FROM {schema}.catalog_probe WHERE state = 'done'",
+            "catalog_probe_pending",
+        ),
+        (
+            "ALTER SEQUENCE {schema}.catalog_probe_id_seq INCREMENT BY 2",
+            "catalog_probe_id_seq",
+        ),
+        (
+            "ALTER TABLE {schema}.catalog_probe NO FORCE ROW LEVEL SECURITY",
+            "forceRowSecurity",
+        ),
+        (
+            "DROP POLICY catalog_probe_pending_policy ON {schema}.catalog_probe",
+            "catalog_probe_pending_policy",
+        ),
+        (
+            "GRANT USAGE ON SCHEMA {schema} TO PUBLIC",
+            "namespace",
+        ),
+    ] {
+        assert_catalog_difference(mutation, expected).await;
+    }
+
+    let (left, right) = equivalent_catalog_probes().await;
+    left.admin
+        .batch_execute(&format!(
+            "ALTER TABLE {}.catalog_probe ALTER COLUMN source SET DEFAULT '{}'",
+            left.schema, left.schema
+        ))
+        .await
+        .expect("put the left schema name in a domain literal");
+    right
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {}.catalog_probe ALTER COLUMN source SET DEFAULT '{}'",
+            right.schema, right.schema
+        ))
+        .await
+        .expect("put the right schema name in a domain literal");
+    let report =
+        verify_postgres_schema_equivalence(&left.admin, &left.schema, &right.admin, &right.schema)
+            .await
+            .expect_err("schema qualifier normalization never rewrites domain literals");
+    assert!(report.contains("default"), "{report}");
+    assert!(report.contains(&left.schema), "{report}");
+    assert!(report.contains(&right.schema), "{report}");
 }
 
 #[tokio::test]
@@ -294,7 +425,7 @@ async fn apply_migrates_a_version_100_database_forward_and_keeps_its_queue() {
         file_audit(root.path()),
     );
     let config =
-        RuntimeConfig::load(&root.path().join("runtime.yaml")).expect("the runtime configuration");
+        RuntimeConfig::load(root.path().join("runtime.yaml")).expect("the runtime configuration");
 
     let applied = apply_activation(&config, &ApplyRequest::default())
         .await

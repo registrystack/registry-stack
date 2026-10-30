@@ -510,6 +510,7 @@ impl RuntimeConfig {
             kind: KIND,
         })
         .removed_keys(REMOVED_KEYS)
+        .require_trusted_ownership()
     }
 
     /// Serialize the complete configuration envelope without resolving credentials.

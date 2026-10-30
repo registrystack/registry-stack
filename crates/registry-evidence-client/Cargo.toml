@@ -20,6 +20,7 @@ base64.workspace = true
 chrono.workspace = true
 getrandom.workspace = true
 registry-evidence-verifier.workspace = true
+registry-platform-canonical-json.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httpsec = { workspace = true, default-features = false }
 registry-platform-httputil.workspace = true

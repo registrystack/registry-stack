@@ -77,7 +77,7 @@ and freezes its current compiled policy at first acceptance. This delegates
 policy-version governance to the trusted Casework administrator. A producer
 that must approve every policy change instead submits the exact
 `{id, version, digest}` binding. Both pin fields are required together.
-For strict mode, read `data.policyBindings[]` from the checked project:
+For strict mode, read `policyBindings[]` from the checked project's flat report:
 
 ```sh
 caseworkctl --format json check ./casework
@@ -239,6 +239,9 @@ caseworkctl provider add ./review --breg-project ./facility \
 The command reads BReg through the matching `bregctl` public CLI. Missing
 review requirements, context, or reader grants produce
 `casework.provider-add.breg-changes-needed`, proposed YAML, and no project.
+The flat JSON report names the command result in `outcome`, such as
+`changes-needed`, `created`, or `in-agreement`; `status` remains the process
+result class.
 Review and apply those source changes, then rerun. Existing context, policy
 IDs, and authority names are retained. The suggested context contains the
 Plan's used inputs and changed fields; a changes projection needs ordinary

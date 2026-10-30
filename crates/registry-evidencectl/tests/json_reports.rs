@@ -11,12 +11,20 @@ fn evidencectl() -> Command {
 }
 
 fn json_of(output: &std::process::Output) -> Value {
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "invalid JSON on stdout: {error}: {}",
             String::from_utf8_lossy(&output.stdout)
         )
-    })
+    });
+    if value["kind"] == "EvidenceCtlReport" {
+        assert_eq!(
+            value["version"],
+            registry_platform_buildinfo::DISPLAY_VERSION
+        );
+        assert!(value["diagnostics"].is_array(), "{value}");
+    }
+    value
 }
 
 #[test]
@@ -97,7 +105,8 @@ fn a_refused_check_report_keeps_the_passing_report_top_level_keys() {
         );
     }
     assert_eq!(report["ok"], Value::Bool(false));
-    assert_eq!(report["status"], "refused");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["outcome"], "refused");
     assert!(report.get("findings").is_none(), "{report}");
     let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
     assert_eq!(diagnostics.len(), 1, "{report}");

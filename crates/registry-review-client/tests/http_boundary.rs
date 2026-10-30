@@ -182,7 +182,11 @@ async fn capture_create(
     );
     assert_eq!(sent["policy"], json!(create_request().policy));
     assert!(sent.get("kind").is_none());
-    json_response(StatusCode::OK, accepted_json(Uuid::from_u128(7)))
+    let mut accepted = accepted_json(Uuid::from_u128(7));
+    accepted["futureAcceptedMember"] = json!({"safeToIgnore": true});
+    accepted["subject"]["futureSubjectMember"] = json!(true);
+    accepted["policy"]["futurePolicyMember"] = json!(true);
+    json_response(StatusCode::OK, accepted)
 }
 
 #[tokio::test]
@@ -591,26 +595,27 @@ async fn capture_request(
     request: Request<Body>,
 ) -> Response<Body> {
     capture(&observations, &request);
-    json_response(
-        StatusCode::OK,
-        json!({
-            "requestId": request_id,
-            "subject": {
-                "source": "registry",
-                "type": "change-request",
-                "id": "proposal-7",
-                "version": "3",
-                "digest": DIGEST
-            },
-            "policy": {"id": "registry-correction", "version": "1", "digest": DIGEST},
-            "submissionDigest": DIGEST,
-            "requesterReference": "proposal-7",
-            "lifecycle": "reviewing",
-            "activeStage": "legal",
-            "createdAt": "2026-09-19T00:00:00Z",
-            "updatedAt": "2026-09-19T00:00:01Z"
-        }),
-    )
+    let mut view = json!({
+        "requestId": request_id,
+        "subject": {
+            "source": "registry",
+            "type": "change-request",
+            "id": "proposal-7",
+            "version": "3",
+            "digest": DIGEST
+        },
+        "policy": {"id": "registry-correction", "version": "1", "digest": DIGEST},
+        "submissionDigest": DIGEST,
+        "requesterReference": "proposal-7",
+        "lifecycle": "reviewing",
+        "activeStage": "legal",
+        "createdAt": "2026-09-19T00:00:00Z",
+        "updatedAt": "2026-09-19T00:00:01Z"
+    });
+    view["futureRequestMember"] = json!({"safeToIgnore": true});
+    view["subject"]["futureSubjectMember"] = json!(true);
+    view["policy"]["futurePolicyMember"] = json!(true);
+    json_response(StatusCode::OK, view)
 }
 
 async fn capture_feed(
@@ -618,18 +623,18 @@ async fn capture_feed(
     request: Request<Body>,
 ) -> Response<Body> {
     capture(&observations, &request);
-    json_response(
-        StatusCode::OK,
-        json!({
-            "items": [{
-                "eventId": Uuid::from_u128(8),
-                "requestId": Uuid::from_u128(7),
-                "resultId": Uuid::from_u128(99),
-                "completedAt": "2026-09-19T00:00:00Z"
-            }],
-            "nextCursor": Uuid::from_u128(8)
-        }),
-    )
+    let mut page = json!({
+        "items": [{
+            "eventId": Uuid::from_u128(8),
+            "requestId": Uuid::from_u128(7),
+            "resultId": Uuid::from_u128(99),
+            "completedAt": "2026-09-19T00:00:00Z"
+        }],
+        "nextCursor": Uuid::from_u128(8)
+    });
+    page["futurePageMember"] = json!({"safeToIgnore": true});
+    page["items"][0]["futureEntryMember"] = json!(true);
+    json_response(StatusCode::OK, page)
 }
 
 async fn capture_cancel(
@@ -638,25 +643,27 @@ async fn capture_cancel(
     request: Request<Body>,
 ) -> Response<Body> {
     capture(&observations, &request);
-    json_response(
-        StatusCode::OK,
-        json!({"outcome": "cancelled", "result": {
-            "resultId": Uuid::from_u128(99),
-            "requestId": request_id,
-            "subject": {
-                "source": "registry",
-                "type": "change-request",
-                "id": "proposal-7",
-                "version": "3",
-                "digest": DIGEST
-            },
-            "policy": {"id": "registry-correction", "version": "1", "digest": DIGEST},
-            "submissionDigest": DIGEST,
-            "status": "cancelled",
-            "completedAt": "2026-09-19T00:00:00Z",
-            "availableUntil": "2026-10-19T00:00:00Z"
-        }}),
-    )
+    let mut cancellation = json!({"outcome": "cancelled", "result": {
+        "resultId": Uuid::from_u128(99),
+        "requestId": request_id,
+        "subject": {
+            "source": "registry",
+            "type": "change-request",
+            "id": "proposal-7",
+            "version": "3",
+            "digest": DIGEST
+        },
+        "policy": {"id": "registry-correction", "version": "1", "digest": DIGEST},
+        "submissionDigest": DIGEST,
+        "status": "cancelled",
+        "completedAt": "2026-09-19T00:00:00Z",
+        "availableUntil": "2026-10-19T00:00:00Z"
+    }});
+    cancellation["futureCancellationMember"] = json!({"safeToIgnore": true});
+    cancellation["result"]["futureResultMember"] = json!(true);
+    cancellation["result"]["subject"]["futureSubjectMember"] = json!(true);
+    cancellation["result"]["policy"]["futurePolicyMember"] = json!(true);
+    json_response(StatusCode::OK, cancellation)
 }
 
 fn capture(observations: &Observations, request: &Request<Body>) {
@@ -857,7 +864,13 @@ async fn queued_cancel_response(
 
 async fn result_by_id(Path(id): Path<Uuid>) -> Response<Body> {
     match id.as_u128() {
-        200 => json_response(StatusCode::OK, result_json(id)),
+        200 => {
+            let mut value = result_json(id);
+            value["futureResultMember"] = json!({"safeToIgnore": true});
+            value["subject"]["futureSubjectMember"] = json!(true);
+            value["policy"]["futurePolicyMember"] = json!(true);
+            json_response(StatusCode::OK, value)
+        }
         201 => json_response(StatusCode::OK, result_json(Uuid::from_u128(200))),
         202 => empty_response(StatusCode::ACCEPTED),
         404 => empty_response(StatusCode::NOT_FOUND),
@@ -1064,7 +1077,21 @@ async fn wrong_media() -> Response<Body> {
 }
 
 async fn malformed_problem() -> Response<Body> {
-    problem_response(true)
+    let value = json!({
+        "type": "https://id.registrystack.org/problems/registry-casework/request/invalid",
+        "title": "Invalid request",
+        "status": "400",
+        "detail": "The review request is invalid.",
+        "code": "request.invalid",
+        "traceId": "0123456789abcdef0123456789abcdef",
+        "futureMember": {"safeToIgnore": true}
+    });
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header("content-type", "application/problem+json")
+        .header("traceparent", TRACEPARENT)
+        .body(Body::from(value.to_string()))
+        .expect("fixture response")
 }
 
 async fn invalid_problem_uri() -> Response<Body> {
@@ -1094,7 +1121,7 @@ async fn provider_specific_problem() -> Response<Body> {
 }
 
 async fn unpaired_problem() -> Response<Body> {
-    let mut response = problem_response(false);
+    let mut response = problem_response();
     response.headers_mut().insert(
         "registry-review-validation-path",
         HeaderValue::from_static("$.context.snapshot"),
@@ -1103,7 +1130,7 @@ async fn unpaired_problem() -> Response<Body> {
 }
 
 async fn valid_problem() -> Response<Body> {
-    let mut response = problem_response(false);
+    let mut response = problem_response();
     response.headers_mut().insert(
         "registry-review-validation-path",
         HeaderValue::from_static("$.context.snapshot"),
@@ -1132,18 +1159,16 @@ async fn server_problem() -> Response<Body> {
         .expect("fixture response")
 }
 
-fn problem_response(extra_member: bool) -> Response<Body> {
-    let mut value = json!({
+fn problem_response() -> Response<Body> {
+    let value = json!({
         "type": "https://id.registrystack.org/problems/registry-casework/request/invalid",
         "title": "Invalid request",
         "status": 400,
         "detail": "The review request is invalid.",
         "code": "request.invalid",
-        "traceId": "0123456789abcdef0123456789abcdef"
+        "traceId": "0123456789abcdef0123456789abcdef",
+        "futureMember": {"safeToIgnore": true}
     });
-    if extra_member {
-        value["untrusted"] = json!("must be refused");
-    }
     Response::builder()
         .status(StatusCode::BAD_REQUEST)
         .header("content-type", "application/problem+json")

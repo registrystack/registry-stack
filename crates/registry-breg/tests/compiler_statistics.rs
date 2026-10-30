@@ -846,7 +846,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                     json!([boundary.clone()]);
             }
         },
-        "breg.statistical-dataset.publisher-entity-row-boundary",
+        "breg.statistical-dataset.publisher-record-type-row-boundary",
     );
 }
 

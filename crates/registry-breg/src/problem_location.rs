@@ -23,6 +23,24 @@ pub use crate::query::QUERY_PARAMETERS;
 /// Fixed query locations on the separate statistical dataset surface.
 pub const STATISTICS_QUERY_PARAMETERS: &[&str] = &["from", "to", "status"];
 
+/// Fixed query locations on the Proposal collection surface.
+pub const PROPOSAL_LIST_QUERY_PARAMETERS: &[&str] = &[
+    "action",
+    "owner",
+    "state",
+    "turn",
+    "pendingManualApplication",
+    "target",
+    "cursor",
+    "top",
+];
+
+/// Fixed query locations unique to the ingestion-run collection surface.
+pub const INGESTION_LIST_QUERY_PARAMETERS: &[&str] = &["inputDigest", "after"];
+
+/// The fixed container used when an unrecognized query name cannot be echoed.
+pub const QUERY_CONTAINER: &str = "query";
+
 /// The header a `request.invalid` refusal names when it is missing or
 /// malformed.
 pub const IDEMPOTENCY_KEY_HEADER: &str = "Idempotency-Key";
@@ -53,7 +71,7 @@ impl PatchMember {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BatchItemMember {
     Operation,
-    RecordId,
+    RecordIdentifier,
     IfMatch,
     Data,
     Patch,
@@ -63,7 +81,7 @@ impl BatchItemMember {
     const fn name(self) -> &'static str {
         match self {
             Self::Operation => "operation",
-            Self::RecordId => "recordId",
+            Self::RecordIdentifier => "recordIdentifier",
             Self::IfMatch => "ifMatch",
             Self::Data => "data",
             Self::Patch => "patch",
@@ -231,7 +249,7 @@ pub fn is_record_request_location(path: &str) -> bool {
     match segments.as_slice() {
         ["items", index, rest @ ..] if valid_index(index) => match rest {
             [] => true,
-            ["operation" | "recordId" | "ifMatch" | "patch"] => true,
+            ["operation" | "recordIdentifier" | "ifMatch" | "patch"] => true,
             ["patch", operation, member @ ..] => valid_patch_operation(operation, member),
             data => valid_record_data(data),
         },
@@ -245,7 +263,11 @@ pub fn is_record_request_location(path: &str) -> bool {
 /// Whether `path` names a fixed query parameter.
 #[must_use]
 pub fn is_query_parameter_location(path: &str) -> bool {
-    QUERY_PARAMETERS.contains(&path) || STATISTICS_QUERY_PARAMETERS.contains(&path)
+    QUERY_PARAMETERS.contains(&path)
+        || STATISTICS_QUERY_PARAMETERS.contains(&path)
+        || PROPOSAL_LIST_QUERY_PARAMETERS.contains(&path)
+        || INGESTION_LIST_QUERY_PARAMETERS.contains(&path)
+        || path == QUERY_CONTAINER
 }
 
 fn valid_record_data(segments: &[&str]) -> bool {
@@ -336,7 +358,7 @@ mod tests {
             "/changeContext",
             "/items/3",
             "/items/3/operation",
-            "/items/3/recordId",
+            "/items/3/recordIdentifier",
             "/items/3/ifMatch",
             "/items/3/patch",
             "/items/3/data",
@@ -362,7 +384,15 @@ mod tests {
             assert!(!is_record_request_location(path), "{path}");
         }
         assert!(is_query_parameter_location("$select"));
+        assert!(is_query_parameter_location("limit"));
+        assert!(is_query_parameter_location("cursor"));
+        assert!(is_query_parameter_location("pendingManualApplication"));
+        assert!(is_query_parameter_location("inputDigest"));
+        assert!(is_query_parameter_location("top"));
+        assert!(is_query_parameter_location("after"));
+        assert!(is_query_parameter_location("query"));
         assert!(!is_query_parameter_location("$expand"));
         assert!(!is_query_parameter_location("select"));
+        assert!(!is_query_parameter_location("unknownCanary"));
     }
 }

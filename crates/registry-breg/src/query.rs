@@ -635,7 +635,7 @@ pub const QUERY_PARAMETERS: [&str; 12] = [
     "asOf",
     "snapshot",
     "validAt",
-    "requestHistoryAfterProposalVersion",
+    "limit",
 ];
 
 /// The fixed name of `key`, when a refusal while reading it is its own.
@@ -784,7 +784,7 @@ impl QueryBuilder {
                 ensure_absent(self.skiptoken.is_none())?;
                 self.skiptoken = Some(parse_opaque_value(value, MAX_CURSOR_TOKEN_BYTES)?);
             }
-            "fields" | "filter" | "sort" | "pageSize" | "cursor" | "$skip" | "$apply"
+            "fields" | "filter" | "sort" | "pageSize" | "cursor" | "limit" | "$skip" | "$apply"
             | "$expand" | "$batch" => return Err(QueryParseError::DisallowedOption),
             "$query" | "query" | "sql" | "statement" => {
                 return Err(QueryParseError::DisallowedOption);
@@ -1309,7 +1309,7 @@ fn parse_opaque_value(value: &str, maximum_bytes: usize) -> Result<String, Query
     Ok(value.to_owned())
 }
 
-fn valid_config_identifier(value: &str) -> bool {
+pub(crate) fn valid_config_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
         return false;
@@ -1880,7 +1880,7 @@ mod tests {
     fn rejects_unknown_disallowed_and_duplicate_options() {
         assert_eq!(
             parse([("limit", "10")]),
-            Err(QueryParseError::UnknownOption)
+            Err(QueryParseError::DisallowedOption)
         );
         for key in [
             "fields", "filter", "sort", "pageSize", "cursor", "$skip", "$apply", "$expand",

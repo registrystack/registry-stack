@@ -16,9 +16,10 @@ use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use std::{
     ffi::OsString,
+    fmt,
     io::{self, Write},
     path::PathBuf,
-    process::{Command as ProcessCommand, ExitCode},
+    process::{Command as ProcessCommand, ExitCode, ExitStatus},
 };
 #[derive(Debug, Parser)]
 #[command(name="caseworkctl",version=registry_platform_buildinfo::DISPLAY_VERSION,about="Compile and operate bounded review policies")]
@@ -228,6 +229,15 @@ pub fn command() -> clap::Command {
     Cli::command()
 }
 pub fn main_entry() -> ExitCode {
+    registry_cli_report::install_panic_hook(
+        registry_cli_report::Identity {
+            binary: "caseworkctl",
+            api_version: report::REPORT_API_VERSION,
+            kind: report::REPORT_KIND,
+            version: registry_platform_buildinfo::DISPLAY_VERSION,
+        },
+        registry_cli_report::json_requested(std::env::args_os()),
+    );
     main_entry_from(std::env::args_os(), &mut io::stdout(), &mut io::stderr())
 }
 pub fn main_entry_from(
@@ -254,8 +264,11 @@ pub fn main_entry_from(
         Ok(cli) => cli,
         Err(error) => {
             if !error.use_stderr() {
-                let _ = write!(stdout, "{error}");
-                return ExitCode::SUCCESS;
+                return if write!(stdout, "{error}").is_ok() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+                };
             }
             let diagnostic = registry_platform_yaml::Diagnostic::error(
                 "casework.usage.invalid",
@@ -264,15 +277,20 @@ pub fn main_entry_from(
                 "Run caseworkctl --help for supported commands and arguments.",
             );
             if json_output {
-                if let Ok(value) = report::CliReport::failure(
+                let written = report::CliReport::failure(
                     "usage",
                     report::ReportStatus::UsageError,
                     vec![diagnostic],
-                ) {
-                    let _ = report::write(&serde_json::to_value(value).unwrap_or_default(), stdout);
+                )
+                .and_then(|value| serde_json::to_value(value).map_err(Into::into))
+                .and_then(|value| report::write(&value, stdout).map_err(Into::into));
+                if written.is_err() {
+                    return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
                 }
             } else {
-                let _ = writeln!(stderr, "{}", diagnostic.message);
+                if writeln!(stderr, "{}", diagnostic.message).is_err() {
+                    return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+                }
             }
             return ExitCode::from(report::USAGE_EXIT);
         }
@@ -291,14 +309,31 @@ pub fn main_entry_from(
     if report_command == "internal" {
         return match run(command) {
             Ok(_) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::from(1),
+            Err(error) => {
+                let (exit, diagnostic) = classify_failure(kind, &error);
+                let value = json!({
+                    "ok":false,"command":"internal","status":report::failure_status(exit),
+                    "apiVersion":report::REPORT_API_VERSION,"kind":report::REPORT_KIND,
+                    "diagnostics":[diagnostic]
+                });
+                let written = match format {
+                    OutputFormat::Json => report::write(&value, stdout),
+                    OutputFormat::Human => render_human(&value, stderr),
+                };
+                ExitCode::from(if written.is_ok() {
+                    exit
+                } else {
+                    OPERATIONAL_FAILURE_EXIT
+                })
+            }
         };
     }
     let result =
         run(command).and_then(|value| report::CliReport::from_value(report_command, value));
     let (value, exit) = match result {
         Ok(value) => {
-            let value = serde_json::to_value(value).unwrap_or_default();
+            let value =
+                serde_json::to_value(value).expect("a typed Casework command report serializes");
             let failed = value["ok"] != true;
             (value, if failed { DOMAIN_REFUSAL_EXIT } else { 0 })
         }
@@ -332,7 +367,7 @@ pub fn main_entry_from(
             };
             let value = report::CliReport::failure(report_command, status, diagnostics)
                 .and_then(|value| serde_json::to_value(value).map_err(Into::into))
-                .unwrap_or_default();
+                .expect("a declared Casework command accepts its failure report");
             (value, exit)
         }
     };
@@ -341,15 +376,42 @@ pub fn main_entry_from(
     } else {
         stdout as &mut dyn Write
     };
-    let _ = match format {
+    let written = match format {
         OutputFormat::Json => report::write(&value, output),
         OutputFormat::Human => render_human(&value, output),
     };
-    ExitCode::from(exit)
+    ExitCode::from(if written.is_ok() {
+        exit
+    } else {
+        OPERATIONAL_FAILURE_EXIT
+    })
 }
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 use report::OPERATIONAL_FAILURE_EXIT;
+
+#[derive(Debug)]
+struct ChildReportOperationalFailure;
+
+impl fmt::Display for ChildReportOperationalFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a required peer CLI command did not complete")
+    }
+}
+
+impl std::error::Error for ChildReportOperationalFailure {}
+
+fn child_report_failure(
+    status: ExitStatus,
+    domain_refusal: impl std::error::Error + Send + Sync + 'static,
+) -> anyhow::Error {
+    if status.code() == Some(i32::from(DOMAIN_REFUSAL_EXIT)) {
+        anyhow::Error::new(domain_refusal)
+    } else {
+        anyhow::Error::new(ChildReportOperationalFailure)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum CommandKind {
     Authoring,
@@ -372,6 +434,15 @@ fn command_kind(command: &Command) -> CommandKind {
     }
 }
 fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
+    if error
+        .chain()
+        .any(|cause| cause.is::<ChildReportOperationalFailure>())
+    {
+        return (
+            OPERATIONAL_FAILURE_EXIT,
+            json!({"severity":"error","code":"caseworkctl.peer-operational-failure","path":"runtime","message":"A required peer CLI command did not complete.","suggestedAction":"Restore the peer CLI or its runtime dependency, then retry."}),
+        );
+    }
     if let Some(failure) = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<provider_add::ProviderAddFailure>())
@@ -421,16 +492,25 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             json!({"severity":"error","code":runtime.code(),"path":format!("runtime.yaml:{}",runtime.pointer()),"message":if unavailable{"The configured runtime dependency is unavailable."}else{"The runtime configuration was refused."},"suggestedAction":runtime.suggested_action()}),
         );
     }
+    if error
+        .chain()
+        .any(|cause| cause.is::<project::ProjectRefusal>())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({"severity":"error","code":"caseworkctl.refused","path":"runtime","message":"The authored input was refused.","suggestedAction":"Correct the named input or runtime dependency, then retry."}),
+        );
+    }
     let io_failure = error.chain().any(|cause| cause.is::<std::io::Error>());
-    let domain = !io_failure
-        && (configuration_report(error).is_some() || matches!(kind, CommandKind::Authoring));
+    let domain = !io_failure && configuration_report(error).is_some();
+    let internal = !io_failure && !domain && matches!(kind, CommandKind::Authoring);
     (
         if domain {
             DOMAIN_REFUSAL_EXIT
         } else {
             OPERATIONAL_FAILURE_EXIT
         },
-        json!({"severity":"error","code":if io_failure{"caseworkctl.io-failure"}else if domain{"caseworkctl.refused"}else{"caseworkctl.operational-failure"},"path":if io_failure{"filesystem"}else{"runtime"},"message":if io_failure{"A required filesystem operation failed."}else if domain{"The authored input was refused."}else{"A Casework runtime dependency check failed."},"suggestedAction":if io_failure{"Correct the path or permissions, then retry."}else{"Correct the named input or runtime dependency, then retry."}}),
+        json!({"severity":"error","code":if io_failure{"caseworkctl.io-failure"}else if domain{"caseworkctl.refused"}else if internal{"caseworkctl.internal-error"}else{"caseworkctl.operational-failure"},"path":if io_failure{"filesystem"}else{"runtime"},"message":if io_failure{"A required filesystem operation failed."}else if domain{"The authored input was refused."}else if internal{"The command stopped because of an internal error."}else{"A Casework runtime dependency check failed."},"suggestedAction":if io_failure{"Correct the path or permissions, then retry."}else if internal{"Preserve the input, check for a corrected release, and report the diagnostic code."}else{"Correct the named input or runtime dependency, then retry."}}),
     )
 }
 
@@ -789,10 +869,13 @@ fn render_human(value: &Value, out: &mut (impl Write + ?Sized)) -> io::Result<()
         }
     }
     if value["command"] == "provider-add" {
-        if let Some(data) = value.get("data") {
-            return render_provider_add(data, out);
-        }
-        return Ok(());
+        // A flattened Option<ProviderAddData> has `outcome` exactly when its
+        // complete typed payload is present. Bare failures render diagnostics only.
+        return if value.get("outcome").is_some() {
+            render_provider_add(value, out)
+        } else {
+            Ok(())
+        };
     }
     writeln!(
         out,
@@ -840,7 +923,7 @@ fn render_provider_add(data: &Value, out: &mut (impl Write + ?Sized)) -> io::Res
     writeln!(
         out,
         "{}: {}",
-        data["state"].as_str().unwrap_or_default(),
+        data["outcome"].as_str().unwrap_or_default(),
         data["next"].as_str().unwrap_or_default()
     )
 }
@@ -873,6 +956,129 @@ pub(crate) fn canonical_tempdir() -> tempfile::TempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ClosedOutput;
+
+    impl Write for ClosedOutput {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn unexpected_authoring_errors_are_value_free_internal_failures() {
+        let error = anyhow::anyhow!("private-internal-sentinel");
+        let (exit, diagnostic) = classify_failure(CommandKind::Authoring, &error);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "caseworkctl.internal-error");
+        assert!(!diagnostic.to_string().contains("private-internal-sentinel"));
+        assert!(diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| !action.is_empty()));
+    }
+
+    #[test]
+    fn a_usage_report_that_cannot_be_written_exits_operationally() {
+        let exit = main_entry_from(
+            ["caseworkctl", "--format=json", "check"].map(OsString::from),
+            &mut ClosedOutput,
+            &mut Vec::new(),
+        );
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+    }
+
+    #[test]
+    fn help_that_cannot_be_written_exits_operationally() {
+        let exit = main_entry_from(
+            ["caseworkctl", "--help"].map(OsString::from),
+            &mut ClosedOutput,
+            &mut Vec::new(),
+        );
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+    }
+
+    #[test]
+    fn human_usage_that_cannot_be_written_exits_operationally() {
+        let exit = main_entry_from(
+            ["caseworkctl", "check"].map(OsString::from),
+            &mut Vec::new(),
+            &mut ClosedOutput,
+        );
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+    }
+
+    #[test]
+    fn an_existing_init_destination_is_a_typed_domain_refusal() {
+        let directory = canonical_tempdir();
+        let project = directory.path().join("existing");
+        std::fs::create_dir(&project).unwrap();
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format=json"),
+                OsString::from("init"),
+                project.clone().into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(report["status"], "domain-refusal");
+        assert_eq!(report["diagnostics"][0]["code"], "caseworkctl.refused");
+        assert_eq!(report["diagnostics"][0]["path"], "runtime");
+        assert!(project.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn provider_add_human_output_names_its_command_outcome() {
+        let mut rendered = Vec::new();
+        render_provider_add(
+            &json!({
+                "outcome":"changes-needed",
+                "next":"Review the proposed source changes.",
+                "changes":[],
+                "deployment":[],
+                "bypassPaths":[]
+            }),
+            &mut rendered,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(rendered).unwrap(),
+            "changes-needed: Review the proposed source changes.\n"
+        );
+    }
+
+    #[test]
+    fn provider_add_human_failure_without_payload_prints_only_its_diagnostic() {
+        let mut rendered = Vec::new();
+        render_human(
+            &json!({
+                "ok":false,
+                "command":"provider-add",
+                "status":"domain-refusal",
+                "diagnostics":[registry_platform_yaml::Diagnostic::error(
+                    "casework.provider-add.invalid-breg-report",
+                    "--breg-project",
+                    "The BReg report was refused.",
+                    "Inspect the BReg project, then retry.",
+                )]
+            }),
+            &mut rendered,
+        )
+        .unwrap();
+        let rendered = String::from_utf8(rendered).unwrap();
+        assert!(rendered.contains("The BReg report was refused."));
+        assert!(!rendered.lines().any(|line| line.trim() == ":"));
+    }
+
     #[test]
     fn serve_refuses_explicit_human_format_before_starting_the_runtime() {
         for arguments in [

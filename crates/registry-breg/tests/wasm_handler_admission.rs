@@ -432,6 +432,7 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
         "outputs": ["active"],
         "maximumObservationAgeSeconds": 60
     }]);
+    project["functions"][0]["capabilities"] = json!(["evidence"]);
     let contract = ModuleAssetSource {
         module: None,
         path: "evidence/farmer-contracts.json".to_owned(),
@@ -486,9 +487,8 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
     project["functions"][0] = json!({
         "id":"person-plan", "runtime":"rhai", "source":"handlers/register.rhai",
         "entrypoint":"plan", "abi":ACTION_PLAN_ABI_V1,
-        "capabilities":["evidence:farmer-status"]
+        "capabilities":["evidence"]
     });
-    project["actions"][0]["plan"]["capabilities"] = json!(["evidence:farmer-status"]);
     let registry = compile(
         &project,
         ModuleAssetSource {

@@ -178,7 +178,7 @@ def verify_hook_delivery(
     *,
     method: str,
     path: str,
-    headers: dict[str, str],
+    headers: Sequence[tuple[str, str]],
     body: bytes,
     key: bytes,
 ) -> VerifiedHookDelivery:
@@ -332,7 +332,7 @@ class BaseRegistryClient:
     def registry_metadata(self, access_profile: str | None = None) -> dict[str, Any]: ...
     def event_record_creation_revision(
         self,
-        entity_route: str,
+        record_route: str,
         record_identifier: str,
         *,
         access_profile: str | None = None,
@@ -372,10 +372,10 @@ class BaseRegistryClient:
         idempotency_key: str,
     ) -> dict[str, Any]: ...
     def registry_contract(self, access_profile: str | None = None) -> BRegMetadata: ...
-    def entity_schema(self, record_type_identifier: str, access_profile: str | None = None) -> dict[str, Any]: ...
+    def record_schema(self, record_type_identifier: str, access_profile: str | None = None) -> dict[str, Any]: ...
     def get_record(
         self,
-        entity_route: str,
+        record_route: str,
         record_identifier: str,
         *,
         select: Sequence[str] | None = None,
@@ -384,7 +384,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def get_geojson_record(
         self,
-        entity_route: str,
+        record_route: str,
         record_identifier: str,
         *,
         select: Sequence[str] | None = None,
@@ -392,7 +392,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def list_geojson_records(
         self,
-        entity_route: str,
+        record_route: str,
         *,
         top: int | None = None,
         select: Sequence[str] | None = None,
@@ -407,13 +407,13 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def record_revisions(
         self,
-        entity_route: str,
+        record_route: str,
         record_identifier: str,
         access_profile: str | None = None,
     ) -> dict[str, Any]: ...
     def get_record_revision(
         self,
-        entity_route: str,
+        record_route: str,
         record_identifier: str,
         revision: int,
         *,
@@ -423,7 +423,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def list_records(
         self,
-        entity_route: str,
+        record_route: str,
         *,
         top: int | None = None,
         select: Sequence[str] | None = None,
@@ -436,7 +436,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def list_current_records(
         self,
-        entity_route: str,
+        record_route: str,
         *,
         top: int | None = None,
         select: Sequence[str] | None = None,
@@ -451,7 +451,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def list_records_as_of(
         self,
-        entity_route: str,
+        record_route: str,
         as_of: str,
         *,
         top: int | None = None,
@@ -467,7 +467,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def list_snapshot_records(
         self,
-        entity_route: str,
+        record_route: str,
         *,
         snapshot: str | None = None,
         valid_at: str | None = None,
@@ -484,7 +484,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def list_relationship_records(
         self,
-        entity_route: str,
+        record_route: str,
         record_identifier: str,
         path_route: str,
         *,
@@ -502,7 +502,7 @@ class BaseRegistryClient:
     def continue_list(self, continuation: dict[str, JsonValue]) -> dict[str, Any]: ...
     def lookup_record(
         self,
-        entity_route: str,
+        record_route: str,
         selector: str,
         values: dict[str, JsonValue] | None = None,
         *,
@@ -611,12 +611,12 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def create_ingestion_run(
         self,
-        entity_route: str,
+        record_route: str,
         request: dict[str, JsonValue],
     ) -> dict[str, Any]: ...
     def list_ingestion_runs(
         self,
-        entity_route: str,
+        record_route: str,
         *,
         limit: int | None = None,
         cursor: str | None = None,
@@ -626,26 +626,26 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def read_ingestion_run(
         self,
-        entity_route: str,
+        record_route: str,
         run_id: str,
         access_profile: str | None = None,
     ) -> dict[str, Any]: ...
     def submit_ingestion_chunk(
         self,
-        entity_route: str,
+        record_route: str,
         run_id: str,
         chunk: BRegIngestionChunk,
         profile_id: str,
     ) -> dict[str, Any]: ...
     def cancel_ingestion_run(
         self,
-        entity_route: str,
+        record_route: str,
         run_id: str,
         access_profile: str | None = None,
     ) -> dict[str, Any]: ...
     def ingestion_chunk_receipt(
         self,
-        entity_route: str,
+        record_route: str,
         run_id: str,
         chunk_index: int,
         profile_id: str,

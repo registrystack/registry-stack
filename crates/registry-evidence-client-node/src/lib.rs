@@ -71,7 +71,7 @@ fn to_napi_error(value: serde_json::Value) -> NapiError {
 
 /// A serialization failure on a value this crate itself constructed (a
 /// definitions document, a policy document, a verified payload) is not a
-/// caller mistake; it has no `kind` of its own among the eight stable ones, so
+/// caller mistake; it has no `kind` of its own among the ten stable ones, so
 /// it is reported as a plain reason rather than forced into that envelope.
 fn to_napi_serialization_error(what: &str, error: serde_json::Error) -> NapiError {
     NapiError::from_reason(format!("{what} could not be described: {error}"))

@@ -7,7 +7,7 @@ path "transit/sign/evidence-signing/sha2-256" {
   required_parameters = ["input", "key_version", "marshaling_algorithm", "prehashed"]
   allowed_parameters = {
     "input"                 = []
-    "key_version"           = [7]
+    "key_version"           = ["7"]
     "marshaling_algorithm" = ["jws"]
     "prehashed"             = [true]
   }

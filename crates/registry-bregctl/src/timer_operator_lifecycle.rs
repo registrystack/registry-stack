@@ -348,7 +348,7 @@ fn write_success(
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
         let body = match outcome {
-            TimerOutcome::Status(status) => json!({"ok":true,"command":command,"status":status}),
+            TimerOutcome::Status(status) => json!({"ok":true,"command":command,"timer":status}),
             TimerOutcome::List(page) => json!({"ok":true,"command":command,"page":page}),
             TimerOutcome::Show(occurrence) => {
                 json!({"ok":true,"command":command,"occurrence":occurrence})
@@ -608,7 +608,56 @@ fn optional_number(value: Option<i64>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use registry_breg::timer_operator::{
+        TimerBlockCounts, TimerControlState, TimerEffectiveLimits, TimerOccurrenceCounts,
+    };
+
     use super::*;
+
+    #[test]
+    fn status_report_keeps_the_envelope_status_and_a_separate_timer_member() {
+        let outcome = TimerOutcome::Status(TimerStatus {
+            protocol_version: 1,
+            control_state: TimerControlState::Running,
+            control_epoch: 3,
+            instance_epoch: 4,
+            observed_lease_owner_count: 1,
+            occurrence_counts: TimerOccurrenceCounts::default(),
+            block_counts: TimerBlockCounts::default(),
+            stale_revision_count: 0,
+            oldest_due_lag_seconds: None,
+            limits: TimerEffectiveLimits {
+                claim_batch_maximum: 1,
+                stale_revision_batch_maximum: 1,
+                elapsed_window_batch_maximum: 1,
+                maximum_concurrent_attempts: 1,
+                operator_list_maximum: 1,
+            },
+            counts_truncated: false,
+        });
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit = write_success(
+            "timer status",
+            &outcome,
+            OutputFormat::Json,
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(
+            exit,
+            ExitCode::SUCCESS,
+            "{}",
+            String::from_utf8_lossy(&stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["status"], "complete");
+        assert_eq!(report["timer"]["controlState"], "running");
+        assert_eq!(report["timer"]["controlEpoch"], 3);
+    }
 
     #[test]
     fn runtime_config_refusal_is_actionable_without_dependency_detail() {

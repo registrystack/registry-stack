@@ -173,9 +173,9 @@ database:
   migrationUrlRef: secret:env/BREG_STARTUP_TEST_MIGRATION_DATABASE_URL
   pool:
     maximumConnections: 1
-    waitTimeoutMilliseconds: 1000
-    createTimeoutMilliseconds: 1000
-    recycleTimeoutMilliseconds: 1000
+    waitTimeoutMilliseconds: 100
+    createTimeoutMilliseconds: 200
+    recycleTimeoutMilliseconds: 200
   roles:
     migration: registry_migration
     runtime: registry_runtime

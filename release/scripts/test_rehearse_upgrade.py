@@ -1042,12 +1042,12 @@ class TransitStubTest(unittest.TestCase):
                 signed = transit_call(transit.socket_path, "POST",
                                       "/v1/transit/sign/evidence-signing/sha2-256",
                                       {"input": base64.b64encode(digest).decode(),
-                                       "key_version": 1, "prehashed": True,
+                                       "key_version": "1", "prehashed": True,
                                        "marshaling_algorithm": "jws"})
                 refused = transit_call(transit.socket_path, "POST",
                                        "/v1/transit/sign/evidence-signing/sha2-256",
                                        {"input": base64.b64encode(digest).decode(),
-                                        "key_version": 1, "prehashed": False,
+                                        "key_version": "1", "prehashed": False,
                                         "marshaling_algorithm": "jws"})
             finally:
                 transit.stop()
@@ -1065,6 +1065,37 @@ class TransitStubTest(unittest.TestCase):
             message.write_bytes(digest)
             MODULE.run(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(public),
                         "-in", str(message), "-sigfile", str(signature)])
+
+    def test_numeric_key_version_is_limited_to_the_historical_from_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "transit.pem"
+            MODULE.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout",
+                        "-out", str(key)])
+            transit = MODULE.TransitServer(key)
+            digest = base64.b64encode(hashlib.sha256(b"rehearsal").digest()).decode()
+
+            def sign(key_version: Any) -> Any:
+                return transit_call(
+                    transit.socket_path,
+                    "POST",
+                    "/v1/transit/sign/evidence-signing/sha2-256",
+                    {"input": digest, "key_version": key_version, "prehashed": True,
+                     "marshaling_algorithm": "jws"},
+                )
+
+            try:
+                self.assertIn("errors", sign(1))
+                self.assertIn("signature", sign("1")["data"])
+                with transit.historical_key_version_requests():
+                    self.assertIn("signature", sign(1)["data"])
+                    self.assertIn("signature", sign("1")["data"])
+                    for invalid in (True, 1.0, 2, "2", None, ["1"]):
+                        with self.subTest(invalid=invalid):
+                            self.assertIn("errors", sign(invalid))
+                self.assertIn("errors", sign(1))
+                self.assertIn("signature", sign("1")["data"])
+            finally:
+                transit.stop()
 
 
 def transit_call(socket_path: Path, method: str, path: str, body: Any) -> Any:

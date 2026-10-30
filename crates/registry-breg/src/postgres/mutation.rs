@@ -37,6 +37,10 @@ use super::{
 
 pub(super) const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn action_timeout_for_http_deadline(http_request_timeout: Duration) -> Duration {
+    REQUEST_ACTION_TIMEOUT.min(http_request_timeout)
+}
+
 #[cfg(feature = "postgres-test")]
 #[derive(Clone)]
 struct ProposalReadBarrier {
@@ -152,6 +156,121 @@ pub enum IngestionServiceError {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StoredReceiptResultShape {
+    Current,
+    ImmediatePredecessor,
+}
+
+/// Read one retained batch answer written by this release or its immediate
+/// predecessor. The stored bytes stay immutable; only the in-memory value
+/// reaching current projection and opening is adapted. A partial, mixed, or
+/// unknown shape is stored corruption and fails before any receipt release.
+fn normalize_stored_receipt_wire_shape(batch: &mut Value) -> Result<(), IngestionServiceError> {
+    let object = batch
+        .as_object_mut()
+        .ok_or(IngestionServiceError::Unavailable)?;
+    if object.len() != 2
+        || object
+            .get("snapshot")
+            .and_then(Value::as_str)
+            .is_none_or(|reference| {
+                crate::history_reference::SnapshotReference::parse(reference).is_err()
+            })
+    {
+        return Err(IngestionServiceError::Unavailable);
+    }
+    let results = object
+        .get_mut("results")
+        .and_then(Value::as_array_mut)
+        .filter(|results| !results.is_empty())
+        .ok_or(IngestionServiceError::Unavailable)?;
+    let shape =
+        stored_receipt_result_shape(&results[0]).ok_or(IngestionServiceError::Unavailable)?;
+    if results
+        .iter()
+        .any(|result| stored_receipt_result_shape(result) != Some(shape))
+    {
+        return Err(IngestionServiceError::Unavailable);
+    }
+    if shape == StoredReceiptResultShape::Current {
+        return Ok(());
+    }
+    for result in results {
+        let object = result
+            .as_object_mut()
+            .ok_or(IngestionServiceError::Unavailable)?;
+        let record_identifier = object
+            .remove("id")
+            .ok_or(IngestionServiceError::Unavailable)?;
+        let revision = object
+            .remove("revision")
+            .and_then(|revision| revision.as_i64())
+            .ok_or(IngestionServiceError::Unavailable)?;
+        let domain_data = object
+            .remove("data")
+            .ok_or(IngestionServiceError::Unavailable)?;
+        object.insert("recordIdentifier".to_owned(), record_identifier);
+        object.insert(
+            "revisionIdentifier".to_owned(),
+            Value::String(revision.to_string()),
+        );
+        object.insert("domainData".to_owned(), domain_data);
+    }
+    Ok(())
+}
+
+fn stored_receipt_result_shape(result: &Value) -> Option<StoredReceiptResultShape> {
+    let object = result.as_object()?;
+    if object.len() != 5
+        || !matches!(
+            object.get("operation").and_then(Value::as_str),
+            Some("create" | "patch")
+        )
+        || !object
+            .get("etag")
+            .and_then(Value::as_str)
+            .is_some_and(valid_strong_etag)
+    {
+        return None;
+    }
+    let current = canonical_record_identifier(object.get("recordIdentifier"))
+        && object
+            .get("revisionIdentifier")
+            .and_then(Value::as_str)
+            .is_some_and(canonical_positive_revision_identifier)
+        && object.get("domainData").is_some_and(Value::is_object);
+    let predecessor = canonical_record_identifier(object.get("id"))
+        && object
+            .get("revision")
+            .and_then(Value::as_i64)
+            .is_some_and(|revision| revision > 0)
+        && object.get("data").is_some_and(Value::is_object);
+    match (current, predecessor) {
+        (true, false) => Some(StoredReceiptResultShape::Current),
+        (false, true) => Some(StoredReceiptResultShape::ImmediatePredecessor),
+        _ => None,
+    }
+}
+
+fn canonical_record_identifier(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            Uuid::parse_str(value)
+                .ok()
+                .map(|identifier| (value, identifier))
+        })
+        .is_some_and(|(value, identifier)| identifier.to_string() == value)
+}
+
+fn canonical_positive_revision_identifier(value: &str) -> bool {
+    value
+        .parse::<i64>()
+        .ok()
+        .is_some_and(|revision| revision > 0 && revision.to_string() == value)
+}
+
 impl PostgresRecordMutationService {
     #[must_use]
     pub fn with_task_status(
@@ -252,6 +371,14 @@ impl PostgresRecordMutationService {
     #[must_use]
     pub(crate) fn with_evidence_timeout(mut self, timeout: Duration) -> Self {
         self.evidence_timeout = timeout.min(self.action_timeout);
+        self
+    }
+
+    /// Keep every Action inside the outer HTTP request budget.
+    #[must_use]
+    pub(crate) fn with_http_request_timeout(mut self, timeout: Duration) -> Self {
+        self.action_timeout = action_timeout_for_http_deadline(timeout);
+        self.evidence_timeout = self.evidence_timeout.min(self.action_timeout);
         self
     }
 
@@ -705,11 +832,11 @@ impl PostgresRecordMutationService {
             }
             Some("patch")
                 if object.len() == 4
-                    && object.contains_key("recordId")
+                    && object.contains_key("recordIdentifier")
                     && object.contains_key("ifMatch")
                     && object.contains_key("patch") =>
             {
-                let record_id = object.get("recordId")?.as_str()?;
+                let record_id = object.get("recordIdentifier")?.as_str()?;
                 let expected_etag = object.get("ifMatch")?.as_str()?;
                 if !Uuid::parse_str(record_id).is_ok_and(|id| id.to_string() == record_id)
                     || !valid_strong_etag(expected_etag)
@@ -1801,6 +1928,7 @@ impl PostgresRecordMutationService {
         bindings: &std::collections::BTreeMap<String, String>,
         batch: &mut Value,
     ) -> Result<(), IngestionServiceError> {
+        normalize_stored_receipt_wire_shape(batch)?;
         let Some(entity) = self.registry.entities().get(entity_id) else {
             return Err(IngestionServiceError::Unavailable);
         };
@@ -1820,7 +1948,7 @@ impl PostgresRecordMutationService {
             return Ok(());
         };
         for result in results {
-            if let Some(data) = result.get_mut("data").and_then(Value::as_object_mut) {
+            if let Some(data) = result.get_mut("domainData").and_then(Value::as_object_mut) {
                 data.retain(|member, _| {
                     bindings.get(member).is_some_and(|field_id| {
                         readable.contains(field_id)
@@ -1911,6 +2039,10 @@ impl PostgresRecordMutationService {
                     | MutationError::ProposalUniqueConflict
                     | MutationError::ProposalRejected
                     | MutationError::AuthorizationRefused
+                    // Ingestion consumes the batch mutation outcome through
+                    // its run protocol. Its item refusal remains the generic
+                    // 412 instead of the direct write route's 403.
+                    | MutationError::WriteOutsideBoundary
                     | MutationError::FieldPatternViolation { .. }
                     | MutationError::RowLocalConstraintViolation(_) => (
                         IngestionAttemptOutcome::Refused,
@@ -2356,6 +2488,27 @@ fn receipt_json(
         "erased": erased,
         "batch": batch,
     })
+}
+
+#[cfg(test)]
+mod action_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn action_budget_is_capped_to_the_http_request_deadline() {
+        assert_eq!(
+            action_timeout_for_http_deadline(Duration::from_secs(45)),
+            REQUEST_ACTION_TIMEOUT
+        );
+        assert_eq!(
+            action_timeout_for_http_deadline(Duration::from_secs(10)),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            action_timeout_for_http_deadline(Duration::from_millis(1)),
+            Duration::from_millis(1)
+        );
+    }
 }
 
 #[cfg(test)]

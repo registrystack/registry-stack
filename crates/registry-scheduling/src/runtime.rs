@@ -808,10 +808,10 @@ fn reminder_event(
         event_type: format!("org.registrystack.scheduling.{}", row.purpose),
         source: format!("urn:registrystack:scheduling:{scheduling_id}"),
         time: SystemTime::from(row.due_at).into(),
-        subject: EventSubject {
-            record_reference: format!("/v1/appointments/{}", row.claim_id),
-            record_revision: row.appointment_revision,
-        },
+        subject: EventSubject::record(
+            format!("/v1/appointments/{}", row.claim_id),
+            row.appointment_revision,
+        ),
         dataschema: format!("urn:registrystack:scheduling:reminder-data:{}", row.purpose),
         data: row.payload.clone(),
         causation: Causation::root(&id),

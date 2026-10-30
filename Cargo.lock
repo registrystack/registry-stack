@@ -5021,6 +5021,7 @@ dependencies = [
  "pg_query",
  "rcgen",
  "registry-breg-client",
+ "registry-evidence-authoring",
  "registry-evidence-client",
  "registry-evidence-verifier",
  "registry-manifest-core",
@@ -5233,6 +5234,7 @@ dependencies = [
  "registry-breg-client",
  "registry-cli-api",
  "registry-cli-reference",
+ "registry-cli-report",
  "registry-evidence-verifier",
  "registry-linkml",
  "registry-manifest-core",
@@ -5446,6 +5448,7 @@ dependencies = [
  "registry-casework-client",
  "registry-casework-core",
  "registry-cli-api",
+ "registry-cli-report",
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
@@ -5525,6 +5528,14 @@ name = "registry-cli-reference"
 version = "0.45.0"
 dependencies = [
  "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "registry-cli-report"
+version = "0.45.0"
+dependencies = [
  "serde",
  "serde_json",
 ]
@@ -5741,6 +5752,7 @@ dependencies = [
  "hex",
  "jsonschema",
  "registry-cli-api",
+ "registry-cli-report",
  "registry-discovery",
  "registry-discovery-profile",
  "registry-platform-buildinfo",
@@ -5961,6 +5973,7 @@ dependencies = [
  "p256",
  "registry-evidence",
  "registry-evidence-verifier",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
@@ -6115,6 +6128,7 @@ dependencies = [
  "rand_chacha 0.9.0",
  "registry-cli-api",
  "registry-cli-reference",
+ "registry-cli-report",
  "registry-evidence",
  "registry-evidence-authoring",
  "registry-evidence-client",
@@ -6178,6 +6192,7 @@ version = "0.45.0"
 dependencies = [
  "clap",
  "jsonschema",
+ "registry-cli-report",
  "registry-manifest-core",
  "registry-platform-buildinfo",
  "registry-platform-config",
@@ -6331,6 +6346,7 @@ dependencies = [
  "jsonwebtoken",
  "rcgen",
  "registry-cli-api",
+ "registry-cli-report",
  "registry-messaging",
  "registry-messaging-core",
  "registry-platform-audit",
@@ -6685,6 +6701,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-postgres",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -6978,6 +6995,7 @@ dependencies = [
  "chrono",
  "clap",
  "registry-cli-api",
+ "registry-cli-report",
  "registry-platform-audit",
  "registry-platform-buildinfo",
  "registry-platform-config",

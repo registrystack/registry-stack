@@ -54,6 +54,24 @@ pub enum EvidenceClientError {
     #[error("the deployment could not produce evidence for this request")]
     NotAvailable { trace_id: Option<String> },
 
+    /// The deployment rejected the request shape or named resource. Correct
+    /// the request before sending another one.
+    #[error("the Evidence request is invalid: status {status}, code {code}")]
+    InvalidRequest {
+        status: u16,
+        code: String,
+        trace_id: Option<String>,
+    },
+
+    /// The Evidence service or one of its authoritative sources is currently
+    /// unavailable. A retry is a caller decision and requires a fresh request.
+    #[error("the Evidence service is unavailable: status {status}, code {code}")]
+    Unavailable {
+        status: u16,
+        code: String,
+        trace_id: Option<String>,
+    },
+
     /// The response did not satisfy the wire contract, or the deployment
     /// reported a failure that is not a refusal.
     #[error("the Evidence response does not satisfy the wire contract: status {status}")]
@@ -99,6 +117,8 @@ impl EvidenceClientError {
             Self::Transport { .. } => "transport",
             Self::Denied { .. } => "denied",
             Self::NotAvailable { .. } => "not-available",
+            Self::InvalidRequest { .. } => "invalid-request",
+            Self::Unavailable { .. } => "unavailable",
             Self::Protocol { .. } => "protocol",
             Self::Verification(_) => "verification",
         }
@@ -112,6 +132,8 @@ impl EvidenceClientError {
         match self {
             Self::Denied { trace_id, .. }
             | Self::NotAvailable { trace_id }
+            | Self::InvalidRequest { trace_id, .. }
+            | Self::Unavailable { trace_id, .. }
             | Self::Protocol { trace_id, .. } => trace_id.as_deref(),
             _ => None,
         }
@@ -179,6 +201,22 @@ mod tests {
             (
                 EvidenceClientError::NotAvailable { trace_id: None },
                 "not-available",
+            ),
+            (
+                EvidenceClientError::InvalidRequest {
+                    status: 400,
+                    code: "evidence.invalid-request".to_owned(),
+                    trace_id: None,
+                },
+                "invalid-request",
+            ),
+            (
+                EvidenceClientError::Unavailable {
+                    status: 503,
+                    code: "service.unavailable".to_owned(),
+                    trace_id: None,
+                },
+                "unavailable",
             ),
             (
                 EvidenceClientError::Protocol {

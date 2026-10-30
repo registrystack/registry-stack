@@ -4178,7 +4178,7 @@ fn reschedule_ingestion_items(
                 .ok_or_else(|| "timer ingestion Record omitted its ETag".to_owned())?;
             Ok(json!({
                 "operation": "patch",
-                "recordId": record_id,
+                "recordIdentifier": record_id,
                 "ifMatch": etag.as_str(),
                 "patch": [
                     {

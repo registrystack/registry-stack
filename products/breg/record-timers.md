@@ -174,6 +174,9 @@ bregctl --format json timer show --runtime-config "$runtime_config" \
   --occurrence-id 00000000-0000-0000-0000-000000000000
 ```
 
+The `status` member of each report is the shared CLI result class. Timer status
+reports the scheduler state in its `timer` member.
+
 List pages use an opaque cursor returned by the preceding page. Status scans
 each occurrence state and each block kind independently, with a 10,000-row
 ceiling for every category. It reports each capped count and sets

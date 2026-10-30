@@ -13,7 +13,6 @@
 use std::io;
 
 use registry_scheduling_core::{SCHEDULING_CTL_REPORT_API_VERSION, SCHEDULING_CTL_REPORT_KIND};
-use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::{json, Value};
 
 /// The command refused authored, configuration, or selected input, or its
@@ -24,9 +23,7 @@ pub(crate) const USAGE_EXIT: u8 = 2;
 /// A file, process, or service the command depends on was unavailable.
 pub(crate) const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 
-/// The members every report opens with, in the order they are written.
-const HEAD: [&str; 3] = ["ok", "command", "status"];
-/// The members that name the report's format, written after [`HEAD`].
+/// The product-owned format identity attached before common serialization.
 const FORMAT: [(&str, &str); 2] = [
     ("apiVersion", SCHEDULING_CTL_REPORT_API_VERSION),
     ("kind", SCHEDULING_CTL_REPORT_KIND),
@@ -142,44 +139,25 @@ fn refused_argument(error: &clap::Error) -> Option<String> {
     (!names.is_empty()).then(|| names.join(", "))
 }
 
-/// Write one report, envelope members first, and its trailing newline.
-pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    serde_json::to_writer_pretty(&mut *stdout, &Ordered(report)).map_err(io::Error::other)?;
-    writeln!(stdout)
+fn envelope(report: &Value) -> io::Result<Value> {
+    let mut members = report
+        .as_object()
+        .cloned()
+        .ok_or_else(|| io::Error::other("a CLI report must be an object"))?;
+    for (key, value) in FORMAT {
+        members.insert(key.to_owned(), Value::String(value.to_owned()));
+    }
+    Ok(Value::Object(members))
 }
 
-/// Serialize the top-level object with the envelope members first, whatever
-/// order the underlying map keeps. The format members are always the
-/// report's own, so a command never writes them.
-struct Ordered<'a>(&'a Value);
-
-impl Serialize for Ordered<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let Value::Object(members) = self.0 else {
-            return self.0.serialize(serializer);
-        };
-        let named = |key: &str| HEAD.contains(&key) || FORMAT.iter().any(|(name, _)| *name == key);
-        let own = members.keys().filter(|key| !named(key)).count();
-        let head = HEAD
-            .iter()
-            .filter(|key| members.contains_key(**key))
-            .count();
-        let mut map = serializer.serialize_map(Some(head + FORMAT.len() + own))?;
-        for key in HEAD {
-            if let Some(value) = members.get(key) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        for (key, value) in FORMAT {
-            map.serialize_entry(key, value)?;
-        }
-        for (key, value) in members {
-            if !named(key) {
-                map.serialize_entry(key, value)?;
-            }
-        }
-        map.end()
-    }
+/// Write one report, envelope members first, and its trailing newline.
+pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    let value = envelope(report)?;
+    let report =
+        registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
+            .map_err(io::Error::other)?;
+    serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
+    writeln!(stdout)
 }
 
 #[cfg(test)]
@@ -239,19 +217,26 @@ mod tests {
     fn a_report_opens_with_ok_command_and_status_then_names_its_format() {
         let mut out = Vec::new();
         write(
-            &json!({"alpha": 1, "status": "complete", "command": "check", "ok": true}),
+            &json!({"alpha":1,"status":"complete","command":"check","ok":true}),
             &mut out,
         )
         .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(
             text.starts_with(concat!(
-                "{\n  \"ok\": true,\n  \"command\": \"check\",\n  \"status\": \"complete\",\n",
-                "  \"apiVersion\": \"id.registrystack.org/formats/scheduling/ctl-report/v1alpha1\",\n",
-                "  \"kind\": \"SchedulingCtlReport\",\n  \"alpha\": 1\n}"
-            )),
+            "{\n  \"ok\": true,\n  \"command\": \"check\",\n  \"status\": \"complete\",\n",
+            "  \"apiVersion\": \"id.registrystack.org/formats/scheduling/ctl-report/v1alpha1\",\n",
+            "  \"kind\": \"SchedulingCtlReport\","
+        )),
             "{text}"
         );
+        let report: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            report["version"],
+            registry_platform_buildinfo::DISPLAY_VERSION
+        );
+        assert_eq!(report["diagnostics"], json!([]));
+        assert_eq!(report["alpha"], 1);
     }
 
     #[test]
@@ -265,7 +250,7 @@ mod tests {
         let report: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(report["apiVersion"], SCHEDULING_CTL_REPORT_API_VERSION);
         assert_eq!(report["kind"], SCHEDULING_CTL_REPORT_KIND);
-        assert_eq!(report.as_object().unwrap().len(), 5);
+        assert_eq!(report.as_object().unwrap().len(), 7);
     }
 
     #[test]

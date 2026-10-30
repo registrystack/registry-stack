@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let record = response.value.data;
     if record.record_identifier != arguments.record_id.to_string()
-        || response.value.meta.entity_type_identifier != "application"
+        || response.value.meta.record_type_identifier != "application"
     {
         return Err(invalid("BReg returned a different application identity").into());
     }

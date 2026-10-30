@@ -89,7 +89,7 @@ claims:
   holder_binding:
     cnf:
       required: false
-      source: the optional holderKey member of the request
+      source: the optional holderKeys request array, containing one key for a single credential
       rule: >-
         Present only when the caller supplies a holder public key. Evidence
         embeds the accepted key with its only permitted algorithm stated

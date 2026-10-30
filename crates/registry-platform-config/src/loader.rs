@@ -265,6 +265,21 @@ impl<T> std::fmt::Debug for LoadedRuntimeConfig<T> {
     }
 }
 
+/// Require a runtime configuration path owned by root or the effective user,
+/// with neither the file nor an ancestor writable by group or others. A
+/// root-owned sticky ancestor is allowed. The path must be absolute,
+/// lexically normalized, and contain no symbolic-link component.
+///
+/// This checks only the path and its metadata. It neither opens nor parses the
+/// file, so a caller with its own stable-read boundary can apply the shared
+/// path policy before that read without consuming the bytes twice.
+pub fn require_trusted_runtime_path(path: &Path) -> Result<(), RuntimeConfigError> {
+    validate_absolute_lexical_path(path)
+        .and_then(|()| reject_symlink_components(path))
+        .and_then(|()| require_trusted_ownership(path))
+        .map_err(|error| error.in_file(path))
+}
+
 /// Loads one product's runtime configuration under the shared rules.
 #[derive(Clone, Debug)]
 pub struct RuntimeConfigLoader {
@@ -428,10 +443,11 @@ impl RuntimeConfigLoader {
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {
-        validate_absolute_lexical_path(path)?;
-        reject_symlink_components(path)?;
         if self.trusted_ownership {
-            require_trusted_ownership(path)?;
+            require_trusted_runtime_path(path)?;
+        } else {
+            validate_absolute_lexical_path(path)?;
+            reject_symlink_components(path)?;
         }
         read_bounded(path, DEFAULT_MAX_RUNTIME_CONFIG_BYTES)
     }

@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use registry_evidence_authoring::formats::{decode_authored, SELECTOR_FRAGMENT, SOURCE_FRAGMENT};
 use registry_platform_yaml::{
     ApiVersion, Digest, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
 };
@@ -98,11 +99,13 @@ pub(super) fn normalize_artifacts(
     artifacts: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>> {
     let source_path = format!("sources/{source_id}.yaml");
-    let mut source = yaml_value(
+    let mut source = fragment_value(
         &source_path,
         artifacts
             .get(&source_path)
             .ok_or_else(|| anyhow!("source export is missing {source_path}"))?,
+        &SOURCE_FRAGMENT,
+        "Evidence source fragment",
     )?;
     let source_object = source
         .as_object_mut()
@@ -110,8 +113,6 @@ pub(super) fn normalize_artifacts(
     if source_object.contains_key("adapterParameters") {
         bail!("exported Source requires adapterParameters inside request");
     }
-    source_object.remove("apiVersion");
-    source_object.remove("kind");
     let posture = source_object
         .remove("posture")
         .ok_or_else(|| anyhow!("exported Source requires posture"))?;
@@ -214,12 +215,15 @@ pub(super) fn normalize_artifacts(
         let id = path
             .trim_start_matches("selectors/")
             .trim_end_matches(".yaml");
-        let mut profile = yaml_value(path, &artifacts[path])?;
-        let object = profile
-            .as_object_mut()
+        let profile = fragment_value(
+            path,
+            &artifacts[path],
+            &SELECTOR_FRAGMENT,
+            "Evidence selector fragment",
+        )?;
+        profile
+            .as_object()
             .ok_or_else(|| anyhow!("exported SelectorProfile must be a mapping"))?;
-        object.remove("apiVersion");
-        object.remove("kind");
         let profile =
             serde_json::from_value::<registry_evidence_authoring::project::SelectorProfile>(
                 profile,
@@ -311,4 +315,21 @@ fn yaml_value(path: &str, text: &str) -> Result<Value> {
         Ok(None) => bail!("{path} is empty"),
         Err(report) => bail!("{path} was refused:\n{}", report.render_human()),
     }
+}
+
+fn fragment_value(
+    path: &str,
+    text: &str,
+    format: &FormatSpec<'_>,
+    document: &'static str,
+) -> Result<Value, DocumentRefused> {
+    let mut value = decode_authored::<Value>(path, text.as_bytes(), format)
+        .map(|decoded| decoded.value)
+        .map_err(|report| DocumentRefused { document, report })?;
+    let object = value
+        .as_object_mut()
+        .expect("a document with an envelope is a mapping");
+    object.remove("apiVersion");
+    object.remove("kind");
+    Ok(value)
 }

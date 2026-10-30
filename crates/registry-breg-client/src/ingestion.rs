@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::client::{access_profile_query, valid_breg_identifier, validate_entity_route};
+use crate::client::{access_profile_query, valid_breg_identifier, validate_record_route};
 use crate::mutation::{
     validate_json_values, MAXIMUM_BREG_MUTATION_BODY_BYTES, MAXIMUM_BREG_PATCH_OPERATIONS,
 };
@@ -1291,7 +1291,7 @@ fn valid_batch_item(item: &Value) -> bool {
         Some("patch") => {
             object.len() == 4
                 && object
-                    .get("recordId")
+                    .get("recordIdentifier")
                     .and_then(Value::as_str)
                     .is_some_and(canonical_record_id)
                 && object
@@ -1488,14 +1488,14 @@ impl BaseRegistryClient {
     /// exchange selects it as the `accessProfile` query pair.
     pub async fn create_ingestion_run(
         &self,
-        entity_route: &str,
+        record_route: &str,
         request: &BRegIngestionRunRequest,
     ) -> Result<BRegComplete<BRegIngestionRun>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let pairs = access_profile_query(Some(request.profile_id()))?;
         let raw = self
             .ingestion_post_json(
-                &["v1", "records", entity_route, "ingestion-runs"],
+                &["v1", "records", record_route, "ingestion-runs"],
                 &pairs,
                 request.body().to_vec(),
                 Some(crate::client::APPLICATION_JSON),
@@ -1515,16 +1515,16 @@ impl BaseRegistryClient {
         )
     }
 
-    /// Read one bounded page of ingestion runs for one entity route.
+    /// Read one bounded page of ingestion runs for one record route.
     pub async fn list_ingestion_runs(
         &self,
-        entity_route: &str,
+        record_route: &str,
         query: &BRegIngestionRunListQuery,
     ) -> Result<BRegComplete<BRegIngestionRunPage>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let raw = self
             .ingestion_get_json(
-                &["v1", "records", entity_route, "ingestion-runs"],
+                &["v1", "records", record_route, "ingestion-runs"],
                 &query.query_pairs(),
             )
             .await?;
@@ -1541,11 +1541,11 @@ impl BaseRegistryClient {
     /// pair; an absent profile leaves the route default selected.
     pub async fn read_ingestion_run(
         &self,
-        entity_route: &str,
+        record_route: &str,
         run_id: Uuid,
         access_profile: Option<&str>,
     ) -> Result<BRegComplete<BRegIngestionRun>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let run_identifier = run_id.to_string();
         let pairs = access_profile_query(access_profile)?;
         let raw = self
@@ -1553,7 +1553,7 @@ impl BaseRegistryClient {
                 &[
                     "v1",
                     "records",
-                    entity_route,
+                    record_route,
                     "ingestion-runs",
                     &run_identifier,
                 ],
@@ -1574,12 +1574,12 @@ impl BaseRegistryClient {
     /// twice.
     pub async fn submit_ingestion_chunk(
         &self,
-        entity_route: &str,
+        record_route: &str,
         run_id: Uuid,
         chunk: &BRegIngestionChunk,
         profile_id: &str,
     ) -> Result<BRegComplete<BRegIngestionChunkSubmission>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let run_identifier = run_id.to_string();
         let pairs = access_profile_query(Some(profile_id))?;
         let raw = self
@@ -1587,7 +1587,7 @@ impl BaseRegistryClient {
                 &[
                     "v1",
                     "records",
-                    entity_route,
+                    record_route,
                     "ingestion-runs",
                     &run_identifier,
                     "chunks",
@@ -1619,11 +1619,11 @@ impl BaseRegistryClient {
     /// given, is selected as the `accessProfile` query pair.
     pub async fn cancel_ingestion_run(
         &self,
-        entity_route: &str,
+        record_route: &str,
         run_id: Uuid,
         access_profile: Option<&str>,
     ) -> Result<BRegComplete<BRegIngestionRun>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let run_identifier = run_id.to_string();
         let pairs = access_profile_query(access_profile)?;
         let raw = self
@@ -1631,7 +1631,7 @@ impl BaseRegistryClient {
                 &[
                     "v1",
                     "records",
-                    entity_route,
+                    record_route,
                     "ingestion-runs",
                     &run_identifier,
                     "cancel",
@@ -1655,12 +1655,12 @@ impl BaseRegistryClient {
     /// receipt answers with the `ingestion.receipt_erased` problem instead.
     pub async fn ingestion_chunk_receipt(
         &self,
-        entity_route: &str,
+        record_route: &str,
         run_id: Uuid,
         chunk_index: u64,
         profile_id: &str,
     ) -> Result<BRegComplete<BRegIngestionChunkReceipt>, BaseRegistryClientError> {
-        validate_entity_route(entity_route)?;
+        validate_record_route(record_route)?;
         let run_identifier = run_id.to_string();
         let chunk = chunk_index.to_string();
         let pairs = access_profile_query(Some(profile_id))?;
@@ -1669,7 +1669,7 @@ impl BaseRegistryClient {
                 &[
                     "v1",
                     "records",
-                    entity_route,
+                    record_route,
                     "ingestion-runs",
                     &run_identifier,
                     "chunks",
@@ -1739,7 +1739,7 @@ mod tests {
             "batch": {
                 "snapshot": "breg1_00000000-0000-4000-8000-000000000002",
                 "results": [
-                    {"operation": "create", "id": RUN_ID, "revision": 1, "etag": "\"breg-record-v1-abcdef012345\"", "data": {"legalName": "Example Ltd"}}
+                    {"operation": "create", "recordIdentifier": RUN_ID, "revisionIdentifier": "1", "etag": "\"breg-record-v1-abcdef012345\"", "domainData": {"legalName": "Example Ltd"}}
                 ]
             }
         })
@@ -2164,7 +2164,7 @@ mod tests {
         let etag = "\"breg-record-v1-abcdef012345\"";
         let patch = json!({
             "operation": "patch",
-            "recordId": RUN_ID,
+            "recordIdentifier": RUN_ID,
             "ifMatch": etag,
             "patch": [{"op": "replace", "path": "/data/legalName", "value": "Renamed Ltd"}]
         });
@@ -2177,37 +2177,40 @@ mod tests {
             json!({"operation": "create", "data": {"legalName": "Example Ltd"}, "extra": 1}),
             json!({"operation": "create", "data": "not-an-object"}),
             json!({"operation": "delete", "data": {}}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+                {"op": "remove", "path": "/data/legalName"}
+            ]}),
             // A patch carries exactly the record reference, the expected etag,
             // and the JSON Patch document.
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag}),
-            json!({"operation": "patch", "recordId": "not-a-uuid", "ifMatch": etag, "patch": [
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag}),
+            json!({"operation": "patch", "recordIdentifier": "not-a-uuid", "ifMatch": etag, "patch": [
                 {"op": "remove", "path": "/data/legalName"}
             ]}),
-            json!({"operation": "patch", "recordId": "00000000000040008000000000000001",
+            json!({"operation": "patch", "recordIdentifier": "00000000000040008000000000000001",
                    "ifMatch": etag, "patch": [{"op": "remove", "path": "/data/legalName"}]}),
-            json!({"operation": "patch", "recordId": "00000000-0000-4000-8000-00000000000A",
+            json!({"operation": "patch", "recordIdentifier": "00000000-0000-4000-8000-00000000000A",
                    "ifMatch": etag, "patch": [{"op": "remove", "path": "/data/legalName"}]}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": "\"breg-\"", "patch": [
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": "\"breg-\"", "patch": [
                 {"op": "remove", "path": "/data/legalName"}
             ]}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": "breg-record-v1-abcdef012345",
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": "breg-record-v1-abcdef012345",
                    "patch": [{"op": "remove", "path": "/data/legalName"}]}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag,
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag,
                    "patch": {"op": "remove", "path": "/data/legalName"}}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": []}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag, "patch": []}),
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag, "patch": [
                 {"op": "rename", "path": "/data/legalName", "value": "Renamed Ltd"}
             ]}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag, "patch": [
                 {"op": "replace", "path": "/data/legalName"}
             ]}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag, "patch": [
                 {"op": "remove", "path": "/data/legalName", "value": null}
             ]}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag, "patch": [
                 {"op": "remove", "path": 7}
             ]}),
-            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+            json!({"operation": "patch", "recordIdentifier": RUN_ID, "ifMatch": etag, "patch": [
                 {"op": 7, "path": "/data/legalName"}
             ]}),
         ];

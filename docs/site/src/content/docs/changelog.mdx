@@ -18,6 +18,16 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: Proposal lifecycle event subjects use `proposalReference` and
+  `proposalRevision`. Record event subjects keep `recordReference` and `recordRevision`.
+  Update receivers that parse Proposal envelopes; mixed or open subject shapes are refused.
+
+{/* Evidence: crates/registry-breg/src/proposal_events.rs, EventSubject::proposal;
+    crates/registry-platform-hooks/src/envelope.rs, EventSubject and
+    decode_refuses_mixed_or_open_subject_shapes;
+    crates/registry-breg/tests/postgres_proposal_hooks.rs,
+    native_observers_capture_filter_fanout_replay_and_private_values_atomically. */}
+
 ## v0.44.0 beta-56
 
 - Managed local installations expose one `rstack` command and install product

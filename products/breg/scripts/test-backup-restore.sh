@@ -869,8 +869,8 @@ assert_json_ok "$temporary_root/claim-restored-before.json" "instance-claim stat
 python3 - "$temporary_root/claim-restored-before.json" "$temporary_root/claim-original.json" <<'PY'
 import json
 import sys
-restored = json.load(open(sys.argv[1], encoding="utf-8"))["status"]
-original = json.load(open(sys.argv[2], encoding="utf-8"))["status"]
+restored = json.load(open(sys.argv[1], encoding="utf-8"))["instanceClaim"]
+original = json.load(open(sys.argv[2], encoding="utf-8"))["instanceClaim"]
 if restored["matches"] is not False:
     raise SystemExit("instance-claim status did not report the restored copy as unclaimed")
 if restored["claim"] != original["claim"]:
@@ -904,8 +904,8 @@ python3 - "$temporary_root/adopt.json" "$temporary_root/claim-restored-after.jso
 import json
 import sys
 adoption = json.load(open(sys.argv[1], encoding="utf-8"))["adoption"]
-after = json.load(open(sys.argv[2], encoding="utf-8"))["status"]
-original = json.load(open(sys.argv[3], encoding="utf-8"))["status"]
+after = json.load(open(sys.argv[2], encoding="utf-8"))["instanceClaim"]
+original = json.load(open(sys.argv[3], encoding="utf-8"))["instanceClaim"]
 if adoption["supersededImportAuthorities"] != [sys.argv[4]]:
     raise SystemExit(f"adopt did not supersede the reopened authority: {adoption}")
 if adoption["previous"]["databaseOid"] != original["claim"]["databaseOid"]:

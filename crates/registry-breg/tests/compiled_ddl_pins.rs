@@ -60,6 +60,10 @@
 //! The complete `atField` and `notAfterField` pair for invalid timer windows is
 //! likewise part of the generated Problem schema. It moves every fixture's
 //! artifact revision while preserving the SQL and Action fingerprints below.
+//! Event-record and display-grouping metadata, package-recovery vocabulary,
+//! Registry Record response spellings, batch response shapes, the bounded-write
+//! Problem, and generated SDK contract alignment likewise move artifact
+//! revisions only. SQL and Action fingerprints stay fixed.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -82,7 +86,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "6d6431e3e4fb3eb254ef8f3b2e895aed2c09ed4ee7ca506627e1d063359f4578",
-        revision: "sha256:ca53caf5b0ed2dce9ceb5ea83cf7ee99b0ef55a499659cd15dbd83e471575d6d",
+        revision: "sha256:f6a1aaf77f88d31c2b12bb8a840750ab9249f93997feb952508c20b884cdd37a",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -93,7 +97,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "43acdae956eb2f932fb22a2cccc5cee5ed19cf806f2f28bbc677eff219d00b99",
-        revision: "sha256:6a43c218c947156bbb62915841a09811f14ed93bb7796a860b1cdb8252cf5ca2",
+        revision: "sha256:b4a0a980d813a2eebb3a1665e0e4db84a34df8a1a027d942c1c60d7f507484cf",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -104,7 +108,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "6439a877ee6508b999a77242542695d8ccddc6d80518699d90eddc32b305780b",
-        revision: "sha256:3bf8ade841fae30e52f461ae57a1b99362da179e8b59b14cfbe5a902cea02695",
+        revision: "sha256:27e54c5d8bc7b245af54c5fff9f3b6b3a5c7be489b0215e71e3d38a5c2e94d06",
     },
     Fixture {
         name: "household-contact-actions",
@@ -115,7 +119,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "f82f2f8376df97fb184c04d31c8e42c291f7a03dbd909828e1bf61612106de35",
-        revision: "sha256:0c4dd96e5c0e4a3dc84544ce7549f31f9b3237d2cbf9a04f560a71e9977642df",
+        revision: "sha256:1b7c844213457e7d3ae2f48809f615ee639c81a1ef378c1e40d612be7194bdb4",
     },
 ];
 

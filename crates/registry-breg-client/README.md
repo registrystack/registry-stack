@@ -97,7 +97,7 @@ values:
 
 ```sh
 BREG_BASE_URL=https://registry.example.com \
-BREG_ENTITY_ROUTE=establishments BREG_ACCESS_PROFILE=map-reader \
+BREG_RECORD_ROUTE=establishments BREG_ACCESS_PROFILE=map-reader \
 BREG_BBOX=100,13,101,14 BREG_TOKEN_FILE=/path/to/access-token \
 cargo run --locked -p registry-breg-client --example native_geojson
 ```
@@ -109,7 +109,7 @@ a read. The example advances pages explicitly and does not fetch linked resource
 `BRegCurrentListRequest`, `BRegAsOfListRequest`, `BRegSnapshotListRequest`, and
 `BRegRelationshipListRequest` separate route-specific options. Snapshot responses
 expose a reusable snapshot reference; their continuations retain it across
-writes. Relationship methods take the entity route, source-record UUID, and path
+writes. Relationship methods take the record route, source-record UUID, and path
 route independently. Temporal and relationship requests reject bbox combinations.
 
 Parsed metadata retains selectors, read paths, vocabulary labels, reference

@@ -332,7 +332,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     lax.token_file = Some(lax_token);
     let error = run_connection("breg", ConnectionCommand::Add(Box::new(lax)))
         .expect_err("connection add must preflight owner-only credential permissions");
-    assert_eq!(error.exit_code(), 3);
+    assert_eq!(error.exit_code(), 1);
     assert!(error.to_string().contains("0400 or 0600"));
     assert!(!error.to_string().contains("must-not-be-read-later"));
 
@@ -348,7 +348,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     invalid_renewable.private_key_file = Some(invalid_key);
     let error = run_connection("breg", ConnectionCommand::Add(Box::new(invalid_renewable)))
         .expect_err("connection add must preflight the private key file");
-    assert_eq!(error.exit_code(), 3);
+    assert_eq!(error.exit_code(), 1);
     assert!(!error.to_string().contains("invalid-private-key-canary"));
 
     let (base_url, requests) = request_server(2, "200 OK", "{} ");
@@ -381,7 +381,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     unusable.connection = Some("staging".to_owned());
     let error = run_api("breg", unusable, |_, _| unreachable!("saved connection"))
         .expect_err("runtime credential errors must give value-free recovery guidance");
-    assert_eq!(error.exit_code(), 3);
+    assert_eq!(error.exit_code(), 1);
     assert!(error.to_string().contains("0400 or 0600"));
     assert!(!error.to_string().contains("staging-token"));
     run_connection(
@@ -443,7 +443,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
         unreachable!("saved remote connection")
     })
     .expect_err("a saved profile requires adapter-owned header names");
-    assert_eq!(missing_headers.exit_code(), 3);
+    assert_eq!(missing_headers.exit_code(), 1);
     run_api_with_profile_headers(
         "casework",
         profiled,
@@ -500,7 +500,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
         }),
     )
     .expect_err("manually authored non-Casework access profiles must be refused");
-    assert_eq!(error.exit_code(), 3);
+    assert_eq!(error.exit_code(), 1);
 
     let ca = temporary.path().join("institution-ca.pem");
     fs::write(&ca, "not a PEM certificate\n").unwrap();
@@ -521,7 +521,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
         unreachable!("saved connection")
     })
     .expect_err("invalid saved trust material must be refused locally");
-    assert_eq!(error.exit_code(), 3);
+    assert_eq!(error.exit_code(), 1);
 
     let token_body = r#"{"access_token":"renewed-token","token_type":"Bearer","expires_in":300}"#;
     let (token_endpoint, token_requests) = request_server(1, "200 OK", token_body);
@@ -537,7 +537,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     call.connection = Some("renewable".to_owned());
     let error = run_api("breg", call, |_, _| unreachable!("saved remote connection"))
         .expect_err("the API status remains a visible refusal");
-    assert_eq!(error.exit_code(), 1);
+    assert_eq!(error.exit_code(), 3);
     let token_request = String::from_utf8(token_requests.recv().unwrap()).unwrap();
     assert!(token_request.starts_with("POST /prefix/token HTTP/1.1\r\n"));
     assert!(token_request.contains("grant_type=client_credentials"));

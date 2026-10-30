@@ -47,7 +47,7 @@ impl LocalSession {
         );
         let report: Value = serde_json::from_slice(&result.stdout).unwrap();
         assert_eq!(report["ok"], true);
-        report["data"].clone()
+        report
     }
     async fn start(&self) -> Value {
         self.success(vec![

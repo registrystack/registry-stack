@@ -47,12 +47,12 @@
     },
     "RegistryRecordMeta": {
       "additionalProperties": true,
-      "description": "The homogeneous Registry, primary dataset, and entity context shared by a\nsingle response or every member of a collection.",
+      "description": "The homogeneous Registry, primary dataset, and record type context shared by a\nsingle response or every member of a collection.",
       "properties": {
         "datasetIdentifier": {
           "type": "string"
         },
-        "entityTypeIdentifier": {
+        "recordTypeIdentifier": {
           "type": "string"
         },
         "registryIdentifier": {
@@ -62,7 +62,7 @@
       "required": [
         "registryIdentifier",
         "datasetIdentifier",
-        "entityTypeIdentifier"
+        "recordTypeIdentifier"
       ],
       "type": "object"
     }

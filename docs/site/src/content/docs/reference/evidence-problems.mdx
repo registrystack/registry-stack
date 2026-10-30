@@ -65,12 +65,16 @@ problem code from the error's `code`. Python raises the exception in the table; 
 | --- | --- | --- |
 | `denied` | `auth.invalid-credential`, `evidence.denied`, `evidence.rate-limited` | `DeniedError` |
 | `not-available` | `evidence.unavailable` | `NotAvailableError` |
-| `protocol` | `evidence.invalid-request`, `request.selector-invalid`, `resource.not-found`, `format.unsupported`, `source.unavailable`, `service.unavailable` | `ProtocolError` |
+| `invalid-request` | `evidence.invalid-request`, `request.selector-invalid`, `resource.not-found`, `format.unsupported` | `InvalidRequestError` |
+| `unavailable` | `source.unavailable`, `service.unavailable` | `UnavailableError` |
 
-Only `evidence.rate-limited` sets the retry delay (`retry_after_seconds` in Python,
-`retryAfterSeconds` in Node). A problem whose status, title, detail, type, or `traceId` departs from
-the contract also becomes `protocol`, with no `code`: a `protocol` error with a `code` is one of the
-codes in this table, and one without is a contract violation.
+An HTTP `429` response may set the retry delay (`retry_after_seconds` in Python,
+`retryAfterSeconds` in Node). Classification uses the code, HTTP status, type URI, and trace
+correlation. The clients discard response-authored `title` and `detail` text. A malformed problem,
+a registered code at the wrong status, or broken correlation becomes `protocol`.
+
+A valid unknown code follows its HTTP status: `401`, `403`, and `429` are `denied`; `422` is
+`not-available`; other `4xx` responses are `invalid-request`; `5xx` responses are `unavailable`.
 
 {/* Evidence: crates/registry-evidence-client/src/problem.rs, REGISTERED_PROBLEMS, map_problem(),
     and exact_registered_problems_preserve_the_typed_mapping;

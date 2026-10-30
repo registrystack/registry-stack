@@ -19,6 +19,7 @@ postgres-test = ["registry-scheduling/postgres-test"]
 workspace = true
 
 [dependencies]
+registry-cli-report.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 registry-cli-api.workspace = true

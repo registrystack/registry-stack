@@ -11,6 +11,7 @@ file calls either. Every status/code combination below mirrors
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import unittest
@@ -97,18 +98,65 @@ class ErrorMappingTest(unittest.TestCase):
         self.assertEqual(error.kind, "not-available")
         self.assertEqual(error.trace_id, TRACE_ID)
 
-    def test_400_with_an_ordinary_code_maps_to_protocol(self):
+    def test_400_with_an_invalid_request_code_maps_to_invalid_request(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=400,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
             body=fixtures.problem_body(400, "evidence.invalid-request"),
         )
-        with self.assertRaises(revc.ProtocolError) as raised:
+        with self.assertRaises(revc.InvalidRequestError) as raised:
             self._send(self._client())
         error = raised.exception
-        self.assertEqual(error.kind, "protocol")
+        self.assertEqual(error.kind, "invalid-request")
         self.assertEqual(error.status, 400)
         self.assertEqual(error.code, "evidence.invalid-request")
+
+    def test_503_with_an_unavailable_code_maps_to_unavailable(self):
+        problem = json.loads(
+            fixtures.problem_body(503, "source.unavailable").decode("utf-8")
+        )
+        problem.update(
+            title="Source temporarily offline",
+            detail="Try the request again later.",
+            futureMember=True,
+        )
+        self.server.routes["POST /v1/evidence"] = StubRoute(
+            status=503,
+            headers={"Content-Type": PROBLEM_MEDIA_TYPE, "Retry-After": "30"},
+            body=json.dumps(problem).encode("utf-8"),
+        )
+        with self.assertRaises(revc.UnavailableError) as raised:
+            self._send(self._client())
+        error = raised.exception
+        self.assertEqual(error.kind, "unavailable")
+        self.assertEqual(error.status, 503)
+        self.assertEqual(error.code, "source.unavailable")
+        self.assertEqual(error.trace_id, TRACE_ID)
+        self.assertIsNone(error.retry_after_seconds)
+
+    def test_unknown_valid_code_falls_back_by_status_and_preserves_code(self):
+        self.server.routes["POST /v1/evidence"] = StubRoute(
+            status=409,
+            headers={"Content-Type": PROBLEM_MEDIA_TYPE},
+            body=json.dumps({
+                "type": (
+                    "https://id.registrystack.org/problems/registry-evidence/"
+                    "request/future-conflict"
+                ),
+                "title": "Future request conflict",
+                "status": 409,
+                "detail": "The request conflicts with future service state.",
+                "code": "request.future-conflict",
+                "traceId": TRACE_ID,
+            }).encode("utf-8"),
+        )
+        with self.assertRaises(revc.InvalidRequestError) as raised:
+            self._send(self._client())
+        error = raised.exception
+        self.assertEqual(error.kind, "invalid-request")
+        self.assertEqual(error.status, 409)
+        self.assertEqual(error.code, "request.future-conflict")
+        self.assertEqual(error.trace_id, TRACE_ID)
 
     def test_a_success_with_the_wrong_media_type_maps_to_protocol(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(

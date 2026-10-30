@@ -160,9 +160,9 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
         .expect("changes array")
         .iter()
         .any(|change| change["classification"] == "unsupported"));
-    assert!(report["findings"]
+    assert!(report["diagnostics"]
         .as_array()
-        .expect("findings array")
+        .expect("diagnostics array")
         .iter()
         .any(|finding| finding["code"] == "diff.classification.unsupported"));
 }
@@ -196,9 +196,9 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
         .expect("changes array")
         .iter()
         .any(|change| change["change"]["code"] == "field-removed"));
-    let retained: Vec<&Value> = report["findings"]
+    let retained: Vec<&Value> = report["diagnostics"]
         .as_array()
-        .expect("findings array")
+        .expect("diagnostics array")
         .iter()
         .filter(|finding| finding["code"] == "diff.history.removed-values-retained")
         .collect();
@@ -220,9 +220,9 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
         path(&baseline.package),
     ]);
     assert!(quiet.status.success(), "{quiet:?}");
-    assert!(!json_stdout(&quiet)["findings"]
+    assert!(!json_stdout(&quiet)["diagnostics"]
         .as_array()
-        .expect("findings array")
+        .expect("diagnostics array")
         .iter()
         .any(|finding| finding["code"] == "diff.history.removed-values-retained"));
 }

@@ -51,22 +51,22 @@ arguments in all three.
     crates/registry-breg-client-node/client.d.ts, executeRecoveredProposalStart, registryMetadata,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi */}
 
-## Exact JSON text in Node
+## Proposal objects in Node
 
-Three Node methods take JSON text instead of plain objects: `startProposal(binding, inputsJson,
-key)`, `listProposals(collection, queryJson)`, and `prepareProposal(proposal, operation, bodyJson,
-key)`. Python takes dicts for the same arguments, and Rust takes typed values.
+Three Node methods take plain JSON objects: `startProposal(binding, inputs, key)`,
+`listProposals(collection, query)`, and `prepareProposal(proposal, operation, body, key)`.
+Python takes dicts for the same arguments, and Rust takes typed values.
 
 ```js
 const proposal = await client.startProposal(
   binding,
-  JSON.stringify({ reason: 'relocation' }),
+  { reason: 'relocation' },
   'start-2026-10-17-0001',
 );
 ```
 
-Other Node methods take plain values. Many have a `*Json` twin, such as `getRecordJson` or
-`invokeActionJson`, that returns the validated response as exact text in `valueJson`.
+Many Node methods have a `*Json` twin, such as `getRecordJson` or `invokeActionJson`, that returns
+the validated response as exact text in `valueJson`.
 
 {/* Evidence: crates/registry-breg-client-node/client.d.ts, startProposal, listProposals,
     prepareProposal, getRecordJson, invokeActionJson, valueJson,
@@ -250,7 +250,7 @@ carries `refusalCode`. Datasets are declared in the
 [statistics configuration](../../configure/breg-statistics/).
 
 {/* Evidence: crates/registry-breg-client/src/statistics.rs, statistics_withdraw,
-    crates/registry-breg-client-node/src/lib.rs, StatisticalDatasetVersionWithdrawn,
+    crates/registry-breg-client/src/error.rs, StatisticalDatasetVersionWithdrawn,
     StatisticalDatasetReleaseRefused */}
 
 ## Ingestion runs

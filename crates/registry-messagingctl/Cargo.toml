@@ -25,6 +25,7 @@ postgres-test = ["registry-messaging/postgres-test"]
 workspace = true
 
 [dependencies]
+registry-cli-report.workspace = true
 aws-lc-rs.workspace = true
 axum.workspace = true
 base64.workspace = true

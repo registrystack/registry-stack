@@ -34,20 +34,24 @@ NOW = datetime(2026, 8, 30, 0, 0, 1, tzinfo=UTC)
 
 
 def headers():
-    return {
-        "ce-specversion": "1.0",
-        "ce-id": "00000000-0000-4000-8000-000000000001",
-        "ce-source": SOURCE,
-        "ce-type": "case-created-v1",
-        "ce-time": "2026-08-30T00:00:00Z",
-        "ce-dataschema": SCHEMA,
-        "x-registry-event-generation": "1",
-        "x-registry-delivery-attempt": "1",
-        "x-registry-delivery-time": "2026-08-30T00:00:01Z",
-        "idempotency-key": "sha256:" + "a" * 64,
-        "content-type": "application/json",
-        "x-registry-signature": "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM",
-    }
+    return [
+        ("ce-specversion", "1.0"),
+        ("ce-id", "00000000-0000-4000-8000-000000000001"),
+        ("ce-source", SOURCE),
+        ("ce-type", "case-created-v1"),
+        ("ce-time", "2026-08-30T00:00:00Z"),
+        ("ce-dataschema", SCHEMA),
+        ("x-registry-event-generation", "1"),
+        ("x-registry-delivery-attempt", "1"),
+        ("x-registry-delivery-time", "2026-08-30T00:00:01Z"),
+        ("idempotency-key", "sha256:" + "a" * 64),
+        ("content-type", "application/json"),
+        ("x-registry-signature", "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM"),
+    ]
+
+
+def header(name):
+    return next(value for candidate, value in headers() if candidate == name)
 
 
 def accept(inbox, body=BODY, **overrides):
@@ -72,16 +76,16 @@ PROPOSAL_SCHEMA = "https://id.registrystack.org/contracts/breg/proposal-event/v1
 
 def proposal_envelope():
     return {
-        "id": headers()["ce-id"],
+        "id": header("ce-id"),
         "type": "proposal.applied",
         "source": SOURCE,
         "time": "2026-08-30T00:00:00Z",
         "dataschema": PROPOSAL_SCHEMA,
         "subject": {
-            "recordReference": "/v1/proposals/" + PROPOSAL_ID,
-            "recordRevision": 2,
+            "proposalReference": "/v1/proposals/" + PROPOSAL_ID,
+            "proposalRevision": 2,
         },
-        "causation": {"root": headers()["ce-id"], "hop": 0},
+        "causation": {"root": header("ce-id"), "hop": 0},
         "data": {
             "proposalId": PROPOSAL_ID,
             "submissionVersion": 1,
@@ -101,7 +105,7 @@ def proposal_envelope():
 
 def verified_proposal(envelope=None):
     envelope = proposal_envelope() if envelope is None else envelope
-    verified = breg.verify_webhook_delivery(
+    verified = breg.verify_hook_delivery(
         method="POST",
         path="/hooks/registry",
         headers=headers(),
@@ -120,11 +124,11 @@ def verified_proposal(envelope=None):
 
 def accept_proposal(inbox, envelope=None):
     verified = verified_proposal(envelope)
-    with patch.object(breg, "verify_webhook_delivery", return_value=verified):
+    with patch.object(breg, "verify_hook_delivery", return_value=verified):
         return inbox.accept(
             "POST",
             "/hooks/breg",
-            {},
+            [],
             verified["body"],
             key=CANARY_KEY,
             source=SOURCE,
@@ -178,7 +182,7 @@ class WakeReceiverTests(unittest.TestCase):
             self.assertEqual(inbox.pending(), 0)
 
 
-class PublishedClientTests(unittest.TestCase):
+class ClientConstructionTests(unittest.TestCase):
     def config(self, root):
         file = Path(root) / "canary.headers"
         file.write_text("Authorization: Bearer canary-token\n")
@@ -198,7 +202,7 @@ class PublishedClientTests(unittest.TestCase):
             },
         }
 
-    def test_pinned_043_native_constructors_are_called_with_released_spellings(self):
+    def test_native_constructors_are_called_with_current_spellings(self):
         with tempfile.TemporaryDirectory() as root:
             app = Composition(self.config(root), Inbox(Path(root) / "inbox.sqlite"))
             self.assertIsNotNone(app.registry)
@@ -432,12 +436,12 @@ class ReceiverHttpTests(unittest.TestCase):
                 # Native cryptography and target checks are covered above.
                 # This trusted result isolates HTTP framing and commit order.
                 with patch.object(
-                    breg, "verify_webhook_delivery", return_value=verified
+                    breg, "verify_hook_delivery", return_value=verified
                 ):
                     for _ in range(2):
                         connection = HTTPConnection(*server.server_address, timeout=5)
                         connection.request(
-                            "POST", "/hooks/breg", body=BODY, headers=headers()
+                            "POST", "/hooks/breg", body=BODY, headers=dict(headers())
                         )
                         response = connection.getresponse()
                         self.assertEqual(response.status, 204)
@@ -445,7 +449,9 @@ class ReceiverHttpTests(unittest.TestCase):
                         self.assertEqual(Inbox(inbox.path).pending(), 1)
                         connection.close()
                 connection = HTTPConnection(*server.server_address, timeout=5)
-                connection.request("POST", "/hooks/other", body=BODY, headers=headers())
+                connection.request(
+                    "POST", "/hooks/other", body=BODY, headers=dict(headers())
+                )
                 response = connection.getresponse()
                 self.assertEqual(response.status, 403)
                 problem = json.loads(response.read())
@@ -459,6 +465,57 @@ class ReceiverHttpTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_repeated_header_reaches_the_native_verifier_without_collapsing(self):
+        with tempfile.TemporaryDirectory() as root:
+            inbox = Inbox(Path(root) / "inbox.sqlite")
+            server = ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                receiver(
+                    inbox,
+                    key=CANARY_KEY,
+                    source=SOURCE,
+                    event_type="proposal.applied",
+                    schema=PROPOSAL_SCHEMA,
+                ),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            captured = []
+
+            def refuse_duplicate(**delivery):
+                captured.extend(delivery["headers"])
+                raise ValueError("the native verifier refused a repeated header")
+
+            try:
+                with patch.object(
+                    breg, "verify_hook_delivery", side_effect=refuse_duplicate
+                ):
+                    connection = HTTPConnection(*server.server_address, timeout=5)
+                    connection.putrequest("POST", "/hooks/breg")
+                    connection.putheader("Content-Length", str(len(BODY)))
+                    for name, value in [*headers(), ("CE-TYPE", "proposal.applied")]:
+                        connection.putheader(name, value)
+                    connection.endheaders(BODY)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 403)
+                    self.assertEqual(
+                        json.loads(response.read())["code"], "receiver.hook-refused"
+                    )
+                    connection.close()
+                self.assertEqual(
+                    [
+                        (name.lower(), value)
+                        for name, value in captured
+                        if name.lower() == "ce-type"
+                    ],
+                    [("ce-type", "case-created-v1"), ("ce-type", "proposal.applied")],
+                )
+                self.assertEqual(inbox.pending(), 0)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
 
 class NativeFailureRecoveryTests(unittest.TestCase):
     app = ReceiptRecoveryTests.app
@@ -467,9 +524,9 @@ class NativeFailureRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             app = self.app(root)
             # This fixture notice is deliberately outside the native wire schema.
-            # The actual released SDK rejects it before opening a connection.
+            # The native SDK rejects it before opening a connection.
             native = messaging.MessagingClient(
-                "http://127.0.0.1:1", max_mutation_retries=0
+                "http://127.0.0.1:1", maximum_mutation_retries=0
             )
             failures = []
 
@@ -610,20 +667,46 @@ class ProposalHintTests(unittest.TestCase):
     def test_subject_version_and_payload_schema_are_checked_before_durable_acceptance(
         self,
     ):
-        for change in ("subject", "version", "unknown-field", "header"):
+        for change in (
+            "subject-path",
+            "subject-revision",
+            "record-subject",
+            "mixed-subject",
+            "unknown-subject-member",
+            "version",
+            "unknown-field",
+            "header",
+        ):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as root:
                 inbox = Inbox(Path(root) / "inbox.sqlite")
                 envelope = proposal_envelope()
-                if change == "subject":
-                    envelope["subject"]["recordReference"] = "/v1/proposals/another"
+                if change == "subject-path":
+                    envelope["subject"]["proposalReference"] = "/v1/proposals/another"
+                elif change == "subject-revision":
+                    envelope["subject"]["proposalRevision"] = 3
+                elif change == "record-subject":
+                    envelope["subject"] = {
+                        "recordReference": "/v1/proposals/" + PROPOSAL_ID,
+                        "recordRevision": 2,
+                    }
+                elif change == "mixed-subject":
+                    envelope["subject"]["recordReference"] = "must-not-appear"
+                elif change == "unknown-subject-member":
+                    envelope["subject"]["privateValue"] = "must-not-appear"
                 elif change == "version":
                     envelope["data"]["submissionVersion"] = True
                 elif change == "unknown-field":
                     envelope["data"]["privateValue"] = "must-not-persist"
                 else:
                     envelope["type"] = "proposal.submitted"
-                with self.assertRaises(WakeRefused):
+                with self.assertRaises(WakeRefused) as refused:
                     accept_proposal(inbox, envelope)
+                self.assertEqual(
+                    str(refused.exception),
+                    "hook signature or expected envelope was refused"
+                    if change == "header"
+                    else "the authenticated native Proposal envelope was refused",
+                )
                 self.assertEqual(inbox.pending(), 0)
 
 

@@ -377,24 +377,19 @@ fn event_subjects_name_the_record_and_its_revision() {
     let version = version_event(HookTrigger::DocumentVersionReady)
         .subject()
         .unwrap();
+    assert!(matches!(&version, EventSubject::Record { .. }));
     assert_eq!(
-        version.record_reference,
+        version.reference(),
         format!("/v1/documents/{DOCUMENT}/versions/{VERSION}")
     );
-    assert_eq!(version.record_revision, 3, "the revision the change left");
+    assert_eq!(version.revision(), 3, "the revision the change left");
     let issued = grant_event(GrantChange::Issued).subject().unwrap();
-    assert_eq!(
-        issued.record_reference,
-        format!("/v1/document-grants/{GRANT}")
-    );
-    assert_eq!(issued.record_revision, 1);
-    assert_eq!(
-        grant_event(GrantChange::Revoked)
-            .subject()
-            .unwrap()
-            .record_revision,
-        2
-    );
+    assert!(matches!(&issued, EventSubject::Record { .. }));
+    assert_eq!(issued.reference(), format!("/v1/document-grants/{GRANT}"));
+    assert_eq!(issued.revision(), 1);
+    let revoked = grant_event(GrantChange::Revoked).subject().unwrap();
+    assert!(matches!(&revoked, EventSubject::Record { .. }));
+    assert_eq!(revoked.revision(), 2);
     let mut mismatched = version_event(HookTrigger::DocumentGrantChanged);
     mismatched.grant = None;
     assert_eq!(mismatched.subject(), Err(HookCaptureError::InvalidCapture));

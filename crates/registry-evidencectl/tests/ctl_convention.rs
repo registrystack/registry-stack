@@ -152,7 +152,8 @@ fn scaffold(root: &Path) -> std::path::PathBuf {
         .args(["--transport", "sqlite-extract", "--profile", "local"])
         .output()
         .expect("run init");
-    conforming(&output, "init", SUCCESS, "created");
+    let report = conforming(&output, "init", SUCCESS, "complete");
+    assert_eq!(report["outcome"], "created");
     project
 }
 
@@ -253,7 +254,8 @@ fn init_check_and_explain_share_the_envelope() {
             .arg(&project)
             .output()
             .expect("run refused command");
-        let refused = conforming(&output, command, DOMAIN_REFUSAL, "refused");
+        let refused = conforming(&output, command, DOMAIN_REFUSAL, "domain-refusal");
+        assert_eq!(refused["outcome"], "refused", "{command}");
         let keys = |report: &Value| {
             report
                 .as_object()
@@ -262,7 +264,16 @@ fn init_check_and_explain_share_the_envelope() {
                 .cloned()
                 .collect::<std::collections::BTreeSet<_>>()
         };
-        assert_eq!(keys(&refused), keys(passing), "{command} key sets diverge");
+        let mut expected_refused_keys = keys(passing);
+        assert!(
+            expected_refused_keys.insert("outcome".to_owned()),
+            "{command} successful report unexpectedly carried an outcome"
+        );
+        assert_eq!(
+            keys(&refused),
+            expected_refused_keys,
+            "{command} key sets diverge"
+        );
     }
 }
 

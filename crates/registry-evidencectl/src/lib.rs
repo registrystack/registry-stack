@@ -432,6 +432,15 @@ fn format_value_refused(error: &clap::Error) -> bool {
 
 /// Parse process arguments and run one adopter-tooling operation.
 pub fn main_entry() -> ExitCode {
+    registry_cli_report::install_panic_hook(
+        registry_cli_report::Identity {
+            binary: "evidencectl",
+            api_version: report::API_VERSION,
+            kind: report::KIND,
+            version: registry_platform_buildinfo::DISPLAY_VERSION,
+        },
+        registry_cli_report::json_requested(std::env::args_os()),
+    );
     let code = run_entry();
     if REPORT_UNDELIVERED.load(std::sync::atomic::Ordering::Relaxed) {
         return ExitCode::from(report::OPERATIONAL_FAILURE_EXIT);

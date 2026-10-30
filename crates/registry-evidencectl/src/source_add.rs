@@ -1253,12 +1253,12 @@ mod tests {
     }
 
     fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
-        let source = format!("type: http-json\nposture: record-transformed\nconnection: {connection}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
+        let source = format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nposture: record-transformed\nconnection: {connection}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
         let artifacts = BTreeMap::from([
             (format!("sources/{id}.yaml"), source),
             (
                 "selectors/record-code.yaml".to_owned(),
-                "maximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
+                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
             ),
             (
                 format!("schemas/{id}-parameters.yaml"),

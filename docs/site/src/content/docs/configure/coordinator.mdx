@@ -20,20 +20,15 @@ project, check and test it with no service running, and package it for the opera
 it. Endpoints, credentials, and caller policies never enter the package;
 [Deploy Registry Coordinator](../../operate/coordinator/) adds them.
 
-You need `coordinatorctl` on your `PATH`. Build it from a Registry Stack checkout of the release
-you deploy:
-
-```sh test-skip="the gate builds coordinatorctl from this checkout"
-cargo build --locked --release -p registry-coordinator --bins
-export PATH="$PWD/target/release:$PATH"
-```
-
-On macOS the binary loads the FIPS library its build produced, so run it from that checkout or
-follow the macOS install in the
-[deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#install-and-package).
+You need `coordinatorctl` on your `PATH`. Stack release packaging includes it from `v0.44.0`.
+Use the checksum-verifying installer from the published release you deploy; it keeps the macOS
+FIPS libraries beside the executables. The
+[deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#install-and-package)
+covers that installer and source builds until the release is available. Coordinator remains
+experimental, and its container image is not published yet.
 
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Install and package;
-    scripts/cargo-runtime-library-path.sh. */}
+    release/scripts/release_roster.py, COORDINATOR_BINARY_FIRST_RELEASE and COORDINATOR_FIRST_RELEASE. */}
 
 ## Start a project
 

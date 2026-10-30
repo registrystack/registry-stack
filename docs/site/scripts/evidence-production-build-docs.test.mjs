@@ -31,10 +31,24 @@ async function page(path) {
 // write. If you are adding an assertion because a page happens to contain a
 // string, stop.
 test('production Evidence tutorials keep their secret handling and signing boundaries explicit', async () => {
-  const [build, transit, rotation] = await Promise.all([
+  const [build, transit, rotation, productionPolicy, stagingPolicy] = await Promise.all([
     page('src/content/docs/tutorials/build-and-deploy-evidence-project.mdx'),
     page('src/content/docs/tutorials/move-evidence-to-production-signing.mdx'),
     page('src/content/docs/tutorials/rotate-evidence-signing-keys.mdx'),
+    readFile(
+      resolve(
+        repoRoot,
+        'products/evidence/reference/deployment-targets/environments/production/transit/policies/evidence-signing.hcl',
+      ),
+      'utf8',
+    ),
+    readFile(
+      resolve(
+        repoRoot,
+        'products/evidence/reference/deployment-targets/environments/staging/transit/policies/evidence-signing.hcl',
+      ),
+      'utf8',
+    ),
   ]);
 
   // The access token goes into an owner-only file, never onto a command line or
@@ -47,6 +61,12 @@ test('production Evidence tutorials keep their secret handling and signing bound
   // backed up in the clear.
   assert.match(transit, /exportable=false/u);
   assert.match(transit, /allow_plaintext_backup=false/u);
+  // OpenBao compares ACL parameter values by string. Keep the application
+  // request, shipped policies, and documented overlap on that wire type.
+  assert.match(productionPolicy, /"key_version"\s*=\s*\["12"\]/u);
+  assert.match(stagingPolicy, /"key_version"\s*=\s*\["7"\]/u);
+  assert.match(transit, /"key_version"\s*=\s*\["12"\]/u);
+  assert.match(rotation, /"key_version"\s*=\s*\["12", "13"\]/u);
   // The proxy attaches the provider credential, so the service process never
   // holds one. The value carries the control: under "true" a client-supplied
   // token wins, and only "force" makes the proxy always override.

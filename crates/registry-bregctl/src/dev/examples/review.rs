@@ -46,12 +46,9 @@ fn ctl(binary: &Path, args: Vec<String>, logs: &Path) -> Result<Value> {
             log.display()
         );
     }
-    let mut value = decode_exact_json(&output.stdout)?;
-    if value["kind"] == "CaseworkReport" {
-        if value["ok"] != true || value["status"] != "complete" {
-            bail!("Casework command did not complete");
-        }
-        value = value["data"].take();
+    let value = decode_exact_json(&output.stdout)?;
+    if value["kind"] == "CaseworkReport" && (value["ok"] != true || value["status"] != "complete") {
+        bail!("Casework command did not complete");
     }
     Ok(value)
 }
@@ -569,6 +566,30 @@ fn task_matches(task: &Value, proposal: &ProposalCapture) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_casework_command_keeps_its_flat_report_payload() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("caseworkctl");
+        fs::write(
+            &binary,
+            concat!(
+                "#!/usr/bin/env bash\nset -euo pipefail\n",
+                "printf '%s\\n' '{\"ok\":true,\"command\":\"check\",",
+                "\"status\":\"complete\",\"kind\":\"CaseworkReport\",",
+                "\"policyBindings\":[{\"policy\":\"permit-review\"}]}'\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let report = ctl(&binary, vec!["check".into()], root.path()).unwrap();
+        assert_eq!(report["policyBindings"][0]["policy"], "permit-review");
+        assert!(report.get("data").is_none());
+    }
 
     #[test]
     fn generated_review_yaml_keeps_schema_hints_notes_and_bindings() {

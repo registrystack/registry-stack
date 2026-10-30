@@ -258,6 +258,9 @@ pub struct EvidenceConstruction<'a> {
     pub scope: EvidenceScope<'a>,
     pub issued_at: DateTime<Utc>,
     pub observed_at: DateTime<Utc>,
+    /// Earliest verified deadline of any signed source value used to derive
+    /// this assertion. Ordinary HTTP and SQLite sources supply no cap.
+    pub source_valid_until: Option<DateTime<Utc>>,
     pub subjects: Vec<SubjectBinding>,
 }
 
@@ -1135,14 +1138,27 @@ impl OfflineKernel {
             .requirement(requirement_id)
             .ok_or(KernelError::Requirement)?;
         validate_evidence_inputs(requirement, values.as_slice(), &input)?;
-        let valid_until = input
-            .issued_at
+        // The public contract emits whole-second instants. Apply lifecycle
+        // comparisons at that same precision so sub-second differences cannot
+        // collapse into an invalid `issuedAt == validUntil` payload after
+        // serialization. Flooring a source deadline is conservative: the
+        // downstream assertion remains bounded by the exact verified instant.
+        let issued_at = emitted_instant(input.issued_at)?;
+        let local_valid_until = issued_at
             .checked_add_signed(Duration::seconds(
                 i64::try_from(requirement.validity_seconds.get())
                     .map_err(|_| KernelError::Evidence)?,
             ))
-            .ok_or(KernelError::Evidence)
-            .map(format_utc)?;
+            .ok_or(KernelError::Evidence)?;
+        let valid_until = input
+            .source_valid_until
+            .map(emitted_instant)
+            .transpose()?
+            .map_or(local_valid_until, |source| source.min(local_valid_until));
+        if valid_until <= issued_at {
+            return Err(KernelError::Evidence);
+        }
+        let valid_until = format_utc(valid_until);
 
         Ok(Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_owned(),
@@ -1745,6 +1761,10 @@ fn scope_is_valid(scope: EvidenceScope<'_>) -> bool {
 
 fn format_utc(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn emitted_instant(value: DateTime<Utc>) -> Result<DateTime<Utc>, KernelError> {
+    DateTime::from_timestamp(value.timestamp(), 0).ok_or(KernelError::Evidence)
 }
 
 fn valid_opaque_binding(value: &str) -> bool {
@@ -3047,6 +3067,7 @@ fn extract_batch(response, context) {
             },
             issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
             observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
+            source_valid_until: None,
             subjects: vec![
                 SubjectBinding {
                     role: "child".to_owned(),
@@ -3069,6 +3090,69 @@ fn extract_batch(response, context) {
         assert_eq!(first.subjects[0].role, "child");
         assert_eq!(first.subjects[1].role, "candidate-parent");
         assert_eq!(first.valid_until, "2026-08-02T00:05:01Z");
+    }
+
+    #[test]
+    fn verified_source_deadline_caps_issuance_and_refuses_an_expired_cap() {
+        let copied = immutable_fixture("legal-parent-relationship");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = &bundle.config.requirements[0];
+        let values = kernel
+            .validate_values(
+                &requirement.id,
+                vec![DerivedConceptValue {
+                    concept_id: requirement.concepts[0].id.clone(),
+                    value: DerivedValue::Json(json!(false)),
+                }],
+                projection(),
+            )
+            .expect("values validate");
+        let construction = |issued_at, source_valid_until| EvidenceConstruction {
+            evidence_id: "urn:ulid:01K1EXAMPLE0000000000000000",
+            purpose: &requirement.purposes[0],
+            scope: EvidenceScope::AudienceScoped {
+                audience: AUDIENCE,
+                request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+            },
+            issued_at,
+            observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
+            source_valid_until,
+            subjects: vec![
+                SubjectBinding {
+                    role: "child".to_owned(),
+                    binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),
+                },
+                SubjectBinding {
+                    role: "candidate-parent".to_owned(),
+                    binding: format!("urn:evidence:subject:v1_{}", "B".repeat(43)),
+                },
+            ],
+        };
+        let capped = kernel
+            .construct_evidence(
+                &requirement.id,
+                values.clone(),
+                construction(
+                    "2026-08-02T00:00:01.100Z".parse().expect("time"),
+                    Some("2026-08-02T00:00:02.900Z".parse().expect("time")),
+                ),
+            )
+            .expect("a source deadline in a later emitted second caps local validity");
+        assert_eq!(capped.issued_at, "2026-08-02T00:00:01Z");
+        assert_eq!(capped.valid_until, "2026-08-02T00:00:02Z");
+        assert_eq!(
+            kernel.construct_evidence(
+                &requirement.id,
+                values,
+                construction(
+                    "2026-08-02T00:00:01.100Z".parse().expect("time"),
+                    Some("2026-08-02T00:00:01.900Z".parse().expect("time")),
+                ),
+            ),
+            Err(KernelError::Evidence),
+            "fractional instants in one emitted second cannot form a valid assertion interval"
+        );
     }
 
     /// A holder-bound construction has no member in which to state an audience
@@ -3100,6 +3184,7 @@ fn extract_batch(response, context) {
                     scope: EvidenceScope::HolderBound,
                     issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
                     observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
+                    source_valid_until: None,
                     subjects: vec![
                         SubjectBinding {
                             role: "child".to_owned(),
@@ -3651,6 +3736,7 @@ fn extract_batch(response, context) {
                     },
                     issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
                     observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
+                    source_valid_until: None,
                     subjects: vec![SubjectBinding {
                         role: "subject".to_owned(),
                         binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),

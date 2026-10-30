@@ -380,8 +380,8 @@ print(proposal.document["state"], proposal.document["application"]["resultLinks"
 print(proposal.document["links"]["cancel"]["availability"])
 ```
 
-Or `register.mjs`. The Node client takes the inputs and the submit body as JSON text, and returns
-the Proposal's document the same way:
+Or `register.mjs`. The Node client takes the inputs and submit body as plain objects, and returns the
+Proposal's document as exact JSON text:
 
 ```js title="register.mjs" test-file
 import { setTimeout } from 'node:timers/promises';
@@ -391,13 +391,13 @@ import { PROFILE, client, contract } from './registry.mjs';
 const action = contract.selectAction('register-contact', PROFILE);
 let proposal = await client.startProposal(
   action,
-  JSON.stringify({ name: 'Grace Hopper', email: 'grace@example.test', jurisdiction: 'zone-a' }),
+  { name: 'Grace Hopper', email: 'grace@example.test', jurisdiction: 'zone-a' },
   'register-grace-hopper',
 );
 let document = JSON.parse(proposal.documentJson);
 console.log(proposal.identifier, document.state);
 
-const submit = client.prepareProposal(proposal, 'submit', '{}', 'submit-grace-hopper');
+const submit = client.prepareProposal(proposal, 'submit', {}, 'submit-grace-hopper');
 proposal = await client.executeProposal(submit);
 document = JSON.parse(proposal.documentJson);
 while (document.state !== 'applied') {

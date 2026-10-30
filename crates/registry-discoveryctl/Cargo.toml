@@ -24,6 +24,7 @@ schema = [
 ]
 
 [dependencies]
+registry-cli-report.workspace = true
 clap.workspace = true
 registry-cli-api.workspace = true
 hex.workspace = true

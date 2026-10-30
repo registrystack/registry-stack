@@ -37,11 +37,78 @@ fn unconditioned_action_schema_accepts_only_empty_optional_preconditions() {
 
 #[test]
 fn prospective_row_boundary_refusal_is_documented_only_where_it_can_apply() {
-    for operation in [Operation::Create, Operation::Batch] {
-        assert!(super::problem_responses(operation, true).contains_key("412"));
-        assert!(!super::problem_responses(operation, false).contains_key("412"));
+    for operation in [Operation::Create, Operation::Patch, Operation::Batch] {
+        assert!(super::problem_responses(operation, true).contains_key("403"));
+        assert!(!super::problem_responses(operation, false).contains_key("403"));
     }
+    assert!(!super::problem_responses(Operation::Create, true).contains_key("412"));
+    assert!(super::problem_responses(Operation::Batch, true).contains_key("412"));
     assert!(super::problem_responses(Operation::Patch, false).contains_key("412"));
+    let example = super::problem_example(
+        "403",
+        "write.outside-boundary",
+        "The resulting record falls outside the selected access profile's row boundary.",
+    );
+    assert_eq!(example["title"], "Forbidden");
+}
+
+#[test]
+fn write_outside_boundary_problem_is_exact_and_does_not_narrow_located_problems() {
+    let schema = inline_validator(&super::problem_schema());
+    let boundary = crate::problem::ProblemCode::WriteOutsideBoundary;
+    let exact = json!({
+        "type": boundary.type_uri(),
+        "title": boundary.title(),
+        "status": boundary.status(),
+        "detail": boundary.description(),
+        "code": boundary.code(),
+        "traceId": "11111111111111111111111111111111"
+    });
+    assert_valid(&schema, &exact);
+
+    for (member, value) in [
+        ("fieldPath", json!("/data/jurisdiction")),
+        ("refusalCode", json!("outside-boundary")),
+        ("guardReason", json!("outside-boundary")),
+        ("reasonCode", json!("disclosure-risk")),
+        ("recordType", json!("contact")),
+        ("fieldId", json!("jurisdiction")),
+        ("constraintId", json!("row-boundary")),
+        ("constraintKind", json!("vocabulary")),
+        ("left", json!("jurisdiction")),
+        ("right", json!("selected-jurisdiction")),
+        ("field", json!("jurisdiction")),
+    ] {
+        let mut extended = exact.clone();
+        extended[member] = value;
+        assert_invalid(&schema, &extended);
+    }
+
+    for (member, value) in [
+        (
+            "type",
+            json!(crate::problem::ProblemCode::PreconditionFailed.type_uri()),
+        ),
+        ("title", json!("Precondition Failed")),
+        ("status", json!(412)),
+        ("detail", json!("The mutation precondition failed.")),
+    ] {
+        let mut altered = exact.clone();
+        altered[member] = value;
+        assert_invalid(&schema, &altered);
+    }
+
+    let query = crate::problem::ProblemCode::QueryInvalid;
+    let located_query = json!({
+        "type": query.type_uri(),
+        "title": query.title(),
+        "status": query.status(),
+        "detail": query.description(),
+        "code": query.code(),
+        "traceId": "22222222222222222222222222222222",
+        "fieldPath": "$filter"
+    });
+    assert_valid(&schema, &located_query);
 }
 
 #[test]
@@ -67,7 +134,7 @@ fn served_field_projection_keeps_response_data_strict_but_subsettable() {
         "get",
         "200",
     );
-    let mut record = json!({"data":{"recordIdentifier":"00000000-0000-4000-8000-000000000001", "revisionIdentifier":"1", "domainData":{"name":"Example"}}, "meta":{"registryIdentifier":"local-directory", "datasetIdentifier":"directory", "entityTypeIdentifier":"contact"}});
+    let mut record = json!({"data":{"recordIdentifier":"00000000-0000-4000-8000-000000000001", "revisionIdentifier":"1", "domainData":{"name":"Example"}}, "meta":{"registryIdentifier":"local-directory", "datasetIdentifier":"directory", "recordTypeIdentifier":"contact"}});
     assert_valid(&schema, &record);
     record["data"]["domainData"]["undeclared"] = json!("refused");
     assert_invalid(&schema, &record);
@@ -77,6 +144,41 @@ fn served_field_projection_keeps_response_data_strict_but_subsettable() {
         .remove("undeclared");
     record["data"]["request"] = json!({"bregState":"submitted"});
     assert_invalid(&schema, &record);
+}
+
+#[test]
+fn record_response_schema_uses_only_record_type_identifier_in_meta() {
+    let registry = compiled_registry();
+    let openapi = generated_openapi(&registry);
+    let schema = response_validator(
+        &openapi,
+        route_path(&registry, "contact", Operation::Get),
+        "get",
+        "200",
+    );
+    let canonical = json!({
+        "data": {
+            "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+            "revisionIdentifier": "1",
+            "domainData": {"name": "Example"}
+        },
+        "meta": {
+            "registryIdentifier": "local-directory",
+            "datasetIdentifier": "directory",
+            "recordTypeIdentifier": "contact"
+        }
+    });
+    assert_valid(&schema, &canonical);
+
+    let mut retired = canonical;
+    let meta = retired["meta"]
+        .as_object_mut()
+        .expect("record meta is an object");
+    let record_type = meta
+        .remove("recordTypeIdentifier")
+        .expect("canonical record type exists");
+    meta.insert("entityTypeIdentifier".to_owned(), record_type);
+    assert_invalid(&schema, &retired);
 }
 
 #[test]

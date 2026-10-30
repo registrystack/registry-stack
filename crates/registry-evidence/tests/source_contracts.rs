@@ -1980,6 +1980,7 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                     },
                     issued_at: observed_at,
                     observed_at,
+                    source_valid_until: None,
                     subjects: vec![SubjectBinding {
                         role: "subject".to_owned(),
                         binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),

@@ -119,7 +119,7 @@ pub(crate) fn sample(
     if matching.next().is_some() {
         return Err(HookLifecycleError::Event);
     }
-    let (data, event_type) = match &delivery.owner {
+    let (data, event_type, subject) = match &delivery.owner {
         registry_breg::model::CompiledEventOwner::RecordType {
             record_type,
             trigger,
@@ -139,6 +139,7 @@ pub(crate) fn sample(
             (
                 json!({"recordType":record_type,"recordId":SAMPLE_RECORD_ID,"revision":1,"trigger":trigger_name(*trigger),"packageRevision":SAMPLE_PACKAGE_REVISION,"values":values}),
                 delivery.event_id.clone(),
+                EventSubject::record(SAMPLE_RECORD_REFERENCE, 1),
             )
         }
         registry_breg::model::CompiledEventOwner::ProposalAction { action } => {
@@ -180,6 +181,7 @@ pub(crate) fn sample(
             (
                 json!({"actionId":action.id,"actionRevision":action.definition_revision,"proposalId":SAMPLE_RECORD_ID,"submissionVersion":1,"revision":1,"fromState":from,"state":state,"transition":transition.as_str(),"effectDigest":null,"authorityKind":authority_kind,"systemApplyGrantRevision":null,"turn":turn}),
                 format!("proposal.{}", transition.as_str()),
+                EventSubject::proposal(format!("/v1/proposals/{SAMPLE_RECORD_ID}"), 1),
             )
         }
     };
@@ -192,10 +194,7 @@ pub(crate) fn sample(
         event_type: event_type.clone(),
         source: source.clone(),
         time: sample_time()?,
-        subject: EventSubject {
-            record_reference: SAMPLE_RECORD_REFERENCE.to_owned(),
-            record_revision: 1,
-        },
+        subject,
         dataschema: delivery.data_schema.clone(),
         data,
         causation: Causation::root(SAMPLE_EVENT_ID),

@@ -4,5 +4,6 @@
   "status": "complete",
   "apiVersion": "id.registrystack.org/formats/evidence/ctl-report/v1alpha1",
   "kind": "EvidenceCtlReport",
+  "version": "0.44.0-dev",
   "diagnostics": []
 }

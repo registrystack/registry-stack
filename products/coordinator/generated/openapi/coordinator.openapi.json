@@ -278,25 +278,47 @@
             "type": "object"
           },
           "EventSubject": {
-            "additionalProperties": false,
-            "description": "The product record the triggering change landed on.",
-            "properties": {
-              "recordReference": {
-                "description": "The record reference, as the product addresses it.",
-                "type": "string"
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "An ordinary product record and the revision the change produced.",
+                "properties": {
+                  "recordReference": {
+                    "type": "string"
+                  },
+                  "recordRevision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "recordReference",
+                  "recordRevision"
+                ],
+                "type": "object"
               },
-              "recordRevision": {
-                "description": "The revision the triggering change produced. Revisions start at one, so\na revision of zero or below is refused on both encode and decode, the\nsame bound the delivery store enforces on a stored envelope.",
-                "maximum": 9007199254740991,
-                "minimum": 1,
-                "type": "integer"
+              {
+                "additionalProperties": false,
+                "description": "A Proposal resource and its lifecycle revision after the transition.",
+                "properties": {
+                  "proposalReference": {
+                    "type": "string"
+                  },
+                  "proposalRevision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "proposalReference",
+                  "proposalRevision"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "recordReference",
-              "recordRevision"
             ],
-            "type": "object"
+            "description": "The product resource the triggering change landed on.\n\nRecord and Proposal subjects are separate closed wire shapes. The enum is\nuntagged because the field names identify the shape without adding a\nshared product-semantic discriminator to the envelope."
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -325,7 +347,7 @@
           },
           "subject": {
             "$ref": "#/components/schemas/HookEnvelope/$defs/EventSubject",
-            "description": "The product record reference and revision."
+            "description": "The product resource reference and revision."
           },
           "time": {
             "description": "Commit time of the triggering change, RFC 3339.\n\nNormalized on every serialization: converted to UTC and truncated to\nwhole milliseconds, so two equal instants written at different offsets\nor at finer precision produce identical canonical bytes. The in-memory\nvalue keeps whatever the product gave it; the wire form is the\nnormalized one. Decoding requires that wire form and refuses any other\nspelling, so a decoded envelope re-encodes to the bytes it arrived as.",

@@ -478,10 +478,11 @@ stays the audience-scoped pseudonym, so the same person requested for a
 different audience yields a different identifier and the credential is not a
 general-purpose multi-verifier credential.
 
-A request may carry an optional `holderKey`, which is echoed into the `cnf`
-claim and is meaningful only for the SD-JWT VC format. Only a public EC P-256
-JWK is accepted; an unacceptable key is rejected as a malformed request
-alongside the nonce check, before authentication, credential acquisition, and
+An audience-scoped single-credential request may carry an optional `holderKeys`
+array containing one public EC P-256 JWK. That key is echoed into the `cnf`
+claim and is meaningful only for the SD-JWT VC format. An unacceptable key is
+rejected as a malformed request alongside the nonce check, before authentication,
+credential acquisition, and
 source access. The key never reaches authorization, selectors, Rhai, sources,
 audit, or the signed-JWS payload. Evidence issues no key-binding JWT, requires
 none, and verifies none, so `cnf` is an unverified caller-supplied

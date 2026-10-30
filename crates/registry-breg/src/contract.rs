@@ -307,8 +307,6 @@ pub enum ActionPlanSource {
         writes: Vec<ActionHandlerWriteSource>,
         #[serde(default)]
         refusals: Vec<ActionHandlerRefusalSource>,
-        #[serde(default)]
-        capabilities: UniqueSet<String>,
     },
 }
 registry_platform_yaml::tagged_union!(ActionPlanSource);
@@ -341,9 +339,25 @@ pub struct FunctionSource {
     #[cfg_attr(feature = "schema", schemars(schema_with = "action_plan_abi_schema"))]
     pub abi: String,
     #[serde(default)]
-    pub capabilities: UniqueSet<String>,
+    pub capabilities: UniqueSet<FunctionCapabilitySource>,
     #[serde(default)]
     pub limits: FunctionLimitsSource,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FunctionCapabilitySource {
+    Evidence,
+}
+
+impl FunctionCapabilitySource {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Evidence => "evidence",
+        }
+    }
 }
 
 #[cfg(feature = "schema")]
@@ -4977,6 +4991,7 @@ const EQUALS_INPUT_REPLACEMENT: &str =
     "Rename `equalsInput` to `equalsFromInput`, keeping the same input reference.";
 const FROM_FIELD_REPLACEMENT: &str =
     "Rename `fromField` to `fromInput`, keeping the same input reference.";
+const PLAN_CAPABILITIES_REPLACEMENT: &str = "Remove `plan.capabilities`. Declare the Action's Evidence dependencies in `evidence`; a named Function's `capabilities` list is only its ceiling.";
 
 /// Members `registry.yaml` no longer accepts, each with the member that
 /// replaced it.
@@ -5040,6 +5055,10 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
         pointer: "/actions/*/requires",
         replacement: "Use `commitGuards` for conditions checked when the Action commits. Declare target revision guards under `commitGuards.targets`.",
+    },
+    RemovedKey {
+        pointer: "/actions/*/plan/capabilities",
+        replacement: PLAN_CAPABILITIES_REPLACEMENT,
     },
     RemovedKey {
         pointer: "/actions/*/effects",
@@ -5132,6 +5151,10 @@ const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
         pointer: "/actions/*/requires",
         replacement: "Use `commitGuards` for conditions checked when the Action commits. Declare target revision guards under `commitGuards.targets`.",
+    },
+    RemovedKey {
+        pointer: "/actions/*/plan/capabilities",
+        replacement: PLAN_CAPABILITIES_REPLACEMENT,
     },
     RemovedKey {
         pointer: "/actions/*/effects",

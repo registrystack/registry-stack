@@ -426,6 +426,15 @@ pub fn command() -> clap::Command {
 }
 
 pub fn main_entry() -> ExitCode {
+    registry_cli_report::install_panic_hook(
+        registry_cli_report::Identity {
+            binary: "messagingctl",
+            api_version: registry_messaging_core::MESSAGING_CTL_REPORT_API_VERSION,
+            kind: registry_messaging_core::MESSAGING_CTL_REPORT_KIND,
+            version: registry_platform_buildinfo::DISPLAY_VERSION,
+        },
+        registry_cli_report::json_requested(std::env::args_os()),
+    );
     main_entry_from(
         std::env::args_os(),
         &mut io::stdout().lock(),
@@ -2875,11 +2884,28 @@ audit:
         report["project"] = json!(relative);
         let mut written = Vec::new();
         report::write(&report, &mut written).unwrap();
-        let committed =
-            std::fs::read(root.join("products/messaging/examples/formats/ctl-report.json"))
-                .unwrap();
+        let committed = std::fs::read_to_string(
+            root.join("products/messaging/examples/formats/ctl-report.json"),
+        )
+        .unwrap();
+        let sample: Value = serde_json::from_str(&committed).unwrap();
+        let sample_version = sample["version"]
+            .as_str()
+            .filter(|version| !version.is_empty())
+            .expect("the report example carries a displayed binary version");
+        let written = String::from_utf8(written).unwrap();
+        let actual_version = format!(
+            "  \"version\": {},\n",
+            serde_json::to_string(registry_platform_buildinfo::DISPLAY_VERSION).unwrap()
+        );
+        assert_eq!(written.matches(&actual_version).count(), 1, "{written}");
+        let sample_version = format!(
+            "  \"version\": {},\n",
+            serde_json::to_string(sample_version).unwrap()
+        );
+        let normalized = written.replacen(&actual_version, &sample_version, 1);
         assert!(
-            written == committed,
+            normalized == committed,
             "products/messaging/examples/formats/ctl-report.json drifted; rerun \
              `messagingctl --format json check --project {relative}` from the repository \
              root and commit its output"

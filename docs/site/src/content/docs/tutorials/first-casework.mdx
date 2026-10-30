@@ -59,11 +59,10 @@ cd tutorial-work/casework
 ```json test-excerpt
 {
   "command": "init",
-  "data": {
-    "created": "tutorial-work/casework",
-    "next": "Run caseworkctl check, test and types, then caseworkctl dev start.",
-    "template": "standalone-decision"
-  }
+  "status": "complete",
+  "created": "tutorial-work/casework",
+  "next": "Run caseworkctl check, test and types, then caseworkctl dev start.",
+  "template": "standalone-decision"
 }
 ```
 
@@ -117,9 +116,10 @@ rstack casework dev start
 
 ```json test-excerpt
 {
+  "status": "complete",
+  "outcome": "ready",
   "caseworkUrl": "http://127.0.0.1:8092",
-  "directory": {"revision": 1, "teams": 1},
-  "state": "ready"
+  "directory": {"revision": 1, "teams": 1}
 }
 ```
 

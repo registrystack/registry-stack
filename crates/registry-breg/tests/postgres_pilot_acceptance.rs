@@ -1196,7 +1196,7 @@ fn assert_record_meta(meta: Value) {
     for name in [
         "registryIdentifier",
         "datasetIdentifier",
-        "entityTypeIdentifier",
+        "recordTypeIdentifier",
     ] {
         assert!(
             meta.get(name)

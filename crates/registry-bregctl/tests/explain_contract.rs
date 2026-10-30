@@ -1241,7 +1241,7 @@ fn registered_ctl_report_example_matches_current_actions_report() {
             }
         }
     };
-    for finding in current["findings"].as_array_mut().unwrap() {
+    for finding in current["diagnostics"].as_array_mut().unwrap() {
         if let Some(source) = finding.get_mut("source") {
             normalize_file(source);
         }

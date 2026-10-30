@@ -85,7 +85,7 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
             json!({"items":[
                 {
                     "operation":"patch",
-                    "recordId":record_id,
+                    "recordIdentifier":record_id,
                     "ifMatch":patch_etag,
                     "patch":[
                         {"op":"test","path":"/data/assetCode","value":"A-101"},
@@ -105,9 +105,11 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
         .await;
     assert_eq!(batch.status(), StatusCode::OK);
     let batch = response_json(batch).await;
-    assert_eq!(batch["results"][0]["data"]["assetCode"], "A-102");
-    assert_eq!(batch["results"][1]["data"]["assetCode"], "A-103");
-    assert!(batch["results"][0]["data"].get("asset-code").is_none());
+    assert_eq!(batch["results"][0]["domainData"]["assetCode"], "A-102");
+    assert_eq!(batch["results"][1]["domainData"]["assetCode"], "A-103");
+    assert!(batch["results"][0]["domainData"]
+        .get("asset-code")
+        .is_none());
 
     // #1442: the refusal names `/data` for a name the caller made up, such
     // as a field id where its API name belongs, and the field for a missing

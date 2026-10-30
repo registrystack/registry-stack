@@ -404,13 +404,12 @@ fn record_body(format: BRegRecordFormat, record_identifier: &str) -> Value {
         "data": {
             "recordIdentifier": record_identifier,
             "revisionIdentifier": "1",
-            "domainData": {"legalName": "Example Ltd"},
-            "snapshot": format!("breg1_{record_identifier}")
+            "domainData": {"legalName": "Example Ltd"}
         },
         "meta": {
             "registryIdentifier": "business-registry",
             "datasetIdentifier": "legal-entities",
-            "entityTypeIdentifier": "company"
+            "recordTypeIdentifier": "company"
         }
     });
     if format == BRegRecordFormat::JsonLd {
@@ -1246,7 +1245,6 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
         }
     }
     for (member, value) in [
-        ("detail", json!("response-canary")),
         ("status", json!(400)),
         ("fieldPath", json!("/evidence/status")),
         ("refusalCode", json!("response-canary")),
@@ -1381,7 +1379,6 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
     for (member, value) in [
         ("refusalCode", json!("private-canary")),
         ("recordType", json!("private-canary")),
-        ("detail", json!("private-canary")),
         ("status", json!(409)),
         ("traceId", json!("0123456789abcdef0123456789abcdef")),
     ] {
@@ -1732,7 +1729,7 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_
         "/changeContext",
         "/items/3",
         "/items/3/operation",
-        "/items/3/recordId",
+        "/items/3/recordIdentifier",
         "/items/3/ifMatch",
         "/items/3/patch",
         "/items/3/data",
@@ -1763,10 +1760,21 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_
         "asOf",
         "snapshot",
         "validAt",
-        "requestHistoryAfterProposalVersion",
         "from",
         "to",
         "status",
+        "limit",
+        "action",
+        "owner",
+        "state",
+        "turn",
+        "pendingManualApplication",
+        "target",
+        "cursor",
+        "top",
+        "inputDigest",
+        "after",
+        "query",
     ] {
         accepted.push((
             response_for(&query_invalid, query_document.clone(), json!(parameter)),
@@ -1816,6 +1824,7 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_
         "select",
         "fields",
         "noSuchField",
+        "requestHistoryAfterProposalVersion",
     ] {
         refused.push(response_for(
             &query_invalid,
@@ -1883,12 +1892,83 @@ async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_
         assert!(!rendered.contains("$select"));
         if let Some(path) = accepted_paths
             .get(index)
-            .filter(|path| !matches!(path.as_str(), "from" | "to" | "status"))
+            .filter(|path| !matches!(path.as_str(), "from" | "to" | "status" | "query"))
         {
             assert!(!rendered.contains(path));
         }
     }
     assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
+}
+
+#[tokio::test]
+async fn registered_problem_identity_ignores_bounded_title_and_detail_prose() {
+    let base = problem_response(BRegProblemCode::QueryInvalid);
+    let base_document: Value = serde_json::from_slice(&base.body).unwrap();
+    let cases = [
+        (
+            "query",
+            "A different bounded title canary",
+            "A different bounded detail canary.",
+        ),
+        (
+            "limit",
+            "Bad Request",
+            "A record listing takes `$top` for its page size; `limit` is not accepted.",
+        ),
+        (
+            "top",
+            "Bad Request",
+            "The Proposal list takes `limit` for its page size; `top` is not accepted.",
+        ),
+        (
+            "after",
+            "Bad Request",
+            "An ingestion run listing takes `cursor` for its keyset cursor; `after` is not accepted.",
+        ),
+    ];
+    let responses = cases.iter().map(|(path, title, detail)| {
+        let mut document = base_document.clone();
+        document["fieldPath"] = json!(path);
+        document["title"] = json!(title);
+        document["detail"] = json!(detail);
+        MockResponse {
+            body: serde_json::to_vec(&document).unwrap(),
+            ..base.clone()
+        }
+    });
+    let fixture = test_client(
+        std::iter::once(metadata_response())
+            .chain(responses)
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for (path, _, detail) in cases {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("query-guidance"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("the registered query problem is retained");
+        assert_eq!(error.problem_code(), Some(BRegProblemCode::QueryInvalid));
+        assert_eq!(
+            error.field_path().map(BRegProblemFieldPath::as_str),
+            Some(path)
+        );
+        let rendered = format!("{error:?}: {error}");
+        assert!(!rendered.contains("canary"));
+        assert!(!rendered.contains(detail));
+    }
 }
 
 #[tokio::test]
@@ -2100,6 +2180,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The statistical dataset version was withdrawn."
         }
         Code::UnsupportedMediaType => "The request media type is not supported.",
+        Code::WriteOutsideBoundary => {
+            "The resulting record falls outside the selected access profile's row boundary."
+        }
         _ => panic!("unregistered problem code"),
     }
 }
@@ -2914,7 +2997,7 @@ fn ingestion_receipt_wire() -> Value {
         "batch": {
             "snapshot": format!("breg1_{OTHER_RECORD_ID}"),
             "results": [
-                {"operation": "create", "id": RECORD_ID, "revision": 1, "etag": "\"breg-record-v1-abcdef012345\"", "data": {"legalName": "Example Ltd"}}
+                {"operation": "create", "recordIdentifier": RECORD_ID, "revisionIdentifier": "1", "etag": "\"breg-record-v1-abcdef012345\"", "domainData": {"legalName": "Example Ltd"}}
             ]
         }
     })

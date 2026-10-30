@@ -135,6 +135,12 @@
       "reason": "The unknown future Registry Discovery Problem is a synthetic client decoding fixture outside the active resolver catalog by design."
     },
     {
+      "path": "crates/registry-evidence-client-node/__test__/errors.test.js",
+      "uri": "https://id.registrystack.org/problems/registry-evidence/request/future-conflict",
+      "classification": "fixture",
+      "reason": "This synthetic future-conflict Problem is a negative client-decoding fixture, not an active Evidence Problem."
+    },
+    {
       "glob": "crates/registry-manifest-core/tests/**",
       "classification": "fixture",
       "reason": "Manifest test shapes are local conformance fixtures, not Registry Stack identifier contracts."

@@ -147,7 +147,8 @@ fn a_file_with_a_member_its_format_does_not_define_is_refused() {
         assert_eq!(json.status.code(), Some(1), "{format}");
         let report = json_report(&json);
         assert_eq!(report["ok"], false, "{format}");
-        assert_eq!(report["status"], "refused", "{format}");
+        assert_eq!(report["status"], "domain-refusal", "{format}");
+        assert_eq!(report["outcome"], "refused", "{format}");
         assert!(
             report["diagnostics"]
                 .as_array()
@@ -187,7 +188,8 @@ fn a_file_of_no_known_format_is_refused_naming_the_formats() {
         let json = check_file(&file, &["--format", "json"]);
         assert_eq!(json.status.code(), Some(1), "{name}");
         let report = json_report(&json);
-        assert_eq!(report["status"], "refused", "{name}");
+        assert_eq!(report["status"], "domain-refusal", "{name}");
+        assert_eq!(report["outcome"], "refused", "{name}");
         assert_eq!(report["diagnostics"][0]["code"], code, "{name}");
     }
 }
@@ -255,7 +257,8 @@ fn a_file_that_is_not_a_document_is_refused_by_the_reader() {
     let json = check_file(&file, &["--format", "json"]);
     assert_eq!(json.status.code(), Some(1));
     let report = json_report(&json);
-    assert_eq!(report["status"], "refused");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["outcome"], "refused");
     assert!(report["diagnostics"][0]["code"]
         .as_str()
         .is_some_and(|code| code.starts_with("yaml.")));

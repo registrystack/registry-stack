@@ -509,7 +509,6 @@ class Journey:
             report = json.loads(result.stdout)
             if report.get("kind") == "CaseworkReport":
                 assert report["ok"] and report["status"] == "complete"
-                return report["data"]
             return report
         return result.returncode
 

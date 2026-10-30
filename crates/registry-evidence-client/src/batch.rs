@@ -79,8 +79,10 @@ impl SdJwtVcBatchResponse {
         if body.len() > MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES {
             return Err(refusal());
         }
+        let value =
+            registry_platform_canonical_json::parse_json_strict(body).map_err(|_| refusal())?;
         let document: SdJwtVcBatchEnvelopeDocument =
-            serde_json::from_slice(body).map_err(|_| refusal())?;
+            serde_json::from_value(value).map_err(|_| refusal())?;
         if document.schema != SD_JWT_VC_BATCH_SCHEMA_V1
             || document.envelope_type != SD_JWT_VC_BATCH_ENVELOPE_TYPE
         {
@@ -147,11 +149,9 @@ pub(crate) fn refusal() -> EvidenceClientError {
     }
 }
 
-/// The envelope exactly as the runtime declares it. `deny_unknown_fields` keeps
-/// a document carrying anything this version does not declare from being read
-/// as though it were this version.
+/// The known envelope members exactly as the runtime declares them. Additive
+/// response members are ignored after duplicate-member rejection.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SdJwtVcBatchEnvelopeDocument {
     schema: String,
     #[serde(rename = "type")]
@@ -259,6 +259,20 @@ mod tests {
     }
 
     #[test]
+    fn additive_envelope_members_are_ignored() {
+        let body = serde_json::json!({
+            "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
+            "type": SD_JWT_VC_BATCH_ENVELOPE_TYPE,
+            "credentials": ["only-credential"],
+            "futureMember": {"safeToIgnore": true},
+        })
+        .to_string();
+        let parsed = SdJwtVcBatchResponse::parse(body.as_bytes())
+            .expect("additive envelope members are ignored");
+        assert_eq!(parsed.credentials(), ["only-credential"]);
+    }
+
+    #[test]
     fn a_body_that_is_not_this_envelope_is_refused() {
         let ceiling = MAXIMUM_HOLDER_KEYS + 1;
         let too_many: Vec<String> = (0..ceiling)
@@ -284,17 +298,6 @@ mod tests {
                     "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
                     "type": "SomeOtherEnvelope",
                     "credentials": ["a-credential"],
-                })
-                .to_string()
-                .into_bytes(),
-            ),
-            (
-                "a member this version does not declare",
-                serde_json::json!({
-                    "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
-                    "type": SD_JWT_VC_BATCH_ENVELOPE_TYPE,
-                    "credentials": ["a-credential"],
-                    "holderKeys": [],
                 })
                 .to_string()
                 .into_bytes(),
