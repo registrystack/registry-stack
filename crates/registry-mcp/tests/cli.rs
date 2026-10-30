@@ -73,3 +73,45 @@ fn unreadable_configuration_is_an_operational_failure_with_exit_three() {
         .any(|diagnostic| diagnostic["code"] == "platform.runtime-config.unavailable"));
     assert!(result.stderr.is_empty());
 }
+
+#[test]
+fn held_staff_template_reports_its_authority_dependency_without_opening_credentials() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/platform/examples/mcp-runtime/casework-held.example.yaml")
+        .canonicalize()
+        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-mcp"));
+    command.env_clear();
+    // Only retain Cargo's native linker paths, not credential configuration.
+    for name in [
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "LD_LIBRARY_PATH",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    let result = command
+        .args([
+            "--runtime-config",
+            path.to_str().unwrap(),
+            "check",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    assert!(result.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["errors"], 1);
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0]["code"],
+        "casework.mcp.delegation-unsupported"
+    );
+    assert_eq!(diagnostics[0]["path"], "/bindings/0");
+}
