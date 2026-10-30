@@ -24,7 +24,9 @@
 # matches against the caller's JSON: a literal must equal the body's value
 # (a selector or search name the profile does not declare is a field
 # fault), `filters` is the criteria object checked against the binding's
-# declared filters, `pageSize` and `cursor` are the continuation controls.
+# declared filters (each declared filter is required; a search that leaves
+# one out is an invalid field), `pageSize` and `cursor` are the continuation
+# controls.
 #
 # Draft features this profile does not express: the 422 problem's `errors`
 # array of `pointer` and `message` (a problem envelope has no repeated
@@ -90,7 +92,7 @@ problems:
   - code: https://govstack.global/problems/digital-registries/bad-request
     status: 400
     title: the request is not valid
-    classes: [outcome, outcome.invalid-request, outcome.conflict, outcome.rejected, facade.invalid-request, facade.method-not-allowed, facade.conflict, facade.idempotency-mismatch]
+    classes: [outcome, outcome.conflict, outcome.rejected, facade.invalid-request, facade.method-not-allowed, facade.conflict, facade.idempotency-mismatch]
   - code: https://govstack.global/problems/digital-registries/unauthorized
     status: 401
     title: the request carries no valid credential
@@ -122,7 +124,7 @@ problems:
   - code: https://govstack.global/problems/digital-registries/invalid-field
     status: 422
     title: a request field is not valid
-    classes: [facade.invalid-field]
+    classes: [outcome.invalid-request, facade.invalid-field]
   - code: https://govstack.global/problems/digital-registries/invalid-cursor
     status: 400
     title: the cursor is not valid

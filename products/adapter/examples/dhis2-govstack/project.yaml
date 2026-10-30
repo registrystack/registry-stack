@@ -40,11 +40,11 @@ project:
 profile:
   id: govstack-consultation
   version: "1"
-  digest: sha256:40d8bf63b55b9f936186476e66ce4d0580afaeb9aed3fa9fbc55da0c62ed3b9e
+  digest: sha256:cf7e18b8b95da078bde2950390450fab48c2e131d2981dc8cf19cc77d6651aed
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:961e00a1e05b636ad4634933c6bd409f500d5f36bac0776d0d6a19b1c462b77b
+  digest: sha256:d18074b6225def664095ccb629aa53fd5c9092386d402211c945555ec58d05f9
 recordTypes:
   - name: persons
     fields:

@@ -708,6 +708,9 @@
                         "type": "string"
                       }
                     },
+                    "required": [
+                      "org_unit"
+                    ],
                     "type": "object"
                   },
                   "cursor": {

@@ -209,6 +209,19 @@ routeTemplates:
           redeliveryPolicy:
             maximumRedeliveries: 1
             retryDelaySeconds: 2
+      # The source refuses a criteria value it cannot read (a 400 from the
+      # export): that is the caller's invalid input, not a source fault.
+      - onException:
+          exception:
+            - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/is-bad-request.rhai
+              entrypoint: is_bad_request
+          steps:
+            - throwException:
+                exceptionType: outcome.invalid-request
+                message: The source refused the search criteria.
       - setProperty:
           name: dhis2OrgUnit
           value:
@@ -383,6 +396,8 @@ scripts:
     digest: sha256:ddbb54a6b67c09db81952cf8c5d5c2b54db4e842cb31996ebf8072e30014b104
   - path: scripts/is-not-found.rhai
     digest: sha256:8f738dc51ecbd1641f8f512ff5d2edcc48408e438814179ea360cd4267dd34b0
+  - path: scripts/is-bad-request.rhai
+    digest: sha256:ed94136005f93644620028ed7338240a2faad741145f574ba00491b43e606b4b
   - path: scripts/to-record.rhai
     digest: sha256:4a728a56abeb6e25ea3d13868dd5a0a5fdba81bbdb20fe21269f596e7557ec9d
   - path: scripts/shape-records.rhai
