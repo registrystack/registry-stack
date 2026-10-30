@@ -98,9 +98,9 @@
 # against 2.43.2.1; earlier tracker versions answered different shapes
 # and are not targeted. A pageSize above the server's
 # KeyTrackedEntityMaxLimit system setting, when that setting is non-zero,
-# is refused with a 400 (documentation; the capture server caps page
-# sizes at 5 and never answered one); the bound profile's pageSize
-# maximum must respect the deployment's setting. An absent or null
+# is refused with a 400 (documentation; the capture kept page sizes at
+# 5, so it never answered one); the bound profile's pageSize maximum
+# must respect the deployment's setting. An absent or null
 # AdapterNextContinuation at the end of the route is the last page, so
 # the engine seals no cursor.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
