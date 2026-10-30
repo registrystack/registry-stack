@@ -568,8 +568,15 @@ is in the profile's shape.
   `RedeliveryPolicy` at the pinned tag: the multiplier applies only with
   `useExponentialBackOff` and a multiplier above 1, and collision avoidance
   varies the delay by plus or minus the factor
-  (`RedeliveryPolicy.calculateRedeliveryDelay`). `delayPattern` is not
-  ported. Redelivery is
+  (`RedeliveryPolicy.calculateRedeliveryDelay`). The order is Camel's:
+  the first delay is `retryDelaySeconds`, each later one the previous delay
+  (times the multiplier when backing off), then the collision variance, then
+  the `maximumRetryDelaySeconds` cap, so the cap bounds the varied delay.
+  During redelivery the exchange carries Camel's `CamelRedelivered`,
+  `CamelRedeliveryCounter`, and `CamelRedeliveryMaxCounter` headers, readable
+  by `retryWhile` and `onWhen`, and sent upstream only if listed like any
+  engine header (section 8.11.4).
+  `delayPattern` is not ported. Redelivery is
   per failing endpoint send, as in Camel, but reaches only upstream
   component sends (`http`, `graphql`; token requests sit outside it per
   section 10.2), never a `to: direct:` send; that scope is a declared
@@ -582,7 +589,8 @@ is in the profile's shape.
   redelivery continues while the predicate is true. Divergence:
   `maximumRedeliveries` remains the hard cap, where Camel lets `retryWhile`
   replace it, so `maximumUpstreamCalls` stays a check-time guarantee; `check`
-  refuses `retryWhile` with `maximumRedeliveries` 0.
+  refuses `retryWhile` with `maximumRedeliveries` 0. A `retryWhile` that
+  raises ends redelivery, as in Camel.
   Divergence for writes: `check`
   refuses `maximumRedeliveries > 0` over a `to` whose `httpMethod` is not
   safe, unless that endpoint operation declares `idempotentUpstream: true`
@@ -591,6 +599,9 @@ is in the profile's shape.
   redelivery options, nested steps. Matching is Camel's: the clause whose
   class is closest to the error or any of its causes wins, ties going to the
   most deeply nested cause; a clause never matches a class above its own.
+  An `onWhen` that raises means the clause does not match, as in Camel.
+  Clauses are route-scoped; Camel's global and `routeConfiguration` scopes
+  are not ported.
   `handled: true` ends the exchange successfully with the clause's result,
   which is validated against the operation's result schema like any route
   output (an empty search page, a fallback record). To translate an error
@@ -598,7 +609,12 @@ is in the profile's shape.
   raised inside an exception clause is not handled again and becomes the
   exchange's failure, which the profile maps to a problem (section 8.11.6;
   Camel wraps clause steps in `FatalFallbackErrorHandler` to stop the
-  recursion).
+  recursion). Camel keeps the original error as suppressed; the problem
+  carries only the clause's error, and the journal records both classes.
+  Divergence: a `direct:` route called from a clause is inside the clause,
+  so its errors are not handled again either, where Camel lets the callee's
+  own error handler fire the clause a second time
+  (`OnExceptionRecursionTest.testRecursionDirect`).
   A clause never builds a problem body or sets `CamelHttpResponseCode`.
   `continued: true` resumes the route at the step after the failure. An
   unhandled error surfaces as the profile's problem for its class, with no
@@ -610,7 +626,11 @@ is in the profile's shape.
   to the block's steps. An error no `doCatch` matches, or one raised in a
   `doCatch` or `doFinally`, leaves the `doTry` and fails the exchange; an
   error raised in `doFinally` while another is pending is kept as
-  suppressed, and the original wins.
+  suppressed, and the original wins (`FinallyProcessor`,
+  `DoTryEdgeCasesTest.testDoFinallyThrowsKeepsOriginal`). A `doCatch`
+  `onWhen` that raises fails the exchange with that error, the original
+  kept as suppressed. A `to: direct:` inside the block calls a route that
+  keeps its own error handling, as in Camel.
 - `circuitBreaker`: resilience4j semantics and defaults, per EIP node,
   process-local state (as in Camel; replicas have independent breakers):
   `failureRateThreshold` 50, `slidingWindowType` count-based,
@@ -631,9 +651,13 @@ is in the profile's shape.
   false, `resilience4j-eip.adoc`): with true, the route error handler
   redelivers the whole breaker block; `check` refuses true over a block
   holding a non-safe send without `idempotentUpstream`, as for
-  `maximumRedeliveries`. Whether an error escaping a breaker without
-  `onFallback` reaches the route's `onException` clauses is decided from
-  `ResilienceProcessor` by the conformance stream and recorded here.
+  `maximumRedeliveries`. As in Camel, the route error handler does not wrap
+  a breaker or its steps unless `inheritErrorHandler` is true
+  (`ProcessorDefinitionHelper.shouldWrapInErrorHandler`), so an error
+  escaping a breaker without `onFallback` reaches no `onException` clause
+  and surfaces as the profile's problem for its class; with
+  `inheritErrorHandler` true the route's clauses and redelivery apply to
+  the whole block (`ResilienceInheritErrorHandlerTest`).
 
 ### 8.8 Components
 
