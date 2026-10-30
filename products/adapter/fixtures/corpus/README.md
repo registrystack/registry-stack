@@ -60,11 +60,12 @@ macOS, source `scripts/cargo-runtime-library-path.sh` first.
 
 Codes are grouped by the artifact that carries the defect. "Layer" is who
 refuses: reader (the platform YAML reader, before any check runs), checks
-(the core authoring checks), or tool (adapterctl's own verification, here
-the script digest pins). Route findings report once at the authored
-position: `/routeTemplates/N` when the defect sits in a template body,
+(the core authoring checks), or tool (adapterctl's own verification: the
+digest pins and the GraphQL query-file checks). Route findings report
+once at the authored position: `/routeTemplates/N` when the defect sits
+in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 77 members.
+finding per code. The corpus holds 79 members.
 
 ### Profile members
 
@@ -95,14 +96,14 @@ finding per code. The corpus holds 77 members.
 | `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
 | `adapter.pack.script-uncompilable` | A pinned script does not parse (missing closing brace; its pin matches the broken bytes) | `adapter.pack.script-uncompilable` | tool |
+| `adapter.pack.graphql-query-invalid` | The pinned query file does not parse as a GraphQL document (its pin matches the broken bytes) | `adapter.pack.graphql-query-invalid` | tool |
+| `adapter.pack.graphql-operation-unknown` | The graphql endpoint names operation `FindCases`, which its pinned query file does not declare | `adapter.pack.graphql-operation-unknown` | tool |
 
 `adapter.route.nesting-depth-exceeded` has no corpus member: it fires when
 the worst-case walk saturates past the reader's depth bound, and a YAML
 document nested that deep is refused by the reader first with
 `yaml.too-deep` (both bounds are the same 128-level constant), so no
-member can reach it from authored files. `adapter.pack.graphql-query-invalid`
-and `adapter.pack.graphql-operation-unknown` are registered vocabulary but
-no check emits them yet; their members land with the emitting checks.
+member can reach it from authored files.
 Every code with an emitting check except `nesting-depth-exceeded` carries
 exactly one member, and the sweep over all of them must stay green before
 this corpus is relied on as a gate.

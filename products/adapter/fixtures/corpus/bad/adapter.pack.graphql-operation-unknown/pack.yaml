@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.graphql-operation-unknown: this artifact set must be refused with
+# exactly adapter.pack.graphql-operation-unknown. The endpoint names operation FindCases, which
+# its pinned query file does not declare (the file declares FetchCases).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.graphql-operation-unknown/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: graphql
+    authentication:
+      type: basic
+    queryFile: queries/find-cases.graphql
+    operationName: FindCases
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+              filter[region]:
+                constant: west
+queryFiles:
+  - path: queries/find-cases.graphql
+    digest: sha256:1f682105e4c6eb36ff6b1085e085ed6a4d9bf71763f3ada871f17f84ce353e97
+capabilities: {}
