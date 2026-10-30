@@ -185,7 +185,9 @@ pub enum AuthEvent {
     /// The token request was refused by the destination policy before
     /// it was sent; the engine refusing to egress is uncatchable.
     TokenEgressRefused,
-    /// A cached credential was discarded after an upstream 401.
+    /// A cached credential was discarded after an upstream 401. A stale
+    /// 401 about an issuance a concurrent refresh already replaced
+    /// pushes nothing, because nothing was discarded.
     TokenInvalidatedAfterUnauthorized,
     /// The uncatchable credential rejection of section 10.2.
     CredentialRejected,

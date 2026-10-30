@@ -695,7 +695,9 @@ impl TokenCache {
     /// refresh's fresher issuance survives it. A generation the cache
     /// never issued clears nothing, and there is no unconditional
     /// eviction: a credential with no generation invalidates nothing,
-    /// because the acquisition stored nothing for it.
+    /// because the acquisition stored nothing for it. Returns whether
+    /// the cache actually cleared, so the journal records an
+    /// invalidation only when one happened.
     ///
     /// The lock wait is one handoff, never a queue: the lock is held
     /// only across one in-flight token send, whose own request timeout
@@ -703,7 +705,7 @@ impl TokenCache {
     /// is why this call takes no admission bound; a bounded give-up
     /// would skip the invalidation and strand the credential that just
     /// drew the 401.
-    pub async fn invalidate_if(&self, sent: u64) {
+    pub async fn invalidate_if(&self, sent: u64) -> bool {
         let mut guard = self.state.lock().await;
         let matches = guard
             .cached
@@ -711,6 +713,9 @@ impl TokenCache {
             .is_some_and(|cached| cached.generation == sent);
         if matches {
             guard.cached = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -1818,17 +1823,26 @@ mod tests {
         // Exchange X drew the 401 on its issuance while exchange Y had
         // already refreshed past it: X's invalidation names gen1 and
         // must leave Y's gen2 in place.
-        cache.invalidate_if(gen1).await;
+        assert!(
+            !cache.invalidate_if(gen1).await,
+            "the stale generation cleared nothing, and the answer says so"
+        );
         assert!(
             cache.remaining_lifetime().await.is_some(),
             "the fresher issuance survives a stale 401"
         );
-        cache.invalidate_if(99).await;
+        assert!(
+            !cache.invalidate_if(99).await,
+            "a generation the cache never issued clears nothing"
+        );
         assert!(
             cache.remaining_lifetime().await.is_some(),
             "a generation the cache never issued clears nothing"
         );
-        cache.invalidate_if(gen2).await;
+        assert!(
+            cache.invalidate_if(gen2).await,
+            "the generation the cache holds clears"
+        );
         assert!(
             cache.remaining_lifetime().await.is_none(),
             "the generation the cache holds clears"

@@ -465,10 +465,12 @@ impl AuthPlan {
     /// about an issuance another exchange has already replaced, leaves
     /// the newer issuance cached instead of forcing another token
     /// request. A send whose credential named no generation invalidates
-    /// nothing: nothing was cached for it to clear. A 401 after the one
-    /// refresh, or any 401 under a static kind, raises the uncatchable
-    /// `credential.rejected`. A 403 stays the caller's `upstream.http`:
-    /// it answers about the request, not the credential.
+    /// nothing: nothing was cached for it to clear. The invalidation is
+    /// journaled only when it cleared the cache, so a stale 401 about an
+    /// issuance a refresh already replaced records no invalidation. A
+    /// 401 after the one refresh, or any 401 under a static kind, raises
+    /// the uncatchable `credential.rejected`. A 403 stays the caller's
+    /// `upstream.http`: it answers about the request, not the credential.
     pub async fn on_upstream_status(
         &self,
         status: u16,
@@ -485,9 +487,14 @@ impl AuthPlan {
         if self.kind.is_oauth2() && !*refresh_used {
             *refresh_used = true;
             if let (Some(plan), Some(generation)) = (&self.token, sent_generation) {
-                plan.cache().invalidate_if(generation).await;
+                // The journal records an invalidation only when the
+                // cache actually cleared: a stale 401 about an issuance
+                // a concurrent refresh already replaced changed
+                // nothing, so it records nothing.
+                if plan.cache().invalidate_if(generation).await {
+                    events.push(AuthEvent::TokenInvalidatedAfterUnauthorized);
+                }
             }
-            events.push(AuthEvent::TokenInvalidatedAfterUnauthorized);
             return UpstreamStatusAction::RetryWithFreshCredential;
         }
         events.push(AuthEvent::CredentialRejected);
@@ -1628,7 +1635,8 @@ mod tests {
         assert_eq!(second.header.value().as_bytes(), b"Bearer issued-2");
 
         // A late 401 about the first send arrives: the newer issuance
-        // stays cached because its generation is not the one named.
+        // stays cached because its generation is not the one named, and
+        // the journal records no invalidation, because none happened.
         let mut refresh_used = false;
         assert_eq!(
             plan.on_upstream_status(401, first.generation, &mut refresh_used, &mut events)
@@ -1638,6 +1646,14 @@ mod tests {
         assert!(
             cache.remaining_lifetime().await.is_some(),
             "the fresher issuance survived the stale 401"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AuthEvent::TokenInvalidatedAfterUnauthorized))
+                .count(),
+            1,
+            "only the invalidation that cleared the cache is recorded, never the stale 401"
         );
 
         // The engine's retry reuses the surviving cache; no third ask.
