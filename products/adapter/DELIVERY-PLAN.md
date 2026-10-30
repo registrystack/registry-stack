@@ -470,9 +470,10 @@ Scaffold: none needed beyond migrations, which D1 owns.
 - Integration: write property tests (idempotency, mapping totality), write
   security tests, write-safety refusals live, review report.
 
-Precondition: Jeremi decides D16 (accepted but not complete) before this
-increment starts; until then such a route is refused and the increment
-proceeds on synchronous outcomes only.
+D16 is decided: an accepted but incomplete write answers a 202 with a status
+link or a bounded wait, chosen by configuration. This increment implements
+both, with their keys, the bound's expiry, and tests; until then such a route
+is refused.
 
 ## Increment 3: the second system
 
@@ -602,8 +603,7 @@ Increment 3:
 Global definition of done: `CONCEPT.md` section 14, items 1 to 9, each
 verified by the commands above. The final report to Jeremi states the count
 of `captured` and `documented` fixtures, every open finding, every
-contradiction rule 11 surfaced, and the decisions still pending (D7 to D16,
-D18 to D28).
+contradiction rule 11 surfaced, and the decisions still pending (D13 to D15).
 
 ## Increment checklist
 
