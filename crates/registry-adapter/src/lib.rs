@@ -26,6 +26,16 @@
 //! `errorhandler` the error classes and handlers, `journal` the
 //! journal's PostgreSQL store and migration, `notifier` the
 //! journal, and `idempotent` the idempotency store.
+//!
+//! The `auth` module is the outbound authentication layer
+//! (`products/adapter/CONCEPT.md` section 10.2): one endpoint's
+//! declared credential kind compiles against its runtime binding before
+//! any secret is resolved, secrets live only in zeroizing buffers from
+//! resolution through the outbound request, the OAuth2 kinds acquire and
+//! cache bearer credentials through the endpoint's fixed token endpoint
+//! under the exchange's token budget, and a late 401 refreshes only the
+//! issuance the refused send carried. Every fault maps to a section 8.7
+//! class, and the journal keeps only value-free auth events.
 
 pub mod auth;
 pub mod component;

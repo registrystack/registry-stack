@@ -8,9 +8,12 @@
 //! ignored after their values are validated as JSON. This reader is
 //! adapter-local over no JSON dependency: it accepts exactly the grammar
 //! RFC 8259 defines, bounds the document before parsing, bounds nesting,
-//! and hands back only the members a caller names. Member names and
-//! string values are always decoded and allocated, and text values come
-//! back in zeroizing buffers so a credential that rode in one (as
+//! and hands back only the members a caller names. The platform's JSON
+//! reader cannot serve this decode: its string values arrive as plain
+//! `String` allocations that never zeroize, so an `access_token` read
+//! through it would stay recoverable from released memory. Member names
+//! and string values are always decoded and allocated, and text values
+//! come back in zeroizing buffers so a credential that rode in one (as
 //! `access_token` does) is erased when the members drop; a skipped
 //! value's bytes are never copied into an error, a diagnostic, or a
 //! `Debug` rendering.
