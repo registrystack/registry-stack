@@ -38,6 +38,10 @@ pub const PAGE_SIZE_HEADER: &str = "pageSize";
 pub const REDELIVERED_HEADER: &str = "camelredelivered";
 pub const REDELIVERY_COUNTER_HEADER: &str = "camelredeliverycounter";
 pub const REDELIVERY_MAX_COUNTER_HEADER: &str = "camelredeliverymaxcounter";
+/// The header the engine sets to the caught class while a `doCatch`'s
+/// steps run (Camel's `CamelExceptionCaught`, section 8.7); it does not
+/// outlive the catch.
+pub const EXCEPTION_CAUGHT_HEADER: &str = "camelexceptioncaught";
 
 /// One message: lowercased header names and one JSON body.
 #[derive(Clone, Debug, Default)]

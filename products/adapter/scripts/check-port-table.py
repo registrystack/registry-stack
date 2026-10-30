@@ -201,6 +201,32 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:src/processor/aggregation/mod.rs:a_custom_strategy_returns_its_body_and_properties",
         "engine:src/processor/aggregation/mod.rs:a_custom_strategy_without_a_body_member_fails",
     ],
+    "Default error handler": [
+        "engine:tests/camel_error_cluster.rs:the_error_handler_shapes_the_attempts_and_clause_reach",
+        "engine:tests/camel_error_cluster.rs:the_default_error_handler_redelivers_under_its_policy",
+        "engine:tests/camel_error_cluster.rs:the_clause_policy_governs_its_classes_and_the_handler_the_rest",
+        "engine:tests/camel_error_cluster.rs:the_route_error_handler_does_not_wrap_a_do_try_block",
+    ],
+    "Redelivery policy": [
+        "engine:src/processor/redelivery.rs:the_first_delay_is_the_retry_delay_whatever_the_growth",
+        "engine:src/processor/redelivery.rs:the_delay_grows_only_with_back_off_and_a_multiplier_above_one",
+        "engine:src/processor/redelivery.rs:the_variance_applies_after_the_growth_and_the_cap_bounds_it",
+        "engine:src/processor/redelivery.rs:a_delay_sequence_follows_the_whole_order",
+        "engine:src/processor/redelivery.rs:a_draw_stays_inside_the_factor",
+        "engine:tests/camel_error_cluster.rs:retry_while_narrows_redelivery_without_raising_the_cap",
+    ],
+    "Exception clause": [
+        "engine:tests/camel_error_cluster.rs:handled_ends_continued_resumes_and_default_propagates",
+        "engine:tests/camel_error_cluster.rs:a_clause_error_replaces_the_failure_and_keeps_the_original",
+        "engine:tests/camel_error_cluster.rs:an_uncatchable_class_matches_no_clause",
+        "engine:tests/camel_error_cluster.rs:the_cluster_refuses_its_unservable_shapes_at_load",
+    ],
+    "Try, catch, finally": [
+        "engine:src/processor/do_try.rs:run",
+        "engine:tests/camel_error_cluster.rs:do_try_catches_its_block_and_resumes_the_route",
+        "engine:tests/camel_error_cluster.rs:a_do_catch_on_when_narrows_or_fails",
+        "engine:tests/camel_error_cluster.rs:do_finally_runs_on_every_path_and_yields_to_a_pending_failure",
+    ],
 }
 
 SECTION = "### 8.10 The Camel port table"

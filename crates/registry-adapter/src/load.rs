@@ -703,7 +703,30 @@ fn step_expressions(step: &Step) -> Vec<Expression> {
         Step::Loop(looped) => looped.expression().into_iter().collect(),
         Step::To(to) => send_expressions(to.parameters.as_ref()),
         Step::Enrich(enrich) => send_expressions(enrich.parameters.as_ref()),
-        Step::OnException(clause) => clause.on_when.iter().cloned().collect(),
+        Step::OnException(clause) => clause
+            .on_when
+            .iter()
+            .chain(
+                clause
+                    .redelivery_policy
+                    .as_ref()
+                    .and_then(|policy| policy.retry_while.as_ref()),
+            )
+            .cloned()
+            .collect(),
+        Step::ErrorHandler(handler) => handler
+            .default_error_handler
+            .as_ref()
+            .and_then(|handler| handler.redelivery_policy.as_ref())
+            .and_then(|policy| policy.retry_while.as_ref())
+            .into_iter()
+            .cloned()
+            .collect(),
+        Step::DoTry(block) => block
+            .do_catch
+            .iter()
+            .filter_map(|catch| catch.on_when.clone())
+            .collect(),
         _ => Vec::new(),
     }
 }

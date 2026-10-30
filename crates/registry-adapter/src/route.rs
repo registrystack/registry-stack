@@ -24,7 +24,7 @@ use std::time::{Duration, Instant, SystemTime};
 use registry_adapter_core::{
     is_route_unwritable_header_name, AdapterRuntimeConfig, AggregationStrategy, Endpoint,
     EndpointBinding, EnrichStep, ErrorClass, Expression, HttpMethod, OnExceptionStep,
-    SendComponent, SetPropertyStep, Step, ToParameters, ToStep,
+    RedeliveryOptions, SendComponent, SetPropertyStep, Step, ToParameters, ToStep,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -85,6 +85,16 @@ fn step_name(step: &Step) -> &'static str {
 /// route that passes runs exactly as written; a route that does not is never
 /// registered, so nothing it says can be silently skipped.
 pub fn check_servable(steps: &[Step]) -> Result<(), String> {
+    // An errorHandler step configures the whole route; a second one
+    // would silently shadow the first (section 8.7).
+    if steps
+        .iter()
+        .filter(|step| matches!(step, Step::ErrorHandler(_)))
+        .count()
+        > 1
+    {
+        return Err("a route carries more than one errorHandler step".to_owned());
+    }
     check_steps(steps, false)
 }
 
@@ -199,6 +209,44 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 check_strategy(enrich.aggregation_strategy.as_ref())?;
             }
             Step::OnException(clause) if !in_clause => check_clause(clause)?,
+            Step::OnException(_) => {
+                return Err("an onException clause is served at route top level only".to_owned())
+            }
+            Step::ErrorHandler(handler) => {
+                if in_clause {
+                    return Err("an errorHandler step is served at route top level only".to_owned());
+                }
+                if let Some(policy) = handler
+                    .default_error_handler
+                    .as_ref()
+                    .and_then(|handler| handler.redelivery_policy.as_ref())
+                {
+                    check_policy("errorHandler", policy)?;
+                }
+            }
+            Step::DoTry(block) => {
+                for catch in &block.do_catch {
+                    if catch.exception.is_empty() {
+                        return Err("a doCatch names no exception class".to_owned());
+                    }
+                    for class in catch.exception.iter() {
+                        if class.is_uncatchable() || class.is_facade() {
+                            return Err(format!(
+                                "a doCatch may not name the class {}",
+                                class.class()
+                            ));
+                        }
+                    }
+                    if let Some(expression) = &catch.on_when {
+                        check_predicate_expression("doCatch onWhen", expression)?;
+                    }
+                    check_steps(&catch.steps, true)?;
+                }
+                if let Some(finally) = &block.do_finally {
+                    check_steps(&finally.steps, true)?;
+                }
+                check_steps(&block.steps, true)?;
+            }
             other => {
                 return Err(format!(
                     "the {} step is not served by this runtime yet",
@@ -262,24 +310,38 @@ fn check_set_property(property: &SetPropertyStep) -> Result<(), String> {
 }
 
 fn check_clause(clause: &OnExceptionStep) -> Result<(), String> {
-    if clause.handled == Some(true) || clause.continued == Some(true) {
-        return Err("onException handled and continued are not served by this runtime yet".into());
+    if clause.exception.is_empty() {
+        return Err("an onException clause names no exception class".to_owned());
+    }
+    for class in clause.exception.iter() {
+        if class.is_uncatchable() || class.is_facade() {
+            return Err(format!(
+                "an onException clause may not name the class {}",
+                class.class()
+            ));
+        }
+    }
+    if clause.handled == Some(true) && clause.continued == Some(true) {
+        return Err("an onException clause cannot set handled and continued together".into());
     }
     if let Some(expression) = &clause.on_when {
         check_predicate_expression("onWhen", expression)?;
     }
     if let Some(policy) = &clause.redelivery_policy {
-        if policy.use_exponential_back_off
-            || policy.use_collision_avoidance
-            || policy.retry_while.is_some()
-        {
-            return Err(
-                "redelivery with a back-off, collision avoidance or retryWhile is not served by this runtime yet"
-                    .into(),
-            );
-        }
+        check_policy("onException", policy)?;
     }
     check_steps(&clause.steps, true)
+}
+
+/// A policy whose `retryWhile` could never fire, because no redelivery
+/// stands behind it (section 8.7).
+fn check_policy(site: &str, policy: &RedeliveryOptions) -> Result<(), String> {
+    if policy.retry_while.is_some() && policy.maximum_redeliveries.get() == 0 {
+        return Err(format!(
+            "a {site} retryWhile has no redeliveries behind it; raise maximumRedeliveries or drop retryWhile"
+        ));
+    }
+    Ok(())
 }
 
 fn check_to(to: &ToStep) -> Result<(), String> {
@@ -555,16 +617,34 @@ pub async fn run_route_within(
         events: Vec::new(),
         sends: 0,
     };
-    let clauses: Vec<&OnExceptionStep> = steps
-        .iter()
-        .filter_map(|step| match step {
-            Step::OnException(clause) => Some(clause),
-            _ => None,
-        })
-        .collect();
+    // The route's error handler (section 8.7): `noErrorHandler`
+    // withdraws every clause, `defaultErrorHandler` supplies the
+    // redelivery policy for a failing send no clause claims. The
+    // handler is held to one by check_servable.
+    let clauses_enabled = !steps.iter().any(
+        |step| matches!(step, Step::ErrorHandler(handler) if handler.no_error_handler.is_some()),
+    );
+    let handler_policy = steps.iter().find_map(|step| match step {
+        Step::ErrorHandler(handler) => handler
+            .default_error_handler
+            .as_ref()
+            .and_then(|handler| handler.redelivery_policy.as_ref()),
+        _ => None,
+    });
+    let clauses: Vec<&OnExceptionStep> = if clauses_enabled {
+        steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::OnException(clause) => Some(clause),
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let body = async {
         for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
-            match run.step_with_clauses(step, &clauses).await {
+            match run.step_with_clauses(step, &clauses, handler_policy).await {
                 Ok(Flow::Continue) => {}
                 Ok(Flow::Stop) => break,
                 Err(failure) => return Err(failure),
@@ -596,35 +676,50 @@ impl Run<'_, '_> {
     /// redeliver an upstream send while the policy allows, then run the
     /// clause's steps. An error inside a clause is final. A `stop` in the
     /// step or in the clause's steps ends the route without failing.
+    ///
+    /// Redelivery reaches only a failing upstream component send
+    /// (section 8.7): the matched clause's policy for its classes, the
+    /// handler's for every other failure. `retryWhile` only stops
+    /// redelivery earlier; `maximumRedeliveries` stays the hard cap.
     async fn step_with_clauses(
         &mut self,
         step: &Step,
         clauses: &[&OnExceptionStep],
+        handler_policy: Option<&RedeliveryOptions>,
     ) -> Result<Flow, RouteFailure> {
         let mut redeliveries = 0_u32;
+        let mut previous_delay: Option<Duration> = None;
         loop {
             let failure = match self.step(step).await {
                 Ok(flow) => return Ok(flow),
                 Err(failure) => failure,
             };
-            let Some(clause) = self.select_clause(&failure, clauses) else {
-                return Err(failure);
+            let clause = self.select_clause(&failure, clauses);
+            let policy = match (clause, step) {
+                (Some(clause), Step::To(_)) => clause.redelivery_policy.as_ref().or(handler_policy),
+                (None, Step::To(_)) => handler_policy,
+                _ => None,
             };
-            if let (Some(policy), Step::To(_)) = (&clause.redelivery_policy, step) {
-                if redeliveries < policy.maximum_redeliveries.get() {
+            if let Some(policy) = policy {
+                if redeliveries < policy.maximum_redeliveries.get()
+                    && self.retry_while_allows(policy)
+                {
                     redeliveries += 1;
-                    self.events.push(RouteEvent {
-                        kind: "exchangeRedelivery",
-                        at: SystemTime::now(),
-                        detail: json!({
+                    let delay = crate::processor::redelivery::calculate_redelivery_delay(
+                        previous_delay,
+                        policy,
+                        crate::processor::redelivery::draw_variance(policy),
+                    );
+                    previous_delay = Some(delay);
+                    self.record(
+                        "exchangeRedelivery",
+                        json!({
                             "class": failure.class.class(),
                             "counter": redeliveries,
+                            "delaySeconds": delay.as_secs_f64(),
                         }),
-                    });
-                    tokio::time::sleep(Duration::from_secs(u64::from(
-                        policy.retry_delay_seconds.get(),
-                    )))
-                    .await;
+                    );
+                    tokio::time::sleep(delay).await;
                     let message = &mut self.exchange.message;
                     message.set_header(REDELIVERED_HEADER, json!(true));
                     message.set_header(REDELIVERY_COUNTER_HEADER, json!(redeliveries));
@@ -635,19 +730,49 @@ impl Run<'_, '_> {
                     continue;
                 }
             }
-            self.events.push(RouteEvent {
-                kind: "exchangeFailureHandled",
-                at: SystemTime::now(),
-                detail: json!({ "class": failure.class.class() }),
-            });
+            let Some(clause) = clause else {
+                return Err(failure);
+            };
+            self.record(
+                "exchangeFailureHandled",
+                json!({ "class": failure.class.class() }),
+            );
             for clause_step in &clause.steps {
                 // An error inside a clause replaces the failure and is final.
                 if self.step(clause_step).await? == Flow::Stop {
                     break;
                 }
             }
+            // `handled` ends the exchange successfully with the clause's
+            // result and `continued` resumes the route after the failure
+            // point; with neither, the failure surfaces (section 8.7).
+            if clause.handled == Some(true) {
+                return Ok(Flow::Stop);
+            }
+            if clause.continued == Some(true) {
+                return Ok(Flow::Continue);
+            }
             return Err(failure);
         }
+    }
+
+    /// Whether the policy's `retryWhile` still allows another redelivery:
+    /// absent is yes; a predicate that does not hold, or one that raises,
+    /// stops the redelivery (section 8.7).
+    fn retry_while_allows(&self, policy: &RedeliveryOptions) -> bool {
+        policy
+            .retry_while
+            .as_ref()
+            .is_none_or(|condition| self.predicate(condition).unwrap_or(false))
+    }
+
+    /// One journal-bound engine event.
+    pub(crate) fn record(&mut self, kind: &'static str, detail: Value) {
+        self.events.push(RouteEvent {
+            kind,
+            at: SystemTime::now(),
+            detail,
+        });
     }
 
     /// Run a nested step body (a `choice` branch, a `filter`'s steps): no
@@ -725,6 +850,12 @@ impl Run<'_, '_> {
             // Boxed: enrich sends through this same dispatcher, so an
             // unboxed pair of futures would recurse without bound.
             Step::Enrich(enrich) => Box::pin(processor::enrich::run(self, enrich)).await,
+            // Boxed the same way: the block's steps dispatch through
+            // this dispatcher too.
+            Step::DoTry(block) => Box::pin(processor::do_try::run(self, block)).await,
+            // Configuration the runner collected before the first step;
+            // in the body it runs nothing.
+            Step::ErrorHandler(_) => Ok(Flow::Continue),
             // The unserved kinds never reach here: check_servable refuses
             // them by name before a route is registered.
             _ => Err(RouteFailure::of(ErrorClass::Script)),

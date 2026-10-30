@@ -24,6 +24,7 @@ pub mod do_try;
 pub mod enrich;
 pub mod filter;
 pub mod r#loop;
+pub mod redelivery;
 pub mod remove_header;
 pub mod remove_property;
 pub mod script;
