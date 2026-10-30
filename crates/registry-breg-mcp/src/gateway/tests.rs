@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex},
+};
+
 use base64::Engine as _;
 use registry_breg_client::BRegProblemCode;
-use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter, FileDestination};
+use registry_mcp_edge::{AuditOptions, GatewayCore, GatewayInfo, ToolAuditLog, VerifiedCaller};
+use registry_platform_audit::{
+    AuditDestination, AuditKeyHasher, AuditProfile, AuditWriter, FileDestination,
+};
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use registry_platform_testing::{
     ExchangeProfile, TestActorKind, TestAuthorizationServer, TestClient,
@@ -13,13 +21,11 @@ use zeroize::Zeroizing;
 
 use super::*;
 use crate::{
-    audit::AuditCapture,
-    config::tests::outbound_sections,
-    contract::tests::spec,
-    inbound::VerifiedCaller,
+    config::tests::{outbound_sections, service},
     mock_registry::{
         draft_request, grant_exchange_with_probe, GrantExchangeProbe, MockRegistry, Seen,
     },
+    provider::{breg_binding_for_test, BRegProvider, BREG_TOOL_NAMES},
 };
 
 const AUDIENCE: &str = "urn:breg:citizen-address-correction";
@@ -35,10 +41,54 @@ const CANARY: &str = "canary-field-value-7f3a";
 const START_ATTEMPT_A: &str = "53e14a1a-6e19-4b2e-af6e-b9c39a9a3250";
 const START_ATTEMPT_B: &str = "a6878495-b52f-420f-9dc5-220c944de359";
 
+#[derive(Clone, Default)]
+struct AuditBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for AuditBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("audit buffer lock")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct AuditCapture {
+    writer: AuditWriter,
+    buffer: AuditBuffer,
+}
+
+impl AuditCapture {
+    fn entries(&self) -> Vec<Value> {
+        self.writer.wait_for_detached_entries();
+        String::from_utf8(self.buffer.0.lock().expect("audit buffer lock").clone())
+            .expect("UTF-8 audit")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("audit line"))
+            .collect()
+    }
+}
+
+fn capture_audit() -> (ToolAuditLog, AuditCapture) {
+    let buffer = AuditBuffer::default();
+    let writer = AuditWriter::from_line_sink(Box::new(buffer.clone()));
+    (
+        ToolAuditLog::new(writer.clone()),
+        AuditCapture { writer, buffer },
+    )
+}
+
 struct Fixture {
     server: TestAuthorizationServer,
     registry: MockRegistry,
-    gateway: Gateway,
+    gateway: Arc<GatewayCore>,
+    provider: Arc<BRegProvider>,
+    keys: AuditKeyHasher,
     directory: TempDir,
     exchange_probe: GrantExchangeProbe,
 }
@@ -73,11 +123,10 @@ impl Fixture {
             outbound_sections(&registry.base_url, &token_endpoint);
         exchange.assertion_audience =
             Some(registry_platform_yaml::ExternalId::new(server.issuer()).unwrap());
-        let outbound =
-            Outbound::new(&registry_config, &exchange, RESOURCE, key).expect("outbound configures");
         let directory = tempfile::tempdir().expect("temporary directory");
         let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![9; 32]))
             .expect("audit profile");
+        let keys = profile.key_hasher();
         let destination = AuditDestination::File(
             FileDestination::new(directory.path().join("audit.jsonl")).expect("audit destination"),
         );
@@ -85,38 +134,79 @@ impl Fixture {
             Some(audit) => audit,
             None => ToolAuditLog::new(AuditWriter::open(destination).await.expect("audit opens")),
         };
-        let gateway = Gateway::new(
-            outbound,
-            spec(),
-            ServiceDescription {
-                name: "Address correction".to_owned(),
-                description: "Correct the postal address the registry holds for you.".to_owned(),
-                disclosure: "The assistant will see your current address.".to_owned(),
-            },
-            Url::parse("https://review.example.test/").expect("review url"),
-            audit,
-            profile.key_hasher(),
+        let (binding, provider) = breg_binding_for_test(
+            &registry_config,
+            &exchange,
+            &service(),
+            RESOURCE,
+            key,
+            keys.clone(),
+            BREG_TOOL_NAMES.into_iter().map(str::to_owned),
+        )
+        .expect("BReg binding");
+        let gateway = Arc::new(
+            GatewayCore::new(
+                [binding],
+                audit,
+                AuditOptions::new("registry-breg-mcp.tool-call/v1", "breg_mcp.tool_call")
+                    .expect("audit options"),
+                GatewayInfo::new(
+                    "breg-mcp",
+                    "Address correction",
+                    "Address correction gateway",
+                )
+                .expect("gateway info"),
+            )
+            .expect("gateway core"),
         );
         Self {
             server,
             registry,
             gateway,
+            provider,
+            keys,
             directory,
             exchange_probe,
         }
     }
 
     fn caller(&self, citizen: &str) -> VerifiedCaller {
+        self.caller_and_token(citizen).0
+    }
+
+    fn caller_and_token(&self, citizen: &str) -> (VerifiedCaller, String) {
         let expires_at = now() + 300;
         let token =
             self.server
                 .issue_access_token("chat-host", citizen, RESOURCE, SCOPE, expires_at);
-        VerifiedCaller::for_test(
-            &self.server.issuer(),
-            citizen,
-            "chat-host",
-            &token,
-            expires_at,
+        let issuer = self.server.issuer();
+        let principal_pseudonym = self
+            .keys
+            .audit_reference_hash(
+                "breg-mcp-principal-v1",
+                "",
+                &json!([issuer, citizen]).to_string(),
+            )
+            .expect("principal pseudonym");
+        let client_pseudonym = self
+            .keys
+            .audit_reference_hash(
+                "breg-mcp-client-v1",
+                "",
+                &json!([issuer, "chat-host"]).to_string(),
+            )
+            .expect("client pseudonym");
+        (
+            VerifiedCaller::for_test(
+                &self.server.issuer(),
+                citizen,
+                "chat-host",
+                &token,
+                expires_at,
+                &principal_pseudonym,
+                &client_pseudonym,
+            ),
+            token,
         )
     }
 
@@ -188,8 +278,8 @@ async fn describe_service_reads_nothing_from_the_registry() {
 
 #[tokio::test]
 async fn audit_request_refusal_prevents_exchange_and_registry_dispatch() {
-    let mut fixture = Fixture::start_with_audit(Some(ToolAuditLog::refusing_after(0))).await;
-    let dispatch = fixture.gateway.pause_dispatch();
+    let fixture = Fixture::start_with_audit(Some(ToolAuditLog::refusing_after_for_test(0))).await;
+    let dispatch = fixture.provider.pause_dispatch();
     let caller = fixture.caller(CITIZEN_A);
     let value = fixture.call(&caller, GET_MY_DETAILS, json!({})).await;
     assert_eq!(error_code(&value), "service-unavailable");
@@ -199,7 +289,7 @@ async fn audit_request_refusal_prevents_exchange_and_registry_dispatch() {
 
 #[tokio::test]
 async fn audit_response_refusal_withholds_the_tool_result() {
-    let fixture = Fixture::start_with_audit(Some(ToolAuditLog::refusing_after(1))).await;
+    let fixture = Fixture::start_with_audit(Some(ToolAuditLog::refusing_after_for_test(1))).await;
     let caller = fixture.caller(CITIZEN_A);
     let value = fixture.call(&caller, GET_MY_DETAILS, json!({})).await;
     assert_eq!(error_code(&value), "service-unavailable");
@@ -209,9 +299,9 @@ async fn audit_response_refusal_withholds_the_tool_result() {
 
 #[tokio::test]
 async fn cancelling_an_in_flight_call_writes_same_correlation_unfinished() {
-    let (audit, capture): (ToolAuditLog, AuditCapture) = ToolAuditLog::capture();
-    let mut fixture = Fixture::start_with_audit(Some(audit)).await;
-    let barrier = fixture.gateway.pause_dispatch();
+    let (audit, capture): (ToolAuditLog, AuditCapture) = capture_audit();
+    let fixture = Fixture::start_with_audit(Some(audit)).await;
+    let barrier = fixture.provider.pause_dispatch();
     let caller = fixture.caller(CITIZEN_A);
     let arguments = Map::new();
     {
@@ -234,11 +324,11 @@ async fn cancelling_an_in_flight_call_writes_same_correlation_unfinished() {
     assert_eq!(entries[1]["record"]["tool"], GET_MY_DETAILS);
     assert_eq!(
         entries[1]["record"]["principalPseudonym"],
-        caller.citizen_pseudonym()
+        caller.context().principal_pseudonym()
     );
     assert_eq!(
         entries[1]["record"]["clientPseudonym"],
-        caller.client_pseudonym()
+        caller.context().client_pseudonym()
     );
     assert!(entries[1]["record"].get("reason").is_none());
     assert!(fixture.registry.seen().is_empty());
@@ -788,16 +878,16 @@ async fn prepare_review_links_the_citizens_own_application() {
 #[tokio::test]
 async fn the_registry_sees_the_delegated_token_never_the_chat_hosts() {
     let fixture = Fixture::start().await;
-    let caller = fixture.caller(CITIZEN_A);
+    let (caller, inbound_token) = fixture.caller_and_token(CITIZEN_A);
     let value = fixture
         .call(&caller, START_APPLICATION, start_arguments())
         .await;
-    assert!(!value.to_string().contains(caller.token()));
+    assert!(!value.to_string().contains(&inbound_token));
     let seen = fixture.registry.seen();
     assert!(!seen.is_empty());
     for request in seen {
         let authorization = request.authorization.expect("authorization sent");
-        assert!(!authorization.contains(caller.token()));
+        assert!(!authorization.contains(&inbound_token));
         let claims = claims(&authorization);
         assert_eq!(claims["sub"], CITIZEN_A);
         assert_eq!(claims["aud"], AUDIENCE);
@@ -808,7 +898,7 @@ async fn the_registry_sees_the_delegated_token_never_the_chat_hosts() {
 #[tokio::test]
 async fn every_call_is_audited_without_values_or_credentials() {
     let fixture = Fixture::start().await;
-    let caller = fixture.caller(CITIZEN_A);
+    let (caller, inbound_token) = fixture.caller_and_token(CITIZEN_A);
     let mut arguments = start_arguments();
     arguments["newAddressLine"] = json!(CANARY);
     fixture.call(&caller, START_APPLICATION, arguments).await;
@@ -843,16 +933,16 @@ async fn every_call_is_audited_without_values_or_credentials() {
     assert_eq!(entries[3]["record"]["reason"], "invalid-arguments");
     assert_eq!(
         entries[0]["record"]["principalPseudonym"],
-        caller.citizen_pseudonym()
+        caller.context().principal_pseudonym()
     );
     assert_eq!(
         entries[0]["record"]["clientPseudonym"],
-        caller.client_pseudonym()
+        caller.context().client_pseudonym()
     );
     assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
     assert_eq!(entries[2]["correlation"], entries[3]["correlation"]);
     assert_ne!(entries[0]["correlation"], entries[2]["correlation"]);
-    for forbidden in [CANARY, CITIZEN_A, ADDRESS_A, ADDRESS_B, caller.token()] {
+    for forbidden in [CANARY, CITIZEN_A, ADDRESS_A, ADDRESS_B, &inbound_token] {
         assert!(!text.contains(forbidden), "audit carries a forbidden value");
     }
 }
@@ -906,7 +996,7 @@ async fn a_failed_readback_after_a_committed_start_is_unfinished() {
         BRegProblemCode::AuthenticationRefused,
         BRegProblemCode::ServiceUnavailable,
     ] {
-        let (audit, capture) = ToolAuditLog::capture();
+        let (audit, capture) = capture_audit();
         let fixture = Fixture::start_with_audit(Some(audit)).await;
         let caller = fixture.caller(CITIZEN_A);
         let first = fixture
@@ -979,7 +1069,7 @@ async fn a_linked_start_receipt_does_not_hide_a_failed_get() {
 
 #[tokio::test]
 async fn a_token_exchange_failure_on_a_read_tool_is_refused() {
-    let (audit, capture) = ToolAuditLog::capture();
+    let (audit, capture) = capture_audit();
     let fixture = Fixture::start_with_audit(Some(audit)).await;
     let caller = fixture.caller(CITIZEN_A);
     fixture.server.stop().await;
@@ -997,7 +1087,7 @@ async fn a_token_exchange_failure_on_a_read_tool_is_refused() {
 
 #[tokio::test]
 async fn a_registry_failure_on_a_read_tool_is_refused() {
-    let (audit, capture) = ToolAuditLog::capture();
+    let (audit, capture) = capture_audit();
     let fixture = Fixture::start_with_audit(Some(audit)).await;
     let caller = fixture.caller(CITIZEN_A);
     fixture.registry.fail_next_at(
@@ -1014,7 +1104,7 @@ async fn a_registry_failure_on_a_read_tool_is_refused() {
 
 #[tokio::test]
 async fn a_registry_failure_on_the_update_patch_is_unfinished() {
-    let (audit, capture) = ToolAuditLog::capture();
+    let (audit, capture) = capture_audit();
     let fixture = Fixture::start_with_audit(Some(audit)).await;
     let caller = fixture.caller(CITIZEN_A);
     let draft = fixture.registry.add_application(
@@ -1040,7 +1130,7 @@ async fn a_registry_failure_on_the_update_patch_is_unfinished() {
 
 #[tokio::test]
 async fn a_definite_refusal_of_the_update_patch_is_refused() {
-    let (audit, capture) = ToolAuditLog::capture();
+    let (audit, capture) = capture_audit();
     let fixture = Fixture::start_with_audit(Some(audit)).await;
     let caller = fixture.caller(CITIZEN_A);
     let draft = fixture.registry.add_application(

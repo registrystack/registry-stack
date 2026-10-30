@@ -10,7 +10,6 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -2134,6 +2133,8 @@ class CiChangesTest(unittest.TestCase):
             "products/platform/scripts/check-yaml-reader-boundary.sh",
             "products/platform/scripts/check-yaml-reader-boundary.py",
             "products/platform/scripts/test_check_yaml_reader_boundary.py",
+            "products/platform/scripts/check-mcp-dependencies.py",
+            "products/platform/scripts/test_check_mcp_dependencies.py",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["platform_hygiene"])
@@ -2469,7 +2470,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-bregctl", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"breg", "casework", "stack-client", "developer-tools"},
+            {"breg", "casework", "stack-client", "developer-tools", "mcp"},
         )
 
     def test_registry_record_change_runs_the_breg_client_and_facade(self) -> None:
@@ -2549,10 +2550,53 @@ class CiChangesTest(unittest.TestCase):
             if entry["name"] == "breg"
         )
         self.assertIn("registry-breg-mcp", breg["packages"])
+        mcp = next(
+            entry
+            for entry in outputs["rust_matrix"]["include"]
+            if entry["name"] == "mcp"
+        )
+        self.assertEqual(mcp["packages"], ["registry-mcp"])
         # Its command tree reaches the docs only through the catalog test.
         command = classify(self.workspace, ("crates/registry-breg-mcp/src/cli.rs",))
         self.assertFalse(command["docs"])
         self.assertIn("registry-cli-docs", command["rust_packages"])
+
+    def test_shared_mcp_edge_and_generic_runtime_run_in_the_mcp_shard(self) -> None:
+        edge = classify(
+            self.workspace,
+            ("crates/registry-mcp-edge/src/core.rs",),
+            pull_request=True,
+        )
+        edge_mcp = next(
+            entry
+            for entry in edge["rust_matrix"]["include"]
+            if entry["name"] == "mcp"
+        )
+        self.assertEqual(
+            edge_mcp["packages"],
+            ["registry-mcp", "registry-mcp-edge"],
+        )
+        self.assertIn("registry-breg-mcp", edge["rust_packages"])
+        self.assertTrue(edge["breg_contracts"])
+
+        runtime = classify(
+            self.workspace,
+            ("crates/registry-mcp/src/casework.rs",),
+            pull_request=True,
+        )
+        self.assertEqual(
+            runtime["rust_matrix"],
+            {
+                "include": [
+                    {
+                        "name": "mcp",
+                        "packages": ["registry-mcp"],
+                        "all_features": False,
+                    }
+                ]
+            },
+        )
+        self.assertFalse(runtime["breg_contracts"])
 
     def test_native_citizen_journey_inputs_select_the_existing_postgres_lane(self) -> None:
         for path in (

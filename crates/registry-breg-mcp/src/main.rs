@@ -43,6 +43,12 @@ fn operational_log_level(
     }
 }
 
+fn operational_targets(level: Level) -> Targets {
+    Targets::new()
+        .with_target("registry_breg_mcp", level)
+        .with_target("registry_mcp_edge", level)
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -85,7 +91,8 @@ fn main() -> ExitCode {
         operational_log_level(Err(std::env::VarError::NotPresent), config.log_level)
             .expect("the runtime log level was validated")
     });
-    // JSON lines on standard output, from this crate only.
+    // JSON lines on standard output, from the BReg facade and its shared MCP
+    // edge only. Dependency targets remain disabled.
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -94,7 +101,7 @@ fn main() -> ExitCode {
                 .with_current_span(false)
                 .with_span_list(false),
         )
-        .with(Targets::new().with_target("registry_breg_mcp", level))
+        .with(operational_targets(level))
         .init();
 
     match serve(&config) {
@@ -187,5 +194,14 @@ mod tests {
                 "{refused:?}"
             );
         }
+    }
+
+    #[test]
+    fn operational_logs_include_the_facade_and_shared_edge_only() {
+        let targets = operational_targets(Level::INFO);
+        assert!(targets.would_enable("registry_breg_mcp", &Level::INFO));
+        assert!(targets.would_enable("registry_mcp_edge::core", &Level::INFO));
+        assert!(!targets.would_enable("registry_mcp_edge::core", &Level::DEBUG));
+        assert!(!targets.would_enable("reqwest", &Level::ERROR));
     }
 }

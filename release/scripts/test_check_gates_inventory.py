@@ -978,10 +978,27 @@ class GateInventoryTest(unittest.TestCase):
                 self.assertIn(
                     gate,
                     self.module.missing_gates(
-                        self.workflow,
+                        self.workflow.replace(snippet, replacement),
                         casework_checkpoint_runner_text=runner,
                     ),
                 )
+
+    def test_unconditional_casework_guard_covers_a_disabled_checkpoint_guard(self) -> None:
+        snippet = "python3 products/casework/scripts/check_dependency_direction.py"
+        self.assertIn(snippet, self.workflow)
+        runner = self.casework_checkpoint_runner.replace(snippet, "true # disabled", 1)
+        self.assertNotIn(
+            "Casework dependency-direction guard",
+            self.module.missing_gates(self.workflow, casework_checkpoint_runner_text=runner),
+        )
+
+    def test_mcp_guards_cannot_be_removed_from_ci(self) -> None:
+        for label, snippet in (
+            ("MCP dependency boundary", "python3 products/platform/scripts/check-mcp-dependencies.py"),
+            ("MCP configuration schema drift", "run: cargo test --locked -p registry-mcp --features schema --lib schema::tests"),
+        ):
+            with self.subTest(gate=label):
+                self.assertIn(label, self.module.missing_gates(self.workflow.replace(snippet, "true # disabled")))
 
     def test_missing_casework_schema_runner_step_is_reported(self) -> None:
         runner = self.casework_schema_runner.replace(

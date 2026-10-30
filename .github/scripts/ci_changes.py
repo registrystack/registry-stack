@@ -45,6 +45,10 @@ SHARDS = {
         "registry-platform-testing",
         "registry-platform-yaml",
     ),
+    "mcp": (
+        "registry-mcp",
+        "registry-mcp-edge",
+    ),
     "manifest": (
         "registry-manifest-cli",
         "registry-manifest-core",
@@ -172,6 +176,7 @@ CONFIG_CHECK_PACKAGES = frozenset(
         "registry-evidence-oid4vci",
         "registry-evidencectl",
         "registry-manifest-cli",
+        "registry-mcp",
         "registry-messagingctl",
         "registry-render",
         "registry-schedulingctl",

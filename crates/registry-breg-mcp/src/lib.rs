@@ -5,25 +5,24 @@
 #[cfg(not(unix))]
 compile_error!("registry-breg-mcp requires a Unix target for owner-only secret file guarantees");
 
-mod audit;
 pub mod check;
 #[doc(hidden)]
 pub mod cli;
+mod client;
 pub mod config;
 mod contract;
 mod gateway;
 mod handler;
 mod idempotency;
-mod inbound;
 #[cfg(test)]
 #[path = "../tests/support/mock_registry.rs"]
 mod mock_registry;
-mod outbound;
 mod problems;
+mod provider;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
-mod server;
 mod tools;
 
 pub use cli::command;
+pub use provider::{breg_binding, BRegBindingError, BREG_TOOL_NAMES};

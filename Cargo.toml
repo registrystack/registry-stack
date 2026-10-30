@@ -62,6 +62,8 @@ members = [
     "crates/registry-render-client-py",
     "crates/registry-breg-client",
     "crates/registry-breg-mcp",
+    "crates/registry-mcp-edge",
+    "crates/registry-mcp",
     "crates/registry-breg-review",
     "crates/registry-breg-client-node",
     "crates/registry-breg-client-py",
@@ -138,6 +140,8 @@ registry-render = { path = "crates/registry-render", version = "0.45.0" }
 registry-render-client = { path = "crates/registry-render-client", version = "0.45.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.45.0" }
 registry-breg-mcp = { path = "crates/registry-breg-mcp", version = "0.45.0" }
+registry-mcp = { path = "crates/registry-mcp", version = "0.45.0" }
+registry-mcp-edge = { path = "crates/registry-mcp-edge", version = "0.45.0" }
 registry-breg-review = { path = "crates/registry-breg-review", version = "0.45.0" }
 registry-scheduling = { path = "crates/registry-scheduling", version = "0.45.0" }
 registry-scheduling-core = { path = "crates/registry-scheduling-core", version = "0.45.0" }

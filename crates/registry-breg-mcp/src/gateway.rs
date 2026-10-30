@@ -15,25 +15,25 @@ use registry_breg_client::{
     BRegProblemCode, BRegProposal, BRegProposalQuery, BRegProposalState, BRegRecordOptions,
     BaseRegistryClient, RegistryRecord,
 };
+use registry_mcp_edge::{ProviderAuthorization, VerifiedCaller};
 use registry_platform_audit::AuditKeyHasher;
-use rmcp::model::CallToolResult;
 use serde_json::{json, Map, Value};
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    audit::{ToolAudit, ToolAuditLog},
+    client::BRegClientFactory,
     contract::{Contract, ContractSpec},
     idempotency::idempotency_key,
-    inbound::VerifiedCaller,
-    outbound::Outbound,
     problems::{ToolError, ToolErrorCode},
     tools::{
         parse_application, parse_no_arguments, parse_start, parse_update, screen_controlled, Edit,
         DESCRIBE_SERVICE, GET_APPLICATION_STATUS, GET_MY_DETAILS, LIST_APPLICATIONS,
-        PREPARE_REVIEW, START_APPLICATION, TOOL_NAMES, UPDATE_APPLICATION,
+        PREPARE_REVIEW, START_APPLICATION, UPDATE_APPLICATION,
     },
 };
+
+const PRINCIPAL_CLASS: &str = "breg-mcp-principal-v1";
 
 /// The fixed notice every result carrying registry values opens with.
 pub(crate) const REGISTRY_DATA_NOTICE: &str = "Values under registryData are quoted from the \
@@ -61,14 +61,13 @@ struct Session {
 
 /// The gateway's tool implementation.
 pub(crate) struct Gateway {
-    outbound: Outbound,
+    client: BRegClientFactory,
     spec: ContractSpec,
     service: ServiceDescription,
     review_base_url: Url,
-    audit: ToolAuditLog,
     keys: AuditKeyHasher,
     #[cfg(test)]
-    dispatch_barrier: Option<std::sync::Arc<DispatchBarrier>>,
+    dispatch_barrier: std::sync::Mutex<Option<std::sync::Arc<DispatchBarrier>>>,
 }
 
 #[cfg(test)]
@@ -91,33 +90,32 @@ impl DispatchBarrier {
 
 impl Gateway {
     pub(crate) const fn new(
-        outbound: Outbound,
+        client: BRegClientFactory,
         spec: ContractSpec,
         service: ServiceDescription,
         review_base_url: Url,
-        audit: ToolAuditLog,
         keys: AuditKeyHasher,
     ) -> Self {
         Self {
-            outbound,
+            client,
             spec,
             service,
             review_base_url,
-            audit,
             keys,
             #[cfg(test)]
-            dispatch_barrier: None,
+            dispatch_barrier: std::sync::Mutex::new(None),
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn pause_dispatch(&mut self) -> std::sync::Arc<DispatchBarrier> {
+    pub(crate) fn pause_dispatch(&self) -> std::sync::Arc<DispatchBarrier> {
         let barrier = std::sync::Arc::new(DispatchBarrier {
             was_entered: std::sync::atomic::AtomicBool::new(false),
             entered: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),
         });
-        self.dispatch_barrier = Some(std::sync::Arc::clone(&barrier));
+        *self.dispatch_barrier.lock().expect("dispatch barrier lock") =
+            Some(std::sync::Arc::clone(&barrier));
         barrier
     }
 
@@ -125,85 +123,32 @@ impl Gateway {
         &self.service
     }
 
-    /// Whether the audit log can accept a record.
-    pub(crate) async fn ready(&self) -> bool {
-        self.audit.ready().await
+    /// The contract the registry currently publishes under this call's
+    /// independently exchanged downstream authorization.
+    pub(crate) async fn contract(
+        &self,
+        authorization: ProviderAuthorization,
+    ) -> Result<Contract, ToolError> {
+        Ok(self.session(authorization).await?.contract)
     }
 
-    /// The contract the registry currently publishes for `caller`.
-    pub(crate) async fn contract(&self, caller: &VerifiedCaller) -> Result<Contract, ToolError> {
-        Ok(self.session(caller).await?.contract)
-    }
-
-    /// Run one tool call. The attempt is durably audited before any registry
-    /// call and the outcome before the result is returned; if either record
-    /// cannot be written the call fails closed.
-    pub(crate) async fn call(
+    /// Run one provider invocation. The shared edge has already admitted and
+    /// audited the call before entering this product boundary.
+    pub(crate) async fn dispatch(
         &self,
         caller: &VerifiedCaller,
-        tool: &str,
-        arguments: Option<&Map<String, Value>>,
-    ) -> CallToolResult {
-        let request_id = Uuid::new_v4();
-        let tool_name = TOOL_NAMES
-            .iter()
-            .find(|name| **name == tool)
-            .copied()
-            .unwrap_or("unknown");
-        let audit_record = ToolAudit {
-            tool: tool_name,
-            principal_pseudonym: caller.citizen_pseudonym(),
-            client_pseudonym: caller.client_pseudonym(),
-        };
-        let Ok(mut audit_request) = self
-            .audit
-            .begin(request_id.to_string(), &audit_record)
-            .await
-            .map_err(|error| {
-                tracing::error!(request_id = %request_id, reason = ?error.reason(), "tool audit request refused");
-            })
-        else {
-            return ToolError::new(ToolErrorCode::ServiceUnavailable).into_result();
-        };
-        let outcome = self.dispatch(caller, tool, arguments).await;
-        let code = match &outcome {
-            Ok(_) => "ok",
-            Err(error) => error.code.as_str(),
-        };
-        // A failure after a mutating registry request was sent may follow a
-        // committed mutation, so its fate is recorded unfinished without
-        // changing the deliberate stale-update refusal returned to a later
-        // retry. Every other failure had no registry effect and is refused.
-        let (audit_outcome, reason) = match &outcome {
-            Ok(_) => (code, None),
-            Err(error) if error.effect_unknown => ("unfinished", Some(code)),
-            Err(_) => ("refused", Some(code)),
-        };
-        if audit_request
-            .respond(audit_record.response(audit_outcome, reason))
-            .await
-            .map_err(|error| {
-                tracing::error!(request_id = %request_id, reason = ?error.reason(), "tool audit response refused");
-            })
-            .is_err()
-        {
-            return ToolError::new(ToolErrorCode::ServiceUnavailable).into_result();
-        }
-        tracing::info!(request_id = %request_id, tool = tool_name, outcome = code, "tool call");
-        match outcome {
-            Ok(value) => CallToolResult::structured(value),
-            Err(error) => error.into_result(),
-        }
-    }
-
-    async fn dispatch(
-        &self,
-        caller: &VerifiedCaller,
+        authorization: ProviderAuthorization,
         tool: &str,
         arguments: Option<&Map<String, Value>>,
     ) -> Result<Value, ToolError> {
         #[cfg(test)]
-        if let Some(barrier) = &self.dispatch_barrier {
+        let dispatch_barrier = self
+            .dispatch_barrier
+            .lock()
+            .expect("dispatch barrier lock")
+            .clone();
+        #[cfg(test)]
+        if let Some(barrier) = dispatch_barrier {
             barrier
                 .was_entered
                 .store(true, std::sync::atomic::Ordering::Release);
@@ -218,18 +163,18 @@ impl Gateway {
             }
             GET_MY_DETAILS => {
                 parse_no_arguments(arguments)?;
-                self.my_details(caller).await
+                self.my_details(authorization).await
             }
-            START_APPLICATION => self.start(caller, arguments).await,
-            LIST_APPLICATIONS => self.list(caller, arguments).await,
-            UPDATE_APPLICATION => self.update(caller, arguments).await,
+            START_APPLICATION => self.start(caller, authorization, arguments).await,
+            LIST_APPLICATIONS => self.list(authorization, arguments).await,
+            UPDATE_APPLICATION => self.update(caller, authorization, arguments).await,
             PREPARE_REVIEW => {
                 let application = parse_application(arguments)?;
-                self.prepare_review(caller, application).await
+                self.prepare_review(authorization, application).await
             }
             GET_APPLICATION_STATUS => {
                 let application = parse_application(arguments)?;
-                self.status(caller, application).await
+                self.status(authorization, application).await
             }
             _ => Err(ToolError::new(ToolErrorCode::InvalidArguments)),
         }
@@ -245,8 +190,8 @@ impl Gateway {
         })
     }
 
-    async fn session(&self, caller: &VerifiedCaller) -> Result<Session, ToolError> {
-        let client = self.outbound.client(caller)?;
+    async fn session(&self, authorization: ProviderAuthorization) -> Result<Session, ToolError> {
+        let client = self.client.client(authorization)?;
         let metadata = client
             .registry_contract(Some(&self.spec.access_profile))
             .await?
@@ -313,8 +258,8 @@ impl Gateway {
         Ok(proposal)
     }
 
-    async fn my_details(&self, caller: &VerifiedCaller) -> Result<Value, ToolError> {
-        let session = self.session(caller).await?;
+    async fn my_details(&self, authorization: ProviderAuthorization) -> Result<Value, ToolError> {
+        let session = self.session(authorization).await?;
         let own = self.resolve_own(&session).await?;
         let fields: Vec<Value> = session
             .contract
@@ -331,9 +276,10 @@ impl Gateway {
     async fn start(
         &self,
         caller: &VerifiedCaller,
+        authorization: ProviderAuthorization,
         arguments: Option<&Map<String, Value>>,
     ) -> Result<Value, ToolError> {
-        let session = self.session(caller).await?;
+        let session = self.session(authorization).await?;
         let parsed = parse_start(arguments, &session.contract)?;
         let mut input = parsed.input;
         let own = self.resolve_own(&session).await?;
@@ -347,7 +293,7 @@ impl Gateway {
         let request = BRegActionInvocationRequest::new(&action, input.clone(), None)?;
         let key = idempotency_key(
             &self.keys,
-            caller.citizen_pseudonym(),
+            &self.citizen_pseudonym(caller)?,
             START_APPLICATION,
             &json!({"attemptId":parsed.attempt_id}),
         )?;
@@ -404,9 +350,10 @@ impl Gateway {
     async fn update(
         &self,
         caller: &VerifiedCaller,
+        authorization: ProviderAuthorization,
         arguments: Option<&Map<String, Value>>,
     ) -> Result<Value, ToolError> {
-        let session = self.session(caller).await?;
+        let session = self.session(authorization).await?;
         let update = parse_update(arguments, &session.contract)?;
         let own = self.resolve_own(&session).await?;
         let proposal = self
@@ -435,7 +382,7 @@ impl Gateway {
         let body = json!({"input":input});
         let key = idempotency_key(
             &self.keys,
-            caller.citizen_pseudonym(),
+            &self.citizen_pseudonym(caller)?,
             UPDATE_APPLICATION,
             &json!({"applicationId":proposal.id(),"revision":proposal.revision(),"body":body}),
         )?;
@@ -447,11 +394,11 @@ impl Gateway {
 
     async fn list(
         &self,
-        caller: &VerifiedCaller,
+        authorization: ProviderAuthorization,
         arguments: Option<&Map<String, Value>>,
     ) -> Result<Value, ToolError> {
         let cursor = crate::tools::parse_list(arguments)?;
-        let session = self.session(caller).await?;
+        let session = self.session(authorization).await?;
         let own = self.resolve_own(&session).await?;
         let collection = session
             .metadata
@@ -478,10 +425,10 @@ impl Gateway {
 
     async fn prepare_review(
         &self,
-        caller: &VerifiedCaller,
+        authorization: ProviderAuthorization,
         application: Uuid,
     ) -> Result<Value, ToolError> {
-        let session = self.session(caller).await?;
+        let session = self.session(authorization).await?;
         let own = self.resolve_own(&session).await?;
         let proposal = self.owned_application(&session, &own, application).await?;
         let mut review_url = self.review_base_url.clone();
@@ -498,11 +445,26 @@ impl Gateway {
         }))
     }
 
-    async fn status(&self, caller: &VerifiedCaller, application: Uuid) -> Result<Value, ToolError> {
-        let session = self.session(caller).await?;
+    async fn status(
+        &self,
+        authorization: ProviderAuthorization,
+        application: Uuid,
+    ) -> Result<Value, ToolError> {
+        let session = self.session(authorization).await?;
         let own = self.resolve_own(&session).await?;
         let proposal = self.owned_application(&session, &own, application).await?;
         application_value(&session.contract, &proposal)
+    }
+
+    fn citizen_pseudonym(&self, caller: &VerifiedCaller) -> Result<String, ToolError> {
+        let identity = caller.identity();
+        self.keys
+            .audit_reference_hash(
+                PRINCIPAL_CLASS,
+                "",
+                &json!([identity.issuer(), identity.subject()]).to_string(),
+            )
+            .map_err(|_| ToolError::new(ToolErrorCode::ServiceUnavailable))
     }
 }
 

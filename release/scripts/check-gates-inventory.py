@@ -128,6 +128,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Stable CI aggregate",
         "ci-result:\n    name: CI result",
     ),
+    ("MCP dependency boundary", "python3 products/platform/scripts/check-mcp-dependencies.py"),
+    ("MCP configuration schema drift", "run: cargo test --locked -p registry-mcp --features schema --lib schema::tests"),
     ("Cargo deny", "run: cargo deny check"),
     (
         "Standalone Cargo lockfiles",

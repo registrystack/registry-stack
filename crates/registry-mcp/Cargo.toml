@@ -1,0 +1,66 @@
+[package]
+name = "registry-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Configurable MCP gateway over explicitly bound Registry Stack and adapter capabilities."
+
+[lints]
+workspace = true
+
+[features]
+schema = [
+    "dep:schemars",
+    "registry-breg-mcp/schema",
+    "registry-platform-audit/schema",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
+
+[[bin]]
+name = "registry-mcp"
+path = "src/main.rs"
+
+[[example]]
+name = "runtime-schema"
+path = "examples/runtime-schema.rs"
+required-features = ["schema"]
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+clap.workspace = true
+registry-breg-mcp.workspace = true
+registry-casework-client.workspace = true
+registry-mcp-edge.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-yaml.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+jsonschema.workspace = true
+
+[dev-dependencies]
+registry-mcp-edge = { workspace = true, features = ["test-support"] }
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+tempfile.workspace = true
+tokio-postgres.workspace = true
+tower.workspace = true

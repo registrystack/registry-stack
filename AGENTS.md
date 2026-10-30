@@ -24,7 +24,7 @@ in custody for an owning system, with an exact, verified version released to
 the recipient a document grant names; held out of releases), and **Registry
 Discovery** (a curated, immutable index over public provider descriptions).
 Registry Manifest describes sources portably; `registry-platform-*` crates are
-shared primitives; `registry-breg-mcp`, `registry-breg-review`, and
+shared primitives; `registry-mcp`, `registry-breg-mcp`, `registry-breg-review`, and
 `registry-evidence-oid4vci` are supporting services beside a product, not
 products of their own.
 
@@ -53,6 +53,8 @@ products of their own.
 | `crates/registry-breg-client` | Base Registry Engine client and its opaque authorization handles |
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `crates/registry-mcp-edge` | Product-neutral MCP transport, verified caller, per-binding authorization and fail-closed audit |
+| `crates/registry-mcp` | Configurable MCP supporting service over explicit native and adapter bindings; no inherited product authority |
 | `crates/registry-breg-mcp` | Citizen-facing MCP gateway beside the Base Registry Engine and the `breg-mcp` binary |
 | `crates/registry-breg-review` | Server-rendered citizen review page for BReg Proposal drafts and the `breg-review` binary |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
@@ -124,6 +126,7 @@ Before editing an area, read its owning guide:
 - `registry-discovery*`, `registry-discoveryctl`:
   `products/discovery/AGENTS.md`
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
+- `registry-mcp`, `registry-mcp-edge`: `products/platform/AGENTS.md` and each crate README; apply the provider product guide when changing its semantics
 - `registry-platform-*`: `products/platform/AGENTS.md`
 - `registry-cli-report`: `products/platform/AGENTS.md` and the crate README
 - product clients, their language bindings, `registry-record`, and

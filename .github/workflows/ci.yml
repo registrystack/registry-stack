@@ -539,6 +539,16 @@ jobs:
       - name: Test Coordinator dependency gate
         run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
 
+      - name: Test MCP dependency boundaries
+        run: |
+          python3 -m unittest discover -s products/platform/scripts -p 'test_check_mcp_dependencies.py'
+          python3 -m unittest discover -s products/casework/scripts -p 'test_check_dependency_direction.py'
+
+      - name: MCP dependency direction
+        run: |
+          python3 products/platform/scripts/check-mcp-dependencies.py
+          python3 products/casework/scripts/check_dependency_direction.py
+
       - name: Test Scheduling integrations
         if: needs.changes.outputs.release_tool != 'true'
         run: |
@@ -653,6 +663,10 @@ jobs:
       - name: Reproduce the Manifest schemas
         if: matrix.name == 'manifest'
         run: cargo test --locked -p registry-manifest-cli --features schema --lib schema::tests
+
+      - name: Reproduce the configurable MCP schema
+        if: matrix.name == 'mcp' && contains(matrix.packages, 'registry-mcp')
+        run: cargo test --locked -p registry-mcp --features schema --lib schema::tests
 
       - name: Reproduce the Render schemas
         if: matrix.name == 'render'
@@ -1847,7 +1861,7 @@ jobs:
           -p registry-messagingctl -p registry-discoveryctl -p registry-render
           -p registry-documentsctl
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
-          -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci
+          -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci -p registry-mcp
 
       - name: Run configuration conformance corpus
         run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug

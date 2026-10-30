@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/mcp-runtime/mcp-runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/platform/mcp-runtime/v1alpha1
+kind: PlatformMcpRuntimeConfig
+name: Citizen registry assistant
+logLevel: info
+listener:
+  bind: 127.0.0.1:8110
+  tlsTermination: development-loopback
+  networkExposure: private-address
+secretProviders:
+  environment: {}
+resourceServer:
+  resource: http://127.0.0.1:8110/mcp
+  issuer: http://127.0.0.1:8111
+  jwksSource:
+    type: static
+    documentRef: secret:env/MCP_JWKS
+  allowInsecureHttp: false
+  algorithms: [EdDSA]
+  allowedClients: [chat-host]
+  requiredScopes: [citizen:self]
+  scopeClaim: scope
+audit:
+  hashKeyRef: secret:env/MCP_AUDIT_KEY
+  destination: stdout
+rateLimits:
+  perPrincipal:
+    requestsPerMinute: 30
+    burst: 10
+  perClient:
+    requestsPerMinute: 600
+    burst: 100
+limits:
+  maximumRequestBytes: 65536
+bindings:
+  - name: citizen-registry
+    tools: [get_my_details]
+    provider:
+      type: breg
+      registry:
+        baseUrl: http://127.0.0.1:8112/
+        accessProfile: citizen-agent
+        audience: urn:example:breg
+        scopes: [citizen:self]
+      exchange:
+        tokenEndpoint: http://127.0.0.1:8111/token
+        clientId: citizen-gateway
+        privateKeyRef: secret:env/MCP_EXCHANGE_PRIVATE_KEY
+        assertionAudience: http://127.0.0.1:8111/token
+      service:
+        name: Citizen details
+        description: Read the citizen's own registry details.
+        disclosure: The assistant sees only values the registry authorizes for this citizen.
+        details:
+          recordType: person
+        application:
+          action: update-details
+          targetInput: person
+        reviewBaseUrl: http://127.0.0.1:8113/
