@@ -273,6 +273,17 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_origin_link.rs:a_path_and_an_http_uri_together_are_not_served",
         "engine:tests/camel_error_cluster.rs:the_error_handler_shapes_the_attempts_and_clause_reach",
     ],
+    "graphql": [
+        "engine:src/component/graphql.rs:load",
+        "engine:tests/camel_graphql.rs:a_send_posts_the_pinned_query_with_its_operation_and_variables",
+        "engine:tests/camel_graphql.rs:the_endpoints_variables_expression_answers_when_the_send_carries_no_body",
+        "engine:tests/camel_graphql.rs:an_errors_array_fails_the_exchange_as_upstream_http",
+        "engine:tests/camel_graphql.rs:partial_data_with_errors_still_fails_the_exchange",
+        "engine:tests/camel_graphql.rs:variables_that_yield_no_object_fail_as_validation",
+        "engine:tests/camel_graphql.rs:a_graphql_send_to_an_endpoint_without_a_query_is_refused",
+        "engine:tests/camel_graphql.rs:the_graphql_send_shape_carries_operation_and_body_only",
+        "engine:tests/camel_graphql.rs:the_loader_holds_the_query_files_own_line",
+    ],
 }
 
 SECTION = "### 8.10 The Camel port table"

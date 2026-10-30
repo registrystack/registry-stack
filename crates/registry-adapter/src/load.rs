@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, AggregationStrategy, SendComponent, Step, ToParameters, Workspace,
-    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
-    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
+    AdapterRuntimeConfig, AggregationStrategy, ComponentKind, SendComponent, Step, ToParameters,
+    Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION,
+    ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
     ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
@@ -31,6 +31,7 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::auth::{AuthPlan, StaticCredential};
+use crate::component::graphql::GraphQlQuery;
 use crate::egress::EndpointEgress;
 use crate::envelope::CompiledEnvelope;
 use crate::read_request::{ReadRequestTemplate, ServedFilter};
@@ -345,6 +346,8 @@ pub fn load(
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .map_err(|_| LoadError::Runtime("the secret resolver could not start".to_owned()))?;
 
+    let mut scripts = ScriptSet::default();
+
     // Endpoints with a served authentication kind. An endpoint whose plan
     // needs a token endpoint stays out; a route that sends to it is unserved.
     let mut endpoints = BTreeMap::new();
@@ -377,18 +380,35 @@ pub fn load(
             egress.origin().base_path()
         );
         let (attempt, maximum_response_bytes) = (egress.attempt(), egress.maximum_response_bytes());
+        // A graphql endpoint carries exactly one pinned query
+        // (section 8.8): loaded and digest-verified here, so a route's
+        // send finds it ready and no exchange reads the pack directory.
+        // Its variables expression is a script like any other when it is
+        // one, compiled into the deployment's set.
+        let graphql = if declared.component == ComponentKind::GraphQl {
+            let query = GraphQlQuery::load(&pack, pack_directory, declared).map_err(|fault| {
+                LoadError::Runtime(format!("endpoint {id} query was refused: {fault}"))
+            })?;
+            if let Some(Expression::Rhai(script)) = &query.variables {
+                scripts
+                    .add(&pack, pack_directory, &script.file, &script.entrypoint)
+                    .map_err(|error| LoadError::Runtime(error.to_string()))?;
+            }
+            Some(query)
+        } else {
+            None
+        };
         endpoints.insert(
             id,
             EndpointRuntime {
                 egress,
                 base,
+                graphql,
                 attempt,
                 maximum_response_bytes,
             },
         );
     }
-
-    let mut scripts = ScriptSet::default();
 
     // The deployment's route table: every pack route, then every
     // templated instantiation shadowing a pack route of the same id, the
@@ -636,7 +656,18 @@ fn compile_binding(
                 }
             } else if let Some(reason) = endpoint_refusals.get(&to.uri.id) {
                 refusal.get_or_insert(format!("endpoint {}: {reason}", to.uri.id));
-            } else if !endpoints.contains_key(&to.uri.id) {
+            } else if let Some(endpoint) = endpoints.get(&to.uri.id) {
+                // A send reaches an endpoint of its own component: a
+                // graphql send posts the endpoint's pinned query, an
+                // http send never does (section 8.8).
+                if to.uri.component == SendComponent::GraphQl && endpoint.graphql.is_none() {
+                    refusal
+                        .get_or_insert(format!("endpoint {} is not a graphql endpoint", to.uri.id));
+                } else if to.uri.component == SendComponent::Http && endpoint.graphql.is_some() {
+                    refusal
+                        .get_or_insert(format!("endpoint {} is not an http endpoint", to.uri.id));
+                }
+            } else {
                 refusal.get_or_insert(format!(
                     "endpoint {} is not bound by the runtime",
                     to.uri.id

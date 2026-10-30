@@ -36,7 +36,9 @@ use crate::auth::{
     UpstreamStatusAction,
 };
 use crate::component::http::uri::{encode_path_segment, percent_encode, LinkRefusal};
-use crate::egress::{EgressError, EgressFault, EndpointEgress, OutboundSend, SendShape};
+use crate::egress::{
+    EgressError, EgressFault, EndpointEgress, OutboundSend, SendBody, SendBodyFormat, SendShape,
+};
 use crate::exchange::{
     Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
     REDELIVERY_MAX_COUNTER_HEADER, RESERVED_PROPERTY_PREFIX,
@@ -386,6 +388,40 @@ fn check_to(to: &ToStep) -> Result<(), String> {
         }
         return Ok(());
     }
+    if to.uri.component == SendComponent::GraphQl {
+        // The graphql shape carries `operation` and `body` only (section
+        // 8.8): no address members, no method of its own, no status
+        // range of its own. `body` names the send's variables and is
+        // checked beside them.
+        let Some(parameters) = &to.parameters else {
+            return Ok(());
+        };
+        if parameters.http_method.is_some() {
+            return Err("a graphql send declares no httpMethod".into());
+        }
+        if parameters.path.is_some() {
+            return Err("a graphql send declares no path".into());
+        }
+        if parameters.http_uri.is_some() {
+            return Err("a graphql send declares no httpUri".into());
+        }
+        if !parameters.path_parameters.is_empty() {
+            return Err("a graphql send declares no pathParameters".into());
+        }
+        if !parameters.query.is_empty() {
+            return Err("a graphql send declares no query".into());
+        }
+        if parameters.ok_status_code_range.is_some() {
+            return Err("a graphql send declares no okStatusCodeRange".into());
+        }
+        if !parameters.resume_bindings.is_empty() {
+            return Err("a graphql send with resumeBindings is not served".into());
+        }
+        if let Some(expression) = &parameters.body {
+            check_expression("body", expression)?;
+        }
+        return Ok(());
+    }
     if to.uri.component != SendComponent::Http {
         return Err("a to step is served for the http component only".into());
     }
@@ -514,6 +550,10 @@ pub struct EndpointRuntime {
     pub egress: EndpointEgress,
     /// The origin and base path every link of this endpoint starts with.
     pub base: String,
+    /// The pinned GraphQL query, filled by the loader on a `graphql`
+    /// endpoint; `None` on every other endpoint and on a graphql
+    /// endpoint a caller assembled without the loader.
+    pub graphql: Option<crate::component::graphql::GraphQlQuery>,
     pub attempt: Duration,
     pub maximum_response_bytes: usize,
 }
@@ -537,6 +577,7 @@ impl EndpointRuntime {
         Ok(Self {
             attempt: egress.attempt(),
             maximum_response_bytes: egress.maximum_response_bytes(),
+            graphql: None,
             egress,
             base,
         })
@@ -1107,10 +1148,18 @@ impl Run<'_, '_> {
         if to.uri.component == SendComponent::Direct {
             return self.direct(to).await;
         }
-        let parameters = to
-            .parameters
-            .as_ref()
-            .ok_or_else(|| RouteFailure::of(ErrorClass::EgressRefused))?;
+        // A graphql send names its variables in `body`, so its parameters
+        // are optional; every other send carries them.
+        let graphql = to.uri.component == SendComponent::GraphQl;
+        let parameters = if graphql {
+            to.parameters.as_ref()
+        } else {
+            Some(
+                to.parameters
+                    .as_ref()
+                    .ok_or_else(|| RouteFailure::of(ErrorClass::EgressRefused))?,
+            )
+        };
         let endpoint = self
             .context
             .endpoints
@@ -1120,20 +1169,59 @@ impl Run<'_, '_> {
         if self.sends > self.context.maximum_upstream_calls {
             return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
         }
-        let ok_range = parse_ok_range(parameters).unwrap_or(DEFAULT_OK_RANGE);
-        let link = if let Some(expression) = &parameters.http_uri {
-            self.pinned_link(&endpoint.egress, expression)?
-        } else {
-            let path = self.render_path(parameters)?;
-            let query = self.render_query(parameters)?;
-            let link = format!("{}{path}{query}", endpoint.base);
-            // A link the destination's URL bound cannot hold names nothing the
-            // source can serve: it is answered as no such record, before any
-            // credential is acquired and with no send.
-            if endpoint.egress.origin().pin(&link) == Err(LinkRefusal::TooLong) {
-                return Err(RouteFailure::of(ErrorClass::OutcomeNotFound));
+        let ok_range = match parameters.map(parse_ok_range) {
+            Some(Ok(range)) => range,
+            // A refused range never reaches the transport: the authoring
+            // checks hold it, and a graphql send declares none.
+            Some(Err(_)) | None => DEFAULT_OK_RANGE,
+        };
+        // A graphql send posts one document over the endpoint's base link:
+        // the pinned query text, the endpoint's operation name, and the
+        // variables the send's body member yields, or the endpoint's
+        // expression when the send carries none (section 8.8). Every
+        // other send travels in the query string.
+        let mut post_body: Option<Vec<u8>> = None;
+        let link = if graphql {
+            let query = endpoint
+                .graphql
+                .as_ref()
+                .ok_or_else(|| RouteFailure::of(ErrorClass::EgressRefused))?;
+            let variables = match parameters
+                .and_then(|parameters| parameters.body.as_ref())
+                .or(query.variables.as_ref())
+            {
+                Some(expression) => self.eval(expression)?,
+                None => Value::Null,
+            };
+            if !variables.is_null() && !variables.is_object() {
+                return Err(RouteFailure {
+                    class: ErrorClass::Validation,
+                    message: Some("graphql variables must yield an object".to_owned()),
+                    auth: None,
+                });
             }
-            link
+            let mut request = json!({ "query": query.text, "variables": variables });
+            if let Some(operation) = &query.operation {
+                request["operationName"] = json!(operation);
+            }
+            post_body = Some(serde_json::to_vec(&request).expect("a graphql request serializes"));
+            endpoint.base.clone()
+        } else {
+            let parameters = parameters.expect("an http send always carries parameters");
+            if let Some(expression) = &parameters.http_uri {
+                self.pinned_link(&endpoint.egress, expression)?
+            } else {
+                let path = self.render_path(parameters)?;
+                let query = self.render_query(parameters)?;
+                let link = format!("{}{path}{query}", endpoint.base);
+                // A link the destination's URL bound cannot hold names nothing the
+                // source can serve: it is answered as no such record, before any
+                // credential is acquired and with no send.
+                if endpoint.egress.origin().pin(&link) == Err(LinkRefusal::TooLong) {
+                    return Err(RouteFailure::of(ErrorClass::OutcomeNotFound));
+                }
+                link
+            }
         };
 
         let mut budget = TokenBudget::new_exchange();
@@ -1149,7 +1237,8 @@ impl Run<'_, '_> {
                 events: &mut auth_events,
             })
             .await;
-        let mut sending = json!({ "endpoint": to.uri.id, "method": "GET", "operation": parameters.operation.as_ref().map(|o| o.as_str()) });
+        let method = if post_body.is_some() { "POST" } else { "GET" };
+        let mut sending = json!({ "endpoint": to.uri.id, "method": method, "operation": parameters.and_then(|parameters| parameters.operation.as_ref()).map(|o| o.as_str()) });
         if !auth_events.is_empty() {
             sending["auth"] = auth_events_detail(&auth_events);
         }
@@ -1177,12 +1266,20 @@ impl Run<'_, '_> {
             .send(OutboundSend {
                 link: &link,
                 exchange_headers: &headers,
-                shape: SendShape::Get,
+                shape: match &post_body {
+                    Some(bytes) => SendShape::Post(SendBody {
+                        format: SendBodyFormat::Json,
+                        bytes,
+                    }),
+                    None => SendShape::Get,
+                },
                 authorization: credential.as_ref().map(|c| &c.header),
                 attempt: endpoint.attempt,
                 maximum_response_bytes: endpoint.maximum_response_bytes,
                 ok_status_range: ok_range,
-                throw_exception_on_failure: parameters.throw_exception_on_failure,
+                throw_exception_on_failure: parameters
+                    .map(|parameters| parameters.throw_exception_on_failure)
+                    .unwrap_or(false),
             })
             .await;
         let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1238,6 +1335,29 @@ impl Run<'_, '_> {
                 message.set_header("CamelHttpResponseCode", json!(reply.status));
                 for (name, value) in reply.headers.iter() {
                     message.set_header(name, Value::String(value.to_owned()));
+                }
+                // A GraphQL `errors` array fails the exchange (section
+                // 8.8), whatever the status said: the reply keeps its
+                // body and status on the exchange for a clause to read,
+                // and the failure carries the declared detail only,
+                // never the source's error text. Partial data fails with
+                // it.
+                if graphql {
+                    let failed = message
+                        .body
+                        .get("errors")
+                        .and_then(|errors| errors.as_array())
+                        .is_some_and(|errors| !errors.is_empty());
+                    if failed {
+                        return Err(RouteFailure {
+                            class: ErrorClass::UpstreamHttp,
+                            message: Some("the graphql reply carries an errors array".to_owned()),
+                            auth: None,
+                        });
+                    }
+                    // The `data` member is the body (section 8.8); a
+                    // reply without one leaves JSON null.
+                    message.body = message.body.get("data").cloned().unwrap_or(Value::Null);
                 }
                 Ok(Flow::Continue)
             }
@@ -1647,6 +1767,7 @@ testedVersions: []
             EndpointRuntime {
                 egress,
                 base,
+                graphql: None,
                 attempt: Duration::from_secs(10),
                 maximum_response_bytes: 1024,
             },
