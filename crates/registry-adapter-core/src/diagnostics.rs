@@ -65,6 +65,7 @@ pub enum CheckCode {
     RouteFromNotDirect,
     RouteHandledAndContinued,
     RouteInvalidPath,
+    RouteInvalidStatusCodeRange,
     RouteLoopCountAboveBound,
     RouteMaximumItemsRequired,
     RouteMaximumIterationsRequired,
@@ -135,6 +136,7 @@ impl CheckCode {
         Self::RouteFromNotDirect,
         Self::RouteHandledAndContinued,
         Self::RouteInvalidPath,
+        Self::RouteInvalidStatusCodeRange,
         Self::RouteLoopCountAboveBound,
         Self::RouteMaximumItemsRequired,
         Self::RouteMaximumIterationsRequired,
@@ -215,6 +217,7 @@ impl CheckCode {
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
             Self::RouteHandledAndContinued => "adapter.route.handled-and-continued",
             Self::RouteInvalidPath => "adapter.route.invalid-path",
+            Self::RouteInvalidStatusCodeRange => "adapter.route.invalid-status-code-range",
             Self::RouteLoopCountAboveBound => "adapter.route.loop-count-above-bound",
             Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
             Self::RouteMaximumIterationsRequired => "adapter.route.maximum-iterations-required",
@@ -282,6 +285,7 @@ impl CheckCode {
             | Self::RoutePathParameterMismatch
             | Self::RouteHandledAndContinued
             | Self::RouteInvalidPath
+            | Self::RouteInvalidStatusCodeRange
             | Self::RouteLoopCountAboveBound
             | Self::RouteMaximumItemsRequired
             | Self::RouteMaximumIterationsRequired

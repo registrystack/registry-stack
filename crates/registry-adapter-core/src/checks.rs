@@ -312,6 +312,38 @@ fn path_parameter_faults(
     faults
 }
 
+/// The fault of an authored `okStatusCodeRange`, if any: Camel's syntax,
+/// a comma-separated list of single codes and inclusive ranges, every
+/// code inside 100 to 599 and no range running backwards. The fault text
+/// never quotes the range.
+fn ok_status_code_range_fault(text: &str) -> Option<&'static str> {
+    for token in text.split(',') {
+        let (low, high) = match token.split_once('-') {
+            Some((low, high)) => (low, Some(high)),
+            None => (token, None),
+        };
+        let Ok(low) = low.trim().parse::<u16>() else {
+            return Some("a list token is neither a status code nor an inclusive range");
+        };
+        let Some(high) = high else {
+            if (100..=599).contains(&low) {
+                continue;
+            }
+            return Some("a list token sits outside 100 to 599");
+        };
+        let Ok(high) = high.trim().parse::<u16>() else {
+            return Some("a list token is neither a status code nor an inclusive range");
+        };
+        if !(100..=599).contains(&low) || !(100..=599).contains(&high) {
+            return Some("a list token sits outside 100 to 599");
+        }
+        if low > high {
+            return Some("a range's start sits above its end");
+        }
+    }
+    None
+}
+
 /// The origin-relative fault of an authored static path, if any: no
 /// scheme or authority, no `..` segment, and a leading slash. The fault
 /// text never quotes the path.
@@ -625,6 +657,18 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             ));
                         }
                     }
+                    if let Some(fault) = parameters
+                        .ok_status_code_range
+                        .as_deref()
+                        .and_then(ok_status_code_range_fault)
+                    {
+                        route_findings.push(finding(
+                            CheckCode::RouteInvalidStatusCodeRange,
+                            &format!("/routes/{id}/steps{path}/parameters/okStatusCodeRange"),
+                            fault,
+                            "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
+                        ));
+                    }
                 }
                 match target.component {
                     SendComponent::Http | SendComponent::GraphQl => {
@@ -670,6 +714,18 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 "Bind every {{name}} placeholder of the path in pathParameters, and keep no entry the path does not name.",
                             ));
                         }
+                    }
+                    if let Some(fault) = parameters
+                        .ok_status_code_range
+                        .as_deref()
+                        .and_then(ok_status_code_range_fault)
+                    {
+                        route_findings.push(finding(
+                            CheckCode::RouteInvalidStatusCodeRange,
+                            &format!("/routes/{id}/steps{path}/parameters/okStatusCodeRange"),
+                            fault,
+                            "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
+                        ));
                     }
                 }
                 match enrich.uri.component {
@@ -5593,6 +5649,52 @@ mod tests {
             assert_eq!(
                 findings[0].path,
                 "/routes/fetch-case/steps/0/parameters/path"
+            );
+        }
+    }
+
+    // ----- okStatusCodeRange (round 6 C2) -----
+
+    /// `okStatusCodeRange` is Camel's comma-separated list of single
+    /// codes and inclusive ranges, every code inside 100 to 599 and no
+    /// range running backwards.
+    #[test]
+    fn routes_refuse_an_ok_status_code_range_outside_camel_syntax() {
+        let send_with_range = |range: &str| {
+            let mut step = to_get("case-api");
+            if let Step::To(to) = &mut step {
+                if let Some(parameters) = &mut to.parameters {
+                    parameters.ok_status_code_range = Some(range.to_string());
+                }
+            }
+            step
+        };
+        let route_with = |step: Step| {
+            let route = RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![step],
+            };
+            let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+            check_routes(&pack, &project_builder(&pack))
+        };
+        for range in ["200", "200-299", "200-299,404", "100", "599", "100-599"] {
+            assert_clean(route_with(send_with_range(range)));
+        }
+        for range in [
+            "99", "600", "abc", "299-200", "200,,404", "", "200-", "-200",
+        ] {
+            let findings = route_with(send_with_range(range));
+            assert_eq!(findings.len(), 1, "at {range:?}");
+            assert_eq!(
+                findings[0].code,
+                CheckCode::RouteInvalidStatusCodeRange.code()
+            );
+            assert_eq!(
+                findings[0].path,
+                "/routes/fetch-case/steps/0/parameters/okStatusCodeRange"
             );
         }
     }
