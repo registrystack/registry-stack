@@ -162,6 +162,10 @@ pub struct ToParameters {
     /// what the source system documents, not a name the pack defines
     /// (CFG-ID-1).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::external_id_map_schema::<Expression>")
+    )]
     pub query: std::collections::BTreeMap<ExternalId, Expression>,
     /// The request body expression, marshalled to JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -749,9 +753,13 @@ pub struct OnExceptionStep {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RedeliveryOptions {
-    /// Redeliveries after the first attempt (default 0).
-    #[serde(default, skip_serializing_if = "is_default_zero_u32")]
-    pub maximum_redeliveries: u32,
+    /// Redeliveries after the first attempt (default 0; at most 100,
+    /// CFG-QTY-4).
+    #[serde(
+        default = "default_maximum_redeliveries",
+        skip_serializing_if = "is_default_zero_redeliveries"
+    )]
+    pub maximum_redeliveries: BoundedU32<0, 100>,
     /// Delay between redeliveries in seconds (default 1); zero cannot
     /// bound a delay.
     #[serde(
@@ -800,7 +808,7 @@ pub struct RedeliveryOptions {
 impl Default for RedeliveryOptions {
     fn default() -> Self {
         Self {
-            maximum_redeliveries: 0,
+            maximum_redeliveries: default_maximum_redeliveries(),
             retry_delay_seconds: default_retry_delay_seconds(),
             use_exponential_back_off: false,
             back_off_multiplier: default_back_off_multiplier(),
@@ -1015,8 +1023,13 @@ fn is_default_true(value: &bool) -> bool {
     *value
 }
 
-fn is_default_zero_u32(value: &u32) -> bool {
-    *value == 0
+/// A redelivery ceiling at its default stays off the wire.
+fn is_default_zero_redeliveries(value: &BoundedU32<0, 100>) -> bool {
+    value.get() == 0
+}
+
+fn default_maximum_redeliveries() -> BoundedU32<0, 100> {
+    BoundedU32::new(0).expect("default in range")
 }
 
 fn default_failure_rate_threshold() -> Percentage {
@@ -1682,7 +1695,7 @@ mod tests {
             .redelivery_policy
             .as_ref()
             .expect("policy");
-        assert_eq!(policy.maximum_redeliveries, 3);
+        assert_eq!(policy.maximum_redeliveries.get(), 3);
         assert_eq!(policy.retry_delay_seconds.get(), 1);
         assert_eq!(policy.back_off_multiplier, 2.0);
         assert_eq!(policy.maximum_retry_delay_seconds.get(), 60);
@@ -1741,7 +1754,8 @@ mod tests {
                 .redelivery_policy
                 .as_ref()
                 .expect("policy")
-                .maximum_redeliveries,
+                .maximum_redeliveries
+                .get(),
             2
         );
         let back = serde_json::to_string(&step).expect("serialize");
@@ -1958,6 +1972,10 @@ mod tests {
         assert!(policy("backOffMultiplier", "\"twice\"").is_err());
         assert!(policy("retryDelaySeconds", "1").is_ok());
         assert!(policy("backOffMultiplier", "2.0").is_ok());
+        assert!(policy("maximumRedeliveries", "-1").is_err());
+        assert!(policy("maximumRedeliveries", "101").is_err());
+        assert!(policy("maximumRedeliveries", "100").is_ok());
+        assert!(policy("maximumRedeliveries", "0").is_ok());
     }
 
     /// The window names its unit; the window counts calls

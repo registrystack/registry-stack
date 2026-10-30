@@ -10,7 +10,7 @@
 //! slots, encoding cursors, setting the status); the profile owns every
 //! name and shape a caller sees.
 
-use registry_platform_yaml::{BoundedU64, ExternalId, LocalId, UniqueIdList};
+use registry_platform_yaml::{BoundedU64, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
 
 /// The closed envelope slot vocabulary the engine fills
@@ -79,9 +79,10 @@ pub struct ProfileOperation {
     /// refuses here.
     pub path: String,
     /// The path parameters the template names: every `{name}` in `path`
-    /// must resolve here, and every entry must appear in the path.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub path_parameters: Vec<LocalId>,
+    /// must resolve here, every entry must appear in the path, and the
+    /// list is unique (CFG-ID-6).
+    #[serde(default, skip_serializing_if = "path_parameters_empty")]
+    pub path_parameters: UniqueList<LocalId>,
     /// Where a writable record sits in an incoming body. A write
     /// operation's request envelope must name the `record` slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +155,12 @@ pub struct AdapterProfile {
     pub parameterized_parts: registry_platform_yaml::UniqueList<ParameterizedPart>,
 }
 
+/// A path-parameter list is omitted from the wire when empty, the shape
+/// `Vec`'s `skip_serializing_if = "Vec::is_empty"` gave.
+fn path_parameters_empty(parameters: &UniqueList<LocalId>) -> bool {
+    parameters.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,7 +170,8 @@ mod tests {
             id: LocalId::new(id).expect("id"),
             method,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![LocalId::new("type").expect("id")],
+            path_parameters: UniqueList::new(vec![LocalId::new("type").expect("id")])
+                .expect("unique"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -199,6 +207,26 @@ mod tests {
         let declared = r#"{"id":"case-api","version":"1.0.0","operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#;
         let profile = serde_json::from_str::<AdapterProfile>(declared).expect("parse");
         assert_eq!(profile.version, "1.0.0");
+    }
+
+    /// A facade path-parameter list is unique (CFG-ID-6): a repeated
+    /// parameter name refuses at the reader.
+    #[test]
+    fn profile_refuses_duplicate_path_parameters() {
+        let operation = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type","type"],"responseEnvelope":"{\"cases\": {{records}}}"}"#;
+        let json = format!(
+            r#"{{"id":"case-api","version":"1.0.0","operations":[{operation}],"problemCodes":[],"problemEnvelope":"{{}}"}}"#
+        );
+        assert!(
+            serde_json::from_str::<AdapterProfile>(&json).is_err(),
+            "a repeated path parameter refuses"
+        );
+        let unique = r#"{"id":"records-get","method":"GET","path":"/v1/records/{type}","pathParameters":["type"],"responseEnvelope":"{\"cases\": {{records}}}"}"#;
+        let json = format!(
+            r#"{{"id":"case-api","version":"1.0.0","operations":[{unique}],"problemCodes":[],"problemEnvelope":"{{}}"}}"#
+        );
+        let profile = serde_json::from_str::<AdapterProfile>(&json).expect("parse");
+        assert_eq!(profile.operations[0].path_parameters.len(), 1);
     }
 
     /// The profile artifact round-trips with profile-declared operation

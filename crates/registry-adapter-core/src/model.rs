@@ -90,6 +90,21 @@ pub fn local_id_map_schema<V: schemars::JsonSchema>(
     })
 }
 
+/// The schema of a map whose keys are the upstream's wire names
+/// (`ExternalId`, CFG-ID-1): an object whose property names are
+/// `ExternalId` and whose values are `V`.
+#[cfg(feature = "schema")]
+pub fn external_id_map_schema<V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let names = generator.subschema_for::<registry_platform_yaml::ExternalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": names,
+        "additionalProperties": generator.subschema_for::<V>(),
+    })
+}
+
 /// The wire envelope an artifact speaks: the closed set of envelope
 /// executors compiled into the engine (`products/adapter/CONCEPT.md`
 /// section 8.8). Executors are named for mechanisms, never products.

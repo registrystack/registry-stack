@@ -1100,7 +1100,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 {
                     // A retryWhile only stops redelivery earlier; with no
                     // redeliveries behind it, it could never fire.
-                    if policy.retry_while.is_some() && policy.maximum_redeliveries == 0 {
+                    if policy.retry_while.is_some() && policy.maximum_redeliveries.get() == 0 {
                         route_findings.push(finding(
                             CheckCode::RouteRetryWhileWithoutRedeliveries,
                             &format!("{prefix}/steps{path}"),
@@ -1137,7 +1137,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             // redeliveries behind it, it could never fire.
             Step::OnException(clause)
                 if clause.redelivery_policy.as_ref().is_some_and(|policy| {
-                    policy.retry_while.is_some() && policy.maximum_redeliveries == 0
+                    policy.retry_while.is_some() && policy.maximum_redeliveries.get() == 0
                 }) =>
             {
                 route_findings.push(finding(
@@ -1428,14 +1428,14 @@ fn declares_redelivery(steps: &[Step]) -> bool {
                 .as_ref()
                 .and_then(|handler| handler.redelivery_policy.as_ref())
             {
-                if policy.maximum_redeliveries > 0 || policy.retry_while.is_some() {
+                if policy.maximum_redeliveries.get() > 0 || policy.retry_while.is_some() {
                     declared = true;
                 }
             }
         }
         Step::OnException(clause)
             if clause.redelivery_policy.as_ref().is_some_and(|policy| {
-                policy.maximum_redeliveries > 0 || policy.retry_while.is_some()
+                policy.maximum_redeliveries.get() > 0 || policy.retry_while.is_some()
             }) =>
         {
             declared = true;
@@ -2636,12 +2636,12 @@ fn declared_redeliveries(steps: &[Step]) -> u32 {
                 .as_ref()
                 .and_then(|handler| handler.redelivery_policy.as_ref())
             {
-                maximum = maximum.max(policy.maximum_redeliveries);
+                maximum = maximum.max(policy.maximum_redeliveries.get());
             }
         }
         Step::OnException(clause) => {
             if let Some(policy) = &clause.redelivery_policy {
-                maximum = maximum.max(policy.maximum_redeliveries);
+                maximum = maximum.max(policy.maximum_redeliveries.get());
             }
         }
         _ => {}
@@ -2874,7 +2874,7 @@ fn worst_body(
                     .redelivery_policy
                     .as_ref()
                     .map_or(redeliveries, |policy| {
-                        redeliveries.max(policy.maximum_redeliveries)
+                        redeliveries.max(policy.maximum_redeliveries.get())
                     });
                 let worst = worst_body(
                     &clause.steps,
@@ -3308,7 +3308,7 @@ mod tests {
             id: local(id_text),
             method,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -3586,7 +3586,7 @@ mod tests {
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{{mysterySlot}}"#.to_string()),
             pagination: None,
@@ -3603,13 +3603,14 @@ mod tests {
         // Declared parameters resolve: the BReg read surface is clean.
         let mut resolved = operation("records-get", HttpMethod::Get);
         resolved.path = "/v1/records/{type}/{record_id}".to_string();
-        resolved.path_parameters = vec![local("type"), local("record_id")];
+        resolved.path_parameters =
+            UniqueList::new(vec![local("type"), local("record_id")]).expect("unique");
         assert_clean(check_profile(&profile_builder(vec![resolved])));
 
         // An undeclared placeholder refuses at the path member.
         let mut undeclared = operation("records-get", HttpMethod::Get);
         undeclared.path = "/v1/records/{type}/{record_id}".to_string();
-        undeclared.path_parameters = vec![local("type")];
+        undeclared.path_parameters = UniqueList::new(vec![local("type")]).expect("unique");
         let findings = check_profile(&profile_builder(vec![undeclared]));
         assert_has(&findings, CheckCode::ProfileUnresolvedPathParameter);
         assert_eq!(
@@ -3623,7 +3624,7 @@ mod tests {
         // A declared parameter the path never uses refuses too.
         let mut unused = operation("records-get", HttpMethod::Get);
         unused.path = "/v1/records".to_string();
-        unused.path_parameters = vec![local("type")];
+        unused.path_parameters = UniqueList::new(vec![local("type")]).expect("unique");
         let findings = check_profile(&profile_builder(vec![unused]));
         assert_eq!(
             findings
@@ -3636,7 +3637,7 @@ mod tests {
         // Pack-layer substitution syntax is not facade path templating.
         let mut pack_layer = operation("records-get", HttpMethod::Get);
         pack_layer.path = "/v1/records/{{type}}".to_string();
-        pack_layer.path_parameters = vec![local("type")];
+        pack_layer.path_parameters = UniqueList::new(vec![local("type")]).expect("unique");
         assert_has(
             &check_profile(&profile_builder(vec![pack_layer])),
             CheckCode::ProfileUnresolvedPathParameter,
@@ -3657,7 +3658,7 @@ mod tests {
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"empty": true}"#.to_string()),
             pagination: None,
@@ -3701,7 +3702,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: Some(EnvelopeTemplate(r#"{{records}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -3714,7 +3715,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -3743,7 +3744,7 @@ mod tests {
             id: local("cases-find"),
             method: HttpMethod::Get,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: Some(PaginationParameters {
@@ -4231,7 +4232,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 2,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(2)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),
@@ -4383,7 +4385,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 2,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(2)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),
@@ -4512,7 +4515,7 @@ mod tests {
             let mut route_steps = vec![Step::ErrorHandler(ErrorHandlerStep {
                 default_error_handler: Some(DefaultErrorHandler {
                     redelivery_policy: Some(RedeliveryOptions {
-                        maximum_redeliveries: 2,
+                        maximum_redeliveries: BoundedU32::<0, 100>::new(2).expect("redeliveries"),
                         ..Default::default()
                     }),
                 }),
@@ -4613,7 +4616,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -4688,7 +4691,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 2,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(2)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),
@@ -4747,7 +4751,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -5134,7 +5138,7 @@ mod tests {
                     handled: Some(true),
                     continued: None,
                     redelivery_policy: Some(RedeliveryOptions {
-                        maximum_redeliveries: 2,
+                        maximum_redeliveries: BoundedU32::<0, 100>::new(2).expect("redeliveries"),
                         retry_while: Some(rhai("scripts/map.rhai")),
                         ..Default::default()
                     }),
@@ -5283,7 +5287,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 2,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(2)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),
@@ -5954,7 +5959,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 2,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(2)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),
@@ -5986,7 +5992,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 2,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(2)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),
@@ -6008,7 +6015,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 2,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(2)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),
@@ -6119,7 +6127,7 @@ mod tests {
                 handled: Some(true),
                 continued: None,
                 redelivery_policy: Some(RedeliveryOptions {
-                    maximum_redeliveries: 2,
+                    maximum_redeliveries: BoundedU32::<0, 100>::new(2).expect("redeliveries"),
                     ..Default::default()
                 }),
                 steps: vec![to_get("case-api"), to_get("case-api"), to_get("case-api")],
@@ -6158,7 +6166,7 @@ mod tests {
             id: local("cases-create"),
             method: HttpMethod::Post,
             path: "/v2/cases/{type}".to_string(),
-            path_parameters: vec![local("type")],
+            path_parameters: UniqueList::new(vec![local("type")]).expect("unique"),
             request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             pagination: None,
@@ -6462,7 +6470,7 @@ mod tests {
         ] {
             let mut bad = operation("cases-find", HttpMethod::Get);
             bad.path = path.to_string();
-            bad.path_parameters = Vec::new();
+            bad.path_parameters = UniqueList::new(Vec::new()).expect("empty");
             let profile = profile_builder(vec![bad]);
             let findings = check_profile(&profile);
             assert_eq!(findings.len(), 1, "at {path}");
@@ -6545,7 +6553,8 @@ mod tests {
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
                         redelivery_policy: Some(RedeliveryOptions {
-                            maximum_redeliveries: 3,
+                            maximum_redeliveries: BoundedU32::<0, 100>::new(3)
+                                .expect("redeliveries"),
                             ..Default::default()
                         }),
                     }),

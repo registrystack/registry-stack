@@ -500,7 +500,7 @@ mod tests {
             id: local("cases-find"),
             method: crate::model::HttpMethod::Get,
             path: "/v2/cases".to_string(),
-            path_parameters: Vec::new(),
+            path_parameters: UniqueList::new(Vec::new()).expect("empty"),
             request_envelope: None,
             response_envelope: EnvelopeTemplate(envelope.to_string()),
             pagination: None,
