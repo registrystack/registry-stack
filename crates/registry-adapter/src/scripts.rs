@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use crate::load::MAXIMUM_RESPONSE_BYTES;
 use registry_adapter_core::{AdapterPack, ErrorClass};
 use registry_platform_config::sha256_uri;
 use registry_platform_script::rhai::{
@@ -24,17 +25,29 @@ use rhai::{EvalAltResult, AST};
 use serde_json::Value;
 use thiserror::Error;
 
-/// The engine contract the entrypoints compile and run under: the limits
-/// every maintained runtime profile publishes.
+/// Rhai counts string bytes, array items and map entries over the whole
+/// nested value, not per container. A script holds the reply it was given,
+/// at most [`MAXIMUM_RESPONSE_BYTES`], and may keep a second copy beside it,
+/// so each ceiling is sized from that cap: any reply the runtime accepts can
+/// be processed at the declared page maximum.
+const STRING_BYTES: usize = 2 * MAXIMUM_RESPONSE_BYTES;
+/// An array item needs at least two bytes of JSON (a value and a comma).
+const ARRAY_ITEMS: usize = MAXIMUM_RESPONSE_BYTES / 2;
+/// A map entry needs at least four bytes of JSON (a key, a colon, a value).
+const MAP_ENTRIES: usize = MAXIMUM_RESPONSE_BYTES / 4;
+
+/// The engine contract the entrypoints compile and run under. The
+/// operations, depth and source ceilings are the limits every maintained
+/// runtime profile publishes; the data ceilings follow the reply cap.
 pub const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
     limits: RhaiLimits {
         operations: 100_000,
         call_levels: 32,
         expression_depth: 64,
         modules: 0,
-        string_bytes: 16_384,
-        array_items: 256,
-        map_entries: 256,
+        string_bytes: STRING_BYTES,
+        array_items: ARRAY_ITEMS,
+        map_entries: MAP_ENTRIES,
     },
     base: RhaiBaseEngine::Standard,
     disabled_symbols: &["import", "export", "eval", "print", "debug"],

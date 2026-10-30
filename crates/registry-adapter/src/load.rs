@@ -43,7 +43,7 @@ use serde_json::Value;
 /// One upstream attempt's wall-clock bound.
 const ATTEMPT: Duration = Duration::from_secs(10);
 /// The largest upstream reply body a send keeps.
-const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
+pub(crate) const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// Why one binding is not compiled for serving.
 enum BindingRefusal {

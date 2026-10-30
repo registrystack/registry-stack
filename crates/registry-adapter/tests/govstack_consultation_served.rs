@@ -590,3 +590,36 @@ async fn a_search_body_never_reaches_the_journal_in_the_clear() {
         "the criteria value is not in the journal"
     );
 }
+
+/// The capture's search reply restated as a full page of `rows` entities,
+/// each the captured entity under its own identifier.
+fn full_page_of(rows: usize) -> Response {
+    let document = fixture("search-page");
+    let mut body = document["entries"][0]["upstream"][0]["response"]["body"].clone();
+    let entity = body["trackedEntities"][0].clone();
+    let entities: Vec<_> = (0..rows)
+        .map(|row| {
+            let mut entity = entity.clone();
+            entity["trackedEntity"] = json!(format!("E{row:010}"));
+            entity
+        })
+        .collect();
+    body["trackedEntities"] = json!(entities);
+    body["pager"]["pageSize"] = json!(rows);
+    body["pager"]["pageCount"] = json!(2);
+    Response::json(200, &body.to_string())
+}
+
+#[tokio::test]
+async fn a_page_at_the_declared_maximum_is_shaped_within_the_script_budget() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![full_page_of(100)]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    let (status, _, body) = served.get(&format!("{LIST_PATH}?pageSize=100"), Some(&token));
+
+    assert_eq!(status, 200, "{body}");
+    contract::assert_page(&body);
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(100));
+}
