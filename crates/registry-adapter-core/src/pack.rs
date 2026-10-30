@@ -74,6 +74,23 @@ pub struct EndpointOperation {
     /// for example an upstream create with client-supplied UIDs.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_upstream: bool,
+    /// The GraphQL operation kind the pinned query file declares, on a
+    /// `graphql` endpoint; a send naming this operation is safe only for
+    /// a query (`products/adapter/CONCEPT.md` section 8.8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphql: Option<GraphQlOperationKind>,
+}
+
+/// The GraphQL operation kind an endpoint operation declares, as the
+/// pinned query file writes it (`products/adapter/CONCEPT.md` section
+/// 8.8).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum GraphQlOperationKind {
+    /// A read; the only kind that keeps a graphql send safe.
+    Query,
+    /// A write; non-safe under every write-safety rule.
+    Mutation,
 }
 
 /// One code map: an explicit conversion table, the port of Camel's type
@@ -180,6 +197,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: LocalId::new("cases-upsert").expect("op"),
                 idempotent_upstream: true,
+                graphql: None,
             }],
             tested_versions: vec!["2.7".to_string()],
             query_file: None,

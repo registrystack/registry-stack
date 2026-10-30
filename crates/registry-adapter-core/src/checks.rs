@@ -10,7 +10,7 @@ use crate::auth::{is_reserved_header_name, EndpointAuthentication, RuntimeCreden
 use crate::diagnostics::{finding, CheckCode};
 use crate::fixture::{AdapterFixture, Intercept};
 use crate::model::{Expression, SendComponent};
-use crate::pack::AdapterPack;
+use crate::pack::{AdapterPack, GraphQlOperationKind};
 use crate::profile::{
     AdapterProfile, EnvelopeTemplate, ProfileOperation, SLOT_PROBLEM_CODE, SLOT_RECORD,
     SLOT_RECORDS,
@@ -632,7 +632,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
     for (id, steps) in &ordered_bodies {
         let steps: &[Step] = steps;
         let mut route_findings = Vec::new();
-        let sends = collect_non_safe_sends(steps, &bodies);
+        let sends = collect_non_safe_sends(steps, &bodies, pack);
         walk_steps(steps, &mut |step, path| match step {
             Step::To(to) => {
                 let target = &to.uri;
@@ -763,7 +763,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 if !split.stop_on_exception {
                     walk_steps(&split.steps, &mut |inner, inner_path| {
                         if let Step::To(to) = inner {
-                            if is_non_safe_to(to) {
+                            if is_non_safe_to(to, pack) {
                                 route_findings.push(finding(
                                     CheckCode::RouteNonSafeSendInSplit,
                                     &format!("/routes/{id}/steps{path}/steps{inner_path}"),
@@ -1092,18 +1092,51 @@ fn check_route_headers(
 }
 
 /// Whether a `to` send is a non-safe upstream send.
-fn is_non_safe_to(to: &crate::route::ToStep) -> bool {
-    is_non_safe_upstream(to.uri.component, to.parameters.as_ref())
+fn is_non_safe_to(to: &crate::route::ToStep, pack: &AdapterPack) -> bool {
+    is_non_safe_upstream(
+        to.uri.component,
+        to.uri.id.as_str(),
+        to.parameters.as_ref(),
+        pack,
+    )
 }
 
 /// Whether a send or enrichment to the component is a non-safe upstream
-/// send: an `http:` or `graphql:` destination carrying an unsafe method.
+/// send: an `http:` destination carrying an unsafe method, or a `graphql:`
+/// destination whose operation the pack does not declare a query
+/// (`products/adapter/CONCEPT.md` section 8.8).
 fn is_non_safe_upstream(
     component: SendComponent,
+    endpoint: &str,
     parameters: Option<&crate::route::ToParameters>,
+    pack: &AdapterPack,
 ) -> bool {
-    matches!(component, SendComponent::Http | SendComponent::GraphQl)
-        && parameters.is_some_and(|parameters| !parameters.http_method.is_safe())
+    match component {
+        SendComponent::Direct => false,
+        SendComponent::Http => {
+            parameters.is_some_and(|parameters| !parameters.http_method.is_safe())
+        }
+        SendComponent::GraphQl => !is_declared_graphql_query(endpoint, parameters, pack),
+    }
+}
+
+/// Whether the send names an operation the pack declares on that endpoint
+/// as a GraphQL query, the only safe graphql send.
+fn is_declared_graphql_query(
+    endpoint: &str,
+    parameters: Option<&crate::route::ToParameters>,
+    pack: &AdapterPack,
+) -> bool {
+    let Some(operation) = parameters.and_then(|parameters| parameters.operation.as_ref()) else {
+        return false;
+    };
+    let Some(endpoint) = pack.endpoints.get(endpoint) else {
+        return false;
+    };
+    endpoint.operations.iter().any(|declared| {
+        declared.id.as_str() == operation.as_str()
+            && declared.graphql == Some(GraphQlOperationKind::Query)
+    })
 }
 
 /// Whether any step in the body declares redelivery beyond the first
@@ -1231,13 +1264,18 @@ struct NonSafeSend {
 
 /// Every non-safe upstream send a body can reach, with its enclosing
 /// `idempotentConsumer` context.
-fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Vec<NonSafeSend> {
+fn collect_non_safe_sends(
+    steps: &[Step],
+    bodies: &HashMap<&str, &[Step]>,
+    pack: &AdapterPack,
+) -> Vec<NonSafeSend> {
     #[allow(clippy::too_many_arguments)]
     fn walk<'a>(
         steps: &'a [Step],
         inside_idempotency: bool,
         repeated: bool,
         bodies: &HashMap<&'a str, &'a [Step]>,
+        pack: &AdapterPack,
         visiting: &mut Vec<&'a str>,
         depth: usize,
         sends: &mut Vec<NonSafeSend>,
@@ -1250,14 +1288,19 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
         }
         for step in steps {
             match step {
-                Step::To(to) if is_non_safe_to(to) => sends.push(NonSafeSend {
+                Step::To(to) if is_non_safe_to(to, pack) => sends.push(NonSafeSend {
                     endpoint: to.uri.id.clone(),
                     operation: to.parameters.as_ref().and_then(|p| p.operation.clone()),
                     inside_idempotency,
                     repeated,
                 }),
                 Step::Enrich(enrich)
-                    if is_non_safe_upstream(enrich.uri.component, enrich.parameters.as_ref()) =>
+                    if is_non_safe_upstream(
+                        enrich.uri.component,
+                        enrich.uri.id.as_str(),
+                        enrich.parameters.as_ref(),
+                        pack,
+                    ) =>
                 {
                     sends.push(NonSafeSend {
                         endpoint: enrich.uri.id.clone(),
@@ -1273,6 +1316,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     expand_direct(
                         &to.uri,
                         bodies,
+                        pack,
                         visiting,
                         depth,
                         inside_idempotency,
@@ -1284,6 +1328,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     expand_direct(
                         &enrich.uri,
                         bodies,
+                        pack,
                         visiting,
                         depth,
                         inside_idempotency,
@@ -1297,6 +1342,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                         true,
                         repeated,
                         bodies,
+                        pack,
                         visiting,
                         depth,
                         sends,
@@ -1309,6 +1355,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                             inside_idempotency,
                             repeated,
                             bodies,
+                            pack,
                             visiting,
                             depth,
                             sends,
@@ -1320,6 +1367,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                             inside_idempotency,
                             repeated,
                             bodies,
+                            pack,
                             visiting,
                             depth,
                             sends,
@@ -1331,6 +1379,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     inside_idempotency,
                     repeated,
                     bodies,
+                    pack,
                     visiting,
                     depth,
                     sends,
@@ -1340,6 +1389,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     inside_idempotency,
                     true,
                     bodies,
+                    pack,
                     visiting,
                     depth,
                     sends,
@@ -1349,6 +1399,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     inside_idempotency,
                     true,
                     bodies,
+                    pack,
                     visiting,
                     depth,
                     sends,
@@ -1359,6 +1410,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                         inside_idempotency,
                         repeated,
                         bodies,
+                        pack,
                         visiting,
                         depth,
                         sends,
@@ -1369,6 +1421,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                             inside_idempotency,
                             repeated,
                             bodies,
+                            pack,
                             visiting,
                             depth,
                             sends,
@@ -1380,6 +1433,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     inside_idempotency,
                     repeated,
                     bodies,
+                    pack,
                     visiting,
                     depth,
                     sends,
@@ -1390,6 +1444,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                         inside_idempotency,
                         repeated,
                         bodies,
+                        pack,
                         visiting,
                         depth,
                         sends,
@@ -1400,6 +1455,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                             inside_idempotency,
                             repeated,
                             bodies,
+                            pack,
                             visiting,
                             depth,
                             sends,
@@ -1411,6 +1467,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                             inside_idempotency,
                             repeated,
                             bodies,
+                            pack,
                             visiting,
                             depth,
                             sends,
@@ -1422,6 +1479,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     inside_idempotency,
                     repeated,
                     bodies,
+                    pack,
                     visiting,
                     depth,
                     sends,
@@ -1430,9 +1488,11 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn expand_direct<'a>(
         uri: &'a crate::model::SendUri,
         bodies: &HashMap<&'a str, &'a [Step]>,
+        pack: &AdapterPack,
         visiting: &mut Vec<&'a str>,
         depth: usize,
         inside_idempotency: bool,
@@ -1449,6 +1509,7 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                 inside_idempotency,
                 repeated,
                 bodies,
+                pack,
                 visiting,
                 depth + 1,
                 sends,
@@ -1457,7 +1518,16 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
         }
     }
     let mut sends = Vec::new();
-    walk(steps, false, false, bodies, &mut Vec::new(), 0, &mut sends);
+    walk(
+        steps,
+        false,
+        false,
+        bodies,
+        pack,
+        &mut Vec::new(),
+        0,
+        &mut sends,
+    );
     sends
 }
 
@@ -1959,7 +2029,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 ));
             }
             if !operation.method.is_safe() {
-                findings.extend(write_route_checks(&prefix, route_steps, &bodies));
+                findings.extend(write_route_checks(&prefix, route_steps, &bodies, pack));
             }
         }
     }
@@ -2008,9 +2078,10 @@ fn write_route_checks(
     prefix: &str,
     steps: &[Step],
     bodies: &HashMap<&str, &[Step]>,
+    pack: &AdapterPack,
 ) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    let sends = collect_non_safe_sends(steps, bodies);
+    let sends = collect_non_safe_sends(steps, bodies, pack);
     if sends.iter().any(|send| !send.inside_idempotency) {
         findings.push(finding(
             CheckCode::RouteWriteWithoutIdempotency,
@@ -2718,6 +2789,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: local("cases-create"),
                 idempotent_upstream: true,
+                graphql: None,
             }],
             tested_versions: vec!["2.7".to_string()],
             query_file: None,
@@ -2735,6 +2807,7 @@ mod tests {
             operations: vec![EndpointOperation {
                 id: local("cases-find"),
                 idempotent_upstream: true,
+                graphql: None,
             }],
             tested_versions: vec!["2.7".to_string()],
             query_file: None,
@@ -3850,6 +3923,7 @@ mod tests {
         unclaimed.operations = vec![EndpointOperation {
             id: local("cases-create"),
             idempotent_upstream: false,
+            graphql: None,
         }];
         let pack = pack_builder(vec![unclaimed], vec![writer.clone(), caller.clone()]);
         assert_has(
@@ -4440,6 +4514,7 @@ mod tests {
         unclaimed.operations = vec![EndpointOperation {
             id: local("cases-create"),
             idempotent_upstream: false,
+            graphql: None,
         }];
         let pack = pack_builder(vec![unclaimed], vec![route.clone()]);
         assert_has(
@@ -5651,6 +5726,85 @@ mod tests {
                 "/routes/fetch-case/steps/0/parameters/path"
             );
         }
+    }
+
+    // ----- graphql send safety (round 6 C19) -----
+
+    /// A graphql send is non-safe unless its endpoint declares the named
+    /// operation a query: a mutation, or an undeclared kind, sits under
+    /// every write-safety rule, so redelivery without the idempotent
+    /// claim refuses; declaring the operation a query keeps it safe.
+    #[test]
+    fn graphql_sends_are_safe_only_when_their_operation_is_a_query() {
+        let graphql_endpoint = |graphql: Option<GraphQlOperationKind>| Endpoint {
+            id: local("graph-api"),
+            component: ComponentKind::GraphQl,
+            authentication: EndpointAuthentication::None {},
+            response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            operations: vec![EndpointOperation {
+                id: local("person-find"),
+                idempotent_upstream: false,
+                graphql,
+            }],
+            tested_versions: vec!["1.0".to_string()],
+            query_file: Some("queries/person.graphql".to_string()),
+            operation_name: None,
+            variables: None,
+        };
+        let redelivered_send = |operation: &str| RouteDefinition {
+            id: local("fetch-person"),
+            from: RouteFrom {
+                uri: direct("fetch-person"),
+            },
+            steps: vec![
+                Step::ErrorHandler(ErrorHandlerStep {
+                    default_error_handler: Some(DefaultErrorHandler {
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 3,
+                            ..Default::default()
+                        }),
+                    }),
+                    no_error_handler: None,
+                }),
+                Step::To(ToStep {
+                    uri: SendUri::parse("graphql:graph-api").expect("uri"),
+                    parameters: Some(ToParameters {
+                        http_method: HttpMethod::Get,
+                        path: None,
+                        path_parameters: BTreeMap::new(),
+                        query: BTreeMap::new(),
+                        body: None,
+                        operation: Some(id(operation)),
+                        throw_exception_on_failure: true,
+                        ok_status_code_range: None,
+                        resume_bindings: Vec::new(),
+                    }),
+                }),
+            ],
+        };
+        // An undeclared kind refuses, as does a declared mutation.
+        let pack = pack_builder(
+            vec![graphql_endpoint(None)],
+            vec![redelivered_send("person-find")],
+        );
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRedeliveryOverNonSafeSend,
+        );
+        let pack = pack_builder(
+            vec![graphql_endpoint(Some(GraphQlOperationKind::Mutation))],
+            vec![redelivered_send("person-find")],
+        );
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRedeliveryOverNonSafeSend,
+        );
+        // A declared query keeps the send safe.
+        let pack = pack_builder(
+            vec![graphql_endpoint(Some(GraphQlOperationKind::Query))],
+            vec![redelivered_send("person-find")],
+        );
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
     // ----- okStatusCodeRange (round 6 C2) -----
