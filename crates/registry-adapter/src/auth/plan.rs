@@ -82,8 +82,8 @@ pub enum AuthPlanFault {
     /// The runtime credential's kind does not match the endpoint's
     /// declared kind, or a kind that sends a credential has none bound.
     KindMismatch,
-    /// A `none` endpoint reaches a non-loopback origin without an mTLS
-    /// client identity.
+    /// A `none` endpoint reaches an origin that is neither numeric
+    /// loopback nor `https` with an mTLS client identity.
     NoneNotAdmitted,
     /// `scheme` is not 1 to 32 HTTP token bytes.
     SchemeOutOfBounds,
@@ -114,7 +114,8 @@ impl fmt::Display for AuthPlanFault {
                 "the runtime credential's kind does not match the endpoint's declared kind",
             ),
             Self::NoneNotAdmitted => formatter.write_str(
-                "a none endpoint reaches a non-loopback origin without an mTLS client identity",
+                "a none endpoint reaches an origin that is neither numeric loopback nor https \
+                 with an mTLS client identity",
             ),
             Self::SchemeOutOfBounds => {
                 formatter.write_str("the authorization scheme must be 1 to 32 HTTP token bytes")
@@ -231,7 +232,14 @@ impl AuthPlan {
     ) -> Result<Self, AuthPlanFault> {
         match (endpoint, binding.credential.as_ref()) {
             (EndpointAuthentication::None {}, None | Some(RuntimeCredential::None {})) => {
-                if binding.mtls_identity.is_none() && !is_numeric_loopback(&binding.base_url) {
+                // A `none` endpoint leans on the transport alone: numeric
+                // loopback keeps plain HTTP off the network, and an mTLS
+                // identity is only a credential when the handshake itself
+                // is encrypted, so plain HTTP refuses even with one bound.
+                let loopback = is_numeric_loopback(&binding.base_url);
+                let identity_over_https = binding.mtls_identity.is_some()
+                    && binding.base_url.to_url().scheme() == "https";
+                if !loopback && !identity_over_https {
                     return Err(AuthPlanFault::NoneNotAdmitted);
                 }
                 Ok(Self {
@@ -746,8 +754,9 @@ mod tests {
     }
 
     /// `none` reaches numeric loopback, either family, with or without
-    /// mTLS; a loopback name, and any non-loopback origin without mTLS,
-    /// refuse.
+    /// mTLS, and any origin over `https` with an mTLS client identity;
+    /// a loopback name, a non-loopback origin without mTLS, and plain
+    /// HTTP with mTLS, whose handshake no identity can protect, refuse.
     #[test]
     fn none_is_admitted_only_on_numeric_loopback_or_mtls() {
         for base_url in ["http://127.0.0.1:9/", "http://[::1]:9/"] {
@@ -778,6 +787,16 @@ mod tests {
             key_ref: secret("CLIENT_KEY"),
         });
         assert!(AuthPlan::compile(&EndpointAuthentication::None {}, &with_mtls).is_ok());
+        let mut plain_with_mtls = binding(
+            "http://cases.example.invalid:9/",
+            Some(RuntimeCredential::None {}),
+        );
+        plain_with_mtls.mtls_identity = with_mtls.mtls_identity;
+        assert_eq!(
+            AuthPlan::compile(&EndpointAuthentication::None {}, &plain_with_mtls).unwrap_err(),
+            AuthPlanFault::NoneNotAdmitted,
+            "an mTLS identity over plain http is not a credential"
+        );
     }
 
     /// A scheme is 1 to 32 HTTP token bytes; anything else refuses.

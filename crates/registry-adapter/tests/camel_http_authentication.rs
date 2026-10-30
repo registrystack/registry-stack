@@ -181,7 +181,8 @@ async fn none_sends_nothing_and_stays_loopbound() {
     .unwrap_err();
     assert_eq!(
         fault.to_string(),
-        "a none endpoint reaches a non-loopback origin without an mTLS client identity"
+        "a none endpoint reaches an origin that is neither numeric loopback nor https with an \
+         mTLS client identity"
     );
 }
 
