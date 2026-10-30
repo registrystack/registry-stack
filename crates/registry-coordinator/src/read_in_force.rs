@@ -42,7 +42,7 @@ pub(crate) struct InForceRequest {
     entity: String,
     /// The fields that identify the subject, each matched for equality.
     subject: BTreeMap<String, SubjectValue>,
-    /// The calendar date, `YYYY-MM-DD`, read as midnight UTC.
+    /// The calendar date, `YYYY-MM-DD`, sent to BReg as is.
     date: String,
 }
 
