@@ -512,6 +512,11 @@ the lead reviewer before launching.
 - **E3, opencrvs pack**, owns `products/adapter/packs/opencrvs/**`, its
   example and fixtures: reads, then draft and declare writes. Its commits
   change no `.rs` file.
+- **E4, facade contract as OpenAPI** (D35), starts only after the real proof
+  of person-get, person-search, and person-create: a closed OpenAPI subset
+  with `x-` extensions for slots and problems replaces `AdapterProfile`, tried
+  first against a real ministry or GovStack specification. If that attempt
+  needs heavy extensions, E4 stops and the result goes to Jeremi.
 - Integration: both packs' example projects served by one binary; review
   report; final multi-expert review (security, Camel semantics, contracts,
   data minimization) recorded as `products/adapter/reviews/final.md`.

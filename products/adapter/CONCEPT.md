@@ -1126,6 +1126,9 @@ calls on the facade. The adapter inherits no authorization from any product
 and grants none to any source. The caller's token is never forwarded
 upstream: upstream calls run under the deployment's own credential for that
 source (section 10.2), and the journal records which caller asked (D19).
+The runtime config's required, non-empty `clients` list names the OAuth
+clients the deployment admits; a token from any other client is refused
+even when its scopes match an access profile (D33).
 
 ### 10.2 Upstream authentication
 
@@ -1209,8 +1212,11 @@ value-free PostgreSQL journal written before the response is sent. Event
 kinds follow Camel's: `exchangeCreated`, `exchangeSending` and
 `exchangeSent` (endpoint id, method, path template, status, duration,
 response size and digest), `exchangeRedelivery`, `exchangeFailureHandled`,
-`exchangeCompleted`, `exchangeFailed` (error class, problem code). Each row
-carries the exchange id, the concrete operation, the caller identity, the
+`exchangeCompleted`, `exchangeFailed` (error class, problem code). A
+verified caller's refused call is one `callRefused` row (the 403 of an
+access profile and the 404 of a wrong record type, D34), so probing is
+auditable; a 401 is logged and not journaled, because no verified caller
+exists to name. Each row carries the exchange id, the concrete operation, the caller identity, the
 route id, and `occurred_at` (`timestamptz NOT NULL`, from the runtime clock
 at the event, indexed for retention deletes). It records no bodies: no request payloads, no response payloads,
 no field values, no filled query strings. Retention follows the shared
@@ -1542,3 +1548,6 @@ one that decides a row.
 | D30 | Increment 1's gate requires `captured` DHIS2 fixtures for get, missing, and search page, taken from a real server | 2026-10-30, accepted by Jeremi (P6) |
 | D31 | Circuit breaker and throttle stay in Increment 1 as its last slice | 2026-10-30, accepted by Jeremi (P6) |
 | D32 | No declarative field map until a real source needs one; field mapping stays in routes and scripts | 2026-10-30, accepted by Jeremi (P5) |
+| D33 | The runtime config requires a non-empty `clients` list on the facade, as Messaging does; scopes alone leave the issuer's mint policy as the only client gate | 2026-10-30, accepted by Jeremi |
+| D34 | A verified caller's refused call is a `callRefused` journal row; a 401 is logged only | 2026-10-30, accepted by Jeremi |
+| D35 | After the real proof (P6), the facade contract is authored as a closed subset of OpenAPI with `x-` extensions for slots and problems, as Camel's contract-first REST DSL takes OpenAPI as input; until then `AdapterProfile` stands. Confidence is medium until a real ministry or GovStack specification has been tried | 2026-10-30, accepted by Jeremi |
