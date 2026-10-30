@@ -9,8 +9,8 @@
 # widest exception-clause body; every send counts one plus the widest
 # declared maximumRedeliveries; token requests none, the endpoint is
 # basic):
-#   - person-search: loop bound 10 pages x (1 fetch per page) x
-#     (1 + 1 redelivery) = 20; budget 24 leaves headroom.
+#   - person-search: 1 send x (1 + 1 redelivery) = 2; budget 4. The search
+#     answers one facade page from one upstream page (CONCEPT 8.11.2).
 #   - person-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
 #   - person-import: 1 send x (1 + 1 redelivery) = 2; budget 4.
 #
@@ -38,7 +38,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:7d00c1887a1f4c424ee3f0bfbc750ad5b04d83c619c92ecafd0e88d7eb1abba9
+  digest: sha256:27dca69987211151e0cf3b1472e78e616e27c561890627bb1d97151dbfc69e29
 recordTypes:
   - name: person
     fields:
@@ -57,7 +57,6 @@ templatedRoutes:
     routeId: person-search
     parameters:
       program: qyVpUaAYv2A
-      page_size: 50
   - routeTemplate: fetch-tracked-entity
     routeId: person-fetch
   - routeTemplate: import-tracked-entity

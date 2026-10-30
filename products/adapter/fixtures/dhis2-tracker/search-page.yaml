@@ -24,6 +24,8 @@ entries:
   - facadeRequest:
       operation: records-search
       path: /v1/records/person
+      headers:
+        pageSize: "50"
     upstream:
       - request:
           endpoint: tracker

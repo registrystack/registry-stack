@@ -55,11 +55,18 @@
 # returns with the core convert steps (CONCEPT 8.6); this pack declares
 # none until then.
 #
-# Paging assumption, to be proven by a captured fixture: the tracker
-# export reply's page block is read at $.page.totalPage; DHIS2 fills it
-# only when the request carries totalPages=true, which the fetch-page route
-# always sends (docs.dhis2.org tracker export parameters). The reviewed
-# page bound is the loop's maximumIterations: 10.
+# Paging: one facade page per upstream page, the default shape of CONCEPT
+# 8.11.2 and the cheapest bound. The caller's pageSize header (a facade
+# input; the bound profile bounds it) is the DHIS2 page size, and the
+# position is the page number: the route seeds dhis2Page from the
+# AdapterContinuation property the engine restores from the caller's
+# cursor (absent on the first page), fetches that one page, and sets
+# AdapterNextContinuation to the next page number while the reply's page
+# block holds one more. DHIS2 fills the page block only when the request
+# carries totalPages=true, which the search route always sends
+# (docs.dhis2.org tracker export parameters); the assumption awaits a
+# captured fixture. An absent or null AdapterNextContinuation at the end
+# of the route is the last page, so the engine seals no cursor.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: dhis2-tracker
@@ -84,10 +91,6 @@ routeTemplates:
         type: string
         required: true
         description: The DHIS2 program the search narrows to.
-      - name: page_size
-        type: integer
-        defaultValue: 50
-        description: The DHIS2 page size each loop iteration fetches (DHIS2 default 50).
     steps:
       - onException:
           exception:
@@ -100,34 +103,51 @@ routeTemplates:
           name: dhis2Program
           value:
             constant: "{{program}}"
-      - setProperty:
-          name: dhis2PageSize
-          value:
-            constant: "{{page_size}}"
+      # The page this run fetches: the engine restores the caller's
+      # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
+      # the first page; scripts/seed-page.rhai turns that into the DHIS2
+      # page number.
       - setProperty:
           name: dhis2Page
           value:
-            constant: 1
-      - loop:
-          rhai:
-            file: scripts/has-more-pages.rhai
-            entrypoint: has_more_pages
-          doWhile: true
-          maximumIterations: 10
-          steps:
-            - enrich:
-                uri: direct:fetch-page
-                aggregationStrategy:
-                  type: json-array-append
-                  from: pages
-                  into: records
-                  uniqueBy: trackedEntity
-            - setProperty:
-                name: dhis2Page
-                value:
-                  rhai:
-                    file: scripts/next-page.rhai
-                    entrypoint: next_page
+            rhai:
+              file: scripts/seed-page.rhai
+              entrypoint: seed_page
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program:
+                exchangeProperty: dhis2Program
+              page:
+                exchangeProperty: dhis2Page
+              # The caller's pageSize header (a facade input, CONCEPT
+              # 8.11.1; the bound profile bounds it) is the DHIS2 page
+              # size. totalPages makes DHIS2 fill the reply's page block,
+              # which scripts/next-continuation.rhai reads.
+              pageSize:
+                header: pageSize
+              totalPages:
+                constant: true
+              order:
+                constant: "createdAt:desc"
+      - setProperty:
+          name: dhis2TotalPages
+          value:
+            jsonpath: "$.page.totalPage"
+      # The continuation the engine seals into the caller's nextCursor:
+      # the next page number while the reply reported one more, absent on
+      # the last page (scripts/next-continuation.rhai). An absent or null
+      # AdapterNextContinuation at the end of the route is the last page.
+      - setProperty:
+          name: AdapterNextContinuation
+          value:
+            rhai:
+              file: scripts/next-continuation.rhai
+              entrypoint: next_continuation
       - setBody:
           rhai:
             file: scripts/shape-records.rhai
@@ -231,33 +251,11 @@ routeTemplates:
                         rhai:
                           file: scripts/accepted-record.rhai
                           entrypoint: accepted_record
-routes:
-  - id: fetch-page
-    from:
-      uri: direct:fetch-page
-    steps:
-      - to:
-          uri: http:tracker
-          parameters:
-            httpMethod: GET
-            path: /api/tracker/trackedEntities
-            operation: tracker-export
-            query:
-              program:
-                exchangeProperty: dhis2Program
-              page:
-                exchangeProperty: dhis2Page
-              pageSize:
-                exchangeProperty: dhis2PageSize
-              totalPages:
-                constant: true
-              order:
-                constant: "createdAt:desc"
 scripts:
-  - path: scripts/has-more-pages.rhai
-    digest: sha256:1fe96b2aeb6c87828fdab1248b5e3ba1ec40d8db29089e14f3e9d1d97bff8788
-  - path: scripts/next-page.rhai
-    digest: sha256:34bb99208bbc6457180d6a28bda8715db34344596795b84ee7347172aeda5b48
+  - path: scripts/seed-page.rhai
+    digest: sha256:3d1f10f861171fcff9f21c0e36aa7941d6bc327b5c510cf9127a7e8131c835ed
+  - path: scripts/next-continuation.rhai
+    digest: sha256:36a545f5d82b1b2032a1dd059c0dac9c063ea141b1bf49254e2134fe3bdd8b7d
   - path: scripts/soft-deleted.rhai
     digest: sha256:c5cb2eaf086c6b2a6156f17e5d50f6171ec95ecbd869e9b79d715b96fe0047a6
   - path: scripts/is-not-found.rhai
@@ -265,7 +263,7 @@ scripts:
   - path: scripts/to-record.rhai
     digest: sha256:2971163431db3510392b631edcf245baded3aa78ad2fcf187e9863b5c482cb30
   - path: scripts/shape-records.rhai
-    digest: sha256:79b10588f18ab284ea7cae53c4312e45a1dc2e62bd5faa7330f0f97de89a4c62
+    digest: sha256:1bc47ede1499fc273611d5a0cd1ffe8c49a9951d66ae08e3ea84144400ba6d35
   - path: scripts/to-bundle.rhai
     digest: sha256:d289269e36bf753e723a849f7cb192c070d925d4e991311d12dfb59f0a8e97bc
   - path: scripts/import-failed.rhai
@@ -283,9 +281,7 @@ capabilities:
     - rhai
   eips:
     - choice
-    - enrich
     - idempotentConsumer
-    - loop
     - onException
     - setBody
     - setProperty
