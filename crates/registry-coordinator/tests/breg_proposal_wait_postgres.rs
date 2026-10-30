@@ -260,6 +260,24 @@ impl Harness {
             .map(|row| row.get(0))
     }
 
+    /// How the wait's next scheduled read relates to its last read, read from
+    /// the stored times so the answer does not depend on how long the test took:
+    /// (seconds from the last read to the read floor, seconds from the last read
+    /// to the next scheduled read, whether that read is no later than the floor
+    /// or now).
+    async fn schedule_against_last_read(&self, run: Uuid) -> (f64, f64, bool) {
+        let row = self
+            .client()
+            .await
+            .query_one(
+                &format!("SELECT EXTRACT(EPOCH FROM w.not_before-w.read_at)::float8, EXTRACT(EPOCH FROM j.next_attempt_at-w.read_at)::float8, j.next_attempt_at<=GREATEST(w.not_before,clock_timestamp()) FROM {0}.completion_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.run_id=$1 AND w.step='await' AND j.state='pending'", self.namespace),
+                &[&run],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1), row.get(2))
+    }
+
     async fn sql(&self, sql: &str, run: Uuid) {
         self.client()
             .await
@@ -551,10 +569,18 @@ async fn check_now_on_a_followed_proposal_keeps_the_read_floor_and_counts_agains
     assert_eq!(answer.step, "await");
     assert_eq!(answer.observations, 1);
     assert!(answer.observation_limit > answer.observations);
-    let due = h.due_in(run).await.expect("the wait is still scheduled");
+    let (floor, next, no_later_than_floor_or_now) = h.schedule_against_last_read(run).await;
     assert!(
-        (25.0..=30.5).contains(&due),
-        "Check now brings the read forward to the read floor after the last read: {due}"
+        (29.9..=30.1).contains(&floor),
+        "the read floor is thirty seconds after the last read: {floor}"
+    );
+    assert!(
+        next >= floor - 0.001,
+        "Check now never schedules a read inside the floor: {next} against {floor}"
+    );
+    assert!(
+        no_later_than_floor_or_now,
+        "Check now brings the read forward to the floor, or to now once the floor has passed: {next}"
     );
     assert!(answer.next_observation_at.is_some());
     h.drain(&worker).await;
