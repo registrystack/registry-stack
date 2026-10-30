@@ -6554,6 +6554,16 @@ mod tests {
         let ws = workspace(&broken, &pack, &project);
         let findings = check_workspace(&ws);
         assert_has(&findings, CheckCode::ProfileProblemEnvelopeUncompilable);
+
+        // The envelope is a JSON template, never another syntax: an XML
+        // problem envelope refuses under the same code.
+        let mut xml = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
+        xml.problem_envelope = EnvelopeTemplate(r#"<code>{{problemCode}}</code>"#.to_string());
+        let ws = workspace(&xml, &pack, &project);
+        assert_has(
+            &check_workspace(&ws),
+            CheckCode::ProfileProblemEnvelopeUncompilable,
+        );
         assert_eq!(
             codes(&findings)
                 .iter()
