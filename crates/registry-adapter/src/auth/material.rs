@@ -153,20 +153,6 @@ pub(crate) fn basic_payload(
     Ok(ProtectedText::from_owned(encoded))
 }
 
-/// Encode one full `Authorization: Basic <credentials>` value from the
-/// resolved pair: the token request the auth layer dials itself carries
-/// the fixed Basic prefix here.
-pub(crate) fn basic_value(
-    username: &[u8],
-    password: &[u8],
-) -> Result<ProtectedText, MaterialFault> {
-    let payload = basic_payload(username, password)?;
-    let mut value = Zeroizing::new(Vec::with_capacity(6 + payload.len()));
-    value.extend_from_slice(b"Basic ");
-    value.extend_from_slice(payload.as_bytes());
-    Ok(ProtectedText::from_owned(value))
-}
-
 /// The standard-base64 length of `bytes` with padding, so the encoding
 /// lands in one pre-sized buffer with no reallocation.
 fn encoded_len(bytes: &[u8]) -> usize {
@@ -276,9 +262,9 @@ mod tests {
     }
 
     /// The Basic payload is the standard encoding of `user:password`,
-    /// with and without base64 padding, the split is refused where it
-    /// would be ambiguous, and the full value carries the fixed prefix
-    /// only where the token request itself is built.
+    /// with and without base64 padding, and the split is refused where
+    /// it would be ambiguous. The scheme prefix is the destination
+    /// authorization's, never joined here.
     #[test]
     fn basic_values_encode_and_refuse() {
         let payload = basic_payload(b"user", b"pass").expect("a usable pair");
@@ -286,8 +272,6 @@ mod tests {
         // "user:password" is 13 bytes, so the encoding pads with `==`.
         let payload = basic_payload(b"user", b"password").expect("a usable pair");
         assert_eq!(payload.as_bytes(), b"dXNlcjpwYXNzd29yZA==");
-        let value = basic_value(b"user", b"pass").expect("a usable pair");
-        assert_eq!(value.as_bytes(), b"Basic dXNlcjpwYXNz");
         assert_eq!(
             basic_payload(b"", b"pass").unwrap_err(),
             MaterialFault::Empty,

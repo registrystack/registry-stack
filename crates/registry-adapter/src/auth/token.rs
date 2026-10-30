@@ -28,7 +28,7 @@
 //! layer maps onto its own fault vocabulary.
 
 use crate::auth::{
-    material::{basic_value, form_body, AuthHeader, ProtectedText},
+    material::{basic_payload, form_body, ProtectedText},
     AuthError, AuthEvent,
 };
 use registry_adapter_core::CredentialPlacement;
@@ -103,8 +103,16 @@ pub enum TokenFault {
     AdmissionShed,
     /// The platform's destination policy refused the token send before
     /// it went out: the engine refusing to egress is never a transport
-    /// outcome and is never catchable.
-    EgressRefused,
+    /// outcome and is never catchable. The detail is the refusal's
+    /// static journal name, from the same closed mapping the data path
+    /// names its refusals with; the rendering stays fixed text.
+    EgressRefused {
+        /// The static journal name of the boundary refusal.
+        detail: &'static str,
+    },
+    /// The token answer's head was unusable before any body was read,
+    /// the token projection of the data path's malformed-head class.
+    HeadUnusable,
     /// The token endpoint declined to issue a credential.
     Refused {
         /// The registered RFC 6749 or RFC 8707 code name, or the fixed
@@ -146,9 +154,12 @@ impl fmt::Display for TokenFault {
             Self::AdmissionShed => formatter.write_str(
                 "the token acquisition was shed at the admission bound before any request was sent",
             ),
-            Self::EgressRefused => formatter.write_str(
+            Self::EgressRefused { .. } => formatter.write_str(
                 "the token request was refused by the destination policy before it was sent",
             ),
+            Self::HeadUnusable => {
+                formatter.write_str("the token answer's head was not usable, so no body was read")
+            }
             Self::Refused { code } => {
                 write!(
                     formatter,
@@ -173,18 +184,35 @@ impl fmt::Display for TokenFault {
     }
 }
 
-/// One rendered token request: the fixed destination, the optional
-/// Basic client authentication, and the form body, which carries every
-/// other credential. The transport adds the fixed `accept` and
-/// `content-type` headers and never logs the body. No `PartialEq`: the
-/// body is a secret buffer, and equality of secrets is never asked.
+/// How one rendered token request authenticates its client, typed so no
+/// transport ever parses a scheme off credential text: the platform's
+/// destination authorization owns the `Basic ` prefix and appends it at
+/// render time, so the payload here travels without one.
+#[derive(Debug, Clone)]
+pub enum TokenClientAuthentication {
+    /// No client authentication header; the body carries every
+    /// credential, as the form-body and signed-assertion placements do.
+    None,
+    /// The Basic payload, the base64 of `client_id:client_secret`,
+    /// without the scheme prefix.
+    BasicHeader {
+        /// The base64 payload in a zeroizing buffer.
+        payload: ProtectedText,
+    },
+}
+
+/// One rendered token request: the fixed destination, the typed client
+/// authentication, and the form body, which carries every other
+/// credential. The transport adds the fixed `accept` and `content-type`
+/// headers and never logs the body. No `PartialEq`: the body is a
+/// secret buffer, and equality of secrets is never asked.
 #[derive(Debug)]
 pub struct TokenRequest {
     /// The fixed token endpoint, absolute.
     pub url: String,
-    /// The Basic client authentication, for the `basic-header`
+    /// The typed client authentication, for the `basic-header`
     /// placement.
-    pub authorization: Option<AuthHeader>,
+    pub authentication: TokenClientAuthentication,
     /// The `application/x-www-form-urlencoded` body.
     pub body: ProtectedText,
 }
@@ -213,8 +241,16 @@ pub enum TransportFailure {
     /// The platform's destination policy refused the send before it
     /// went out: the engine refusing to egress is not a transport
     /// outcome, and a `TokenSend` implementation must never fold it
-    /// into a transport kind.
-    PolicyRefused,
+    /// into a transport kind. The name is the refusal's static journal
+    /// name, from the closed mapping the data path reports its
+    /// boundary refusals with, so both paths journal the same word.
+    PolicyRefused {
+        /// The static journal name of the boundary refusal.
+        journal_name: &'static str,
+    },
+    /// The answer's head was unusable before any body was read, the
+    /// token projection of the data path's malformed-head class.
+    HeadUnusable,
 }
 
 impl fmt::Display for TransportFailure {
@@ -223,10 +259,40 @@ impl fmt::Display for TransportFailure {
             Self::Transport(kind) => {
                 write!(formatter, "the token request did not complete: {kind}")
             }
-            Self::PolicyRefused => formatter.write_str(
+            Self::PolicyRefused { .. } => formatter.write_str(
                 "the token request was refused by the destination policy before it was sent",
             ),
+            Self::HeadUnusable => {
+                formatter.write_str("the token answer's head was not usable, so no body was read")
+            }
         }
+    }
+}
+
+/// The one projection of a token send failure onto this layer's faults,
+/// total over [`TransportFailure`]: the engine and the journal read the
+/// same fault from one failure, and the class mapping in
+/// [`crate::auth`] keeps the token path agreeing with the data path on
+/// every platform outcome.
+pub(crate) fn token_transport_fault(failure: TransportFailure) -> TokenFault {
+    match failure {
+        TransportFailure::Transport(
+            kind @ (TransportKind::Connect
+            | TransportKind::Timeout
+            | TransportKind::Exchange
+            | TransportKind::ResponseTooLarge),
+        ) => TokenFault::Transport { kind },
+        // A kind this build predates may be a policy refusal in disguise:
+        // the engine got no answer it understands, so the fault is the
+        // egress refusal, the same fault a destination policy raises,
+        // never a transport failure the class denies.
+        TransportFailure::Transport(_) => TokenFault::EgressRefused {
+            detail: "unclassified-transport-kind",
+        },
+        TransportFailure::PolicyRefused { journal_name } => TokenFault::EgressRefused {
+            detail: journal_name,
+        },
+        TransportFailure::HeadUnusable => TokenFault::HeadUnusable,
     }
 }
 
@@ -455,6 +521,20 @@ impl TokenEndpointPlan {
         &self.url
     }
 
+    /// Whether the plan authenticates its client by the Basic
+    /// authorization header, which decides the token template the
+    /// egress layer freezes: the Basic placement rides the reviewed
+    /// authorization slot, every other placement rides the body alone.
+    pub(crate) fn authenticates_by_basic_header(&self) -> bool {
+        matches!(
+            &self.client_authentication,
+            ClientAuthentication::ClientSecret {
+                placement: CredentialPlacement::BasicHeader,
+                ..
+            }
+        )
+    }
+
     /// The endpoint's token cache this plan owns; every clone of the
     /// plan shares it.
     #[must_use]
@@ -485,7 +565,7 @@ impl TokenEndpointPlan {
         signer: &dyn ClientAssertionSigner,
     ) -> Result<TokenRequest, AuthError> {
         let client_id = resolve_text(resolver, &self.client_id_ref)?;
-        let mut authorization = None;
+        let mut authentication = TokenClientAuthentication::None;
         let mut secret = None;
         let mut assertion = None;
         if let ClientAuthentication::ClientSecret {
@@ -496,9 +576,9 @@ impl TokenEndpointPlan {
             match placement {
                 CredentialPlacement::BasicHeader => {
                     let resolved = resolve_protected(resolver, secret_ref)?;
-                    let value = basic_value(client_id.as_bytes(), resolved.as_bytes())
+                    let payload = basic_payload(client_id.as_bytes(), resolved.as_bytes())
                         .map_err(|_| AuthError::Credential)?;
-                    authorization = Some(AuthHeader::new("authorization", value));
+                    authentication = TokenClientAuthentication::BasicHeader { payload };
                 }
                 CredentialPlacement::FormBody => {
                     secret = Some(resolve_protected(resolver, secret_ref)?)
@@ -541,13 +621,7 @@ impl TokenEndpointPlan {
         // RFC 6749 section 2.3.1 allows one client authentication
         // method per request: the Basic placement names the client in
         // the header alone, so the body omits client_id there.
-        let authenticates_by_basic_header = matches!(
-            &self.client_authentication,
-            ClientAuthentication::ClientSecret {
-                placement: CredentialPlacement::BasicHeader,
-                ..
-            }
-        );
+        let authenticates_by_basic_header = self.authenticates_by_basic_header();
         if !authenticates_by_basic_header {
             pairs.push(("client_id", &client_id));
         }
@@ -564,7 +638,7 @@ impl TokenEndpointPlan {
         }
         Ok(TokenRequest {
             url: self.url.clone(),
-            authorization,
+            authentication,
             body,
         })
     }
@@ -785,7 +859,7 @@ pub(crate) async fn acquire_token(
             // No request was sent, so the journal records the shed and
             // never a transport failure; the class stays the catchable
             // timeout a route may treat as a transient outage.
-            events.push(fault_event(&TokenFault::AdmissionShed));
+            events.push(fault_event(TokenFault::AdmissionShed));
             return Err(AuthError::Token(TokenFault::AdmissionShed));
         }
     };
@@ -817,23 +891,11 @@ pub(crate) async fn acquire_token(
     let wire = match timeout(cache.send_ceiling, send.send(&request)).await {
         Ok(Ok(wire)) => wire,
         Ok(Err(failure)) => {
-            let fault = match failure {
-                TransportFailure::Transport(
-                    kind @ (TransportKind::Connect
-                    | TransportKind::Timeout
-                    | TransportKind::Exchange
-                    | TransportKind::ResponseTooLarge),
-                ) => TokenFault::Transport { kind },
-                // A kind this build predates may be a policy refusal in
-                // disguise: the engine got no answer it understands, so
-                // the fault is the egress refusal, the same fault a
-                // destination policy raises, never a transport failure
-                // the class denies.
-                TransportFailure::PolicyRefused | TransportFailure::Transport(_) => {
-                    TokenFault::EgressRefused
-                }
-            };
-            events.push(fault_event(&fault));
+            // One total projection decides the fault, and the journal
+            // records the same fault's event, so the two never
+            // disagree about what happened to the send.
+            let fault = token_transport_fault(failure);
+            events.push(fault_event(fault));
             return Err(AuthError::Token(fault));
         }
         // The send outlived the ceiling: the request went out and no
@@ -842,7 +904,7 @@ pub(crate) async fn acquire_token(
             let fault = TokenFault::Transport {
                 kind: TransportKind::Timeout,
             };
-            events.push(fault_event(&fault));
+            events.push(fault_event(fault));
             return Err(AuthError::Token(fault));
         }
     };
@@ -870,7 +932,7 @@ pub(crate) async fn acquire_token(
             // total mapping; the transport, egress, and shed faults
             // never reach this arm, because they are decided before the
             // answer is read.
-            events.push(fault_event(&fault));
+            events.push(fault_event(fault));
             Err(AuthError::Token(fault))
         }
     }
@@ -879,14 +941,17 @@ pub(crate) async fn acquire_token(
 /// The one event a fault records: every journal line about a token
 /// fault comes from this total mapping, so the journal and the fault
 /// can never disagree about what happened.
-fn fault_event(fault: &TokenFault) -> AuthEvent {
+fn fault_event(fault: TokenFault) -> AuthEvent {
     match fault {
         TokenFault::Transport { kind } => AuthEvent::TokenTransportFailed { kind: kind.kind() },
-        TokenFault::EgressRefused => AuthEvent::TokenEgressRefused,
+        TokenFault::HeadUnusable => AuthEvent::TokenTransportFailed {
+            kind: "malformed-head",
+        },
+        TokenFault::EgressRefused { detail } => AuthEvent::TokenEgressRefused { detail },
         TokenFault::AdmissionShed => AuthEvent::TokenAdmissionShed,
         TokenFault::Refused { code } => AuthEvent::TokenRefused { code },
         TokenFault::Redirect => AuthEvent::TokenRedirected,
-        TokenFault::Unavailable { status } => AuthEvent::TokenUnavailable { status: *status },
+        TokenFault::Unavailable { status } => AuthEvent::TokenUnavailable { status },
         TokenFault::ScopeNarrowed | TokenFault::NoLifetime | TokenFault::Invalid => {
             AuthEvent::TokenProtocolRefused
         }
@@ -1695,7 +1760,11 @@ mod tests {
                 _request: &'a TokenRequest,
             ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>>
             {
-                Box::pin(async { Err(TransportFailure::PolicyRefused) })
+                Box::pin(async {
+                    Err(TransportFailure::PolicyRefused {
+                        journal_name: "policy.denied-destination",
+                    })
+                })
             }
         }
         std::env::set_var("ADAPTER_TEST_EGRESS_ID", "cid-egress");
@@ -1717,7 +1786,12 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(error, AuthError::Token(TokenFault::EgressRefused));
+        assert_eq!(
+            error,
+            AuthError::Token(TokenFault::EgressRefused {
+                detail: "policy.denied-destination"
+            })
+        );
         assert_eq!(
             error.class(),
             "egress.refused",
@@ -1725,7 +1799,12 @@ mod tests {
         );
         assert_eq!(
             events,
-            [AuthEvent::TokenRequested, AuthEvent::TokenEgressRefused],
+            [
+                AuthEvent::TokenRequested,
+                AuthEvent::TokenEgressRefused {
+                    detail: "policy.denied-destination"
+                }
+            ],
             "no token was issued and no transport kind was recorded"
         );
     }
@@ -2365,7 +2444,7 @@ mod tests {
             .expect("a rendered request");
         assert_eq!(request.url, url);
         assert!(
-            request.authorization.is_none(),
+            matches!(request.authentication, TokenClientAuthentication::None),
             "the assertion kind has no Basic header"
         );
         assert_eq!(
@@ -2460,7 +2539,10 @@ mod tests {
         .render(&resolver(), &FixedSigner)
         .expect("a rendered request");
         assert!(
-            basic.authorization.is_some(),
+            matches!(
+                basic.authentication,
+                TokenClientAuthentication::BasicHeader { .. }
+            ),
             "the Basic header carries the pair"
         );
         let body = str::from_utf8(basic.body.as_bytes()).expect("form bytes");
@@ -2480,7 +2562,7 @@ mod tests {
         .render(&resolver(), &FixedSigner)
         .expect("a rendered request");
         assert!(
-            form.authorization.is_none(),
+            matches!(form.authentication, TokenClientAuthentication::None),
             "the form placement has no header"
         );
         let body = str::from_utf8(form.body.as_bytes()).expect("form bytes");

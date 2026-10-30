@@ -45,10 +45,13 @@ pub use plan::{
     AuthKind, AuthPlan, AuthPlanFault, AuthorizeContext, AuthorizedCredential, StaticCredential,
 };
 pub use tls::{EndpointMaterials, EndpointTls, TlsFault};
+#[cfg(test)]
+pub(crate) use token::token_transport_fault;
 pub use token::{
-    ClientAssertion, ClientAssertionSigner, TokenBudget, TokenCache, TokenEndpointPlan, TokenFault,
-    TokenRequest, TokenSend, TokenWire, TransportFailure, UpstreamStatusAction,
-    TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
+    ClientAssertion, ClientAssertionSigner, TokenBudget, TokenCache, TokenClientAuthentication,
+    TokenEndpointPlan, TokenFault, TokenRequest, TokenSend, TokenWire, TransportFailure,
+    UpstreamStatusAction, MAXIMUM_TOKEN_REQUEST_BYTES, TOKEN_REQUEST_ACCEPT,
+    TOKEN_REQUEST_CONTENT_TYPE,
 };
 
 use registry_platform_httputil::TransportKind;
@@ -118,7 +121,11 @@ impl AuthError {
                 // The destination policy refused the send before it
                 // went out; the engine refusing to egress is
                 // uncatchable, like every other pre-send refusal.
-                TokenFault::EgressRefused => "egress.refused",
+                TokenFault::EgressRefused { .. } => "egress.refused",
+                // The answer's head was unusable before any body was
+                // read; the token projection of the data path's
+                // malformed-head outcome.
+                TokenFault::HeadUnusable => "upstream.malformed",
                 // The shed is local, not an upstream outcome, but its
                 // class is the catchable timeout: the caller waited and
                 // got nothing, so a route may treat it as a transient
@@ -187,8 +194,12 @@ pub enum AuthEvent {
         kind: &'static str,
     },
     /// The token request was refused by the destination policy before
-    /// it was sent; the engine refusing to egress is uncatchable.
-    TokenEgressRefused,
+    /// it was sent; the engine refusing to egress is uncatchable. The
+    /// static journal name is carried, never a value.
+    TokenEgressRefused {
+        /// The static journal name of the boundary refusal.
+        detail: &'static str,
+    },
     /// The acquisition gave up at the endpoint's admission bound before
     /// any request was sent: the deliberate shed of a wedged endpoint,
     /// catchable as a timeout, never a recorded transport failure.
@@ -251,9 +262,17 @@ mod tests {
             "upstream.too-large"
         );
         assert_eq!(
-            AuthError::Token(TokenFault::EgressRefused).class(),
+            AuthError::Token(TokenFault::EgressRefused {
+                detail: "policy.denied-destination"
+            })
+            .class(),
             "egress.refused",
             "a policy refusal is the engine refusing to egress"
+        );
+        assert_eq!(
+            AuthError::Token(TokenFault::HeadUnusable).class(),
+            "upstream.malformed",
+            "an unusable head is the malformed-head class on both paths"
         );
         assert_eq!(
             AuthError::Token(TokenFault::AdmissionShed).class(),
@@ -303,7 +322,10 @@ mod tests {
             rendered,
             "the token endpoint must be an absolute http or https URL without userinfo, query, or fragment"
         );
-        let rendered = AuthError::Token(TokenFault::EgressRefused).to_string();
+        let rendered = AuthError::Token(TokenFault::EgressRefused {
+            detail: "policy.denied-destination",
+        })
+        .to_string();
         assert_eq!(
             rendered,
             "the token request was refused by the destination policy before it was sent"

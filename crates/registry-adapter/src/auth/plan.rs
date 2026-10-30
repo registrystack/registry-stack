@@ -552,19 +552,21 @@ fn authorize_static(
 }
 
 /// Whether the fixed token endpoint is usable, Evidence's rules: an
-/// absolute `http`/`https` URL without query, fragment, or userinfo, with
-/// plain HTTP confined to a canonically spelled numeric loopback. The
-/// `Url` type already refuses userinfo and non-HTTP schemes; these
-/// re-checks are the runtime side of the authoring checks.
+/// absolute `http`/`https` URL without query, fragment, or userinfo,
+/// admitted by the same destination profile discipline the egress
+/// layer serves it under, so the plan-level refusal and the send-time
+/// policy can never disagree about one endpoint. The `Url` type already
+/// refuses userinfo and non-HTTP schemes; these re-checks are the
+/// runtime side of the authoring checks.
 fn validate_token_endpoint(endpoint: &registry_platform_yaml::Url) -> Result<(), AuthPlanFault> {
     let parsed = endpoint.to_url();
     let usable = parsed.query().is_none()
         && parsed.fragment().is_none()
         && parsed.username().is_empty()
         && parsed.password().is_none()
-        && (parsed.scheme() == "https"
-            || (is_numeric_loopback(endpoint)
-                && has_canonical_loopback_authority(endpoint.as_str())));
+        && crate::egress::profile_admits_token_endpoints(crate::egress::destination_profile(
+            &parsed,
+        ));
     if usable {
         Ok(())
     } else {
@@ -996,16 +998,23 @@ mod tests {
     }
 
     /// The token endpoint must be absolute `http`/`https` without
-    /// userinfo, query, or fragment; plain HTTP is confined to numeric
-    /// loopback spelled the way the address prints. Userinfo cannot be
-    /// constructed through the `Url` type (it refuses one at parse), so
-    /// the compile-time re-check of userinfo stays a defense no test
-    /// can reach.
+    /// userinfo, query, or fragment, and the origin must take a
+    /// destination profile the token transport serves: the same profile
+    /// predicate the egress layer freezes the token destination under,
+    /// so a load refusal and a frozen policy can never disagree. Plain
+    /// HTTP is confined to loopback, by name or by address literal;
+    /// every other plain-HTTP origin and every profile the token path
+    /// never serves refuses. Userinfo cannot be constructed through the
+    /// `Url` type (it refuses one at parse), so the compile-time
+    /// re-check of userinfo stays a defense no test can reach.
     #[test]
     fn token_endpoints_are_usable_or_refused() {
         for endpoint in [
             "https://token.example.invalid/token",
             "http://127.0.0.1:9/token",
+            "http://localhost:9/token",
+            "http://[::1]:9/token",
+            "http://[0:0:0:0:0:0:0:1]:9/token",
         ] {
             let binding = binding(
                 "https://cases.example.invalid",
@@ -1020,9 +1029,8 @@ mod tests {
         for endpoint in [
             "https://token.example.invalid/token?extra=1",
             "https://token.example.invalid/token#fragment",
-            "http://localhost:9/token",
             "http://10.0.0.5:9/token",
-            "http://[0:0:0:0:0:0:0:1]:9/token",
+            "http://upstream.example.invalid:9/token",
         ] {
             let binding = binding(
                 "https://cases.example.invalid",

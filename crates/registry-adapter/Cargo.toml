@@ -17,8 +17,18 @@ path = "src/main.rs"
 
 [features]
 # Gates the suites that need a disposable database; test-postgres.sh runs
-# them and a plain cargo test run never silently skips them.
-postgres-test = []
+# them and a plain cargo test run never silently skips them. Also enables
+# the platform's pinned-loopback HTTPS test profile and the TLS suites
+# that drive it (tests/egress_tls_wiring.rs), the way registry-breg gates
+# its equivalent loopback TLS lane.
+postgres-test = ["registry-platform-httputil/test-support"]
+
+[dev-dependencies]
+# The loopback TLS doubles of tests/egress_tls_wiring.rs: a locally
+# terminated certificate and acceptor, test-only, never a runtime
+# dependency.
+rcgen.workspace = true
+tokio-rustls.workspace = true
 
 [dependencies]
 # The continuation cursor codec (CONCEPT.md section 8.11.2): XChaCha20-Poly1305

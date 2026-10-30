@@ -18,7 +18,7 @@
 //! client will.
 
 use registry_adapter::auth::{
-    AuthHeader, ProtectedText, TokenRequest, TokenSend, TokenWire, TransportFailure,
+    ProtectedText, TokenClientAuthentication, TokenRequest, TokenSend, TokenWire, TransportFailure,
     TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
 };
 use registry_platform_httputil::TransportKind;
@@ -307,12 +307,12 @@ impl TokenSend for LoopbackSend {
         request: &'a TokenRequest,
     ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>> {
         let url = request.url.clone();
-        let authorization = request.authorization.clone();
+        let authentication = request.authentication.clone();
         let body = request.body.clone();
         let timeout = self.timeout;
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                send_blocking(&url, authorization.as_ref(), &body, timeout)
+                send_blocking(&url, &authentication, &body, timeout)
             })
             .await
             .map_err(|_| TransportFailure::Transport(TransportKind::Exchange))?
@@ -323,7 +323,7 @@ impl TokenSend for LoopbackSend {
 /// The blocking half of one loopback send.
 fn send_blocking(
     url: &str,
-    authorization: Option<&AuthHeader>,
+    authentication: &TokenClientAuthentication,
     body: &ProtectedText,
     timeout: Duration,
 ) -> Result<TokenWire, TransportFailure> {
@@ -334,18 +334,29 @@ fn send_blocking(
     stream
         .set_read_timeout(Some(timeout))
         .map_err(|_| TransportFailure::Transport(TransportKind::Exchange))?;
+    // The transport applies the fixed scheme: the typed authentication
+    // carries the payload alone, and the wire carries the whole header
+    // value, the way the engine's outbound client renders it.
+    let authorization = match authentication {
+        TokenClientAuthentication::None => None,
+        TokenClientAuthentication::BasicHeader { payload } => {
+            let mut value = Zeroizing::new(Vec::with_capacity(6 + payload.as_bytes().len()));
+            value.extend_from_slice(b"Basic ");
+            value.extend_from_slice(payload.as_bytes());
+            Some(value)
+        }
+    };
     let head = format!(
             "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: {TOKEN_REQUEST_ACCEPT}\r\nContent-Type: {TOKEN_REQUEST_CONTENT_TYPE}\r\nContent-Length: {}\r\nConnection: close\r\n",
             body.len()
         );
     stream
         .write_all(head.as_bytes())
-        .and_then(|_| match authorization {
+        .and_then(|_| match &authorization {
             None => Ok(()),
-            Some(authorization) => stream
-                .write_all(authorization.name().as_bytes())
-                .and_then(|_| stream.write_all(b": "))
-                .and_then(|_| stream.write_all(authorization.value().as_bytes()))
+            Some(value) => stream
+                .write_all(b"authorization: ")
+                .and_then(|_| stream.write_all(value.as_slice()))
                 .and_then(|_| stream.write_all(b"\r\n")),
         })
         .and_then(|_| stream.write_all(b"\r\n"))

@@ -3,11 +3,12 @@
 //! The deployment's outbound egress state, exercised over a real
 //! loopback HTTP double: one compiled auth plan per endpoint binding is
 //! held from startup, a data send carries the exchange's selected
-//! headers with the credential injected after them, and the whole
-//! deployment refuses to start when an endpoint's kind needs the token
-//! send this build does not wire yet, so the gap is visible at startup
-//! and never at a first request (`products/adapter/CONCEPT.md`
-//! sections 8.11 and 10.2).
+//! headers with the credential injected after them, an OAuth2 kind
+//! acquires its bearer credential through the endpoint's own frozen
+//! token transport over the same loopback, and every transport failure
+//! inside an admitted exchange lands on its reviewed catchable class
+//! while every boundary refusal stays the uncatchable `egress.refused`
+//! (`products/adapter/CONCEPT.md` sections 8.11 and 10.2).
 
 #[path = "support/upstream/mod.rs"]
 #[allow(dead_code)]
@@ -194,18 +195,6 @@ fn static_api_key_binding(endpoint: &str, base_url: &str, value_env: &str) -> En
     }
 }
 
-fn static_api_key_binding(endpoint: &str, base_url: &str, value_env: &str) -> EndpointBinding {
-    EndpointBinding {
-        endpoint: ExternalId::new(endpoint).expect("endpoint id"),
-        base_url: Url::new(base_url).expect("base url"),
-        credential: Some(RuntimeCredential::StaticApiKey {
-            value_ref: secret(value_env),
-        }),
-        tls_trust_profile: None,
-        mtls_identity: None,
-    }
-}
-
 /// The attempt timeout and response bound every send in this file
 /// carries, until the pack's endpoint keys land.
 const ATTEMPT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -297,18 +286,30 @@ async fn startup_compiles_one_plan_per_endpoint_and_sends_nothing() {
     );
 }
 
-/// An endpoint whose kind acquires a token refuses the whole
-/// deployment's load while the token send is not wired: the gap is
-/// visible at startup with a named refusal, never at a first request
-/// and never silently.
-#[test]
-fn an_oauth2_kind_refuses_the_load_until_the_token_send_is_wired() {
+/// An OAuth2 client-credentials kind acquires its bearer credential
+/// through the endpoint's own frozen token transport, over a real
+/// loopback exchange: the token request is the reviewed shape (the
+/// Basic pair in the authorization slot, the grant alone in the body,
+/// the client secret never repeated as a body member), the issued
+/// credential is cached and carried on the data send, and no
+/// credential value enters the journal events.
+#[tokio::test]
+async fn an_oauth2_kind_acquires_and_carries_a_token_over_the_frozen_transport() {
     std::env::set_var("EGR_C4B_WIRE_ID", "wire-client");
     std::env::set_var("EGR_C4B_WIRE_SECRET", "wire-secret");
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![
+        // The token endpoint's answer, then the data send's reply.
+        Response::json(
+            200,
+            r#"{"access_token":"egress-token-1","token_type":"Bearer","expires_in":3600}"#,
+        ),
+        Response::json(200, r#"{"ok":true}"#),
+    ]);
     let config = runtime_config(vec![oauth_binding(
         "cases-api",
-        "http://127.0.0.1:1/",
-        "https://token.example.invalid/token",
+        &upstream.url("/"),
+        &upstream.url("/token"),
         "EGR_C4B_WIRE_ID",
         "EGR_C4B_WIRE_SECRET",
     )]);
@@ -317,18 +318,155 @@ fn an_oauth2_kind_refuses_the_load_until_the_token_send_is_wired() {
         EndpointAuthentication::Oauth2ClientCredentials {},
         &[],
     )];
-    let error = match Egress::load(&endpoints, &config, &resolver()) {
-        Err(fault) => fault,
-        Ok(_) => panic!("an unwired token send refuses the load"),
-    };
-    assert!(
-        matches!(error, EgressFault::TokenSendUnwired),
-        "the load refuses with the named unwired fault: {error:?}"
+    let egress = Egress::load(&endpoints, &config, &resolver()).expect("the deployment loads");
+    let bound = egress.endpoint("cases-api").expect("the endpoint");
+
+    let mut budget = TokenBudget::new_exchange();
+    let mut events = Vec::new();
+    let credential = authorize(&egress, "cases-api", &mut budget, &mut events)
+        .await
+        .expect("the token acquisition completes through the frozen transport");
+    let credential = credential.expect("an oauth2 kind produces a header").header;
+
+    // The token request is the reviewed client-credentials shape. The
+    // double records values; the assertions here read them only to
+    // prove placement, never into a journal or diagnostic.
+    let token_request = &upstream.requests()[0];
+    assert_eq!(token_request.method, "POST");
+    assert_eq!(token_request.target, "/token");
+    assert_eq!(
+        token_request.header("authorization"),
+        // base64("wire-client:wire-secret"), the pair in the Basic slot.
+        Some("Basic d2lyZS1jbGllbnQ6d2lyZS1zZWNyZXQ="),
+        "the Basic pair rides the token request's authorization slot"
     );
-    let rendered = error.to_string();
+    let token_body = String::from_utf8(token_request.body.clone()).expect("form body");
     assert!(
-        !rendered.contains("wire-secret") && !rendered.contains("wire-client"),
-        "the refusal never carries credential material: {rendered}"
+        token_body.contains("grant_type=client_credentials"),
+        "the body carries the grant: {token_body}"
+    );
+    assert!(
+        !token_body.contains("client_id")
+            && !token_body.contains("client_secret")
+            && !token_body.contains("wire-secret"),
+        "the Basic placement never repeats the pair in the body: {token_body}"
+    );
+
+    // The data send carries the issued credential, not the client
+    // pair.
+    let reply = bound
+        .send(registry_adapter::egress::OutboundSend {
+            link: &upstream.url("/records"),
+            exchange_headers: &[],
+            shape: SendShape::Get,
+            authorization: Some(&credential),
+            attempt: ATTEMPT,
+            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+            ok_status_range: (200, 299),
+            throw_exception_on_failure: true,
+        })
+        .await
+        .expect("the admitted send completes");
+    assert_eq!(reply.status, 200);
+    let data_request = &upstream.requests()[1];
+    assert_eq!(
+        data_request.header("authorization"),
+        Some("Bearer egress-token-1"),
+        "the issued credential rides the data send"
+    );
+
+    // The journal events name the outcomes, never a value.
+    let rendered = format!("{events:?}");
+    assert!(
+        !rendered.contains("egress-token-1")
+            && !rendered.contains("wire-secret")
+            && !rendered.contains("wire-client"),
+        "the journal events carry no credential value: {rendered}"
+    );
+}
+
+/// The signed-assertion kind acquires its credential through the same
+/// frozen transport with no authorization header at all: the client id
+/// and the signed assertion ride the reviewed form body, and the
+/// assertion the signer produced is the assertion the wire carries.
+#[tokio::test]
+async fn a_private_key_jwt_kind_posts_its_assertion_without_an_authorization_header() {
+    std::env::set_var("EGR_C4B_PKJWT_ID", "pkjwt-client");
+    std::env::set_var("EGR_C4B_PKJWT_KEY", "pkjwt-key-material");
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![Response::json(
+        200,
+        r#"{"access_token":"pkjwt-token-1","token_type":"Bearer","expires_in":3600}"#,
+    )]);
+    let config = runtime_config(vec![{
+        let mut binding = oauth_binding(
+            "pkjwt-api",
+            &upstream.url("/"),
+            &upstream.url("/token"),
+            "EGR_C4B_PKJWT_ID",
+            "EGR_C4B_PKJWT_KEY",
+        );
+        binding.credential = Some(RuntimeCredential::Oauth2PrivateKeyJwt {
+            token_endpoint: registry_platform_yaml::Url::new(upstream.url("/token"))
+                .expect("token endpoint"),
+            client_id_ref: secret("EGR_C4B_PKJWT_ID"),
+            client_assertion_key_ref: secret("EGR_C4B_PKJWT_KEY"),
+            client_assertion_audience: None,
+            scope: None,
+            audience: None,
+            resource: None,
+            maximum_cache_seconds: BoundedU64::<0, 86_400>::new(3600).expect("cache ceiling"),
+            assumed_lifetime_seconds: None,
+        });
+        binding
+    }]);
+    let endpoints = vec![pack_endpoint(
+        "pkjwt-api",
+        EndpointAuthentication::Oauth2PrivateKeyJwt {},
+        &[],
+    )];
+    let egress = Egress::load(&endpoints, &config, &resolver()).expect("the deployment loads");
+
+    let mut budget = TokenBudget::new_exchange();
+    let mut events = Vec::new();
+    let credential = authorize(&egress, "pkjwt-api", &mut budget, &mut events)
+        .await
+        .expect("the assertion acquisition completes through the frozen transport");
+    let credential = credential
+        .expect("a signed-assertion kind produces a header")
+        .header;
+
+    let token_request = &upstream.requests()[0];
+    assert_eq!(token_request.method, "POST");
+    assert_eq!(token_request.target, "/token");
+    assert!(
+        token_request.header("authorization").is_none(),
+        "the assertion kind authenticates in the body alone"
+    );
+    let token_body = String::from_utf8(token_request.body.clone()).expect("form body");
+    assert!(
+        token_body.contains("grant_type=client_credentials")
+            && token_body.contains("client_id=pkjwt-client")
+            && token_body.contains(
+                "client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer"
+            )
+            && token_body
+                .contains("client_assertion=assertion.pkjwt-client.http%3A%2F%2F127.0.0.1"),
+        "the body carries the client id and the signed assertion: {token_body}"
+    );
+    assert!(
+        !token_body.contains("client_secret"),
+        "no secret rides the assertion kind's body: {token_body}"
+    );
+    let rendered = format!("{events:?}");
+    assert!(
+        !rendered.contains("pkjwt-token-1") && !rendered.contains("pkjwt-key-material"),
+        "the journal events carry no credential value: {rendered}"
+    );
+    assert_eq!(
+        credential.value().as_bytes(),
+        b"pkjwt-token-1",
+        "the issued credential is the raw access token; the data template applies Bearer"
     );
 }
 
@@ -566,68 +704,71 @@ async fn an_exchange_entry_under_the_api_key_name_never_shadows_the_key() {
     );
 }
 
-/// A redirect is never followed: the 3xx answer raises
-/// `upstream.redirect` and the double sees exactly one request.
+/// A redirect is never followed, whatever its spelling: every 3xx
+/// answer raises `upstream.redirect` carrying its status, and the
+/// double sees exactly one request.
 #[tokio::test]
 async fn a_redirect_is_raised_and_never_followed() {
-    std::env::set_var("EGR_C4B_REDIR_USER", "redirect-user");
-    std::env::set_var("EGR_C4B_REDIR_PASSWORD", "redirect-pass");
-    let upstream = UpstreamDouble::start();
-    upstream.respond_with(vec![upstream::Response {
-        status: 302,
-        media_type: "text/plain",
-        body: String::new(),
-    }]);
-    let config = runtime_config(vec![basic_binding(
-        "redirect-api",
-        &upstream.url("/"),
-        "EGR_C4B_REDIR_USER",
-        "EGR_C4B_REDIR_PASSWORD",
-    )]);
-    let endpoints = vec![pack_endpoint(
-        "redirect-api",
-        EndpointAuthentication::Basic {},
-        &[],
-    )];
-    let egress = Egress::load(&endpoints, &config, &resolver()).expect("the deployment loads");
-    let bound = egress.endpoint("redirect-api").expect("the endpoint");
+    for status in [301, 302, 303, 307, 308] {
+        std::env::set_var("EGR_C4B_REDIR_USER", "redirect-user");
+        std::env::set_var("EGR_C4B_REDIR_PASSWORD", "redirect-pass");
+        let upstream = UpstreamDouble::start();
+        upstream.respond_with(vec![upstream::Response {
+            status,
+            media_type: "text/plain",
+            body: String::new(),
+        }]);
+        let config = runtime_config(vec![basic_binding(
+            "redirect-api",
+            &upstream.url("/"),
+            "EGR_C4B_REDIR_USER",
+            "EGR_C4B_REDIR_PASSWORD",
+        )]);
+        let endpoints = vec![pack_endpoint(
+            "redirect-api",
+            EndpointAuthentication::Basic {},
+            &[],
+        )];
+        let egress = Egress::load(&endpoints, &config, &resolver()).expect("the deployment loads");
+        let bound = egress.endpoint("redirect-api").expect("the endpoint");
 
-    let mut budget = TokenBudget::new_exchange();
-    let mut events = Vec::new();
-    let credential = authorize(&egress, "redirect-api", &mut budget, &mut events)
-        .await
-        .expect("a basic kind resolves its pair");
-    let credential = credential.expect("a basic kind produces a header").header;
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let credential = authorize(&egress, "redirect-api", &mut budget, &mut events)
+            .await
+            .expect("a basic kind resolves its pair");
+        let credential = credential.expect("a basic kind produces a header").header;
 
-    let error = bound
-        .send(registry_adapter::egress::OutboundSend {
-            link: &upstream.url("/records"),
-            exchange_headers: &[],
-            shape: SendShape::Get,
-            authorization: Some(&credential),
-            attempt: ATTEMPT,
-            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
-            throw_exception_on_failure: true,
-        })
-        .await
-        .expect_err("a 3xx is a redirect failure");
+        let error = bound
+            .send(registry_adapter::egress::OutboundSend {
+                link: &upstream.url("/records"),
+                exchange_headers: &[],
+                shape: SendShape::Get,
+                authorization: Some(&credential),
+                attempt: ATTEMPT,
+                maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+                ok_status_range: (200, 299),
+                throw_exception_on_failure: true,
+            })
+            .await
+            .expect_err("a 3xx is a redirect failure");
 
-    let failure = match &error {
-        EgressError::Upstream(failure) => failure,
-        EgressError::Refused(refusal) => panic!("a 3xx is not a refusal: {refusal:?}"),
-    };
-    assert_eq!(
-        failure.class,
-        ErrorClass::UpstreamRedirect,
-        "the 3xx raises the redirect class"
-    );
-    assert_eq!(failure.status, Some(302));
-    assert_eq!(
-        upstream.request_count(),
-        1,
-        "the redirect's Location is never requested"
-    );
+        let failure = match &error {
+            EgressError::Upstream(failure) => failure,
+            EgressError::Refused(refusal) => panic!("a 3xx is not a refusal: {refusal:?}"),
+        };
+        assert_eq!(
+            failure.class,
+            ErrorClass::UpstreamRedirect,
+            "the 3xx raises the redirect class"
+        );
+        assert_eq!(failure.status, Some(status));
+        assert_eq!(
+            upstream.request_count(),
+            1,
+            "the {status}'s Location is never requested"
+        );
+    }
 }
 
 /// A link outside the pinned origin is refused before any send, and a
@@ -1212,6 +1353,232 @@ fn a_plain_http_origin_inside_the_declared_cidrs_loads() {
     assert!(egress.endpoint("private-api").is_some());
 }
 
+// Transport failures inside an admitted exchange.
+
+/// An upstream that never accepts a connection: the failure is the
+/// catchable `upstream.connection`, the certainty is not-sent, and the
+/// failure carries neither a status nor a body.
+#[tokio::test]
+async fn an_unreachable_upstream_raises_connection_not_sent() {
+    // A port with no listener by the time the send runs; the binding
+    // pins its origin, so the send is admitted and dies at the connect.
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe");
+    let dead_port = probe.local_addr().expect("probe port").port();
+    drop(probe);
+    let (egress, credential) = {
+        std::env::set_var("EGR_C4B_DEAD_USER", "dead-user");
+        std::env::set_var("EGR_C4B_DEAD_PASSWORD", "dead-pass");
+        let config = runtime_config(vec![basic_binding(
+            "dead-api",
+            &format!("http://127.0.0.1:{dead_port}/"),
+            "EGR_C4B_DEAD_USER",
+            "EGR_C4B_DEAD_PASSWORD",
+        )]);
+        let endpoints = vec![pack_endpoint(
+            "dead-api",
+            EndpointAuthentication::Basic {},
+            &[],
+        )];
+        let egress = Egress::load(&endpoints, &config, &resolver()).expect("the deployment loads");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let credential = authorize(&egress, "dead-api", &mut budget, &mut events)
+            .await
+            .expect("a basic kind resolves its pair")
+            .expect("a basic kind produces a header")
+            .header;
+        (egress, credential)
+    };
+    let bound = egress.endpoint("dead-api").expect("the endpoint");
+    let error = bound
+        .send(registry_adapter::egress::OutboundSend {
+            link: &format!("http://127.0.0.1:{dead_port}/records"),
+            exchange_headers: &[],
+            shape: SendShape::Get,
+            authorization: Some(&credential),
+            attempt: ATTEMPT,
+            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+            ok_status_range: (200, 299),
+            throw_exception_on_failure: true,
+        })
+        .await
+        .expect_err("a dead upstream fails the send");
+    let failure = upstream_failure(&error);
+    assert_eq!(
+        failure.class,
+        ErrorClass::UpstreamConnection,
+        "a connection that never establishes is the connection class"
+    );
+    assert_eq!(
+        failure.certainty_journal_name(),
+        "not-sent",
+        "the destination never saw the request"
+    );
+    assert_eq!(failure.status, None);
+    assert!(failure.body.is_none());
+}
+
+/// An upstream that accepts and then holds its silence past the
+/// declared attempt: the failure is the catchable `upstream.timeout`
+/// with the maybe-sent certainty, because the request went out and no
+/// answer came back in time.
+#[tokio::test]
+async fn a_stalled_upstream_raises_timeout_maybe_sent() {
+    // A listener that accepts and never answers.
+    let stalled = std::net::TcpListener::bind("127.0.0.1:0").expect("stalled binds");
+    let stalled_port = stalled.local_addr().expect("stalled port").port();
+    let holder = std::thread::spawn(move || {
+        // Hold each accepted connection open, reading nothing, until
+        // the test ends and the listener drops.
+        for stream in stalled.incoming() {
+            let Ok(_stream) = stream else {
+                continue;
+            };
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+    });
+    let error = {
+        // The binding pins the stalled listener's origin, so the send
+        // is admitted, connects, and dies at the deadline.
+        std::env::set_var("EGR_C4B_STALL_USER", "stall-user");
+        std::env::set_var("EGR_C4B_STALL_PASSWORD", "stall-pass");
+        let config = runtime_config(vec![basic_binding(
+            "stall-api",
+            &format!("http://127.0.0.1:{stalled_port}/"),
+            "EGR_C4B_STALL_USER",
+            "EGR_C4B_STALL_PASSWORD",
+        )]);
+        let endpoints = vec![pack_endpoint(
+            "stall-api",
+            EndpointAuthentication::Basic {},
+            &[],
+        )];
+        let egress = Egress::load(&endpoints, &config, &resolver()).expect("the deployment loads");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let credential = authorize(&egress, "stall-api", &mut budget, &mut events)
+            .await
+            .expect("a basic kind resolves its pair")
+            .expect("a basic kind produces a header")
+            .header;
+        let bound = egress.endpoint("stall-api").expect("the endpoint");
+        bound
+            .send(registry_adapter::egress::OutboundSend {
+                link: &format!("http://127.0.0.1:{stalled_port}/records"),
+                exchange_headers: &[],
+                shape: SendShape::Get,
+                authorization: Some(&credential),
+                attempt: std::time::Duration::from_millis(800),
+                maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+                ok_status_range: (200, 299),
+                throw_exception_on_failure: true,
+            })
+            .await
+            .expect_err("a stalled upstream times out")
+    };
+    let failure = upstream_failure(&error);
+    assert_eq!(
+        failure.class,
+        ErrorClass::UpstreamTimeout,
+        "a deadline past an established connection is the timeout class"
+    );
+    assert_eq!(
+        failure.certainty_journal_name(),
+        "maybe-sent",
+        "the request went out; only the answer was lost"
+    );
+    drop(holder);
+}
+
+/// A response head over the platform bound is `upstream.too-large`,
+/// maybe-sent: the reply arrived and was refused at the head, never
+/// decoded.
+#[tokio::test]
+async fn an_over_bound_response_head_raises_too_large() {
+    let upstream = UpstreamDouble::start();
+    // One Content-Type value far over the platform's 64 KiB head
+    // bound; leaked so the double's script holds it for the test.
+    let oversized_media_type: &'static str = Box::leak("a".repeat(100_000).into_boxed_str());
+    upstream.respond_with(vec![upstream::Response {
+        status: 200,
+        media_type: oversized_media_type,
+        body: String::new(),
+    }]);
+    let (egress, credential) = load_basic_and_authorize(
+        &upstream,
+        "large-api",
+        "EGR_C4B_LARGE_USER",
+        "EGR_C4B_LARGE_PASSWORD",
+        "large-user",
+        "large-pass",
+    )
+    .await;
+    let bound = egress.endpoint("large-api").expect("the endpoint");
+    let error = bound
+        .send(outbound(
+            &upstream.url("/records"),
+            &credential,
+            ATTEMPT,
+            true,
+        ))
+        .await
+        .expect_err("an over-bound head is a failure");
+    let failure = upstream_failure(&error);
+    assert_eq!(
+        failure.class,
+        ErrorClass::UpstreamTooLarge,
+        "an over-bound head is the too-large class"
+    );
+    assert_eq!(
+        failure.certainty_journal_name(),
+        "maybe-sent",
+        "the reply arrived; only its head was unusable"
+    );
+    assert!(
+        failure.body.is_none(),
+        "an over-bound head never decodes a body"
+    );
+}
+
+/// The send's own Debug rendering is value-free: a marker riding the
+/// exchange header value, the request body, or the credential value
+/// appears nowhere in it, because a caller's diagnostic render is the
+/// one place a credential could leak without ever reaching the wire.
+#[test]
+fn a_send_debug_render_carries_no_value() {
+    const MARKER: &str = "c4b-outbound-marker-77b1c9";
+    let credential = registry_adapter::auth::AuthHeader::new(
+        "authorization",
+        registry_adapter::auth::ProtectedText::from_str_value(&format!(
+            "Bearer token-{MARKER}-credential"
+        )),
+    );
+    let exchange_headers = [("x-trace".to_owned(), format!("trace-{MARKER}-header"))];
+    let body_bytes = format!(r#"{{"record": "{MARKER}-body"}}"#).into_bytes();
+    let send = registry_adapter::egress::OutboundSend {
+        link: "http://127.0.0.1:1/records",
+        exchange_headers: &exchange_headers,
+        shape: SendShape::Post(SendBody {
+            format: SendBodyFormat::Json,
+            bytes: &body_bytes,
+        }),
+        authorization: Some(&credential),
+        attempt: ATTEMPT,
+        maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+        ok_status_range: (200, 299),
+        throw_exception_on_failure: true,
+    };
+    let rendered = format!("{send:?}");
+    assert!(
+        !rendered.contains(MARKER),
+        "the Debug render never carries a marker: {rendered}"
+    );
+    assert!(
+        rendered.contains("x-trace"),
+        "header names stay visible: {rendered}"
+    );
+}
+
 // Outbound TLS material.
 
 /// Throwaway self-signed fixture generated for these tests only; no
@@ -1234,9 +1601,9 @@ fn bundle_file(name: &str, contents: &str) -> std::path::PathBuf {
 
 /// A declared trust profile whose bundle parses installs at load on an
 /// HTTPS binding; the endpoint's send policy holds the configured CA
-/// from startup, fail-closed. The wrong-CA handshake case needs the
-/// platform's loopback HTTPS double and stays deferred with FLAG 2's
-/// ruling (no new dev-dependency; Cargo.lock does not move).
+/// from startup, fail-closed. The right-CA and wrong-CA handshake
+/// cases over a real TLS exchange live in tests/egress_tls_wiring.rs,
+/// under the postgres-test feature and its loopback HTTPS double.
 #[test]
 fn a_declared_ca_bundle_parses_and_installs_at_load() {
     std::env::set_var("EGR_C4B_TLS_USER", "tls-user");
@@ -1365,4 +1732,3 @@ fn a_binding_above_the_declared_limit_is_refused_at_load() {
         );
     }
 }
-||||||| parent of c7e1ff5c9 (fix(adapter): fail closed on undecodable replies, over-limit attempts, and dot-segment links)

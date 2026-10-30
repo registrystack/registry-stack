@@ -3979,12 +3979,13 @@ fn check_credential_pair(
     }
 }
 
-/// Whether a bound origin's host is a numeric loopback address.
+/// Whether a bound origin's host is a numeric loopback address. The
+/// bracket strip is what makes `[::1]` count: `host_str` carries the
+/// brackets for IPv6 literals, and a bracketed host never parses as an
+/// address, so the parse below would read every IPv6 loopback as
+/// non-loopback.
 fn is_loopback_origin(url: &registry_platform_yaml::Url) -> bool {
-    url.to_url()
-        .host_str()
-        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
-        .is_some_and(|address| address.is_loopback())
+    literal_origin_address(url).is_some_and(|address| address.is_loopback())
 }
 
 /// The address literal a bound origin's host carries, when it carries
@@ -8736,6 +8737,17 @@ mod tests {
             none_binding("http://127.0.0.1:8081", true),
             CheckCode::AuthNoneNotLoopback
         ));
+        // An IPv6 literal carries its brackets through `host_str`, so
+        // the loopback read must strip them before parsing: `[::1]` is
+        // loopback, `[::2]` never is, whatever the spelling.
+        assert!(!none_finds(
+            none_binding("http://[::1]:8081", false),
+            CheckCode::AuthNoneNotLoopback
+        ));
+        assert!(none_finds(
+            none_binding("http://[::2]:8081", false),
+            CheckCode::AuthNoneNotLoopback
+        ));
     }
 
     /// The one plain-HTTP rule (D36): a literal outside the declared
@@ -8955,6 +8967,16 @@ mod tests {
             "https://cases.example.invalid",
             "http://127.0.0.1:8081/token",
         ));
+        // An IPv6 loopback token endpoint carries its brackets through
+        // `host_str`, so the same bracket strip decides it: `[::1]` is
+        // the loopback exception, `[::2]` is plain HTTP outside it.
+        assert_clean(with_token(
+            "https://cases.example.invalid",
+            "http://[::1]:8081/token",
+        ));
+        let findings = with_token("https://cases.example.invalid", "http://[::2]:8081/token");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::RuntimeInsecureOrigin.code());
     }
 
     /// A bound origin is scheme, authority, and base path only: a query or

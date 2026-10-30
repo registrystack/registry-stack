@@ -35,44 +35,53 @@ use registry_adapter_core::{
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::destination::json::decode_script_json;
 use registry_platform_httputil::destination::{
-    DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationScheme,
+    CredentialDestinationPolicy, CredentialDestinationRequestTemplate, DataDestinationPolicy,
+    DataDestinationRequestTemplate, DestinationAuthorizationScheme,
     DestinationAuthorizationTemplate, DestinationAuthorizationValue, DestinationDeliveryCertainty,
     DestinationProfile, DestinationRequestError, DestinationResponseError,
     DestinationResponseHeaderError, DestinationSendError, DestinationTlsMaterialError,
-    QueryStringContentAcknowledgement, ScriptRequestBodyFormat, SideEffectingSendMethod,
-    MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_DESTINATION_REQUEST_BODY_BYTES,
-    MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
+    OAuth2ClientCredentialsBodyFormat, QueryStringContentAcknowledgement, ScriptRequestBodyFormat,
+    SideEffectingSendMethod, MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_DESTINATION_OPERATION_TIMEOUT,
+    MAX_DESTINATION_REQUEST_BODY_BYTES, MAX_DESTINATION_REQUEST_HEADER_BYTES,
+    MAX_DESTINATION_TARGET_BYTES,
 };
+use registry_platform_httputil::{TransportKind, MAXIMUM_TOKEN_RESPONSE_BYTES};
 use registry_platform_yaml::ExternalId;
 use serde_json::Value;
 use zeroize::Zeroizing;
 
 use crate::auth::{
-    AuthError, AuthEvent, AuthHeader, AuthKind, AuthPlan, AuthorizeContext, AuthorizedCredential,
-    ClientAssertionSigner, EndpointTls, TokenBudget, TokenRequest, TokenSend, TokenWire,
-    TransportFailure,
+    AuthError, AuthEvent, AuthHeader, AuthKind, AuthPlan, AuthPlanFault, AuthorizeContext,
+    AuthorizedCredential, ClientAssertionSigner, EndpointTls, TokenBudget,
+    TokenClientAuthentication, TokenRequest, TokenSend, TokenWire, TransportFailure,
+    MAXIMUM_TOKEN_REQUEST_BYTES,
 };
 use crate::component::http::header_filter::{
     AllowlistError, HeaderFilter, InboundHeaderError, OutboundHeaderError, ResponseHeaders,
 };
 use crate::component::http::uri::{LinkRefusal, OriginError, PinnedOrigin};
 
-/// Stands in the authorize context for the token send this build does
-/// not wire: the load refuses every token plan, so no plan this
-/// context serves can reach a token acquisition. If one ever did, the
-/// send refuses loudly instead of pretending.
-struct UnwiredTokenSend;
+/// Stands in the authorize context for a token transport when an
+/// endpoint compiled none: the load wires a real transport for every
+/// plan that acquires a token, so no plan this context serves can
+/// reach a token acquisition. If one ever did, the send refuses loudly
+/// as a boundary refusal instead of pretending.
+struct NoTokenSend;
 
-impl TokenSend for UnwiredTokenSend {
+impl TokenSend for NoTokenSend {
     fn send<'a>(
         &'a self,
         _request: &'a TokenRequest,
     ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>> {
-        Box::pin(async { Err(TransportFailure::PolicyRefused) })
+        Box::pin(async {
+            Err(TransportFailure::PolicyRefused {
+                journal_name: "invalid-frozen-policy",
+            })
+        })
     }
 }
 
-const UNWIRED_TOKEN_SEND: UnwiredTokenSend = UnwiredTokenSend;
+const NO_TOKEN_SEND: NoTokenSend = NoTokenSend;
 
 /// Why a deployment refuses to start, in egress terms. Every rendering
 /// is fixed text; none carries a binding value or a credential.
@@ -91,10 +100,6 @@ pub enum EgressFault {
     Request(DestinationRequestError),
     /// The binding's configured TLS material was refused by the platform.
     DestinationTls(DestinationTlsMaterialError),
-    /// The endpoint's kind acquires a token, and this build does not
-    /// wire the token send yet: the deployment refuses to start, so the
-    /// gap is visible at startup and never at a first request.
-    TokenSendUnwired,
     /// The binding raises a limit above the one the pack declares; a
     /// binding may only lower it.
     LimitAboveDeclared {
@@ -121,9 +126,6 @@ impl fmt::Display for EgressFault {
             Self::Destination(fault) => fault.fmt(formatter),
             Self::Request(fault) => fault.fmt(formatter),
             Self::DestinationTls(fault) => fault.fmt(formatter),
-            Self::TokenSendUnwired => {
-                formatter.write_str("the endpoint's token send is not wired in this build")
-            }
             Self::LimitAboveDeclared { key } => write!(
                 formatter,
                 "the binding's {key} is above the pack's declared one; a binding may only lower it"
@@ -473,6 +475,7 @@ pub struct EndpointEgress {
     post_template: DataDestinationRequestTemplate,
     attempt: Duration,
     maximum_response_bytes: usize,
+    token_send: Option<EndpointTokenSend>,
 }
 
 impl EndpointEgress {
@@ -538,15 +541,20 @@ impl EndpointEgress {
             api_key_header,
         )
         .map_err(EgressFault::Request)?;
-        // The token send is the unit after the first real read: until
-        // it is wired, an endpoint whose kind acquires a token refuses
-        // the load, so the gap is visible at startup and never at a
-        // first request. The resolved token material has no destination
-        // to install it on and is dropped, never shared or re-parsed.
-        if plan.token_plan().is_some() {
-            drop(materials.token);
-            return Err(EgressFault::TokenSendUnwired);
-        }
+        // The token transport freezes beside the data policy: a plan
+        // that acquires a token gets its fixed token endpoint compiled
+        // into a credential destination under the same profile
+        // discipline, carrying the resolved token TLS material
+        // fail-closed; a plan that acquires none compiles no transport,
+        // and the resolved token material has no destination to install
+        // it on and is dropped inside the freeze, never shared or
+        // re-parsed.
+        let token_send = freeze_token_send(
+            binding,
+            &plan,
+            &config.allowed_private_cidrs,
+            materials.token,
+        )?;
         Ok(Self {
             endpoint: binding.endpoint.clone(),
             plan,
@@ -563,6 +571,7 @@ impl EndpointEgress {
                     key: "maximumResponseBytes",
                 }
             })?,
+            token_send,
         })
     }
 
@@ -642,7 +651,8 @@ impl EndpointEgress {
     /// compiled plan: the static kinds resolve their secret, and a kind
     /// that holds no plan produces none. The returned credential names
     /// the cached generation it carries, so the 401 rule can clear
-    /// exactly the issuance its send rode.
+    /// exactly the issuance its send rode. A token acquisition rides
+    /// the endpoint's own frozen token transport.
     ///
     /// # Errors
     ///
@@ -654,14 +664,18 @@ impl EndpointEgress {
         signer: &dyn ClientAssertionSigner,
         events: &mut Vec<AuthEvent>,
     ) -> Result<Option<AuthorizedCredential>, AuthError> {
-        // The load refuses every token plan, so the only plans this
-        // endpoint serves are the static kinds; the unwired send stands
-        // in for the token transport the next unit wires, and refuses
-        // loudly if a token plan ever reached it.
+        // The load wires the real transport for every plan that
+        // acquires a token; the refuser stands in for a plan that holds
+        // none, and refuses loudly if a token acquisition ever reached
+        // it.
+        let send: &dyn TokenSend = match self.token_send.as_ref() {
+            Some(send) => send,
+            None => &NO_TOKEN_SEND,
+        };
         let mut context = AuthorizeContext {
             resolver,
             budget,
-            send: &UNWIRED_TOKEN_SEND,
+            send,
             signer,
             events,
         };
@@ -850,9 +864,8 @@ impl EndpointEgress {
         };
         let payload = header.value().as_bytes();
         let value = match self.plan.kind() {
-            // An OAuth2 kind never reaches a data send while the token
-            // send is unwired: the load refuses the plan, and even a
-            // wired plan could not serve a header here without a token.
+            // An OAuth2 kind presents the bearer credential its token
+            // acquisition produced and the plan's cache holds.
             AuthKind::Oauth2ClientCredentials | AuthKind::Oauth2PrivateKeyJwt => {
                 DestinationAuthorizationValue::bearer(payload.to_vec())
             }
@@ -972,8 +985,16 @@ fn script_template(
 
 /// The destination profile one pinned origin freezes: HTTPS carries the
 /// production address controls; plain HTTP is development on loopback
-/// and one private service hop everywhere else.
-fn destination_profile(parsed_base: &url::Url) -> DestinationProfile {
+/// and one private service hop everywhere else. Under the postgres-test
+/// feature an https loopback origin takes the platform's pinned
+/// loopback test profile, so the TLS suites can drive the same
+/// frozen-policy send against a locally terminated certificate; a
+/// build without the feature serves the same origin as production.
+pub(crate) fn destination_profile(parsed_base: &url::Url) -> DestinationProfile {
+    #[cfg(feature = "postgres-test")]
+    if parsed_base.scheme() == "https" && denotes_loopback(parsed_base) {
+        return DestinationProfile::PinnedLoopbackHttpsTest;
+    }
     match parsed_base.scheme() {
         "https" => DestinationProfile::ProductionHttps,
         _ if denotes_loopback(parsed_base) => DestinationProfile::LoopbackDevelopmentHttp,
@@ -984,12 +1005,239 @@ fn destination_profile(parsed_base: &url::Url) -> DestinationProfile {
 /// Whether the origin's host explicitly denotes loopback: the name
 /// `localhost` or a loopback address literal, the platform's own
 /// admission rule for the development profile.
-fn denotes_loopback(origin: &url::Url) -> bool {
+pub(crate) fn denotes_loopback(origin: &url::Url) -> bool {
     match origin.host() {
         Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
         Some(url::Host::Ipv4(address)) => address.is_loopback(),
         Some(url::Host::Ipv6(address)) => address.is_loopback(),
         None => false,
+    }
+}
+
+/// Whether a destination profile admits a token endpoint: the same
+/// profiles the data path serves, decided by the same predicate the
+/// plan-level compile applies, so a load refusal and the frozen
+/// credential policy can never disagree about one endpoint. Plain HTTP
+/// stays development-only loopback, the private service hop never
+/// carries a credential request, and the pinned loopback test profile
+/// is admitted only under the feature that enables it.
+pub(crate) fn profile_admits_token_endpoints(profile: DestinationProfile) -> bool {
+    match profile {
+        DestinationProfile::ProductionHttps | DestinationProfile::LoopbackDevelopmentHttp => true,
+        #[cfg(feature = "postgres-test")]
+        DestinationProfile::PinnedLoopbackHttpsTest => true,
+        _ => false,
+    }
+}
+
+/// One endpoint's wired token transport, compiled once at startup: the
+/// frozen credential destination policy, the frozen request template,
+/// and the origin and path the plan's fixed token endpoint names. Every
+/// send renders the plan's one request shape and hands it to the frozen
+/// policy, so the endpoint's token requests ride exactly the address
+/// controls, TLS trust, and bounds its data requests ride.
+struct EndpointTokenSend {
+    policy: CredentialDestinationPolicy,
+    template: CredentialDestinationRequestTemplate,
+    origin: url::Url,
+    path: String,
+}
+
+impl TokenSend for EndpointTokenSend {
+    fn send<'a>(
+        &'a self,
+        request: &'a TokenRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>> {
+        Box::pin(self.send_bounded(request))
+    }
+}
+
+impl EndpointTokenSend {
+    /// Send one rendered token request through the frozen credential
+    /// destination. The inner deadline is the platform's one-operation
+    /// ceiling; the auth layer's own send ceiling wraps this send, so a
+    /// `TokenSend` without a working timeout cannot wedge the
+    /// endpoint's single-flight window past it.
+    async fn send_bounded(&self, request: &TokenRequest) -> Result<TokenWire, TransportFailure> {
+        // The request this transport serves is the plan's own render:
+        // its destination is the frozen origin and path, exactly. A
+        // request for anything else is a programming fault, refused as
+        // a frozen-shape violation, never sent.
+        let refused = || TransportFailure::PolicyRefused {
+            journal_name: "invalid-frozen-request",
+        };
+        let parsed = url::Url::parse(&request.url).map_err(|_| refused())?;
+        if parsed.origin() != self.origin.origin() || parsed.path() != self.path {
+            return Err(refused());
+        }
+        let authorization = match &request.authentication {
+            TokenClientAuthentication::None => None,
+            TokenClientAuthentication::BasicHeader { payload } => {
+                // The platform's destination authorization owns the
+                // `Basic ` prefix and appends it at render time; the
+                // payload here travels without one.
+                Some(
+                    DestinationAuthorizationValue::basic(payload.as_bytes().to_vec())
+                        .map_err(|_| refused())?,
+                )
+            }
+        };
+        let rendered = self
+            .template
+            .render_zeroizing(
+                &[],
+                &[],
+                authorization,
+                Some(Zeroizing::new(request.body.as_bytes().to_vec())),
+            )
+            .map_err(|_| refused())?;
+
+        let reply = self
+            .policy
+            .send(rendered, MAX_DESTINATION_OPERATION_TIMEOUT)
+            .await
+            .map_err(token_send_failure)?;
+
+        let status = reply.status().as_u16();
+        if (300..400).contains(&status) {
+            // A redirect is never followed: the token endpoint is a
+            // fixed destination, never one a response derives. The
+            // answer states the status and carries no body to read.
+            return Ok(TokenWire {
+                status,
+                media_type: None,
+                body: Zeroizing::new(Vec::new()),
+            });
+        }
+        let media_type =
+            match reply.selected_script_response_headers(std::iter::once("content-type")) {
+                Ok(selected) => selected.into_iter().flatten().next(),
+                Err(_) => return Err(TransportFailure::HeadUnusable),
+            };
+        let body = reply
+            .read_bounded(MAXIMUM_TOKEN_RESPONSE_BYTES as usize)
+            .await
+            .map_err(token_body_failure)?;
+        Ok(TokenWire {
+            status,
+            media_type,
+            body: body.into_credential_bytes(),
+        })
+    }
+}
+
+/// Freeze one endpoint's token transport beside the data policy: the
+/// plan's fixed token endpoint derives its own credential destination
+/// under the same profile discipline the data origin takes, carrying
+/// the resolved token TLS material fail-closed, and the request
+/// template is one of the platform's reviewed client-credentials
+/// shapes, the Basic placement riding the reviewed authorization slot
+/// and every other placement riding the body alone. A plan that
+/// acquires no token compiles no transport.
+fn freeze_token_send(
+    binding: &EndpointBinding,
+    plan: &AuthPlan,
+    cidrs: &[Cidr],
+    material: Option<registry_platform_httputil::destination::DestinationTlsMaterial>,
+) -> Result<Option<EndpointTokenSend>, EgressFault> {
+    let Some(token_plan) = plan.token_plan() else {
+        return Ok(None);
+    };
+    // The plan-level compile already refused an endpoint this profile
+    // discipline does not admit; the re-check is the runtime side of
+    // the authoring checks, failing closed.
+    let refused_plan = || EgressFault::Auth(AuthError::Plan(AuthPlanFault::TokenEndpointNotUsable));
+    let parsed = url::Url::parse(token_plan.url()).map_err(|_| refused_plan())?;
+    let profile = destination_profile(&parsed);
+    if !profile_admits_token_endpoints(profile) {
+        return Err(refused_plan());
+    }
+    // The token endpoint is a fixed credential destination: its origin
+    // is the endpoint the policy pins, its fixed path is the path the
+    // declared endpoint carries. Clearing the parts the pin refuses
+    // keeps the frozen origin exact.
+    let mut origin = parsed.clone();
+    origin.set_path("");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    let path = parsed.path().to_owned();
+    let origin_id = binding.endpoint.as_str().to_ascii_lowercase();
+    let networks: Vec<_> = cidrs.iter().map(Cidr::network).collect();
+    let policy = CredentialDestinationPolicy::new(&origin_id, origin.as_str(), profile, &networks)
+        .map_err(EgressFault::Destination)?;
+    let policy = if let Some(material) = material {
+        let mut policy = policy.require_configured_tls();
+        policy
+            .install_configured_tls(material)
+            .map_err(EgressFault::DestinationTls)?;
+        policy
+    } else {
+        policy
+    };
+    let template = if token_plan.authenticates_by_basic_header() {
+        CredentialDestinationRequestTemplate::oauth2_client_credentials_form_basic(
+            &path,
+            MAX_DESTINATION_HEADER_VALUE_BYTES,
+            MAXIMUM_TOKEN_REQUEST_BYTES,
+            MAX_DESTINATION_TARGET_BYTES
+                + MAX_DESTINATION_REQUEST_HEADER_BYTES
+                + MAXIMUM_TOKEN_REQUEST_BYTES,
+        )
+    } else {
+        CredentialDestinationRequestTemplate::oauth2_client_credentials(
+            &path,
+            OAuth2ClientCredentialsBodyFormat::FormClientSecretBody,
+            MAXIMUM_TOKEN_REQUEST_BYTES,
+            MAX_DESTINATION_TARGET_BYTES
+                + MAX_DESTINATION_REQUEST_HEADER_BYTES
+                + MAXIMUM_TOKEN_REQUEST_BYTES,
+        )
+    }
+    .map_err(EgressFault::Request)?;
+    Ok(Some(EndpointTokenSend {
+        policy,
+        template,
+        origin,
+        path,
+    }))
+}
+
+/// Where one platform send outcome lands on the token path: the one
+/// partition, projected onto the token layer's transport vocabulary.
+/// The same platform fault lands on the same catchable class on both
+/// paths, and every boundary refusal arrives as the uncatchable policy
+/// refusal carrying the same closed journal name the data path
+/// journals.
+fn token_send_failure(fault: DestinationSendError) -> TransportFailure {
+    match partition_send_fault(fault) {
+        SendFaultClass::ResolutionUnanswered
+        | SendFaultClass::DeadlineBeforeConnect
+        | SendFaultClass::ConnectFailed => TransportFailure::Transport(TransportKind::Connect),
+        SendFaultClass::DeadlineAfterConnect => TransportFailure::Transport(TransportKind::Timeout),
+        SendFaultClass::ExchangeFailed => TransportFailure::Transport(TransportKind::Exchange),
+        SendFaultClass::ResponseHeadUnusable => TransportFailure::HeadUnusable,
+        SendFaultClass::ResponseHeadOverBound => {
+            TransportFailure::Transport(TransportKind::ResponseTooLarge)
+        }
+        SendFaultClass::Refused(fault) => TransportFailure::PolicyRefused {
+            journal_name: destination_refusal_name(&fault),
+        },
+    }
+}
+
+/// Where one bounded body-read failure lands on the token path: the
+/// same classes the data path raises for the same outcomes.
+fn token_body_failure(fault: DestinationResponseError) -> TransportFailure {
+    match fault {
+        DestinationResponseError::BodyLimitTooHigh | DestinationResponseError::BodyTooLarge => {
+            TransportFailure::Transport(TransportKind::ResponseTooLarge)
+        }
+        DestinationResponseError::BodyReadFailed => {
+            TransportFailure::Transport(TransportKind::Exchange)
+        }
+        DestinationResponseError::DeadlineExceeded => {
+            TransportFailure::Transport(TransportKind::Timeout)
+        }
     }
 }
 
@@ -1556,6 +1804,71 @@ mod tests {
         );
     }
 
+    /// The token path projects the one partition exactly: every
+    /// platform send fault lands on the token vocabulary at the class
+    /// the data path raises for the same fault, so the two paths can
+    /// never disagree about what happened to a send. The projection's
+    /// own total function is the token layer's
+    /// `token_transport_fault`; this asserts the pair end to end,
+    /// through the classes each path reports.
+    #[test]
+    fn the_token_path_agrees_with_the_data_path_on_every_send_fault() {
+        for fault in &EVERY_SEND_FAULT {
+            let data_class = match destination_send_outcome(*fault) {
+                EgressError::Upstream(failure) => failure.class.class().to_owned(),
+                EgressError::Refused(_) => ErrorClass::EgressRefused.class().to_owned(),
+            };
+            let token_fault = crate::auth::token_transport_fault(token_send_failure(*fault));
+            let token_class = AuthError::Token(token_fault).class();
+            let expected = match partition_send_fault(*fault) {
+                SendFaultClass::ResolutionUnanswered
+                | SendFaultClass::DeadlineBeforeConnect
+                | SendFaultClass::ConnectFailed => "upstream.connection",
+                SendFaultClass::DeadlineAfterConnect => "upstream.timeout",
+                SendFaultClass::ExchangeFailed => "upstream.connection",
+                SendFaultClass::ResponseHeadUnusable => "upstream.malformed",
+                SendFaultClass::ResponseHeadOverBound => "upstream.too-large",
+                SendFaultClass::Refused(_) => "egress.refused",
+            };
+            assert_eq!(data_class, expected, "{fault:?} on the data path");
+            assert_eq!(token_class, expected, "{fault:?} on the token path");
+        }
+    }
+
+    /// The token refusal's journal detail is the same closed word the
+    /// data path journals for the same platform fault, a catchable
+    /// fault never arrives as a refusal, and no refusal name ever
+    /// carries a value: a marker secret cannot ride a token egress
+    /// refusal into the journal.
+    #[test]
+    fn the_token_refusal_carries_the_data_paths_journal_word() {
+        const MARKER: &str = "c4b-marker-9f31ab";
+        for fault in &EVERY_SEND_FAULT {
+            let token = token_send_failure(*fault);
+            if matches!(partition_send_fault(*fault), SendFaultClass::Refused(_)) {
+                let TransportFailure::PolicyRefused { journal_name } = token else {
+                    panic!("a boundary refusal projects to the policy refusal: {fault:?}");
+                };
+                let data_name = match destination_send_outcome(*fault) {
+                    EgressError::Refused(EgressRefusal::Destination { journal_name, .. }) => {
+                        journal_name
+                    }
+                    other => panic!("a boundary refusal refuses on the data path: {other:?}"),
+                };
+                assert_eq!(journal_name, data_name, "{fault:?}'s journal word");
+                assert!(
+                    !journal_name.contains(MARKER) && !journal_name.is_empty(),
+                    "{journal_name} is a fixed word carrying no value"
+                );
+            } else {
+                assert!(
+                    !matches!(token, TransportFailure::PolicyRefused { .. }),
+                    "{fault:?} is catchable and never a refusal"
+                );
+            }
+        }
+    }
+
     /// The destination profile follows the pinned origin: HTTPS is
     /// production, plain HTTP is development on loopback and a private
     /// service hop everywhere else, matching the platform's own
@@ -1587,6 +1900,49 @@ mod tests {
             destination_profile(&public_name),
             DestinationProfile::PrivateServiceHttp
         );
+    }
+
+    /// Under the postgres-test feature an https loopback origin takes
+    /// the platform's pinned loopback test profile, so the TLS suites
+    /// drive the same frozen-policy send against locally terminated
+    /// certificates; a named https origin stays production even under
+    /// the feature, and without the feature the loopback origin would
+    /// be production too.
+    #[cfg(feature = "postgres-test")]
+    #[test]
+    fn the_pinned_loopback_https_profile_serves_only_under_its_feature() {
+        let loopback = url::Url::parse("https://127.0.0.1:8443/").expect("parsed");
+        assert_eq!(
+            destination_profile(&loopback),
+            DestinationProfile::PinnedLoopbackHttpsTest
+        );
+        let named = url::Url::parse("https://records.example.internal:8443/").expect("parsed");
+        assert_eq!(
+            destination_profile(&named),
+            DestinationProfile::ProductionHttps
+        );
+        assert!(profile_admits_token_endpoints(
+            DestinationProfile::PinnedLoopbackHttpsTest
+        ));
+    }
+
+    /// The token endpoint admission is the profile predicate the
+    /// egress layer serves: the profiles the token transport freezes
+    /// admit, every other profile refuses, fail-closed.
+    #[test]
+    fn the_profile_predicate_admits_exactly_the_served_profiles() {
+        assert!(profile_admits_token_endpoints(
+            DestinationProfile::ProductionHttps
+        ));
+        assert!(profile_admits_token_endpoints(
+            DestinationProfile::LoopbackDevelopmentHttp
+        ));
+        assert!(!profile_admits_token_endpoints(
+            DestinationProfile::PrivateServiceHttp
+        ));
+        assert!(!profile_admits_token_endpoints(
+            DestinationProfile::LocalPrivateDevelopmentHttp
+        ));
     }
 
     /// The declared-scheme slots a static authorization freezes: the
