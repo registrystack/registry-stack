@@ -43,15 +43,21 @@ target directory for `<target-dir>`.
 
 ```bash
 products/adapter/scripts/check-contracts.sh
+products/adapter/scripts/test-postgres.sh
 ```
 
-The gate is `cargo fmt --check` over the workspace plus clippy and tests
-over the adapter crates (`-p registry-adapter -p registry-adapter-core
--p registry-adapterctl`). It is the only gate today; schema drift,
-`check-port-table.py`, and fixture checks join at the Increment 0
-integration wave, and the standalone
-`products/adapter/scripts/test-postgres.sh` arrives with Increment 1,
-when the journal lands.
+`check-contracts.sh` runs the verification floor from `DELIVERY-PLAN.md`:
+`cargo fmt --check` over the workspace plus clippy and tests over the
+adapter crates (`-p registry-adapter -p registry-adapter-core
+-p registry-adapterctl`), the generated schemas held to their generator,
+and the platform configuration-format lint. `test-postgres.sh` runs the
+adapter crates' `postgres-test` suites: without
+`ADAPTER_TEST_DATABASE_URL` it starts and removes its own loopback
+PostgreSQL 17 container; with the variable set it uses that server as
+given. The PostgreSQL suites themselves land with the journal in
+Increment 1 wave 1. Schema drift, `check-port-table.py`, and fixture
+checks join at the integration waves, as `DELIVERY-PLAN.md` assigns
+them.
 
 ## Verify commands
 
