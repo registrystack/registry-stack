@@ -5537,6 +5537,7 @@ name = "registry-cli-docs"
 version = "0.45.0"
 dependencies = [
  "clap",
+ "registry-adapterctl",
  "registry-breg",
  "registry-breg-mcp",
  "registry-breg-review",

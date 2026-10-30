@@ -2,6 +2,312 @@
   "schema_version": "registry.cli-reference/v2",
   "binaries": [
     {
+      "name": "adapterctl",
+      "invocation": "adapterctl",
+      "about": "Registry Stack Adapter authoring and operator tooling",
+      "long_about": null,
+      "usage": "adapterctl [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--format <FORMAT>",
+          "description": "Emit the selected command's report in this format",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [
+            "human"
+          ],
+          "possible_values": [
+            "human",
+            "json"
+          ],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "adapterctl check",
+          "about": "Check an authored adapter project, its pinned profile and pack, and its fixtures, offline, and print the findings",
+          "long_about": null,
+          "usage": "adapterctl check [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authored adapter project: its directory (holding `project.yaml`) or the `project.yaml` file itself. The profile, pack, and fixtures are read beside the project either way",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--deny-warnings",
+              "description": "Exit 1 when a warning is reported",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime <FILE>",
+              "description": "Operator runtime configuration file checked with the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Read the environment when checking the runtime configuration: `${NAME}` expressions are filled from the process environment and every value is checked. Without it, each expression is checked by syntax and position only",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <FILE>",
+              "description": "Profile file read instead of the `profile.yaml` beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--pack <FILE>",
+              "description": "Pack file read instead of the `pack.yaml` beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--fixtures <FILE>",
+              "description": "Fixture file read instead of the `fixtures/` directory beside the project; repeatable, and each given file replaces the whole set",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--environment",
+              "arguments": [
+                "--runtime <FILE>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "project",
+          "invocation": "adapterctl project",
+          "about": "Operate one authored adapter project",
+          "long_about": null,
+          "usage": "adapterctl project [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "lock",
+              "invocation": "adapterctl project lock",
+              "about": "Compute and write the profile and pack digest pins in project.yaml from the artifacts beside it",
+              "long_about": null,
+              "usage": "adapterctl project lock [OPTIONS] <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Authored adapter project: its directory (holding `project.yaml`) or the `project.yaml` file itself",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--profile <FILE>",
+                  "description": "Profile file pinned instead of the `profile.yaml` beside the project",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--pack <FILE>",
+                  "description": "Pack file pinned instead of the `pack.yaml` beside the project",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "schemas",
+          "invocation": "adapterctl schemas",
+          "about": "Write the generated JSON Schemas of the five Adapter formats, or check the committed ones for drift",
+          "long_about": null,
+          "usage": "adapterctl schemas [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--check",
+              "description": "Compare the generated bytes with the committed files and refuse on drift instead of writing anything",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output-dir <DIRECTORY>",
+              "description": "Directory the generated schemas are written to or compared against",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "products/adapter/schemas"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "breg",
       "invocation": "breg",
       "about": "Serve one verified Base Registry Engine package",
