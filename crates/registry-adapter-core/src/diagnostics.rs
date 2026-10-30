@@ -94,6 +94,7 @@ pub enum CheckCode {
     RouteMultipleNonSafeSends,
     RouteNestingDepthExceeded,
     RouteNonSafeSendInSplit,
+    RouteOkRangeCoversUnauthorized,
     RoutePathParameterMismatch,
     RoutePredicateAmbiguous,
     RoutePredicateLanguageRequired,
@@ -193,6 +194,7 @@ impl CheckCode {
         Self::RouteMultipleNonSafeSends,
         Self::RouteNestingDepthExceeded,
         Self::RouteNonSafeSendInSplit,
+        Self::RouteOkRangeCoversUnauthorized,
         Self::RoutePathParameterMismatch,
         Self::RoutePredicateAmbiguous,
         Self::RoutePredicateLanguageRequired,
@@ -304,6 +306,7 @@ impl CheckCode {
             Self::RouteMultipleNonSafeSends => "adapter.route.multiple-non-safe-sends",
             Self::RouteNestingDepthExceeded => "adapter.route.nesting-depth-exceeded",
             Self::RouteNonSafeSendInSplit => "adapter.route.non-safe-send-in-split",
+            Self::RouteOkRangeCoversUnauthorized => "adapter.route.ok-range-covers-unauthorized",
             Self::RoutePredicateAmbiguous => "adapter.route.predicate-ambiguous",
             Self::RoutePredicateLanguageRequired => "adapter.route.predicate-language-required",
             Self::RouteReadUnsafeSend => "adapter.route.read-unsafe-send",
@@ -401,6 +404,7 @@ impl CheckCode {
             | Self::RouteMultipleNonSafeSends
             | Self::RouteNestingDepthExceeded
             | Self::RouteNonSafeSendInSplit
+            | Self::RouteOkRangeCoversUnauthorized
             | Self::RoutePredicateAmbiguous
             | Self::RoutePredicateLanguageRequired
             | Self::RouteReadUnsafeSend

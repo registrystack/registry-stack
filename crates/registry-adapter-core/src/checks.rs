@@ -463,6 +463,48 @@ fn ok_status_code_range_fault(text: &str) -> Option<&'static str> {
     None
 }
 
+/// The status code the engine answers a failed credential with: it
+/// refreshes the credential and retries the send once itself
+/// (`products/adapter/CONCEPT.md` section 10.2), so a route may never
+/// call this code a success on an endpoint an authentication kind
+/// protects.
+const UNAUTHORIZED_STATUS_CODE: u16 = 401;
+
+/// Whether an authored `okStatusCodeRange` covers 401: a single code
+/// equals it, or an inclusive range spans it. Malformed text answers
+/// false; the grammar check owns that refusal.
+fn ok_status_code_range_covers_unauthorized(text: &str) -> bool {
+    for token in text.split(',') {
+        let (low, high) = match token.split_once('-') {
+            Some((low, high)) => (low, Some(high)),
+            None => (token, None),
+        };
+        let Ok(low) = low.trim().parse::<u16>() else {
+            return false;
+        };
+        let Some(high) = high else {
+            if low == UNAUTHORIZED_STATUS_CODE {
+                return true;
+            }
+            continue;
+        };
+        let Ok(high) = high.trim().parse::<u16>() else {
+            return false;
+        };
+        if low <= UNAUTHORIZED_STATUS_CODE && UNAUTHORIZED_STATUS_CODE <= high {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether an endpoint's declared authentication sends a credential: a
+/// `none` endpoint has no credential the engine could refresh, so its
+/// ok range keeps whatever contract its source declares.
+fn endpoint_carries_authentication(authentication: &EndpointAuthentication) -> bool {
+    !matches!(authentication, EndpointAuthentication::None {})
+}
+
 /// The origin-relative fault of an authored static path, if any: no
 /// scheme or authority, a leading slash, no backslash, no query or
 /// fragment delimiter, and no `..` segment in any spelling a URL parser
@@ -1012,6 +1054,15 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         .iter()
         .map(|endpoint| endpoint.id.as_str())
         .collect();
+    // The endpoints an authentication kind protects: an ok range over
+    // one of these may never cover 401 (`products/adapter/CONCEPT.md`
+    // section 10.2).
+    let authenticated_endpoints: HashSet<&str> = pack
+        .endpoints
+        .iter()
+        .filter(|endpoint| endpoint_carries_authentication(&endpoint.authentication))
+        .map(|endpoint| endpoint.id.as_str())
+        .collect();
 
     // Findings iterate route ids in sorted order so snapshots and CI
     // diffs stay stable however the body map hashes.
@@ -1117,17 +1168,25 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             ));
                         }
                     }
-                    if let Some(fault) = parameters
-                        .ok_status_code_range
-                        .as_deref()
-                        .and_then(ok_status_code_range_fault)
-                    {
-                        route_findings.push(finding(
-                            CheckCode::RouteInvalidStatusCodeRange,
-                            &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
-                            fault,
-                            "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
-                        ));
+                    if let Some(range) = parameters.ok_status_code_range.as_deref() {
+                        if let Some(fault) = ok_status_code_range_fault(range) {
+                            route_findings.push(finding(
+                                CheckCode::RouteInvalidStatusCodeRange,
+                                &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
+                                fault,
+                                "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
+                            ));
+                        } else if target.component == SendComponent::Http
+                            && authenticated_endpoints.contains(target.id.as_str())
+                            && ok_status_code_range_covers_unauthorized(range)
+                        {
+                            route_findings.push(finding(
+                                CheckCode::RouteOkRangeCoversUnauthorized,
+                                &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
+                                "the ok range covers 401 on an endpoint an authentication kind protects",
+                                "Keep 401 out of the ok range: the engine refreshes the credential and retries once itself, and a send that calls a refusal a success reports data it never received.",
+                            ));
+                        }
                     }
                     for key in parameters.query.keys() {
                         if let Some(fault) = query_key_fault(key.as_str()) {
@@ -1203,17 +1262,25 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                             ));
                         }
                     }
-                    if let Some(fault) = parameters
-                        .ok_status_code_range
-                        .as_deref()
-                        .and_then(ok_status_code_range_fault)
-                    {
-                        route_findings.push(finding(
-                            CheckCode::RouteInvalidStatusCodeRange,
-                            &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
-                            fault,
-                            "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
-                        ));
+                    if let Some(range) = parameters.ok_status_code_range.as_deref() {
+                        if let Some(fault) = ok_status_code_range_fault(range) {
+                            route_findings.push(finding(
+                                CheckCode::RouteInvalidStatusCodeRange,
+                                &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
+                                fault,
+                                "Write the range as Camel does: a comma-separated list of single codes and inclusive ranges inside 100 to 599.",
+                            ));
+                        } else if enrich.uri.component == SendComponent::Http
+                            && authenticated_endpoints.contains(enrich.uri.id.as_str())
+                            && ok_status_code_range_covers_unauthorized(range)
+                        {
+                            route_findings.push(finding(
+                                CheckCode::RouteOkRangeCoversUnauthorized,
+                                &format!("{prefix}/steps{path}/parameters/okStatusCodeRange"),
+                                "the ok range covers 401 on an endpoint an authentication kind protects",
+                                "Keep 401 out of the ok range: the engine refreshes the credential and retries once itself, and a send that calls a refusal a success reports data it never received.",
+                            ));
+                        }
                     }
                     for key in parameters.query.keys() {
                         if let Some(fault) = query_key_fault(key.as_str()) {
@@ -4036,6 +4103,26 @@ mod tests {
             id: local("case-api"),
             component: ComponentKind::Http,
             authentication: EndpointAuthentication::Basic {},
+            response_headers: UniqueList::new(Vec::new()).expect("empty"),
+            request_headers: UniqueList::new(Vec::new()).expect("unique"),
+            operations: vec![EndpointOperation {
+                id: local("cases-find"),
+                idempotent_upstream: true,
+                safe_upstream: false,
+                graphql: None,
+            }],
+            tested_versions: vec!["2.7".to_string()],
+            query_file: None,
+            operation_name: None,
+            variables: None,
+        }
+    }
+
+    fn open_endpoint() -> Endpoint {
+        Endpoint {
+            id: local("case-api"),
+            component: ComponentKind::Http,
+            authentication: EndpointAuthentication::None {},
             response_headers: UniqueList::new(Vec::new()).expect("empty"),
             request_headers: UniqueList::new(Vec::new()).expect("unique"),
             operations: vec![EndpointOperation {
@@ -8738,7 +8825,8 @@ mod tests {
 
     /// `okStatusCodeRange` is Camel's comma-separated list of single
     /// codes and inclusive ranges, every code inside 100 to 599 and no
-    /// range running backwards.
+    /// range running backwards. Proven on an unauthenticated endpoint so
+    /// the grammar verdict stays independent of the 401 rule below.
     #[test]
     fn routes_refuse_an_ok_status_code_range_outside_camel_syntax() {
         let send_with_range = |range: &str| {
@@ -8758,7 +8846,7 @@ mod tests {
                 },
                 steps: vec![step],
             };
-            let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+            let pack = pack_builder(vec![open_endpoint()], vec![route]);
             check_routes(&pack, &project_builder(&pack))
         };
         for range in ["200", "200-299", "200-299,404", "100", "599", "100-599"] {
@@ -8778,6 +8866,114 @@ mod tests {
                 "/routes/fetch-case/steps/0/parameters/okStatusCodeRange"
             );
         }
+    }
+
+    /// An `okStatusCodeRange` may never cover 401 on an endpoint an
+    /// authentication kind protects (`products/adapter/CONCEPT.md`
+    /// section 10.2): the engine answers a failed credential with 401
+    /// and refreshes and retries once itself, so a route that calls 401
+    /// a success parses a refusal body as data. A `none` endpoint has
+    /// no credential to refresh, so its ok range keeps the source
+    /// contract; a graphql send is never judged by the HTTP rule.
+    #[test]
+    fn routes_refuse_an_ok_range_that_covers_401_on_an_authenticated_endpoint() {
+        let to_with_range = |range: &str| {
+            let mut step = to_get("case-api");
+            if let Step::To(to) = &mut step {
+                if let Some(parameters) = &mut to.parameters {
+                    parameters.ok_status_code_range = Some(range.to_string());
+                }
+            }
+            step
+        };
+        let enrich_with_range = |range: &str| {
+            Step::Enrich(EnrichStep {
+                uri: send("case-api"),
+                aggregation_strategy: None,
+                aggregate_on_exception: false,
+                parameters: Some(ToParameters {
+                    http_method: Some(HttpMethod::Get),
+                    path: None,
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::new(),
+                    body: None,
+                    operation: None,
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: Some(range.to_string()),
+                    http_uri: None,
+                    resume_bindings: Vec::new(),
+                }),
+            })
+        };
+        let route_with = |step: Step, endpoints: Vec<Endpoint>| {
+            let route = RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![step],
+            };
+            let pack = pack_builder(endpoints, vec![route]);
+            check_routes(&pack, &project_builder(&pack))
+        };
+        // Both send kinds refuse a range that covers 401, as a single
+        // code, inside an inclusive range, or as one list token, on an
+        // endpoint an authentication kind protects.
+        for range in ["401", "400-404", "100-599", "200-299,401"] {
+            for endpoints in [vec![oauth_endpoint()], vec![basic_endpoint()]] {
+                let findings = route_with(to_with_range(range), endpoints.clone());
+                assert_eq!(
+                    findings.len(),
+                    1,
+                    "at {range} on {}: {:?}",
+                    endpoints[0].authentication.kind(),
+                    codes(&findings)
+                );
+                assert_eq!(
+                    findings[0].code,
+                    CheckCode::RouteOkRangeCoversUnauthorized.code()
+                );
+                assert_eq!(
+                    findings[0].path,
+                    "/routes/fetch-case/steps/0/parameters/okStatusCodeRange"
+                );
+            }
+        }
+        let findings = route_with(enrich_with_range("400-404"), vec![oauth_endpoint()]);
+        assert_eq!(findings.len(), 1, "{:?}", codes(&findings));
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RouteOkRangeCoversUnauthorized.code()
+        );
+        assert_eq!(
+            findings[0].path,
+            "/routes/fetch-case/steps/0/parameters/okStatusCodeRange"
+        );
+        // A range that leaves 401 out stays admitted on an
+        // authenticated endpoint, and a grammar fault still reports
+        // under the grammar code alone.
+        assert_clean(route_with(to_with_range("200-299"), vec![oauth_endpoint()]));
+        let findings = route_with(to_with_range("299-200"), vec![oauth_endpoint()]);
+        assert_eq!(findings.len(), 1, "{:?}", codes(&findings));
+        assert_eq!(
+            findings[0].code,
+            CheckCode::RouteInvalidStatusCodeRange.code()
+        );
+        // A `none` endpoint keeps the source contract, and a graphql
+        // send is out of the HTTP rule's reach.
+        assert_clean(route_with(to_with_range("100-599"), vec![open_endpoint()]));
+        let mut graphql = oauth_endpoint();
+        graphql.component = ComponentKind::GraphQl;
+        let mut graphql_send = to_with_range("100-599");
+        if let Step::To(to) = &mut graphql_send {
+            to.uri = SendUri::parse("graphql:case-api").expect("uri");
+        }
+        let findings = route_with(graphql_send, vec![graphql]);
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteOkRangeCoversUnauthorized.code()),
+            "{:?}",
+            codes(&findings)
+        );
     }
 
     // ----- path parameter correspondence (round 6 C12) -----
