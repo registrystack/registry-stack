@@ -40,6 +40,8 @@ pub const MAX_CONCRETE_OPERATION_BYTES: usize = 256;
 pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 /// Longest exact facade content type retained with a response.
 pub const MAX_CONTENT_TYPE_BYTES: usize = 256;
+/// Exact lowercase-hex length of an Adapter-generated response request id.
+pub const RESPONSE_REQUEST_ID_BYTES: usize = 32;
 /// Largest exact facade response body the idempotency store will retain.
 ///
 /// This is the Adapter's v1 per-response ceiling. It matches the largest
@@ -55,7 +57,8 @@ const MIN_RESPONSE_RETENTION: Duration = Duration::from_secs(1);
 const SCOPE_DIGEST_DOMAIN: &[u8] = b"registry-adapter:idempotency-scope:v1\0";
 
 const LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION: i64 = 200;
-const MIGRATIONS: [(i64, &str); 2] = [
+const RESPONSE_REQUEST_ID_MIGRATION: i64 = 300;
+const MIGRATIONS: [(i64, &str); 3] = [
     (
         100,
         include_str!("idempotent/migrations/0100_idempotency_store.sql"),
@@ -63,6 +66,10 @@ const MIGRATIONS: [(i64, &str); 2] = [
     (
         LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION,
         include_str!("idempotent/migrations/0200_logical_deployment_identity.sql"),
+    ),
+    (
+        RESPONSE_REQUEST_ID_MIGRATION,
+        include_str!("idempotent/migrations/0300_response_request_id.sql"),
     ),
 ];
 const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
@@ -153,6 +160,7 @@ pub struct StoredResponse {
     status: u16,
     content_type: Vec<u8>,
     body: Vec<u8>,
+    request_id: String,
 }
 
 impl StoredResponse {
@@ -161,7 +169,9 @@ impl StoredResponse {
         status: u16,
         content_type: Vec<u8>,
         body: Vec<u8>,
+        request_id: impl Into<String>,
     ) -> Result<Self, IdempotencyError> {
+        let request_id = request_id.into();
         if !(100..=599).contains(&status) {
             return Err(IdempotencyError::InvalidInput {
                 field: "response status",
@@ -180,10 +190,20 @@ impl StoredResponse {
                 field: "response body",
             });
         }
+        if request_id.len() != RESPONSE_REQUEST_ID_BYTES
+            || !request_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(IdempotencyError::InvalidInput {
+                field: "response request id",
+            });
+        }
         Ok(Self {
             status,
             content_type,
             body,
+            request_id,
         })
     }
 
@@ -203,6 +223,12 @@ impl StoredResponse {
     #[must_use]
     pub fn body(&self) -> &[u8] {
         &self.body
+    }
+
+    /// Adapter-generated request id that accompanied the exact response.
+    #[must_use]
+    pub fn request_id(&self) -> &str {
+        &self.request_id
     }
 }
 
@@ -271,6 +297,9 @@ pub enum IdempotencyError {
     /// Opaque v0100 entries cannot be remapped to the logical deployment
     /// namespace without risking a fresh retry of an existing effect.
     LegacyDeploymentIdentityEntries,
+    /// Replayable v0200 responses lack the original Adapter response id and
+    /// cannot be safely repaired or replayed under the v0300 contract.
+    LegacyResponseRequestIdEntries,
     /// The migration advisory lock was not held when released.
     MigrationLock,
     /// An execution token attempted an invalid or already-completed state
@@ -297,6 +326,10 @@ impl fmt::Display for IdempotencyError {
             Self::LegacyDeploymentIdentityEntries => write!(
                 formatter,
                 "adapter.idempotency-legacy-deployment-entries: existing idempotency entries require operator reconciliation before the logical deployment identity migration"
+            ),
+            Self::LegacyResponseRequestIdEntries => write!(
+                formatter,
+                "adapter.idempotency-legacy-response-id: existing replayable responses require operator reconciliation before the response identity migration"
             ),
             Self::MigrationLock => write!(
                 formatter,
@@ -327,6 +360,7 @@ impl std::error::Error for IdempotencyError {
             Self::InvalidInput { .. }
             | Self::SchemaNewer { .. }
             | Self::LegacyDeploymentIdentityEntries
+            | Self::LegacyResponseRequestIdEntries
             | Self::MigrationLock
             | Self::StateConflict
             | Self::StoredDataInvalid => None,
@@ -416,7 +450,7 @@ impl PostgresIdempotencyStore {
         let row = client
             .query_one(
                 "SELECT request_digest, state, response_status, \
-                        response_content_type, response_body \
+                        response_content_type, response_body, response_request_id \
                  FROM adapter_idempotency_entries WHERE scope_digest = $1",
                 &[&scope_digest.as_slice()],
             )
@@ -524,8 +558,9 @@ impl PostgresIdempotencyStore {
             .execute(
                 "UPDATE adapter_idempotency_entries \
                  SET state = $3, terminal_at = $4, expires_at = $5, \
-                     response_status = $6, response_content_type = $7, response_body = $8 \
-                 WHERE scope_digest = $1 AND request_digest = $2 AND state = $9",
+                     response_status = $6, response_content_type = $7, response_body = $8, \
+                     response_request_id = $9 \
+                 WHERE scope_digest = $1 AND request_digest = $2 AND state = $10",
                 &[
                     &execution.scope_digest.as_slice(),
                     &execution.request_digest.as_slice(),
@@ -535,6 +570,7 @@ impl PostgresIdempotencyStore {
                     &status,
                     &response.content_type,
                     &response.body,
+                    &response.request_id,
                     &expected_state,
                 ],
             )
@@ -574,7 +610,8 @@ impl PostgresIdempotencyStore {
                  SET state = CASE entries.state \
                          WHEN 'completed' THEN 'completed_expired' \
                          ELSE 'failed_expired' END, \
-                     response_status = NULL, response_content_type = NULL, response_body = NULL \
+                     response_status = NULL, response_content_type = NULL, response_body = NULL, \
+                     response_request_id = NULL \
                  FROM expired WHERE entries.scope_digest = expired.scope_digest \
                  RETURNING entries.scope_digest",
                 &[&now, &limit],
@@ -637,6 +674,11 @@ async fn apply_migrations(client: &impl GenericClient) -> Result<(), Idempotency
             {
                 return Err(IdempotencyError::LegacyDeploymentIdentityEntries);
             }
+            if version == RESPONSE_REQUEST_ID_MIGRATION
+                && error.code().is_some_and(|code| code.code() == "P0001")
+            {
+                return Err(IdempotencyError::LegacyResponseRequestIdEntries);
+            }
             return Err(IdempotencyError::Query(error));
         }
         client
@@ -691,7 +733,8 @@ async fn erase_one_if_expired(
              SET state = CASE state \
                      WHEN 'completed' THEN 'completed_expired' \
                      ELSE 'failed_expired' END, \
-                 response_status = NULL, response_content_type = NULL, response_body = NULL \
+                 response_status = NULL, response_content_type = NULL, response_body = NULL, \
+                 response_request_id = NULL \
              WHERE scope_digest = $1 AND state IN ('completed', 'failed') \
                AND expires_at <= $2",
             &[&scope_digest.as_slice(), &now],
@@ -725,6 +768,7 @@ fn replay_from_row(row: &Row, outcome: TerminalOutcome) -> Result<Claim, Idempot
     let status: Option<i16> = row.get("response_status");
     let content_type: Option<Vec<u8>> = row.get("response_content_type");
     let body: Option<Vec<u8>> = row.get("response_body");
+    let request_id: Option<String> = row.get("response_request_id");
     let status = status
         .and_then(|value| u16::try_from(value).ok())
         .ok_or(IdempotencyError::StoredDataInvalid)?;
@@ -732,6 +776,7 @@ fn replay_from_row(row: &Row, outcome: TerminalOutcome) -> Result<Claim, Idempot
         status,
         content_type.ok_or(IdempotencyError::StoredDataInvalid)?,
         body.ok_or(IdempotencyError::StoredDataInvalid)?,
+        request_id.ok_or(IdempotencyError::StoredDataInvalid)?,
     )
     .map_err(|_| IdempotencyError::StoredDataInvalid)?;
     Ok(Claim::Replay { outcome, response })

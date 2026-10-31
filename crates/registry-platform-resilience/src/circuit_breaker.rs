@@ -130,6 +130,9 @@ pub struct BreakerConfig {
     pub minimum_number_of_calls: usize,
     /// How long the breaker stays open before a trial is permitted.
     pub open_state_wait: Duration,
+    /// Whether passive state observation advances an elapsed open wait,
+    /// without requiring another guarded call.
+    pub automatic_transition: bool,
     /// The trials half-open admits before it closes again.
     pub maximum_half_open_calls: usize,
 }
@@ -321,17 +324,24 @@ impl CircuitBreaker {
     /// already allows. This observes without admitting anything.
     pub fn state(&self) -> BreakerState {
         let now = Instant::now();
-        let guard = self.inner.lock().expect("the breaker lock is not poisoned");
-        let internals = &*guard;
+        let mut guard = self.inner.lock().expect("the breaker lock is not poisoned");
+        let internals = &mut *guard;
+        if self.config.automatic_transition
+            && matches!(internals.phase, Phase::Open { opened_at }
+                if now.duration_since(opened_at) >= self.config.open_state_wait)
+        {
+            // Materialize the time-derived phase when observed. This admits
+            // no trial and needs no timer task: the primitive has no state
+            // events, half-open timeout, or other passive observer.
+            internals.cycle += 1;
+            internals.phase = Phase::HalfOpen {
+                permitted: 0,
+                successes: 0,
+            };
+        }
         match internals.phase {
             Phase::Closed { .. } => BreakerState::Closed,
-            Phase::Open { opened_at } => {
-                if now.duration_since(opened_at) >= self.config.open_state_wait {
-                    BreakerState::HalfOpen
-                } else {
-                    BreakerState::Open
-                }
-            }
+            Phase::Open { .. } => BreakerState::Open,
             Phase::HalfOpen { .. } => BreakerState::HalfOpen,
         }
     }
@@ -349,12 +359,50 @@ mod tests {
             sliding_window_calls: 4,
             minimum_number_of_calls: 2,
             open_state_wait: Duration::from_millis(30),
+            automatic_transition: false,
             maximum_half_open_calls: 2,
         }
     }
 
     fn breaker() -> CircuitBreaker {
         CircuitBreaker::new(config()).expect("the breaker builds")
+    }
+
+    #[tokio::test]
+    async fn automatic_transition_is_observable_without_a_guarded_call() {
+        let mut configured = config();
+        configured.automatic_transition = true;
+        let breaker = CircuitBreaker::new(configured).expect("the breaker builds");
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Open);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(breaker.state(), BreakerState::HalfOpen);
+        let guard = breaker
+            .inner
+            .lock()
+            .expect("the breaker lock is not poisoned");
+        assert!(matches!(
+            guard.phase,
+            Phase::HalfOpen {
+                permitted: 0,
+                successes: 0
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn default_transition_waits_for_a_guarded_call_after_the_open_wait() {
+        let breaker = breaker();
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(breaker.state(), BreakerState::Open);
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(true, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the first guarded call after the wait is a trial"),
+        }
+        assert_eq!(breaker.state(), BreakerState::HalfOpen);
     }
 
     #[test]
@@ -592,14 +640,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_reports_the_lazily_advanced_phase() {
-        let breaker = breaker();
+    async fn passive_transition_does_not_consume_a_trial() {
+        let mut configured = config();
+        configured.automatic_transition = true;
+        configured.maximum_half_open_calls = 1;
+        let breaker = CircuitBreaker::new(configured).expect("the breaker builds");
         breaker.record(false, Duration::from_millis(1));
         breaker.record(false, Duration::from_millis(1));
         assert_eq!(breaker.state(), BreakerState::Open);
         tokio::time::sleep(Duration::from_millis(40)).await;
-        // No call was made; the view still reports the wait as elapsed.
+        // No guarded call was made; passive observation admits no trial.
         assert_eq!(breaker.state(), BreakerState::HalfOpen);
+        let Acquired::Permitted(trial) = breaker.acquire() else {
+            panic!("the entire trial allowance remains available");
+        };
+        assert!(matches!(breaker.acquire(), Acquired::Rejected));
+        trial.record(true, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Closed);
     }
 
     #[tokio::test]

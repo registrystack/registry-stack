@@ -158,7 +158,10 @@ fn failed_class(outcome: &RouteOutcome) -> String {
 
 /// The default error handler without a policy makes one attempt and the
 /// failure propagates to the caller; `noErrorHandler` additionally keeps
-/// every clause from firing (section 8.7).
+/// every clause from firing. These are the bounded counterparts of
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DefaultErrorHandlerRedeliveryTest.java#testNoRedeliveriesTest`
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionRecursionTest.java#testRecursionDirectNoErrorHandler`.
 #[tokio::test]
 async fn the_error_handler_shapes_the_attempts_and_clause_reach() {
     let (outcome, requests) = run_over(
@@ -202,7 +205,10 @@ async fn the_error_handler_shapes_the_attempts_and_clause_reach() {
 
 /// The default error handler redelivers a failed send while its policy
 /// allows, carrying Camel's redelivery headers on the exchange that
-/// succeeds (section 8.7, `exception-redelivery.html`).
+/// succeeds, as exercised by
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DefaultErrorHandlerRedeliveryTest.java#testRedeliveryTest`
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/RedeliveryPolicyPerExceptionTest.java#testUsingCustomExceptionHandlerAndOneRedelivery`.
 #[tokio::test]
 async fn the_default_error_handler_redelivers_under_its_policy() {
     let (outcome, requests) = run_over(
@@ -264,7 +270,8 @@ async fn the_default_error_handler_redelivers_under_its_policy() {
 }
 
 /// A clause's own policy governs its classes; the handler's policy
-/// governs every other failure (section 8.7).
+/// governs every other failure, porting
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/RedeliveryPolicyPerExceptionTest.java#testUsingCustomExceptionHandlerAndOneRedelivery`.
 #[tokio::test]
 async fn the_clause_policy_governs_its_classes_and_the_handler_the_rest() {
     let (clause_class, requests) = run_over(
@@ -316,13 +323,58 @@ async fn the_clause_policy_governs_its_classes_and_the_handler_the_rest() {
     );
 }
 
+/// Camel gives an output-bearing `onException` clause that declares no
+/// policy zero redeliveries, even when the route handler permits them
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/RedeliveryPolicyPerExceptionTest.java#testUsingCustomExceptionHandlerWithNoRedeliveries`).
+/// An outputless clause follows Camel's separate parent-policy inheritance
+/// path, which `retry_while_narrows_redelivery_without_raising_the_cap`
+/// exercises below.
+#[tokio::test]
+async fn an_output_bearing_clause_without_policy_disables_handler_redelivery() {
+    let (outcome, requests) = run_over(
+        json!([
+            {"errorHandler": {"defaultErrorHandler": {"redeliveryPolicy": {
+                "maximumRedeliveries": 3, "retryDelaySeconds": 1
+            }}}},
+            {"onException": {
+                "exception": ["upstream"],
+                "handled": true,
+                "steps": [{"setHeader": {
+                    "name": "x-clause", "value": {"constant": 1}
+                }}]
+            }},
+            get()
+        ]),
+        vec![
+            upstream::Response::json(500, r#"{"boom": true}"#),
+            upstream::Response::json(200, r#"{"unexpected": "retry"}"#),
+        ],
+    )
+    .await;
+
+    let exchange = outcome
+        .result
+        .expect("the output-bearing clause handles the first failure");
+    assert_eq!(requests, 1, "the route policy is not inherited");
+    assert_eq!(exchange.message.header("x-clause"), Some(&json!(1)));
+}
+
 /// `retryWhile` sits on the clause and the default handler, as in Camel,
 /// never on the redelivery policy (section 8.7). It continues redelivery
 /// while it holds, stops early when it does not, and a raising predicate
 /// ends the redelivery; the cap stays `maximumRedeliveries`. A matched
 /// clause's own predicate governs its classes, the handler's every other
-/// failure, and a clause without its own policy redelivers under the
-/// handler's.
+/// failure. An outputless clause without its own policy redelivers under
+/// the handler's. Camel's predicate behavior is exercised by
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/DefaultErrorHandlerRetryWhileTest.java#testRetryUntil`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionRetryUntilTest.java#testRetryUntil`,
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/ErrorHandlerFailurePathsTest.java#testDeadLetterChannelRetryWhileThrows`;
+/// the Adapter's hard cap is the recorded divergence. Camel's
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/RedeliveryPolicyPerExceptionTest.java#testUsingCustomExceptionHandlerWithNoRedeliveries`
+/// gives an output-bearing clause with no policy zero redeliveries. The
+/// outputless handled clause below follows Camel's separate inheritance path.
+/// The output-bearing zero-redelivery case has its own focused regression.
 #[tokio::test]
 async fn retry_while_narrows_redelivery_without_raising_the_cap() {
     // A predicate that does not hold stops before any redelivery.
@@ -469,7 +521,12 @@ async fn retry_while_narrows_redelivery_without_raising_the_cap() {
 
 /// `handled` ends the exchange with the clause's result and `continued`
 /// resumes the route after the failure point; without either the clause's
-/// steps run and the failure still surfaces (section 8.7).
+/// steps run and the failure still surfaces. The first two paths port
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionHandledTest.java#testHandled`
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionContinueTest.java#testContinued`;
+/// a later independent failure follows
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/ErrorHandlerFailurePathsTest.java#testContinuedThenUnrelatedFailure`.
 #[tokio::test]
 async fn handled_ends_continued_resumes_and_default_propagates() {
     let (handled, _) = run_over(
@@ -518,6 +575,24 @@ async fn handled_ends_continued_resumes_and_default_propagates() {
         "the route resumes after the failure"
     );
 
+    let (continued_then_failed, _) = run_over(
+        json!([
+            {"onException": {
+                "exception": ["upstream"],
+                "continued": true
+            }},
+            {"throwException": {"exceptionType": "upstream.http"}},
+            {"throwException": {"exceptionType": "validation"}}
+        ]),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        failed_class(&continued_then_failed),
+        "validation",
+        "a later independent failure replaces the continued one"
+    );
+
     let (propagated, _) = run_over(
         json!([
             {"onException": {
@@ -533,8 +608,114 @@ async fn handled_ends_continued_resumes_and_default_propagates() {
     assert_eq!(failed_class(&propagated), "upstream.http");
 }
 
+/// The closest declared class wins over an earlier ancestor; equally close
+/// clauses retain declaration order, while an `onWhen` that raises is not a
+/// match. This ports
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/exceptionpolicy/DefaultExceptionPolicyStrategyTest.java#testClosetMatch3`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/exceptionpolicy/DefaultExceptionPolicyStrategyUsingWhenTest.java#testWithWhen`,
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/ErrorHandlerFailurePathsTest.java#testOnWhenThrowsIsNoMatch`
+/// into the Adapter's single-class hierarchy.
+#[tokio::test]
+async fn the_closest_exception_clause_wins_and_on_when_narrows_ties() {
+    let (closest, _) = run_over(
+        json!([
+            {"onException": {
+                "exception": ["upstream"],
+                "handled": true,
+                "steps": [{"setHeader": {
+                    "name": "x-clause", "value": {"constant": "ancestor"}
+                }}]
+            }},
+            {"onException": {
+                "exception": ["upstream.http"],
+                "handled": true,
+                "steps": [{"setHeader": {
+                    "name": "x-clause", "value": {"constant": "closest"}
+                }}]
+            }},
+            {"throwException": {"exceptionType": "upstream.http"}}
+        ]),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        closest
+            .result
+            .expect("the closest clause handles the failure")
+            .message
+            .header("x-clause"),
+        Some(&json!("closest"))
+    );
+
+    let (tied, _) = run_over(
+        json!([
+            {"onException": {
+                "exception": ["upstream.http"],
+                "handled": true,
+                "steps": [{"setHeader": {
+                    "name": "x-clause", "value": {"constant": "first"}
+                }}]
+            }},
+            {"onException": {
+                "exception": ["upstream.http"],
+                "handled": true,
+                "steps": [{"setHeader": {
+                    "name": "x-clause", "value": {"constant": "second"}
+                }}]
+            }},
+            {"throwException": {"exceptionType": "upstream.http"}}
+        ]),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        tied.result
+            .expect("the first equally specific clause handles the failure")
+            .message
+            .header("x-clause"),
+        Some(&json!("first"))
+    );
+
+    // The first equally specific clause has a raising predicate (a
+    // non-boolean constant), so it is no match and the next clause wins.
+    let (narrowed, _) = run_over(
+        json!([
+            {"onException": {
+                "exception": ["upstream.http"],
+                "onWhen": {"constant": 1},
+                "handled": true,
+                "steps": [{"setHeader": {
+                    "name": "x-clause", "value": {"constant": "raising"}
+                }}]
+            }},
+            {"onException": {
+                "exception": ["upstream.http"],
+                "handled": true,
+                "steps": [{"setHeader": {
+                    "name": "x-clause", "value": {"constant": "fallback"}
+                }}]
+            }},
+            {"throwException": {"exceptionType": "upstream.http"}}
+        ]),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        narrowed
+            .result
+            .expect("the fallback clause handles the failure")
+            .message
+            .header("x-clause"),
+        Some(&json!("fallback"))
+    );
+}
+
 /// An error raised inside a clause is never handled again: it replaces
-/// the failure, and the record keeps both classes (section 8.7).
+/// the failure, and the record keeps both classes. Camel recursively invokes
+/// the callee's handler in
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionRecursionTest.java#testRecursionDirect`;
+/// not doing so is the Adapter's recorded `direct:` divergence.
 #[tokio::test]
 async fn a_clause_error_replaces_the_failure_and_keeps_the_original() {
     let (outcome, _) = run_over(
@@ -565,7 +746,7 @@ async fn a_clause_error_replaces_the_failure_and_keeps_the_original() {
 }
 
 /// No clause matches an uncatchable class, whatever prefix the clause
-/// names (section 8.7).
+/// names. This terminal class set is an Adapter addition with no Camel case.
 #[tokio::test]
 async fn an_uncatchable_class_matches_no_clause() {
     let (outcome, _) = run_over(
@@ -591,8 +772,12 @@ async fn an_uncatchable_class_matches_no_clause() {
 
 /// `doTry` catches a matching class, `instanceof`-wise, first catch
 /// winning, with `CamelExceptionCaught` readable inside the clause and
-/// cleared afterward; the route resumes after the `doTry`
-/// (`try-catch-finally.html`).
+/// cleared afterward; the route resumes after the `doTry`. This ports
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/TryProcessorTest.java#testTryCatchFinallyProcessor`
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/TryProcessorMultipleExceptionTest.java#testIOException`,
+/// while first-catch resolution follows
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DoTryEdgeCasesTest.java#testOnWhenNotEvaluatedWhenHandled`.
 #[tokio::test]
 async fn do_try_catches_its_block_and_resumes_the_route() {
     let (outcome, _) = run_over(
@@ -628,13 +813,98 @@ async fn do_try_catches_its_block_and_resumes_the_route() {
         None,
         "the caught class does not outlive the clause"
     );
+
+    let (multi_class, _) = run_over(
+        json!([
+            {"doTry": {
+                "steps": [{"throwException": {"exceptionType": "upstream.http"}}],
+                "doCatch": [{
+                    "exception": ["upstream.connection", "upstream.http"],
+                    "steps": [{"setHeader": {
+                        "name": "x-caught", "value": {"constant": "multi"}
+                    }}]
+                }]
+            }}
+        ]),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        multi_class
+            .result
+            .expect("one catch may name more than one class")
+            .message
+            .header("x-caught"),
+        Some(&json!("multi"))
+    );
 }
 
 /// A `doCatch` narrows with `onWhen`: a predicate that does not hold
 /// leaves the catch, and one that raises fails the exchange with the
-/// raising error, the original kept (section 8.7).
+/// raising error, the original kept. This ports
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/TryProcessorOnWhenTest.java#testOtherBug`
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DoTryEdgeCasesTest.java#testOnWhenThrowsException`.
 #[tokio::test]
 async fn a_do_catch_on_when_narrows_or_fails() {
+    let (matched, _) = run_over(
+        json!([
+            {"doTry": {
+                "steps": [{"throwException": {"exceptionType": "upstream.http"}}],
+                "doCatch": [{
+                    "exception": ["upstream"],
+                    "onWhen": {"constant": true},
+                    "steps": [{"setHeader": {
+                        "name": "x-caught", "value": {"constant": 1}
+                    }}]
+                }]
+            }}
+        ]),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        matched
+            .result
+            .expect("the holding predicate admits the catch")
+            .message
+            .header("x-caught"),
+        Some(&json!(1))
+    );
+
+    let (fallback, _) = run_over(
+        json!([
+            {"doTry": {
+                "steps": [{"throwException": {"exceptionType": "upstream.http"}}],
+                "doCatch": [
+                    {
+                        "exception": ["upstream"],
+                        "onWhen": {"constant": false},
+                        "steps": [{"setHeader": {
+                            "name": "x-caught", "value": {"constant": "narrowed"}
+                        }}]
+                    },
+                    {
+                        "exception": ["upstream"],
+                        "steps": [{"setHeader": {
+                            "name": "x-caught", "value": {"constant": "fallback"}
+                        }}]
+                    }
+                ]
+            }}
+        ]),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        fallback
+            .result
+            .expect("the next catch handles after the narrowed catch")
+            .message
+            .header("x-caught"),
+        Some(&json!("fallback"))
+    );
+
     let (skipped, _) = run_over(
         json!([
             {"doTry": {"steps": [get()], "doCatch": [
@@ -673,7 +943,10 @@ async fn a_do_catch_on_when_narrows_or_fails() {
 /// An error no `doCatch` matches leaves the `doTry` and fails the
 /// exchange; `doFinally` runs on success, on a handled catch, and on an
 /// escaping failure, and an error it raises itself wins only when no
-/// failure is pending (section 8.7, `FinallyProcessor`).
+/// failure is pending. This ports
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/TryProcessorMultipleExceptionTest.java#testOk`
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DoTryEdgeCasesTest.java#testDoFinallyThrowsKeepsOriginal`.
 #[tokio::test]
 async fn do_finally_runs_on_every_path_and_yields_to_a_pending_failure() {
     let (clean, _) = run_over(
@@ -754,7 +1027,8 @@ async fn do_finally_runs_on_every_path_and_yields_to_a_pending_failure() {
 }
 
 /// Inside a `doTry` block the route error handler is not in use: no
-/// clause fires and no redelivery multiplies the send (section 8.7).
+/// clause fires and no redelivery multiplies the send, matching
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DoTryEdgeCasesTest.java#testNestedDoTryKeepsTryBlock`.
 #[tokio::test]
 async fn the_route_error_handler_does_not_wrap_a_do_try_block() {
     let (outcome, requests) = run_over(
@@ -785,9 +1059,25 @@ async fn the_route_error_handler_does_not_wrap_a_do_try_block() {
 
 /// The load refusals: a second error handler, a nested clause, a
 /// `retryWhile` with no redeliveries behind it, and a doCatch naming an
-/// uncatchable class (sections 8.7 and 5.5).
+/// uncatchable class. The handled/continued exclusivity exercised here is
+/// the same invariant as
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionHandledAndContinueTest.java#testHandledAndContinued`;
+/// the other refusals are Adapter bounds. Camel's `useOriginalMessage` cases
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionUseOriginalMessageTest.java#testOnExceptionError`
+/// and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionUseOriginalBodyTest.java#testUseOriginalBody`
+/// are outside the port and their fields are rejected rather than ignored.
 #[tokio::test]
 async fn the_cluster_refuses_its_unservable_shapes_at_load() {
+    serde_json::from_value::<Vec<Step>>(json!([{"onException": {
+        "exception": ["upstream"], "useOriginalMessage": true
+    }}]))
+    .expect_err("useOriginalMessage is not in the bounded onException shape");
+    serde_json::from_value::<Vec<Step>>(json!([{"onException": {
+        "exception": ["upstream"], "useOriginalBody": true
+    }}]))
+    .expect_err("useOriginalBody is not in the bounded onException shape");
+
     check_servable(&steps(json!([
         {"errorHandler": {"defaultErrorHandler": {}}},
         {"errorHandler": {"noErrorHandler": {}}},

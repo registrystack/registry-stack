@@ -146,8 +146,18 @@
           "$ref": "#/$defs/ExternalId",
           "description": "The profile's own problem code a caller receives."
         },
+        "dataFields": {
+          "description": "The optional closed scalar object this problem may disclose. Every\ndeclared field is required when the object is present; authoring\nchecks enforce the field-count and required-field bounds.",
+          "items": {
+            "$ref": "#/$defs/RecordField"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "status": {
-          "description": "The HTTP status the facade answers with.",
+          "description": "The default HTTP status for profile-governed route failures. Fixed\nfacade admission failures retain their engine-defined status; the\neffective problem schema includes those resolved class/status pairs.",
           "format": "uint32",
           "maximum": 599,
           "minimum": 400,
@@ -242,6 +252,41 @@
         "responseEnvelope"
       ],
       "type": "object"
+    },
+    "RecordField": {
+      "additionalProperties": false,
+      "description": "One declared record field, typed under CFG-VAL-9 so fixture values and\nroute outputs are checked against it.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The field name."
+        },
+        "required": {
+          "description": "Whether every record of the type carries the field.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/RecordFieldType",
+          "description": "The field's value type."
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "RecordFieldType": {
+      "description": "A record field's value type (CFG-VAL-9).",
+      "enum": [
+        "string",
+        "integer",
+        "decimal",
+        "boolean",
+        "date",
+        "date-time"
+      ],
+      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json",

@@ -34,7 +34,7 @@ use crate::exchange::{
 };
 use crate::idempotent::MAX_IDEMPOTENCY_KEY_BYTES;
 use crate::load::{compile_authored_with, EndpointCompilation, LoadError};
-use crate::route::{run_route, RouteContext, RouteFailure};
+use crate::route::{run_route_with_profile, RouteContext, RouteFailure};
 
 /// A sealed marker that permits only this module's runner to install the
 /// in-memory write state used by offline replay.
@@ -630,7 +630,7 @@ pub async fn run(
         code_maps: Arc::clone(&authored.code_maps),
         maximum_upstream_calls: operation.maximum_upstream_calls,
     };
-    let outcome = run_route(&context, &operation.steps, exchange).await;
+    let outcome = run_route_with_profile(&context, profile, &operation.steps, exchange).await;
     transcript.finish()?;
     if let Some(write) = &replay_write {
         if !write.was_claimed().await {
@@ -724,8 +724,9 @@ async fn replay_problem(
     record_type: &str,
     durability: ReplayDurability,
 ) -> Result<ReplayFacade, ReplayRunFailure> {
-    let problem =
-        crate::facade::select_problem(profile, failure.class).ok_or(ReplayRunFailure::Render)?;
+    let failure = crate::facade::enforce_problem_data(profile, failure);
+    let problem = registry_adapter_core::resolve_problem(profile, failure.class)
+        .ok_or(ReplayRunFailure::Render)?;
     facade_result(
         crate::facade::route_problem(
             crate::facade::Problems { profile, envelope },

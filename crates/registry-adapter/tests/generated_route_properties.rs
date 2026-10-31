@@ -228,6 +228,7 @@ fn problem(code: &str, class: ErrorClass) -> Problem {
         status: BoundedU32::new(500).expect("problem status"),
         title: "generated route failure".to_owned(),
         classes: UniqueList::new(vec![class]).expect("one class"),
+        data_fields: None,
     }
 }
 
@@ -766,7 +767,7 @@ fn generated_split_accounting_is_complete_or_stops_at_the_declared_failure() {
                 .collect();
             prop_assert_eq!(&exchange.message.body, &Value::Array(successful_ids));
             prop_assert_eq!(
-                exchange.message.header("CamelSplitResult"),
+                exchange.property("CamelSplitResult"),
                 Some(&json!({
                     "totalItems": outcomes.len(),
                     "processedItems": outcomes.len(),

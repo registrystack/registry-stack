@@ -250,7 +250,8 @@ An envelope is a JSON template in the profile with slots from a closed
 vocabulary the engine fills: `record` (one validated route result),
 `records` (the validated result list), `recordType`, `recordId`,
 `nextCursor`, `requestId`, and, in the problem envelope, `problemCode`,
-`problemTitle`, `problemDetail`, `status`. Request envelopes name where the
+`problemTitle`, `problemDetail`, optional whole-value `problemData`, and
+`status`. Request envelopes name where the
 writable record sits in an incoming body; pagination parameters name the
 cursor and page-size query parameters and their bounds. The profile's
 `problems` list declares each problem a caller can receive (`code`,
@@ -324,14 +325,18 @@ the profile, not before.
   `component` (`direct`, `http`, `graphql`, `rest`), `language`,
   `errorhandler`, `notifier` (the journal), `idempotent`. It serves the
   facade and owns security. Reuses `registry-platform-script`, `-oidc`,
-  `-httputil`, `-httpsec`, `-ratelimit`, `-audit`, `-config`, `-yaml`.
+  `-httputil`, `-ratelimit`, `-resilience`, `-config`, `-yaml`,
+  `-authcommon`, `-crypto`, and `-canonical-json`.
 - `registry-adapterctl`: authoring and operator tooling; the `adapterctl`
   binary: `check`, `compile`, `fixtures replay`, `verify --live`.
 
 The upstream transport is `registry-platform-httputil`'s
 `FixedDestinationPolicy` (opaque templated requests, DNS pinning, mTLS and
-private CAs, the explicit private-CIDR allowlist); the facade's server side is
-`registry-platform-httpsec`, as Evidence does. The generic
+private CAs, the explicit private-CIDR allowlist). The Axum facade uses the
+shared OIDC verifier and keeps its profile-shaped problems and freshly
+minted request IDs inside the Adapter. Its PostgreSQL audit journal owns
+the durable release gate; it does not use the platform's file audit writer.
+The generic
 mechanisms under the resilience processors are built in platform crates from
 the start (D13): the rolling-window limiter in `registry-platform-ratelimit`,
 and the circuit breaker state machine and redelivery delay computation in
@@ -352,6 +357,12 @@ unmarshalled; the `http` and `graphql` components marshal and unmarshal JSON
 themselves (divergence: Camel requires explicit `marshal` and `unmarshal`
 steps; our components speak exactly one data format, so the step would be
 noise).
+
+Split and loop metadata (`CamelSplitIndex`, `CamelSplitSize`,
+`CamelSplitComplete`, `CamelSplitResult`, `CamelLoopIndex`, and
+`CamelLoopSize`) lives in exchange properties, as at the pinned Camel tag.
+These names have no header aliases and authored steps or aggregation
+results cannot overwrite them.
 
 What enters the exchange is declared. The `rest` consumer places only the
 bound operation's validated inputs on it, under the closed names of section
@@ -649,6 +660,9 @@ is in the profile's shape.
   An `onWhen` that raises means the clause does not match, as in Camel.
   Clauses are route-scoped; Camel's global and `routeConfiguration` scopes
   are not ported.
+  Without an explicit clause policy, a clause with nested output steps
+  uses zero redeliveries; an outputless clause inherits the route policy,
+  as `ExceptionPolicy.createRedeliveryPolicy` does at the pinned tag.
   `handled: true` ends the exchange successfully with the clause's result,
   which is validated against the operation's result schema like any route
   output (an empty search page, a fallback record). To translate an error
@@ -669,7 +683,9 @@ is in the profile's shape.
   upstream content; the profile's mapping for the `upstream` root is the
   catch-all for source failures.
 - `doTry`, `doCatch` (with `onWhen`), `doFinally`: ported as in Camel
-  (`doTry-eip.adoc`, `TryProcessor`). Inside a `doTry` block the route error
+  (`doTry-eip.adoc`, `TryProcessor`). A `doTry` without either a catch or
+  a finally clause is refused before serving, as Camel 4.23's `TryReifier`
+  requires; an explicitly empty finally clause is valid. Inside a `doTry` block the route error
   handler is not in use: no `onException` clause and no redelivery applies
   to the block's steps. An error no `doCatch` matches, or one raised in a
   `doCatch` or `doFinally`, leaves the `doTry` and fails the exchange; an
@@ -690,6 +706,11 @@ is in the profile's shape.
   `permittedNumberOfCallsInHalfOpenState`, 10),
   `automaticTransitionFromOpenToHalfOpenEnabled` false,
   `slowCallRateThreshold` 100, `slowCallDurationThresholdSeconds` 60.
+  With automatic transition disabled, an elapsed open wait stays OPEN
+  until the next guarded call. When enabled, passive state observation
+  reflects HALF_OPEN without admitting a trial. The primitive derives
+  this elapsed transition when observed; it starts no timer task and
+  exposes no transition-event or half-open-timeout surface.
   Optional `recordException` and `ignoreException` are unique, non-empty
   lists from the closed Adapter error-class hierarchy. A named parent covers
   its descendants. With `recordException`, a non-matching catchable failure
@@ -720,7 +741,7 @@ is in the profile's shape.
   is always on; unmatched requests answer 404 or 405 as in Camel; a missing
   route fails startup (Camel's `missingOperation` default; `ignore` and
   `mock` are not ported). Authentication and authorization (section 10) are
-  engine-owned on `registry-platform-httpsec`; the envelope is the
+  engine-owned on Axum with shared OIDC verification; the envelope is the
   profile's template, filled by the engine.
 - `http`: producer on `FixedDestinationPolicy`. `uri: "http:<endpointId>"`
   names an endpoint declared in the pack and bound to a base URL in the
@@ -1012,8 +1033,9 @@ the list position, never the value.
 
 A `header` expression may read only a facade input header, a declared
 response header, a Camel engine header the engine sets
-(`CamelHttpResponseCode`, `CamelSplitIndex`, and the others the port table
-names), or a header an earlier step set. Because `to: direct:` shares the
+(`CamelHttpResponseCode` and the redelivery headers), or a header an
+earlier step set. Split and loop metadata is read through exchange-property
+expressions. Because `to: direct:` shares the
 exchange (section 8.11.7), "an earlier step" reaches across it both ways:
 after a `to: direct:` step the caller may read any header the target route
 sets, transitively through its own `direct:` calls; and a target route may
@@ -1051,6 +1073,12 @@ code; it raises error classes and the profile decides what the caller sees.
   `problemDetail` slot when the problem's envelope has one. Raised inside a
   route it is handled by the route's clauses like any error; raised inside
   an `onException` clause it is the exchange's final failure.
+  Optional `data` is an expression supplying only the resolved profile
+  problem's declared `dataFields`. The data is a closed object of at most
+  16 required scalar fields and at most 2048 serialized JSON bytes. It
+  fills the optional whole-value `{{?problemData}}` member. Unknown,
+  missing, mistyped, undeclared, or oversized data becomes a value-free
+  `disclosure.violation`; it never falls back into `problemDetail`.
 - The profile's `problems` list maps classes to problems: each entry has
   `code`, `status`, `title`, and `classes`. The problem for an error is the
   entry whose class is closest to the error's class, by the rule of 8.7,
@@ -1058,8 +1086,17 @@ code; it raises error classes and the profile decides what the caller sees.
   the hierarchy to resolve to exactly one entry, so listing the roots is
   enough and nothing is ever unmapped; it refuses a class listed twice, an
   unknown class, and a status outside 400 to 599.
+  The authored status governs route/profile failures. Facade admission
+  failures retain their fixed engine statuses, including 422 for invalid
+  fields and idempotency mismatch. Their code and title still come from
+  the closest profile problem. Correlated problem schemas include only
+  that authored status and the fixed class/status pairs that resolve to
+  the same problem; another code's status or data shape is not admitted.
 - The engine fills the problem envelope from the resolved entry. The
   journal records the class and the code.
+  Problem data stays out of logs and the journal. Profiles using data
+  publish correlated per-problem schemas, so a code cannot admit another
+  problem's data shape. Other failures may omit the optional data member.
 
 This replaces the earlier rule that an exception clause sets
 `CamelHttpResponseCode` and a profile-shaped body; that rule made every
@@ -1122,6 +1159,11 @@ process (draft, declare), several `to` steps in sequence.
   migration refuses any legacy artifact-namespaced entries, preserving
   their responses and spent keys for operator reconciliation. It never
   clears opaque legacy keys or treats them as fresh work.
+  Exact response replay preserves the original Adapter-minted response
+  request ID in its body and header. Each physical retry has a fresh journal
+  attempt ID. A response-custody upgrade that cannot recover a legacy
+  response's original ID refuses migration while that replayable custody
+  remains; it neither invents an ID nor erases a spent key.
 - `removeOnFailure` before any upstream effect removes the key, as in Camel.
   A failure after a non-safe `to` has been sent keeps the key in a failed
   state and replays the recorded problem; it never re-executes a sent effect.

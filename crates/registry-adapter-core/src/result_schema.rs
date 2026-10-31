@@ -12,7 +12,10 @@ use crate::diagnostics::{finding, CheckCode};
 use crate::envelope::{
     decode_slot, parse_envelope_template, SlotForm, ENVELOPE_GRAMMAR_RULE, SLOT_MARK,
 };
-use crate::profile::{AdapterProfile, ParameterizedPart, SLOT_RECORD, SLOT_RECORDS};
+use crate::profile::{
+    resolve_problem, AdapterProfile, ParameterizedPart, Problem, FIXED_FACADE_PROBLEM_RESPONSES,
+    SLOT_PROBLEM_DATA, SLOT_RECORD, SLOT_RECORDS,
+};
 use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
 use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Map, Value};
@@ -46,6 +49,7 @@ pub fn derive_operation_result_schema(
         binding,
         Some(project),
         &profile.parameterized_parts,
+        None,
     )
 }
 
@@ -113,6 +117,7 @@ pub fn derive_binding_result_schema(
         Some(binding),
         Some(project),
         &profile.parameterized_parts,
+        None,
     )
 }
 
@@ -147,6 +152,7 @@ pub fn derive_operation_request_schema(
         Some(binding),
         Some(project),
         &profile.parameterized_parts,
+        None,
     )
 }
 
@@ -160,7 +166,55 @@ pub fn derive_operation_request_schema(
 /// the problem slots, never a record.
 pub fn derive_problem_envelope_schema(profile: &AdapterProfile) -> Result<Value, String> {
     let template = parse_envelope_template(profile.problem_envelope.text())?;
-    derive_value(&template, None, None, &profile.parameterized_parts)
+    if profile
+        .problems
+        .iter()
+        .all(|problem| problem.data_fields.is_none())
+    {
+        return derive_value(&template, None, None, &profile.parameterized_parts, None);
+    }
+    let branches = profile
+        .problems
+        .iter()
+        .map(|problem| {
+            let statuses = problem_response_statuses(profile, problem);
+            derive_value(
+                &template,
+                None,
+                None,
+                &profile.parameterized_parts,
+                Some(ProblemSchema {
+                    problem,
+                    statuses: &statuses,
+                }),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({"anyOf": branches}))
+}
+
+/// The exact statuses this problem can carry: its authored default plus
+/// every fixed facade status whose class resolves to this same problem.
+fn problem_response_statuses(profile: &AdapterProfile, problem: &Problem) -> Vec<u32> {
+    let mut statuses = vec![problem.status.get()];
+    statuses.extend(
+        FIXED_FACADE_PROBLEM_RESPONSES
+            .iter()
+            .filter(|response| {
+                resolve_problem(profile, response.class)
+                    .is_some_and(|resolved| resolved.code == problem.code)
+            })
+            .map(|response| u32::from(response.status)),
+    );
+    statuses.sort_unstable();
+    statuses.dedup();
+    statuses
+}
+
+#[derive(Clone, Copy)]
+struct ProblemSchema<'a> {
+    problem: &'a Problem,
+    statuses: &'a [u32],
 }
 
 /// The derivation error an envelope carrying a record slot raises when the
@@ -199,13 +253,20 @@ pub fn check_envelope_derivation(
             }
         }
     }
-    if let Err(reason) = derive_problem_envelope_schema(profile) {
-        findings.push(finding(
-            CheckCode::ProfileProblemEnvelopeUncompilable,
-            "/problemEnvelope",
-            &reason,
-            "Repair the problem envelope so the problem schema can be derived.",
-        ));
+    let unused_problem_data_slot = profile.problem_envelope.mentions(SLOT_PROBLEM_DATA)
+        && profile
+            .problems
+            .iter()
+            .all(|problem| problem.data_fields.is_none());
+    if !unused_problem_data_slot {
+        if let Err(reason) = derive_problem_envelope_schema(profile) {
+            findings.push(finding(
+                CheckCode::ProfileProblemEnvelopeUncompilable,
+                "/problemEnvelope",
+                &reason,
+                "Repair the problem envelope so the problem schema can be derived.",
+            ));
+        }
     }
     findings
 }
@@ -216,9 +277,10 @@ fn derive_value(
     binding: Option<&Binding>,
     project: Option<&AdapterProject>,
     parts: &[ParameterizedPart],
+    problem: Option<ProblemSchema<'_>>,
 ) -> Result<Value, String> {
     match template {
-        Value::String(text) => Ok(derive_member(text, binding, project, parts)?.0),
+        Value::String(text) => Ok(derive_member(text, binding, project, parts, problem)?.0),
         Value::Object(members) => {
             let mut properties = Map::new();
             let mut required = Vec::new();
@@ -228,11 +290,21 @@ fn derive_value(
                 }
                 let text = value.as_str();
                 let (schema, optional) = match text.and_then(decode_slot) {
+                    Some((name, SlotForm::Optional))
+                        if name == SLOT_PROBLEM_DATA
+                            && problem
+                                .is_some_and(|problem| problem.problem.data_fields.is_none()) =>
+                    {
+                        continue;
+                    }
                     Some((name, form)) => (
-                        form_schema(slot_schema(name, binding, project)?, form),
+                        form_schema(slot_schema(name, binding, project, problem)?, form),
                         form == SlotForm::Optional,
                     ),
-                    None => (derive_value(value, binding, project, parts)?, false),
+                    None => (
+                        derive_value(value, binding, project, parts, problem)?,
+                        false,
+                    ),
                 };
                 properties.insert(key.clone(), schema);
                 if !optional {
@@ -265,7 +337,7 @@ fn derive_value(
                             .to_string(),
                     );
                 }
-                let schema = derive_value(item, binding, project, parts)?;
+                let schema = derive_value(item, binding, project, parts, problem)?;
                 match &items_schema {
                     Some(previous) if previous != &schema => {
                         return Err(
@@ -297,10 +369,11 @@ fn derive_member(
     binding: Option<&Binding>,
     project: Option<&AdapterProject>,
     parts: &[ParameterizedPart],
+    problem: Option<ProblemSchema<'_>>,
 ) -> Result<(Value, bool), String> {
     match decode_slot(text) {
         Some((name, form)) => Ok((
-            form_schema(slot_schema(name, binding, project)?, form),
+            form_schema(slot_schema(name, binding, project, problem)?, form),
             form == SlotForm::Optional,
         )),
         None if text.contains(SLOT_MARK) => Err(ENVELOPE_GRAMMAR_RULE.to_string()),
@@ -326,11 +399,24 @@ fn slot_schema(
     name: &str,
     binding: Option<&Binding>,
     project: Option<&AdapterProject>,
+    problem: Option<ProblemSchema<'_>>,
 ) -> Result<Value, String> {
     match name {
         "record" => record_schema(binding, project),
         "records" => record_schema(binding, project)
             .map(|schema| json!({"type": "array", "items": schema})),
+        "problemCode" if problem.is_some() => Ok(json!({
+            "type": "string",
+            "const": problem.expect("checked").problem.code.as_str(),
+        })),
+        "problemTitle" if problem.is_some() => Ok(json!({
+            "type": "string",
+            "const": problem.expect("checked").problem.title,
+        })),
+        "status" if problem.is_some() => Ok(exact_status_schema(problem.expect("checked").statuses)),
+        SLOT_PROBLEM_DATA => problem
+            .and_then(|problem| problem_data_schema(problem.problem))
+            .ok_or_else(|| "the problemData slot has no selected problem data declaration".to_string()),
         "nextCursor" | "problemCode" | "problemDetail" | "problemTitle" | "recordId"
         | "recordType" | "requestId" => Ok(json!({"type": "string"})),
         "status" | "pageSize" => Ok(json!({"type": "integer"})),
@@ -340,6 +426,44 @@ fn slot_schema(
             "the response envelope names slot {other}, which the closed slot vocabulary does not declare"
         )),
     }
+}
+
+fn exact_status_schema(statuses: &[u32]) -> Value {
+    match statuses {
+        [status] => json!({"type": "integer", "const": status}),
+        _ => json!({
+            "anyOf": statuses
+                .iter()
+                .map(|status| json!({"type": "integer", "const": status}))
+                .collect::<Vec<_>>()
+        }),
+    }
+}
+
+/// The closed scalar schema of a problem's optional data object. Every
+/// declared field is required when the object is present, and no other key
+/// may pass. Authoring checks reject empty, duplicate, optional, or oversized
+/// declarations before this schema is used.
+#[must_use]
+pub fn problem_data_schema(problem: &Problem) -> Option<Value> {
+    let fields = problem.data_fields.as_ref()?;
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+    for field in fields.iter() {
+        properties.insert(field.name.as_str().to_string(), field_schema(field.r#type));
+        required.push(Value::String(field.name.as_str().to_string()));
+    }
+    required.sort_by(|left, right| {
+        left.as_str()
+            .unwrap_or_default()
+            .cmp(right.as_str().unwrap_or_default())
+    });
+    Some(json!({
+        "type": "object",
+        "properties": Value::Object(properties),
+        "required": required,
+        "additionalProperties": false,
+    }))
 }
 
 /// The closed schema of a read request's `filters` object: one required,
@@ -768,6 +892,7 @@ mod tests {
                 title: "the record was already there".to_string(),
                 classes: UniqueList::new(vec![crate::model::ErrorClass::OutcomeConflict])
                     .expect("unique"),
+                data_fields: None,
             }])
             .expect("unique"),
             problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
@@ -1065,12 +1190,106 @@ mod tests {
         assert_eq!(schema["properties"]["code"], json!({"type": "string"}));
         assert_eq!(schema["properties"]["detail"], json!({"type": "string"}));
 
+        // A profile that declares no problem data keeps its historical
+        // uncorrelated shape. The correlated branches are required only to
+        // prevent one problem code from borrowing another problem's data.
+        let with_status = problem_envelope(r#"{"code":"{{problemCode}}","status":{{status}}}"#);
+        let schema = derive_problem_envelope_schema(&with_status).expect("derive");
+        assert_eq!(schema["properties"]["status"], json!({"type": "integer"}));
+
         let record_slot = problem_envelope(r#"{"code": "{{problemCode}}", "record": {{record}}}"#);
         assert!(
             derive_problem_envelope_schema(&record_slot).is_err(),
             "a problem envelope carries no record slot"
         );
         assert!(derive_problem_envelope_schema(&problem_envelope(r#"{"code": "#)).is_err());
+    }
+
+    #[test]
+    fn problem_data_schema_is_correlated_to_the_exact_problem_code() {
+        let mut profile = profile(r#"{"record": {{record}}}"#);
+        let mut source = profile.problems[0].clone();
+        source.code = external("cases.source");
+        source.status = registry_platform_yaml::BoundedU32::new(400).expect("status");
+        source.title = "source request failed".to_string();
+        source.classes = UniqueList::new(vec![crate::model::ErrorClass::Facade]).expect("unique");
+        let mut partial = source.clone();
+        partial.code = external("cases.partial");
+        partial.status = registry_platform_yaml::BoundedU32::new(409).expect("status");
+        partial.title = "partially accepted".to_string();
+        partial.classes =
+            UniqueList::new(vec![crate::model::ErrorClass::OutcomeRejected]).expect("unique");
+        partial.data_fields = Some(
+            UniqueList::new(vec![
+                RecordField {
+                    name: local("accepted"),
+                    r#type: RecordFieldType::Integer,
+                    required: true,
+                },
+                RecordField {
+                    name: local("rejected"),
+                    r#type: RecordFieldType::Integer,
+                    required: true,
+                },
+            ])
+            .expect("unique"),
+        );
+        profile.problems = UniqueIdList::new(vec![source, partial]).expect("unique");
+        profile.problem_envelope = EnvelopeTemplate(
+            r#"{"code":"{{problemCode}}","title":"{{problemTitle}}","status":{{status}},"data":{{?problemData}}}"#.to_string(),
+        );
+
+        let schema = derive_problem_envelope_schema(&profile).expect("derive");
+        let branches = schema["anyOf"].as_array().expect("correlated branches");
+        assert_eq!(branches.len(), 2);
+        let partial = branches
+            .iter()
+            .find(|branch| branch["properties"]["code"]["const"] == "cases.partial")
+            .expect("partial branch");
+        assert_eq!(
+            partial["properties"]["data"]["required"],
+            json!(["accepted", "rejected"])
+        );
+        assert_eq!(
+            partial["properties"]["data"]["additionalProperties"],
+            json!(false)
+        );
+        let source = branches
+            .iter()
+            .find(|branch| branch["properties"]["code"]["const"] == "cases.source")
+            .expect("source branch");
+        assert!(source["properties"].get("data").is_none());
+
+        assert!(validate_result_schema(
+            &json!({"code":"cases.partial","title":"partially accepted","status":409,"data":{"accepted":3,"rejected":1}}),
+            &schema,
+        )
+        .is_empty());
+        assert!(validate_result_schema(
+            &json!({"code":"cases.source","title":"source request failed","status":422}),
+            &schema,
+        )
+        .is_empty());
+        assert!(!validate_result_schema(
+            &json!({"code":"cases.source","title":"source request failed","status":418}),
+            &schema,
+        )
+        .is_empty());
+        assert!(!validate_result_schema(
+            &json!({"code":"cases.partial","title":"partially accepted","status":422,"data":{"accepted":3,"rejected":1}}),
+            &schema,
+        )
+        .is_empty());
+        assert!(!validate_result_schema(
+            &json!({"code":"cases.source","title":"source request failed","status":422,"data":{"accepted":3,"rejected":1}}),
+            &schema,
+        )
+        .is_empty());
+        assert!(!validate_result_schema(
+            &json!({"code":"cases.partial","title":"partially accepted","status":409,"data":{"accepted":3,"rejected":1,"raw":"no"}}),
+            &schema,
+        )
+        .is_empty());
     }
 
     /// The profile-level derivation check runs without fixtures: a

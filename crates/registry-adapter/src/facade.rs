@@ -23,8 +23,9 @@ use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use deadpool_postgres::Pool;
 use registry_adapter_core::{
-    decode_slot, parse_envelope_template, AdapterProfile, AdapterProject, ErrorClass, HttpMethod,
-    Problem, SLOT_PROBLEM_CODE, SLOT_RECORD,
+    decode_slot, fixed_facade_problem_response, parse_envelope_template, problem_data_schema,
+    resolve_problem, validate_result_schema, AdapterProfile, AdapterProject, ErrorClass,
+    HttpMethod, MAX_PROBLEM_DATA_BYTES, SLOT_PROBLEM_DATA, SLOT_RECORD,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -49,11 +50,17 @@ use crate::idempotent::{
 use crate::journal::{self, JournalEvent};
 use crate::load::{Loaded, ServedOperation, ServedPagination};
 use crate::read_request::{parse_filter_text, ReadRefusal};
-use crate::route::{run_route, RouteContext, RouteFailure};
+use crate::route::{run_route_with_profile, RouteContext, RouteFailure};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
 
 const REQUEST_ID_HEADER: &str = "x-registry-request-id";
 const WRITE_REQUEST_DIGEST_DOMAIN: &[u8] = b"registry-adapter:write-request:v2\0";
+
+/// A store-restored response identity. This private extension is the only
+/// path that may replace the new physical attempt id at the outer response
+/// boundary; caller request headers never create one.
+#[derive(Clone)]
+struct ReplayedResponseRequestId(String);
 
 /// What every handler shares.
 pub struct FacadeState {
@@ -233,7 +240,15 @@ async fn handle(
             )
         }
     };
-    with_request_id(response, &fallback_id)
+    // A replay is a new physical attempt and keeps `fallback_id` in its
+    // journal events. Its caller-visible response is exact prior custody, so
+    // header and any profile-rendered body slot retain the original id.
+    let response_id = response
+        .extensions()
+        .get::<ReplayedResponseRequestId>()
+        .map(|replayed| replayed.0.clone())
+        .unwrap_or(fallback_id);
+    with_request_id(response, &response_id)
 }
 
 /// Return the immutable startup contract only to an authenticated machine
@@ -655,7 +670,8 @@ async fn answer(
         code_maps: state.loaded.code_maps.clone(),
         maximum_upstream_calls: operation.maximum_upstream_calls,
     };
-    let outcome = run_route(&context, &operation.steps, exchange).await;
+    let outcome =
+        run_route_with_profile(&context, &state.loaded.profile, &operation.steps, exchange).await;
     for event in outcome.events {
         events.push((journal_event(event.kind, Some(event.detail)), event.at));
     }
@@ -747,6 +763,7 @@ async fn answer(
                     let failure = RouteFailure {
                         class: ErrorClass::DisclosureViolation,
                         message: None,
+                        data: None,
                         auth: None,
                     };
                     events.push((
@@ -760,6 +777,7 @@ async fn answer(
                 }
             },
             Err(failure) => {
+                let failure = enforce_problem_data(profile.profile, failure);
                 let mut detail = exchange_failure_detail(profile, failure.class);
                 if let Some(auth) = &failure.auth {
                     detail["auth"] = auth.clone();
@@ -821,7 +839,7 @@ async fn answer(
         .then_some(())
         .and(write_execution.as_ref());
     let (response, stored) = match pending_write {
-        Some(_) => match prepare_write_response(response).await {
+        Some(_) => match prepare_write_response(response, &request_id).await {
             Ok(prepared) => prepared,
             Err(error) => {
                 tracing::error!(%error, "the exact write response could not be prepared");
@@ -837,7 +855,7 @@ async fn answer(
                 ));
                 terminal = Some(TerminalOutcome::Failed);
                 response = bounded_internal_problem(&request_id);
-                prepare_write_response(response)
+                prepare_write_response(response, &request_id)
                     .await
                     .expect("the fixed internal problem fits response custody")
             }
@@ -880,7 +898,7 @@ fn warn_exchange_failed(class: ErrorClass, status: StatusCode) {
 /// from the request, source, or response.
 fn exchange_failure_detail(profile: Problems<'_>, class: ErrorClass) -> Value {
     let mut detail = json!({ "class": class.class() });
-    if let Some(problem) = select_problem(profile.profile, class) {
+    if let Some(problem) = resolve_problem(profile.profile, class) {
         detail["problemCode"] = Value::String(problem.code.as_str().to_owned());
     }
     detail
@@ -1485,6 +1503,7 @@ fn json_type(value: &Value) -> &'static str {
 
 async fn prepare_write_response(
     response: Response,
+    request_id: &str,
 ) -> Result<(Response, Option<StoredResponse>), String> {
     let (parts, body) = response.into_parts();
     let content_type = parts
@@ -1496,8 +1515,13 @@ async fn prepare_write_response(
     let body = axum::body::to_bytes(body, MAX_STORED_RESPONSE_BYTES)
         .await
         .map_err(|_| "adapter.idempotency-response: body exceeds custody bound".to_owned())?;
-    let stored = StoredResponse::new(parts.status.as_u16(), content_type, body.to_vec())
-        .map_err(|error| error.to_string())?;
+    let stored = StoredResponse::new(
+        parts.status.as_u16(),
+        content_type,
+        body.to_vec(),
+        request_id,
+    )
+    .map_err(|error| error.to_string())?;
     Ok((Response::from_parts(parts, Body::from(body)), Some(stored)))
 }
 
@@ -1509,6 +1533,9 @@ fn replay_response(stored: StoredResponse) -> Response {
             .headers_mut()
             .insert(header::CONTENT_TYPE, content_type);
     }
+    response
+        .extensions_mut()
+        .insert(ReplayedResponseRequestId(stored.request_id().to_owned()));
     no_store(response)
 }
 
@@ -1700,7 +1727,12 @@ pub(crate) fn render_success(
     operation.response_envelope.render(&slots)
 }
 
-pub(crate) fn route_problem(
+/// Render one route failure through the profile's selected problem. Public
+/// for the runtime conformance suite; live serving and fixture replay call
+/// this same function so their validation and fail-closed behavior cannot
+/// diverge.
+#[doc(hidden)]
+pub fn route_problem(
     profile: Problems<'_>,
     failure: &RouteFailure,
     record_type: &str,
@@ -1711,6 +1743,7 @@ pub(crate) fn route_problem(
         failure.class,
         None,
         failure.message.as_deref(),
+        failure.data.as_ref(),
         record_type,
         request_id,
     )
@@ -1725,7 +1758,20 @@ fn facade_problem(
     record_type: &str,
     request_id: &str,
 ) -> Response {
-    problem_response(profile, class, Some(status), None, record_type, request_id)
+    let fixed = fixed_facade_problem_response(class, status.as_u16())
+        .expect("the facade emits only declared fixed class/status pairs");
+    problem_response(
+        profile,
+        fixed.class,
+        Some(
+            StatusCode::from_u16(fixed.status)
+                .expect("fixed facade statuses are valid HTTP statuses"),
+        ),
+        None,
+        None,
+        record_type,
+        request_id,
+    )
 }
 
 /// Fixed fallback when a profile-rendered terminal write response cannot fit
@@ -1760,15 +1806,33 @@ fn problem_response(
     class: ErrorClass,
     status_override: Option<StatusCode>,
     detail: Option<&str>,
+    data: Option<&Value>,
     record_type: &str,
     request_id: &str,
 ) -> Response {
-    let Some(problem) = select_problem(problems.profile, class) else {
+    let Some(mut problem) = resolve_problem(problems.profile, class) else {
         return with_request_id(
             no_store(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
             request_id,
         );
     };
+    let mut detail = detail;
+    let mut data = data;
+    let valid_data = data.is_none_or(|value| problem_data_is_valid(problem, value));
+    let mut status_override = status_override;
+    if !valid_data {
+        let Some(disclosure) = resolve_problem(problems.profile, ErrorClass::DisclosureViolation)
+        else {
+            return with_request_id(
+                no_store(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+                request_id,
+            );
+        };
+        problem = disclosure;
+        detail = None;
+        data = None;
+        status_override = None;
+    }
     let status = status_override.unwrap_or_else(|| {
         StatusCode::from_u16(u16::try_from(problem.status.get()).unwrap_or(500))
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
@@ -1785,6 +1849,9 @@ fn problem_response(
     if let Some(detail) = detail {
         slots.insert("problemDetail", Value::String(detail.to_owned()));
     }
+    if let Some(data) = data {
+        slots.insert(SLOT_PROBLEM_DATA, data.clone());
+    }
     match problems.envelope.render(&slots) {
         Ok(rendered) => {
             let mut response = json_response(status, &rendered);
@@ -1799,6 +1866,32 @@ fn problem_response(
             with_request_id(no_store(status.into_response()), request_id)
         }
     }
+}
+
+/// Drop invalid problem data and its authored detail before either the
+/// journal or response sees the failure. The facade renderer repeats the
+/// check as a release-boundary defense, while live serving and replay use
+/// this normalization so their selected class and problem code also match
+/// the fixed value-free refusal.
+pub(crate) fn enforce_problem_data(
+    profile: &AdapterProfile,
+    failure: RouteFailure,
+) -> RouteFailure {
+    let valid = failure.data.as_ref().is_none_or(|data| {
+        resolve_problem(profile, failure.class)
+            .is_some_and(|problem| problem_data_is_valid(problem, data))
+    });
+    if valid {
+        failure
+    } else {
+        RouteFailure::of(ErrorClass::DisclosureViolation)
+    }
+}
+
+fn problem_data_is_valid(problem: &registry_adapter_core::Problem, data: &Value) -> bool {
+    serde_json::to_vec(data).is_ok_and(|bytes| bytes.len() <= MAX_PROBLEM_DATA_BYTES)
+        && problem_data_schema(problem)
+            .is_some_and(|schema| validate_result_schema(data, &schema).is_empty())
 }
 
 fn contract_unavailable(request_id: &str) -> Response {
@@ -1830,22 +1923,6 @@ fn protocol_problem(
         HeaderValue::from_static("application/problem+json"),
     );
     with_request_id(response, request_id)
-}
-
-pub(crate) fn select_problem(profile: &AdapterProfile, class: ErrorClass) -> Option<&Problem> {
-    let mut best: Option<(usize, &Problem)> = None;
-    for problem in profile.problems.iter() {
-        for declared in problem.classes.iter() {
-            if class.is_within(*declared) {
-                let depth = declared.class().split('.').count();
-                if best.is_none_or(|(held, _)| depth > held) {
-                    best = Some((depth, problem));
-                }
-            }
-        }
-    }
-    debug_assert!(profile.problem_envelope.mentions(SLOT_PROBLEM_CODE));
-    best.map(|(_, problem)| problem)
 }
 
 pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {
@@ -2069,25 +2146,28 @@ mod tests {
 
     #[tokio::test]
     async fn an_oversized_terminal_response_has_a_bounded_storable_failure() {
+        let request_id = "00000000000000000000000000000001";
         let mut oversized = Response::new(Body::from(vec![b'x'; MAX_STORED_RESPONSE_BYTES + 1]));
         *oversized.status_mut() = StatusCode::CREATED;
         oversized.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
-        assert!(prepare_write_response(oversized).await.is_err());
+        assert!(prepare_write_response(oversized, request_id).await.is_err());
 
-        let (response, stored) = prepare_write_response(bounded_internal_problem("request-1"))
-            .await
-            .expect("the fixed failure fits response custody");
+        let (response, stored) =
+            prepare_write_response(bounded_internal_problem(request_id), request_id)
+                .await
+                .expect("the fixed failure fits response custody");
         let stored = stored.expect("a terminal write response is retained");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(stored.status(), StatusCode::INTERNAL_SERVER_ERROR.as_u16());
         assert_eq!(stored.content_type(), b"application/problem+json");
         assert_eq!(
             serde_json::from_slice::<Value>(stored.body()).unwrap(),
-            json!({ "status": 500, "requestId": "request-1" })
+            json!({ "status": 500, "requestId": request_id })
         );
+        assert_eq!(stored.request_id(), request_id);
         assert!(stored.body().len() < MAX_STORED_RESPONSE_BYTES);
     }
 }

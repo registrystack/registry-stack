@@ -23,10 +23,8 @@
 use registry_adapter_core::{ErrorClass, LoopStep};
 use serde_json::{json, Value};
 
+use crate::exchange::{LOOP_INDEX_PROPERTY, LOOP_SIZE_PROPERTY};
 use crate::route::{Flow, RouteFailure, Run};
-
-const LOOP_INDEX_HEADER: &str = "CamelLoopIndex";
-const LOOP_SIZE_HEADER: &str = "CamelLoopSize";
 
 pub(crate) async fn run(run: &mut Run<'_, '_>, step: &LoopStep) -> Result<Flow, RouteFailure> {
     let Some(bound) = step.maximum_iterations else {
@@ -35,11 +33,11 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &LoopStep) -> Result<Flow, 
     let Some(expression) = step.expression() else {
         return Err(RouteFailure::of(ErrorClass::Validation));
     };
-    // With `copy`, every iteration starts from the exchange as the loop
-    // received it, whatever the earlier iterations did to their own. A
-    // chaining loop needs no retained clone of the whole exchange.
-    let original = step.copy.then(|| run.exchange.clone());
     if step.do_while {
+        // With `copy`, every iteration starts from the exchange as the loop
+        // received it, whatever the earlier iterations did to their own. A
+        // chaining loop needs no retained clone of the whole exchange.
+        let original = step.copy.then(|| run.exchange.clone());
         // The predicate is tested before every iteration, the first
         // included; a loop still holding at the bound raises instead of
         // stopping silently (section 8.6).
@@ -74,9 +72,10 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &LoopStep) -> Result<Flow, 
         }
         _ => return Err(not_an_integer()),
     };
-    run.exchange
-        .message
-        .set_header(LOOP_SIZE_HEADER, json!(count));
+    run.exchange.set_property(LOOP_SIZE_PROPERTY, json!(count));
+    // Camel places the size before taking a per-iteration copy, so copied
+    // count-loop exchanges carry the same engine-owned size property.
+    let original = step.copy.then(|| run.exchange.clone());
     // A count above the bound runs exactly the bound's iterations, then
     // raises: never a silent stop, never more than the bound.
     for index in 0..count.min(bound.get()) {
@@ -96,13 +95,14 @@ fn not_an_integer() -> RouteFailure {
     RouteFailure {
         class: ErrorClass::Validation,
         message: Some("a loop count must be an integer".to_owned()),
+        data: None,
         auth: None,
     }
 }
 
 /// Run one iteration, answering how the loop continues. Without `copy`
 /// the steps work on the exchange the loop holds. With `copy` they work
-/// on a copy of `original` carrying the index header; the last
+/// on a copy of `original` carrying the index property; the last
 /// iteration's exchange becomes the exchange the loop holds, and an
 /// error restores the exchange as it stood before the iteration.
 async fn iterate(
@@ -112,18 +112,14 @@ async fn iterate(
     index: u64,
 ) -> Result<Flow, RouteFailure> {
     if !step.copy {
-        run.exchange
-            .message
-            .set_header(LOOP_INDEX_HEADER, json!(index));
+        run.exchange.set_property(LOOP_INDEX_PROPERTY, json!(index));
         return run.run_steps(&step.steps).await;
     }
     let Some(original) = original else {
         return Err(RouteFailure::of(ErrorClass::Validation));
     };
     let mut iteration = original.clone();
-    iteration
-        .message
-        .set_header(LOOP_INDEX_HEADER, json!(index));
+    iteration.set_property(LOOP_INDEX_PROPERTY, json!(index));
     let standing = std::mem::replace(&mut run.exchange, iteration);
     match run.run_steps(&step.steps).await {
         // The iteration's exchange stands: the next predicate test, and

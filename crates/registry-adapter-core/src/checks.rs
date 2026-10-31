@@ -13,11 +13,11 @@ use crate::fixture::{AdapterFixture, Intercept};
 use crate::model::{Expression, HttpMethod, SendComponent};
 use crate::pack::{AdapterPack, GraphQlOperationKind};
 use crate::profile::{
-    AdapterProfile, EnvelopeTemplate, ProfileOperation, READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE,
-    SLOT_RECORD, SLOT_RECORDS,
+    resolve_problem, AdapterProfile, EnvelopeTemplate, ProfileOperation, MAX_PROBLEM_DATA_FIELDS,
+    READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE, SLOT_PROBLEM_DATA, SLOT_RECORD, SLOT_RECORDS,
 };
 use crate::project::AdapterProject;
-use crate::route::{Step, TemplateParameterType};
+use crate::route::{effective_clause_redelivery_policy, Step, TemplateParameterType};
 use crate::runtime::AdapterRuntimeConfig;
 use registry_platform_httputil::destination::{
     is_script_visible_response_header_name, is_script_writable_request_header_name,
@@ -59,13 +59,35 @@ const ENGINE_HEADERS: &[&str] = &[
     "camelexceptioncaught",
     "camelfiltermatched",
     "camelhttpresponsecode",
-    "camelloopindex",
-    "camelloopsize",
-    "camelsplitcomplete",
-    "camelsplitindex",
-    "camelsplitresult",
-    "camelsplitsize",
 ];
+
+/// Camel collection metadata is carried as exchange properties, not headers.
+/// Names are case-sensitive because exchange property lookup is case-sensitive.
+const ENGINE_EXCHANGE_PROPERTIES: &[&str] = &[
+    "CamelLoopIndex",
+    "CamelLoopSize",
+    "CamelSplitComplete",
+    "CamelSplitIndex",
+    "CamelSplitResult",
+    "CamelSplitSize",
+];
+
+/// Whether the name is collection metadata the engine places in exchange
+/// properties. A route may read these values but may not manufacture or
+/// remove them.
+#[must_use]
+pub fn is_engine_exchange_property_name(name: &str) -> bool {
+    ENGINE_EXCHANGE_PROPERTIES.contains(&name)
+}
+
+/// Whether a route may write or remove the exchange property. The one
+/// Adapter-prefixed output property remains writable by contract; Camel's
+/// collection metadata never is.
+#[must_use]
+pub fn is_route_unwritable_property_name(name: &str) -> bool {
+    is_engine_exchange_property_name(name)
+        || (name.starts_with("Adapter") && name != "AdapterNextContinuation")
+}
 
 /// Whether a route may write (set or remove) the named header, the one
 /// predicate over the reserved names (`RESERVED_HEADER_NAMES`, whose
@@ -321,6 +343,11 @@ pub fn check_workspace(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     let mut findings = check_profile(workspace.profile);
     findings.extend(check_pack(workspace.pack));
     findings.extend(check_routes(workspace.pack, workspace.project));
+    findings.extend(problem_data_route_faults(
+        workspace.profile,
+        workspace.pack,
+        workspace.project,
+    ));
     findings.extend(check_project(workspace));
     findings.extend(crate::result_schema::check_envelope_derivation(
         workspace.profile,
@@ -412,6 +439,36 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
             "Place the problemCode slot in the problem envelope.",
         ));
     }
+    let data_slots: Vec<SlotForm> = envelope_placeholders(profile.problem_envelope.text())
+        .into_iter()
+        .filter_map(|(name, form)| (name == SLOT_PROBLEM_DATA).then_some(form))
+        .collect();
+    let declares_data = profile
+        .problems
+        .iter()
+        .any(|problem| problem.data_fields.is_some());
+    match (declares_data, data_slots.as_slice()) {
+        (true, []) => findings.push(finding(
+            CheckCode::ProfileProblemDataSlotMissing,
+            "/problemEnvelope",
+            "a problem declares data fields but the problem envelope carries no problemData slot",
+            "Place one optional {{?problemData}} whole-value slot in the problem envelope.",
+        )),
+        (false, []) => {}
+        (false, _) => findings.push(finding(
+            CheckCode::ProfileProblemDataSlotUnused,
+            "/problemEnvelope",
+            "the problem envelope carries problemData but no problem declares data fields",
+            "Remove the problemData slot, or declare the closed fields a problem may disclose.",
+        )),
+        (true, [SlotForm::Optional]) => {}
+        (true, _) => findings.push(finding(
+            CheckCode::ProfileProblemDataSlotForm,
+            "/problemEnvelope",
+            "problemData is not one optional whole-value slot",
+            "Place problemData once as {{?problemData}} so unrelated failures may omit it.",
+        )),
+    }
     findings.extend(problems_faults(profile));
     findings
 }
@@ -427,6 +484,43 @@ fn problems_faults(profile: &AdapterProfile) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     let mut listed: HashMap<&str, usize> = HashMap::new();
     for (index, problem) in profile.problems.iter().enumerate() {
+        if let Some(fields) = &problem.data_fields {
+            if fields.is_empty() {
+                findings.push(finding(
+                    CheckCode::ProfileProblemDataFieldsEmpty,
+                    &format!("/problems/{index}/dataFields"),
+                    "the problem data field declaration is empty",
+                    "Remove dataFields, or declare every field the optional problem data object carries.",
+                ));
+            }
+            if fields.len() > MAX_PROBLEM_DATA_FIELDS {
+                findings.push(finding(
+                    CheckCode::ProfileProblemDataFieldsTooMany,
+                    &format!("/problems/{index}/dataFields"),
+                    "the problem declares more data fields than the bound",
+                    "Keep at most 16 required scalar fields.",
+                ));
+            }
+            let mut names = HashSet::new();
+            for (field_index, field) in fields.iter().enumerate() {
+                if !names.insert(field.name.as_str()) {
+                    findings.push(finding(
+                        CheckCode::ProfileProblemDataFieldDuplicate,
+                        &format!("/problems/{index}/dataFields/{field_index}/name"),
+                        "a problem data field repeats a name",
+                        "Declare each problem data field name once.",
+                    ));
+                }
+                if !field.required {
+                    findings.push(finding(
+                        CheckCode::ProfileProblemDataFieldOptional,
+                        &format!("/problems/{index}/dataFields/{field_index}/required"),
+                        "a problem data field is not required",
+                        "Set required to true; the whole problemData object is optional, but every emitted field is required.",
+                    ));
+                }
+            }
+        }
         for class in problem.classes.iter() {
             if listed.insert(class.class(), index).is_some() {
                 findings.push(finding(
@@ -452,6 +546,232 @@ fn problems_faults(profile: &AdapterProfile) -> Vec<Diagnostic> {
             "an error class of the closed hierarchy resolves to no problem",
             "Declare the class, or a parent of it, in exactly one problem's classes; uncatchable and facade classes map like every other class.",
         ));
+    }
+    findings
+}
+
+/// A throwException data expression reachable from a project binding may
+/// only target a problem that declares its exact closed data fields. Pack
+/// templates are reusable across profiles, so an unbound template does not
+/// constrain a project that cannot dispatch to it.
+fn problem_data_route_faults(
+    profile: &AdapterProfile,
+    pack: &AdapterPack,
+    project: &AdapterProject,
+) -> Vec<Diagnostic> {
+    type AuthoredBody<'a> = (&'a [Step], String);
+
+    // A binding resolves pack routes by route id and instantiated routes by
+    // their concrete id. Raw templates deliberately stay absent: binding one
+    // has its own project finding and must not cascade into route semantics.
+    let mut binding_bodies: HashMap<&str, AuthoredBody<'_>> = HashMap::new();
+    for (index, route) in pack.routes.iter().enumerate() {
+        binding_bodies.insert(
+            route.id.as_str(),
+            (route.steps.as_slice(), format!("/routes/{index}")),
+        );
+    }
+
+    // Direct sends resolve by a route's from id, a raw template id, or an
+    // instantiated route id. Each resolved body retains the list index where
+    // its steps were authored so diagnostics are exact RFC 6901 pointers.
+    let mut direct_bodies: HashMap<&str, AuthoredBody<'_>> = HashMap::new();
+    for (index, route) in pack.routes.iter().enumerate() {
+        direct_bodies.insert(
+            route.from.uri.id.as_str(),
+            (route.steps.as_slice(), format!("/routes/{index}")),
+        );
+    }
+    for (index, template) in pack.route_templates.iter().enumerate() {
+        direct_bodies.insert(
+            template.id.as_str(),
+            (
+                template.steps.as_slice(),
+                format!("/routeTemplates/{index}"),
+            ),
+        );
+    }
+    for instantiated in &project.templated_routes {
+        if let Some((index, template)) = pack
+            .route_templates
+            .iter()
+            .enumerate()
+            .find(|(_, template)| template.id.as_str() == instantiated.route_template.as_str())
+        {
+            let authored = (
+                template.steps.as_slice(),
+                format!("/routeTemplates/{index}"),
+            );
+            binding_bodies.insert(instantiated.route_id.as_str(), authored.clone());
+            direct_bodies.insert(instantiated.route_id.as_str(), authored);
+        }
+    }
+
+    fn inspect(
+        profile: &AdapterProfile,
+        steps: &[Step],
+        prefix: &str,
+        direct_bodies: &HashMap<&str, AuthoredBody<'_>>,
+        visited: &mut HashSet<String>,
+        findings: &mut Vec<Diagnostic>,
+    ) {
+        if !visited.insert(prefix.to_string()) {
+            return;
+        }
+        inspect_throw_data(profile, steps, &format!("{prefix}/steps"), findings);
+
+        let mut targets = Vec::new();
+        collect_direct_targets(steps, &mut targets);
+        for target in targets {
+            if let Some((target_steps, target_prefix)) = direct_bodies.get(target) {
+                inspect(
+                    profile,
+                    target_steps,
+                    target_prefix,
+                    direct_bodies,
+                    visited,
+                    findings,
+                );
+            }
+        }
+    }
+
+    /// Inspect throw sites with paths over the externally tagged `Step`
+    /// wire shape. The general step walker intentionally exposes relative
+    /// authoring paths, whereas a diagnostic path must name every enum tag.
+    fn inspect_throw_data(
+        profile: &AdapterProfile,
+        steps: &[Step],
+        steps_prefix: &str,
+        findings: &mut Vec<Diagnostic>,
+    ) {
+        for (index, step) in steps.iter().enumerate() {
+            let at = format!("{steps_prefix}/{index}");
+            match step {
+                Step::ThrowException(throw)
+                    if throw.data.is_some()
+                        && resolve_problem(profile, throw.exception_type)
+                            .is_none_or(|problem| problem.data_fields.is_none()) =>
+                {
+                    findings.push(finding(
+                        CheckCode::RouteThrowExceptionDataUndeclared,
+                        &format!("{at}/throwException/data"),
+                        "throwException emits data for a problem with no declared data fields",
+                        "Declare the selected problem's required scalar dataFields, or remove the data expression.",
+                    ));
+                }
+                Step::Choice(choice) => {
+                    for (when_index, when) in choice.when.iter().enumerate() {
+                        inspect_throw_data(
+                            profile,
+                            &when.steps,
+                            &format!("{at}/choice/when/{when_index}/steps"),
+                            findings,
+                        );
+                    }
+                    if let Some(otherwise) = &choice.otherwise {
+                        inspect_throw_data(
+                            profile,
+                            &otherwise.steps,
+                            &format!("{at}/choice/otherwise/steps"),
+                            findings,
+                        );
+                    }
+                }
+                Step::Filter(filter) => inspect_throw_data(
+                    profile,
+                    &filter.steps,
+                    &format!("{at}/filter/steps"),
+                    findings,
+                ),
+                Step::Split(split) => inspect_throw_data(
+                    profile,
+                    &split.steps,
+                    &format!("{at}/split/steps"),
+                    findings,
+                ),
+                Step::Loop(loop_step) => inspect_throw_data(
+                    profile,
+                    &loop_step.steps,
+                    &format!("{at}/loop/steps"),
+                    findings,
+                ),
+                Step::CircuitBreaker(breaker) => {
+                    inspect_throw_data(
+                        profile,
+                        &breaker.steps,
+                        &format!("{at}/circuitBreaker/steps"),
+                        findings,
+                    );
+                    if let Some(fallback) = &breaker.on_fallback {
+                        inspect_throw_data(
+                            profile,
+                            &fallback.steps,
+                            &format!("{at}/circuitBreaker/onFallback/steps"),
+                            findings,
+                        );
+                    }
+                }
+                Step::Throttle(throttle) => inspect_throw_data(
+                    profile,
+                    &throttle.steps,
+                    &format!("{at}/throttle/steps"),
+                    findings,
+                ),
+                Step::IdempotentConsumer(idempotent) => inspect_throw_data(
+                    profile,
+                    &idempotent.steps,
+                    &format!("{at}/idempotentConsumer/steps"),
+                    findings,
+                ),
+                Step::OnException(clause) => inspect_throw_data(
+                    profile,
+                    &clause.steps,
+                    &format!("{at}/onException/steps"),
+                    findings,
+                ),
+                Step::DoTry(do_try) => {
+                    inspect_throw_data(
+                        profile,
+                        &do_try.steps,
+                        &format!("{at}/doTry/steps"),
+                        findings,
+                    );
+                    for (catch_index, catch) in do_try.do_catch.iter().enumerate() {
+                        inspect_throw_data(
+                            profile,
+                            &catch.steps,
+                            &format!("{at}/doTry/doCatch/{catch_index}/steps"),
+                            findings,
+                        );
+                    }
+                    if let Some(do_finally) = &do_try.do_finally {
+                        inspect_throw_data(
+                            profile,
+                            &do_finally.steps,
+                            &format!("{at}/doTry/doFinally/steps"),
+                            findings,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut findings = Vec::new();
+    let mut visited = HashSet::new();
+    for binding in &project.bindings {
+        if let Some((steps, prefix)) = binding_bodies.get(binding.route.as_str()) {
+            inspect(
+                profile,
+                steps,
+                prefix,
+                &direct_bodies,
+                &mut visited,
+                &mut findings,
+            );
+        }
     }
     findings
 }
@@ -1806,15 +2126,12 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 ));
             }
             // A retryWhile only stops redelivery earlier; with no
-            // redeliveries behind it, it could never fire. The
-            // redeliveries behind a clause are its own policy's, or the
-            // route handler's when the clause declares none (section 8.7).
+            // redeliveries behind it, it could never fire. The effective
+            // policy is the clause's own, or the handler's only when a
+            // clause with no policy also has no output steps (section 8.7).
             Step::OnException(clause)
                 if clause.retry_while.is_some()
-                    && clause
-                        .redelivery_policy
-                        .as_ref()
-                        .or(handler_policy)
+                    && effective_clause_redelivery_policy(clause, handler_policy)
                         .map(|policy| policy.maximum_redeliveries.get())
                         .unwrap_or(0)
                         == 0 =>
@@ -1845,6 +2162,14 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 }
             }
             Step::DoTry(do_try) => {
+                if do_try.do_catch.is_empty() && do_try.do_finally.is_none() {
+                    route_findings.push(finding(
+                        CheckCode::RouteDoTryClauseRequired,
+                        &format!("{prefix}/steps{path}"),
+                        "doTry declares neither doCatch nor doFinally",
+                        "Declare at least one doCatch clause or a doFinally clause.",
+                    ));
+                }
                 for (catch_index, catch) in do_try.do_catch.iter().enumerate() {
                     if catch.exception.is_empty() {
                         route_findings.push(finding(
@@ -2000,6 +2325,22 @@ fn check_route_headers(
                     "Remove only headers the route owns; credential, api-key, cookie, host, hop-by-hop, engine, and facade-input headers are never written by a route.",
                 ));
             }
+            Step::SetProperty(property) if is_route_unwritable_property_name(&property.name) => {
+                findings.push(finding(
+                    CheckCode::RouteReservedPropertyName,
+                    &pointer,
+                    "the route sets a property reserved to the engine",
+                    "Set only route-owned properties; Camel collection metadata and Adapter input properties are engine-owned.",
+                ));
+            }
+            Step::RemoveProperty(name) if is_route_unwritable_property_name(name) => {
+                findings.push(finding(
+                    CheckCode::RouteReservedPropertyName,
+                    &pointer,
+                    "the route removes a property reserved to the engine",
+                    "Remove only route-owned properties; Camel collection metadata and Adapter input properties are engine-owned.",
+                ));
+            }
             _ => {}
         }
     });
@@ -2144,10 +2485,7 @@ fn push_convert_findings(
                 "Use only route-owned headers as conversion sources and targets.",
             ));
         }
-        if form == "convertPropertyTo"
-            && name.starts_with("Adapter")
-            && name != "AdapterNextContinuation"
-        {
+        if form == "convertPropertyTo" && is_route_unwritable_property_name(name) {
             route_findings.push(finding(
                 CheckCode::RouteReservedPropertyName,
                 &format!("{pointer}/{member}"),
@@ -2872,6 +3210,7 @@ pub fn step_expressions(step: &Step) -> Vec<Expression> {
         Step::SetHeader(header) => vec![header.value.clone()],
         Step::SetProperty(property) => vec![property.value.clone()],
         Step::Validate(validate) => vec![validate.expression.clone()],
+        Step::ThrowException(throw) => throw.data.iter().cloned().collect(),
         Step::Throttle(throttle) => vec![throttle.limit.clone()],
         Step::IdempotentConsumer(idempotent) => vec![idempotent.expression.clone()],
         Step::Loop(loop_step) => loop_step.expression().into_iter().collect(),
@@ -4498,7 +4837,7 @@ mod tests {
         ChoiceStep, CircuitBreakerStep, ConvertStep, DefaultErrorHandler, DoCatch, DoFinally,
         DoTryStep, EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
         OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, RouteDefinition,
-        RouteFrom, RouteTemplate, SetHeaderStep, SplitStep, TemplateParameter,
+        RouteFrom, RouteTemplate, SetHeaderStep, SetPropertyStep, SplitStep, TemplateParameter,
         TemplateParameterType, TemplatedRoute, ThrottleStep, ThrowExceptionStep, ToParameters,
         ToStep, ValidateStep, When,
     };
@@ -4727,6 +5066,7 @@ mod tests {
                     .expect("status"),
                 title: "the request could not be served".to_string(),
                 classes: UniqueList::new(classes.to_vec()).expect("unique"),
+                data_fields: None,
             }
         };
         UniqueIdList::new(vec![
@@ -5184,6 +5524,336 @@ mod tests {
         );
     }
 
+    #[test]
+    fn problem_data_fields_are_closed_required_unique_and_bounded() {
+        let fields = |count: usize| {
+            UniqueList::new(
+                (0..count)
+                    .map(|index| RecordField {
+                        name: local(&format!("count-{index}")),
+                        r#type: RecordFieldType::Integer,
+                        required: true,
+                    })
+                    .collect(),
+            )
+            .expect("unique")
+        };
+        let set = |profile: &mut AdapterProfile, data_fields| {
+            let mut problems: Vec<crate::profile::Problem> =
+                profile.problems.iter().cloned().collect();
+            problems[0].data_fields = Some(data_fields);
+            profile.problems = UniqueIdList::new(problems).expect("unique");
+            profile.problem_envelope = EnvelopeTemplate(
+                r#"{"code":"{{problemCode}}","data":{{?problemData}}}"#.to_string(),
+            );
+        };
+
+        let mut profile = profile_builder(vec![]);
+        set(&mut profile, fields(16));
+        assert_clean(check_profile(&profile));
+
+        let mut profile = profile_builder(vec![]);
+        set(&mut profile, fields(17));
+        assert_has(
+            &check_profile(&profile),
+            CheckCode::ProfileProblemDataFieldsTooMany,
+        );
+
+        let mut profile = profile_builder(vec![]);
+        set(
+            &mut profile,
+            UniqueList::new(vec![
+                RecordField {
+                    name: local("accepted"),
+                    r#type: RecordFieldType::Integer,
+                    required: true,
+                },
+                RecordField {
+                    name: local("accepted"),
+                    r#type: RecordFieldType::Decimal,
+                    required: false,
+                },
+            ])
+            .expect("different items"),
+        );
+        let findings = check_profile(&profile);
+        assert_has(&findings, CheckCode::ProfileProblemDataFieldDuplicate);
+        assert_has(&findings, CheckCode::ProfileProblemDataFieldOptional);
+
+        let mut profile = profile_builder(vec![]);
+        set(
+            &mut profile,
+            UniqueList::new(Vec::<RecordField>::new()).expect("empty"),
+        );
+        assert_has(
+            &check_profile(&profile),
+            CheckCode::ProfileProblemDataFieldsEmpty,
+        );
+    }
+
+    #[test]
+    fn problem_data_uses_one_optional_envelope_slot_only_when_declared() {
+        let mut profile = profile_builder(vec![]);
+        profile.problem_envelope =
+            EnvelopeTemplate(r#"{"code":"{{problemCode}}","data":{{?problemData}}}"#.to_string());
+        assert_has(
+            &check_profile(&profile),
+            CheckCode::ProfileProblemDataSlotUnused,
+        );
+
+        let mut problems: Vec<crate::profile::Problem> = profile.problems.iter().cloned().collect();
+        problems[0].data_fields = Some(
+            UniqueList::new(vec![RecordField {
+                name: local("accepted"),
+                r#type: RecordFieldType::Integer,
+                required: true,
+            }])
+            .expect("unique"),
+        );
+        profile.problems = UniqueIdList::new(problems).expect("unique");
+        profile.problem_envelope = EnvelopeTemplate(r#"{"code":"{{problemCode}}"}"#.to_string());
+        assert_has(
+            &check_profile(&profile),
+            CheckCode::ProfileProblemDataSlotMissing,
+        );
+        profile.problem_envelope =
+            EnvelopeTemplate(r#"{"code":"{{problemCode}}","data":{{problemData}}}"#.to_string());
+        assert_has(
+            &check_profile(&profile),
+            CheckCode::ProfileProblemDataSlotForm,
+        );
+    }
+
+    #[test]
+    fn unused_problem_data_slot_reports_only_its_primary_diagnostic() {
+        let mut profile = profile_builder(vec![]);
+        profile.problem_envelope =
+            EnvelopeTemplate(r#"{"code":"{{problemCode}}","data":{{?problemData}}}"#.to_string());
+        let pack = pack_builder(vec![], vec![]);
+        let project = project_builder(&pack);
+        let mut findings = check_profile(&profile);
+        findings.extend(crate::result_schema::check_envelope_derivation(
+            &profile, &project,
+        ));
+        assert_eq!(
+            findings
+                .iter()
+                .map(|finding| finding.code.as_str())
+                .collect::<Vec<_>>(),
+            vec![CheckCode::ProfileProblemDataSlotUnused.code()]
+        );
+    }
+
+    #[test]
+    fn throw_exception_data_requires_the_resolved_problem_declaration() {
+        let route = |data| RouteDefinition {
+            id: local("raise-partial"),
+            from: RouteFrom {
+                uri: direct("raise-partial"),
+            },
+            steps: vec![Step::ThrowException(ThrowExceptionStep {
+                exception_type: crate::model::ErrorClass::OutcomeConflict,
+                message: None,
+                data,
+            })],
+        };
+        let data = Some(Expression::ExchangeProperty("partialCounts".to_string()));
+        let pack = pack_builder(vec![], vec![route(data.clone())]);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("raise-partial"),
+            operation: id("cases-write"),
+            record_type: local("case"),
+            route: id("raise-partial"),
+            filters: UniqueList::new(Vec::new()).expect("empty"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+        }])
+        .expect("unique");
+        let mut profile = profile_builder(vec![]);
+        assert_has(
+            &check_workspace(&workspace(&profile, &pack, &project)),
+            CheckCode::RouteThrowExceptionDataUndeclared,
+        );
+
+        let mut problems: Vec<crate::profile::Problem> = profile.problems.iter().cloned().collect();
+        let outcome = problems
+            .iter_mut()
+            .find(|problem| problem.code.as_str() == "cases.outcome")
+            .expect("outcome problem");
+        outcome.data_fields = Some(
+            UniqueList::new(vec![RecordField {
+                name: local("accepted"),
+                r#type: RecordFieldType::Integer,
+                required: true,
+            }])
+            .expect("unique"),
+        );
+        profile.problems = UniqueIdList::new(problems).expect("unique");
+        assert_clean(problem_data_route_faults(&profile, &pack, &project));
+        let pack = pack_builder(vec![], vec![route(None)]);
+        assert_clean(problem_data_route_faults(
+            &profile,
+            &pack,
+            &project_builder(&pack),
+        ));
+    }
+
+    #[test]
+    fn unbound_problem_data_template_does_not_constrain_a_read_only_project() {
+        let template = RouteTemplate {
+            id: local("write-partial"),
+            parameters: Vec::new(),
+            steps: vec![Step::ThrowException(ThrowExceptionStep {
+                exception_type: crate::model::ErrorClass::OutcomeConflict,
+                message: None,
+                data: Some(Expression::ExchangeProperty("partialCounts".to_string())),
+            })],
+        };
+        let read = one_direct_route(vec![]);
+        let mut pack = pack_builder(vec![], vec![read]);
+        pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("read-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("empty"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+        }])
+        .expect("unique");
+
+        let findings = problem_data_route_faults(&profile_builder(vec![]), &pack, &project);
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteThrowExceptionDataUndeclared.code()),
+            "an unbound write template is outside this project's route closure: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn problem_data_fault_uses_the_standalone_route_list_index() {
+        let bad = RouteDefinition {
+            id: local("raise-partial"),
+            from: RouteFrom {
+                uri: direct("raise-partial"),
+            },
+            steps: vec![Step::ThrowException(ThrowExceptionStep {
+                exception_type: crate::model::ErrorClass::OutcomeConflict,
+                message: None,
+                data: Some(Expression::ExchangeProperty("partialCounts".to_string())),
+            })],
+        };
+        let pack = pack_builder(vec![], vec![one_direct_route(vec![]), bad]);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("raise-partial"),
+            operation: id("cases-write"),
+            record_type: local("case"),
+            route: id("raise-partial"),
+            filters: UniqueList::new(Vec::new()).expect("empty"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+        }])
+        .expect("unique");
+
+        let findings = problem_data_route_faults(&profile_builder(vec![]), &pack, &project);
+        let fault = findings
+            .iter()
+            .find(|finding| finding.code == CheckCode::RouteThrowExceptionDataUndeclared.code())
+            .expect("bound throw data fault");
+        assert_eq!(fault.path, "/routes/1/steps/0/throwException/data");
+    }
+
+    #[test]
+    fn problem_data_fault_uses_the_instantiated_template_source_index() {
+        let harmless = RouteTemplate {
+            id: local("read-template"),
+            parameters: Vec::new(),
+            steps: vec![],
+        };
+        let bad = RouteTemplate {
+            id: local("write-partial"),
+            parameters: Vec::new(),
+            steps: vec![Step::ThrowException(ThrowExceptionStep {
+                exception_type: crate::model::ErrorClass::OutcomeConflict,
+                message: None,
+                data: Some(Expression::ExchangeProperty("partialCounts".to_string())),
+            })],
+        };
+        let mut pack = pack_builder(vec![], vec![]);
+        pack.route_templates = UniqueIdList::new(vec![harmless, bad]).expect("unique");
+        let mut project = project_builder(&pack);
+        project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
+            route_template: id("write-partial"),
+            route_id: id("write-partial-v1"),
+            parameters: BTreeMap::new(),
+        }])
+        .expect("unique");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("raise-partial"),
+            operation: id("cases-write"),
+            record_type: local("case"),
+            route: id("write-partial-v1"),
+            filters: UniqueList::new(Vec::new()).expect("empty"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+        }])
+        .expect("unique");
+
+        let findings = problem_data_route_faults(&profile_builder(vec![]), &pack, &project);
+        let fault = findings
+            .iter()
+            .find(|finding| finding.code == CheckCode::RouteThrowExceptionDataUndeclared.code())
+            .expect("bound template throw data fault");
+        assert_eq!(fault.path, "/routeTemplates/1/steps/0/throwException/data");
+    }
+
+    #[test]
+    fn problem_data_check_follows_direct_enrich_from_a_catch_path() {
+        let entry = one_direct_route(vec![Step::DoTry(DoTryStep {
+            steps: vec![],
+            do_catch: vec![DoCatch {
+                exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                    .expect("unique"),
+                on_when: None,
+                steps: vec![Step::Enrich(EnrichStep {
+                    uri: direct("raise-partial"),
+                    aggregation_strategy: None,
+                    aggregate_on_exception: false,
+                    parameters: None,
+                })],
+            }],
+            do_finally: None,
+        })]);
+        let target = RouteDefinition {
+            id: local("raise-partial"),
+            from: RouteFrom {
+                uri: direct("raise-partial"),
+            },
+            steps: vec![Step::ThrowException(ThrowExceptionStep {
+                exception_type: crate::model::ErrorClass::OutcomeConflict,
+                message: None,
+                data: Some(Expression::ExchangeProperty("partialCounts".to_string())),
+            })],
+        };
+        let pack = pack_builder(vec![], vec![entry, target]);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("read-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: id("fetch-case"),
+            filters: UniqueList::new(Vec::new()).expect("empty"),
+            maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+        }])
+        .expect("unique");
+
+        let findings = problem_data_route_faults(&profile_builder(vec![]), &pack, &project);
+        let fault = findings
+            .iter()
+            .find(|finding| finding.code == CheckCode::RouteThrowExceptionDataUndeclared.code())
+            .expect("direct target from the catch is reachable");
+        assert_eq!(fault.path, "/routes/1/steps/0/throwException/data");
+    }
+
     /// The problems list covers the whole closed hierarchy
     /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.6): one entry
     /// per root resolves every class, uncatchable and facade classes
@@ -5267,6 +5937,7 @@ mod tests {
             status: registry_platform_yaml::BoundedU32::<400, 599>::new(504).expect("status"),
             title: "the upstream answered again".to_string(),
             classes: UniqueList::new(vec![class("upstream")]).expect("unique"),
+            data_fields: None,
         });
         profile.problems = UniqueIdList::new(entries).expect("unique");
         let findings = check_profile(&profile);
@@ -5287,6 +5958,7 @@ mod tests {
             status: registry_platform_yaml::BoundedU32::<400, 599>::new(404).expect("status"),
             title: "the record was not found".to_string(),
             classes: UniqueList::new(vec![class("outcome.not-found")]).expect("unique"),
+            data_fields: None,
         });
         profile.problems = UniqueIdList::new(entries).expect("unique");
         let problem_findings: Vec<Diagnostic> = check_profile(&profile)
@@ -5922,6 +6594,10 @@ mod tests {
             &check(convert_property("AdapterFilters", Some("scratch"))),
             CheckCode::RouteReservedPropertyName,
         );
+        assert_has(
+            &check(convert_property("CamelSplitIndex", None)),
+            CheckCode::RouteReservedPropertyName,
+        );
         assert!(
             !codes(&check(convert_property(
                 "scratch",
@@ -6400,6 +7076,11 @@ mod tests {
                 aggregate_on_exception: false,
                 parameters: None,
             }),
+            Step::ThrowException(ThrowExceptionStep {
+                exception_type: crate::model::ErrorClass::OutcomeConflict,
+                message: None,
+                data: Some(rhai("scripts/problem-data.rhai")),
+            }),
         ];
         let files: Vec<String> = steps
             .iter()
@@ -6419,6 +7100,7 @@ mod tests {
             "scripts/pieces.rhai",
             "scripts/group.rhai",
             "scripts/merge.rhai",
+            "scripts/problem-data.rhai",
         ] {
             assert!(files.contains(&file.to_string()), "missing {file}");
         }
@@ -7271,6 +7953,56 @@ mod tests {
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
+    #[test]
+    fn clause_retry_while_inherits_only_for_an_outputless_clause() {
+        let policy = || RedeliveryOptions {
+            maximum_redeliveries: BoundedU32::<0, 100>::new(2).expect("redeliveries"),
+            ..Default::default()
+        };
+        let route =
+            |clause_steps: Vec<Step>, clause_policy: Option<RedeliveryOptions>| RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![
+                    Step::ErrorHandler(ErrorHandlerStep {
+                        default_error_handler: Some(DefaultErrorHandler {
+                            redelivery_policy: Some(policy()),
+                            retry_while: None,
+                        }),
+                        no_error_handler: None,
+                    }),
+                    Step::OnException(OnExceptionStep {
+                        exception: UniqueList::new(vec![crate::model::ErrorClass::UpstreamTimeout])
+                            .expect("unique"),
+                        on_when: None,
+                        handled: Some(true),
+                        continued: None,
+                        retry_while: Some(rhai("scripts/map.rhai")),
+                        redelivery_policy: clause_policy,
+                        steps: clause_steps,
+                    }),
+                    to_get("case-api"),
+                ],
+            };
+        let output = vec![Step::SetBody(Expression::ExchangeProperty(
+            "fallbackResult".to_string(),
+        ))];
+
+        let pack = pack_builder(vec![basic_endpoint()], vec![route(output.clone(), None)]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRetryWhileWithoutRedeliveries,
+        );
+
+        let pack = pack_builder(vec![basic_endpoint()], vec![route(vec![], None)]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+
+        let pack = pack_builder(vec![basic_endpoint()], vec![route(output, Some(policy()))]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
     /// `stopOnException` and Camel's failure accounting are exclusive: a
     /// split that stops on the first failure carries no threshold.
     #[test]
@@ -7396,6 +8128,40 @@ mod tests {
             })],
         };
         let pack = pack_builder(vec![], vec![admitted]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
+    /// Camel 4.23 refuses a doTry with neither doCatch nor doFinally when
+    /// the route starts (`TryReifier.createProcessor`, lines 45 to 49;
+    /// `DoTryEdgeCasesTest.testDoTryWithoutCatchOrFinally`). Presence of an
+    /// empty doFinally is still a configured finally clause.
+    #[test]
+    fn routes_refuse_a_do_try_without_a_catch_or_finally_clause() {
+        let route = |do_finally| RouteDefinition {
+            id: local("fetch-case"),
+            from: RouteFrom {
+                uri: direct("fetch-case"),
+            },
+            steps: vec![Step::DoTry(DoTryStep {
+                steps: vec![Step::SetBody(Expression::Constant(serde_json::Value::Null))],
+                do_catch: vec![],
+                do_finally,
+            })],
+        };
+        let pack = pack_builder(vec![], vec![route(None)]);
+        let findings = check_routes(&pack, &project_builder(&pack));
+        assert_has(&findings, CheckCode::RouteDoTryClauseRequired);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.code == CheckCode::RouteDoTryClauseRequired.code())
+            .expect("doTry finding");
+        assert_eq!(finding.path, "/routes/fetch-case/steps/0");
+        assert_eq!(
+            finding.message,
+            "doTry declares neither doCatch nor doFinally"
+        );
+
+        let pack = pack_builder(vec![], vec![route(Some(DoFinally { steps: vec![] }))]);
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
@@ -9902,6 +10668,7 @@ mod tests {
             steps: vec![Step::ThrowException(ThrowExceptionStep {
                 exception_type: class,
                 message: Some("the record is not admissible".to_string()),
+                data: None,
             })],
         };
         for class in crate::model::ErrorClass::ALL
@@ -9935,6 +10702,7 @@ mod tests {
             steps: vec![Step::ThrowException(ThrowExceptionStep {
                 exception_type: crate::model::ErrorClass::OutcomeRejected,
                 message: Some(message),
+                data: None,
             })],
         };
         let pack = pack_builder(vec![], vec![raise("x".repeat(512))]);
@@ -10400,6 +11168,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn collection_metadata_is_exchange_property_only() {
+        for name in [
+            "CamelSplitIndex",
+            "CamelSplitSize",
+            "CamelSplitComplete",
+            "CamelSplitResult",
+            "CamelLoopIndex",
+            "CamelLoopSize",
+        ] {
+            assert!(is_engine_exchange_property_name(name), "{name}");
+            assert!(is_route_unwritable_property_name(name), "{name}");
+            assert!(
+                !ENGINE_HEADERS.contains(&name.to_ascii_lowercase().as_str()),
+                "{name} is not a known header"
+            );
+        }
+        assert!(
+            !is_engine_exchange_property_name("camelsplitindex"),
+            "exchange properties have no case-folded alias"
+        );
+    }
+
     /// A `setHeader` names no credential, cookie, host, hop-by-hop,
     /// engine, or facade-input header, and a `header` expression reads
     /// only a facade input, an engine-placed header, a response header an
@@ -10480,7 +11271,27 @@ mod tests {
         let findings = check(vec![set("scratch", read("recordId"))], &[]);
         assert_clean(findings);
         let findings = check(vec![set("scratch", read("CamelSplitIndex"))], &[]);
+        assert_has(&findings, CheckCode::RouteUnknownHeader);
+        let findings = check(
+            vec![Step::SetBody(Expression::ExchangeProperty(
+                "CamelSplitIndex".to_string(),
+            ))],
+            &[],
+        );
         assert_clean(findings);
+
+        for step in [
+            Step::SetProperty(SetPropertyStep {
+                name: "CamelSplitIndex".to_string(),
+                value: Expression::Constant(serde_json::json!(0)),
+            }),
+            Step::RemoveProperty("CamelLoopIndex".to_string()),
+        ] {
+            assert_has(
+                &check(vec![step], &[]),
+                CheckCode::RouteReservedPropertyName,
+            );
+        }
 
         // A read answers to a response allowlist any endpoint declares.
         let findings = check(vec![set("scratch", read("etag"))], &["ETag"]);

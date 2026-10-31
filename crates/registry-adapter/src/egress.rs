@@ -457,6 +457,50 @@ impl fmt::Debug for SendBody<'_> {
     }
 }
 
+/// The inclusive status-code ranges one reviewed HTTP send accepts.
+///
+/// Camel's `okStatusCodeRange` is a comma-separated list of single codes and
+/// inclusive ranges. The route compiler parses that authored spelling once;
+/// live and replay transports both use this value for exact sparse
+/// membership. Redirects remain a separate unconditional refusal before this
+/// set is consulted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OkStatusCodeRanges {
+    ranges: Vec<(u16, u16)>,
+}
+
+impl OkStatusCodeRanges {
+    /// Build the status set from inclusive ranges. The route compiler supplies
+    /// these entries from the already bounded authored configuration string.
+    pub fn try_from_ranges(ranges: Vec<(u16, u16)>) -> Result<Self, &'static str> {
+        if ranges.is_empty() {
+            return Err("at least one HTTP status range is required");
+        }
+        if ranges.iter().any(|(low, high)| {
+            !(100..=599).contains(low) || !(100..=599).contains(high) || low > high
+        }) {
+            return Err("HTTP status ranges must be ordered within 100 through 599");
+        }
+        Ok(Self { ranges })
+    }
+
+    /// Whether one exact status belongs to any declared singleton or range.
+    #[must_use]
+    pub fn contains(&self, status: u16) -> bool {
+        self.ranges
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&status))
+    }
+}
+
+impl Default for OkStatusCodeRanges {
+    fn default() -> Self {
+        Self {
+            ranges: vec![(200, 299)],
+        }
+    }
+}
+
 /// What one `http` send carries to the egress boundary.
 pub struct OutboundSend<'a> {
     /// The send's absolute target: the filled `path` under the
@@ -479,8 +523,8 @@ pub struct OutboundSend<'a> {
     pub attempt: Duration,
     /// The response byte bound, from the endpoint's declared maximum.
     pub maximum_response_bytes: usize,
-    /// The reviewed status range of the send's `to` step, inclusive.
-    pub ok_status_range: (u16, u16),
+    /// The reviewed status ranges of the send's `to` step.
+    pub ok_status_ranges: OkStatusCodeRanges,
     /// Whether the send raises on a status outside the range; the
     /// engine converts [`UpstreamFailure`]'s status and body.
     pub throw_exception_on_failure: bool,
@@ -503,7 +547,7 @@ impl fmt::Debug for OutboundSend<'_> {
             .field("authorization", &self.authorization.map(AuthHeader::name))
             .field("attempt", &self.attempt)
             .field("maximum_response_bytes", &self.maximum_response_bytes)
-            .field("ok_status_range", &self.ok_status_range)
+            .field("ok_status_ranges", &self.ok_status_ranges)
             .field(
                 "throw_exception_on_failure",
                 &self.throw_exception_on_failure,
@@ -1027,8 +1071,7 @@ impl EndpointEgress {
                 ))
             })?;
 
-        let (low, high) = send.ok_status_range;
-        let out_of_range = status < low || status > high;
+        let out_of_range = !send.ok_status_ranges.contains(status);
         // An empty body is JSON null; a non-JSON body raises
         // `upstream.malformed`, also under `throwExceptionOnFailure:
         // false` (`products/adapter/CONCEPT.md` section 8.11). Only an
@@ -1171,8 +1214,7 @@ impl EndpointEgress {
             }
             None => Value::Null,
         };
-        let (low, high) = send.ok_status_range;
-        if send.throw_exception_on_failure && (status < low || status > high) {
+        if send.throw_exception_on_failure && !send.ok_status_ranges.contains(status) {
             return Err(EgressError::Upstream(UpstreamFailure::new(
                 ErrorClass::UpstreamHttp,
                 Some(status),
@@ -1906,7 +1948,7 @@ mod tests {
                 authorization: Some(&credential.header),
                 attempt: Duration::from_secs(1),
                 maximum_response_bytes: 4096,
-                ok_status_range: (200, 299),
+                ok_status_ranges: OkStatusCodeRanges::default(),
                 throw_exception_on_failure: false,
             })
             .await

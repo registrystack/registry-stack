@@ -417,6 +417,10 @@ pub struct ThrowExceptionStep {
     /// The optional constant message; no expression is ported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// The optional expression producing the selected problem's declared,
+    /// closed data object. The runtime validates it before disclosure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Expression>,
 }
 
 /// A `setHeader` step.
@@ -856,8 +860,10 @@ pub struct OnExceptionStep {
     /// Camel lets `retryWhile` override it, so `maximumUpstreamCalls`
     /// stays a check-time guarantee. The redeliveries behind it are the
     /// clause's own policy, or the route handler's when the clause
-    /// declares none; the checks refuse the predicate when neither
-    /// carries any.
+    /// declares no policy and produces no output steps. An output-bearing
+    /// clause instead has Camel's clause-local default of zero
+    /// redeliveries. The checks refuse the predicate when its effective
+    /// policy carries none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_while: Option<Expression>,
     /// Redelivery options, as on the error handler, nested under
@@ -920,6 +926,24 @@ pub struct RedeliveryOptions {
         skip_serializing_if = "is_default_collision_avoidance_factor"
     )]
     pub collision_avoidance_factor: f64,
+}
+
+/// The redelivery policy an exception clause receives. A clause's explicit
+/// policy always wins. A clause with no output steps inherits the route
+/// handler's policy, while an output-bearing clause with no explicit policy
+/// has Camel's clause-local default of zero redeliveries.
+#[must_use]
+pub fn effective_clause_redelivery_policy<'a>(
+    clause: &'a OnExceptionStep,
+    handler_policy: Option<&'a RedeliveryOptions>,
+) -> Option<&'a RedeliveryOptions> {
+    if let Some(policy) = clause.redelivery_policy.as_ref() {
+        Some(policy)
+    } else if clause.steps.is_empty() {
+        handler_policy
+    } else {
+        None
+    }
 }
 
 impl Default for RedeliveryOptions {
@@ -1584,7 +1608,7 @@ mod tests {
     #[test]
     fn throw_exception_step_round_trips() {
         let step: Step = serde_json::from_str(
-            r#"{ "throwException": { "exceptionType": "outcome.rejected", "message": "the record is not admissible" } }"#,
+            r#"{ "throwException": { "exceptionType": "outcome.rejected", "message": "the record is not admissible", "data": {"exchangeProperty": "partialCounts"} } }"#,
         )
         .expect("parse");
         assert_eq!(
@@ -1592,6 +1616,7 @@ mod tests {
             Step::ThrowException(ThrowExceptionStep {
                 exception_type: ErrorClass::OutcomeRejected,
                 message: Some("the record is not admissible".to_string()),
+                data: Some(Expression::ExchangeProperty("partialCounts".to_string())),
             })
         );
         let back = serde_json::to_string(&step).expect("serialize");

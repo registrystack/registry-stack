@@ -17,6 +17,7 @@
 //! them into an intermediate string, the way the engine's outbound
 //! client will.
 
+use http::{HeaderName, HeaderValue};
 use registry_adapter::auth::{
     ProtectedText, TokenClientAuthentication, TokenRequest, TokenSend, TokenWire, TransportFailure,
     TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
@@ -96,6 +97,7 @@ impl Response {
 #[derive(Debug, Clone)]
 enum ResponseDelivery {
     Complete,
+    CompleteWithHeaders(Vec<(String, String)>),
     ResetAfter(usize),
     Trickle { chunk_bytes: usize, delay: Duration },
 }
@@ -152,6 +154,29 @@ impl UpstreamDouble {
             .into_iter()
             .map(|response| (response, ResponseDelivery::Complete))
             .collect();
+    }
+
+    /// Script one complete response with validated extra headers. Framing
+    /// headers stay owned by the double, so tests cannot create an ambiguous
+    /// response by overriding them.
+    pub fn respond_with_headers(&self, response: Response, headers: Vec<(String, String)>) {
+        for (name, value) in &headers {
+            HeaderName::from_bytes(name.as_bytes()).expect("a valid response header name");
+            HeaderValue::from_str(value).expect("a valid response header value");
+            assert!(
+                ![
+                    "connection",
+                    "content-length",
+                    "content-type",
+                    "transfer-encoding"
+                ]
+                .iter()
+                .any(|owned| name.eq_ignore_ascii_case(owned)),
+                "the double owns response framing headers"
+            );
+        }
+        *self.responses.lock().expect("the response script") =
+            [(response, ResponseDelivery::CompleteWithHeaders(headers))].into();
     }
 
     /// Send the declared head and `body_bytes` body bytes, then close the
@@ -307,13 +332,22 @@ fn write_response(
         500 => "Internal Server Error",
         _ => "Status",
     };
-    let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {media_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+    let mut head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {media_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
         body.len()
     );
+    if let ResponseDelivery::CompleteWithHeaders(headers) = delivery {
+        for (name, value) in headers {
+            head.push_str(name);
+            head.push_str(": ");
+            head.push_str(value);
+            head.push_str("\r\n");
+        }
+    }
+    head.push_str("\r\n");
     let _ = stream.write_all(head.as_bytes());
     match delivery {
-        ResponseDelivery::Complete => {
+        ResponseDelivery::Complete | ResponseDelivery::CompleteWithHeaders(_) => {
             let _ = stream.write_all(body.as_bytes());
             let _ = stream.flush();
         }

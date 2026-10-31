@@ -80,6 +80,7 @@ fn invalid_limit() -> RouteFailure {
     RouteFailure {
         class: ErrorClass::Validation,
         message: Some("a throttle limit must be a positive integer".to_owned()),
+        data: None,
         auth: None,
     }
 }

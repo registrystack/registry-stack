@@ -13,6 +13,104 @@
 use registry_platform_yaml::{BoundedU64, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
 
+use crate::project::RecordField;
+
+/// One facade response whose status is fixed by the engine rather than the
+/// profile's authored default. The class remains profile-mapped, so the code,
+/// title, and optional data contract still come from the closest declared
+/// problem.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FixedFacadeProblemResponse {
+    pub class: crate::model::ErrorClass,
+    pub status: u16,
+}
+
+/// The closed facade class/status pairs emitted by fixed engine paths. Keep
+/// this source-neutral list aligned with the runtime's controlled
+/// `facade_problem` call sites.
+pub const FIXED_FACADE_PROBLEM_RESPONSES: &[FixedFacadeProblemResponse] = &[
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::Facade,
+        status: 500,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::Facade,
+        status: 503,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeUnauthenticated,
+        status: 401,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeForbidden,
+        status: 403,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeInvalidRequest,
+        status: 400,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeInvalidField,
+        status: 422,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeInvalidCursor,
+        status: 400,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeNotFound,
+        status: 404,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeMethodNotAllowed,
+        status: 405,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadePayloadTooLarge,
+        status: 413,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeUnsupportedMediaType,
+        status: 415,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeNotAcceptable,
+        status: 406,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeConflict,
+        status: 409,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::FacadeIdempotencyMismatch,
+        status: 422,
+    },
+    FixedFacadeProblemResponse {
+        class: crate::model::ErrorClass::OutcomeNotFound,
+        status: 404,
+    },
+];
+
+/// Look up one controlled facade class/status pair. The runtime uses the
+/// typed pair at its fixed facade boundary; derived problem schemas use the
+/// same closed descriptor.
+#[must_use]
+pub fn fixed_facade_problem_response(
+    class: crate::model::ErrorClass,
+    status: u16,
+) -> Option<&'static FixedFacadeProblemResponse> {
+    FIXED_FACADE_PROBLEM_RESPONSES
+        .iter()
+        .find(|response| response.class == class && response.status == status)
+}
+
+/// The most scalar fields one problem may disclose in its optional data
+/// object. The bound keeps the reviewed problem contract small.
+pub const MAX_PROBLEM_DATA_FIELDS: usize = 16;
+
+/// The largest serialized problem data object the runtime may release.
+pub const MAX_PROBLEM_DATA_BYTES: usize = 2 * 1024;
+
 /// The closed envelope slot vocabulary the engine fills
 /// (`products/adapter/CONCEPT.md` section 7). A slot outside this set is
 /// refused by the authoring checks.
@@ -21,6 +119,7 @@ pub const ENVELOPE_SLOTS: &[&str] = &[
     "filters",
     "nextCursor",
     "problemCode",
+    "problemData",
     "problemDetail",
     "problemTitle",
     "record",
@@ -44,6 +143,8 @@ pub const SLOT_RECORDS: &str = "records";
 /// The problem envelope's code slot; a problem envelope without it is
 /// refused.
 pub const SLOT_PROBLEM_CODE: &str = "problemCode";
+/// The optional, closed data object declared by the selected problem.
+pub const SLOT_PROBLEM_DATA: &str = "problemData";
 
 /// An envelope template: a JSON template whose string members carry
 /// `{{slot}}` placeholders from the closed vocabulary
@@ -198,7 +299,9 @@ pub struct ParameterizedPart {
 pub struct Problem {
     /// The profile's own problem code a caller receives.
     pub code: ExternalId,
-    /// The HTTP status the facade answers with.
+    /// The default HTTP status for profile-governed route failures. Fixed
+    /// facade admission failures retain their engine-defined status; the
+    /// effective problem schema includes those resolved class/status pairs.
     pub status: registry_platform_yaml::BoundedU32<400, 599>,
     /// The problem title the envelope's `problemTitle` slot fills from.
     pub title: String,
@@ -206,12 +309,42 @@ pub struct Problem {
     /// entry whose declared class is closest to it, by the rule of
     /// `products/adapter/CONCEPT.md` section 8.7.
     pub classes: UniqueList<crate::model::ErrorClass>,
+    /// The optional closed scalar object this problem may disclose. Every
+    /// declared field is required when the object is present; authoring
+    /// checks enforce the field-count and required-field bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAX_PROBLEM_DATA_FIELDS))
+    )]
+    pub data_fields: Option<UniqueList<RecordField>>,
 }
 
 impl registry_platform_yaml::Identified for Problem {
     fn id(&self) -> &str {
         self.code.as_str()
     }
+}
+
+/// Resolve the problem whose declared class is the closest ancestor of the
+/// raised class. Authoring checks guarantee one result for every class.
+#[must_use]
+pub fn resolve_problem(
+    profile: &AdapterProfile,
+    class: crate::model::ErrorClass,
+) -> Option<&Problem> {
+    let mut best: Option<(usize, &Problem)> = None;
+    for problem in profile.problems.iter() {
+        for declared in problem.classes.iter() {
+            if class.is_within(*declared) {
+                let depth = declared.class().split('.').count();
+                if best.is_none_or(|(held, _)| depth > held) {
+                    best = Some((depth, problem));
+                }
+            }
+        }
+    }
+    best.map(|(_, problem)| problem)
 }
 
 /// The facade profile artifact (`AdapterProfile`): the operation set, the
@@ -260,6 +393,28 @@ fn default_success_status() -> registry_platform_yaml::BoundedU32<200, 299> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn fixed_facade_problem_response_lookup_is_closed_to_emitted_pairs() {
+        for response in FIXED_FACADE_PROBLEM_RESPONSES {
+            assert_eq!(
+                fixed_facade_problem_response(response.class, response.status),
+                Some(response)
+            );
+        }
+        assert!(
+            fixed_facade_problem_response(crate::model::ErrorClass::FacadeInvalidField, 418)
+                .is_none()
+        );
+        assert!(
+            fixed_facade_problem_response(crate::model::ErrorClass::OutcomeRejected, 422).is_none()
+        );
+        let unique: std::collections::HashSet<_> = FIXED_FACADE_PROBLEM_RESPONSES
+            .iter()
+            .map(|response| (response.class, response.status))
+            .collect();
+        assert_eq!(unique.len(), FIXED_FACADE_PROBLEM_RESPONSES.len());
+    }
+
     fn operation(id: &str, method: crate::model::HttpMethod) -> ProfileOperation {
         ProfileOperation {
             id: LocalId::new(id).expect("id"),
@@ -287,6 +442,7 @@ mod tests {
             status: registry_platform_yaml::BoundedU32::<400, 599>::new(status).expect("status"),
             title: "the record could not be read".to_string(),
             classes: UniqueList::new(classes.to_vec()).expect("unique"),
+            data_fields: None,
         }
     }
 
@@ -471,6 +627,74 @@ mod tests {
         assert_eq!(profile.problems[0].status.get(), 404);
     }
 
+    #[test]
+    fn problem_data_fields_round_trip_without_changing_older_profiles() {
+        let without = r#"{"id":"case-api","version":"1.0.0","operations":[],"problems":[{"code":"cases.gone","status":404,"title":"gone","classes":["outcome.not-found"]}],"problemEnvelope":"{}"}"#;
+        let profile = serde_json::from_str::<AdapterProfile>(without).expect("parse");
+        assert!(profile.problems[0].data_fields.is_none());
+        assert!(!serde_json::to_string(&profile)
+            .expect("serialize")
+            .contains("dataFields"));
+
+        let with = r#"{"id":"case-api","version":"1.0.0","operations":[],"problems":[{"code":"cases.partial","status":409,"title":"partial","classes":["outcome.conflict"],"dataFields":[{"name":"accepted","type":"integer","required":true}]}],"problemEnvelope":"{\"data\": {{?problemData}}}"}"#;
+        let profile = serde_json::from_str::<AdapterProfile>(with).expect("parse");
+        let fields = profile.problems[0]
+            .data_fields
+            .as_ref()
+            .expect("declared fields");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name.as_str(), "accepted");
+        assert_eq!(
+            serde_json::from_str::<AdapterProfile>(
+                &serde_json::to_string(&profile).expect("serialize")
+            )
+            .ok(),
+            Some(profile)
+        );
+    }
+
+    #[test]
+    fn problem_resolution_uses_the_closest_declared_class() {
+        let root = problem("cases.outcome", 422, &[crate::model::ErrorClass::Outcome]);
+        let exact = problem(
+            "cases.conflict",
+            409,
+            &[crate::model::ErrorClass::OutcomeConflict],
+        );
+        let profile = AdapterProfile {
+            id: LocalId::new("case-api").expect("id"),
+            version: "1.0.0".to_string(),
+            operations: UniqueIdList::new(Vec::new()).expect("empty"),
+            problems: UniqueIdList::new(vec![root, exact]).expect("unique"),
+            problem_envelope: EnvelopeTemplate(r#"{"code":"{{problemCode}}"}"#.to_string()),
+            parameterized_parts: UniqueList::new(Vec::new()).expect("empty"),
+        };
+        assert_eq!(
+            resolve_problem(&profile, crate::model::ErrorClass::OutcomeConflict)
+                .map(|problem| problem.code.as_str()),
+            Some("cases.conflict")
+        );
+        assert_eq!(
+            resolve_problem(&profile, crate::model::ErrorClass::OutcomeRejected)
+                .map(|problem| problem.code.as_str()),
+            Some("cases.outcome")
+        );
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn generated_profile_schema_bounds_problem_data_fields() {
+        let schema = serde_json::to_value(schemars::schema_for!(AdapterProfile)).expect("schema");
+        assert_eq!(
+            schema["$defs"]["Problem"]["properties"]["dataFields"]["maxItems"],
+            serde_json::json!(MAX_PROBLEM_DATA_FIELDS)
+        );
+        assert_eq!(
+            schema["$defs"]["Problem"]["properties"]["dataFields"]["minItems"],
+            serde_json::json!(1)
+        );
+    }
+
     /// Problem codes are unique at the reader (CFG-ID-5): two entries
     /// with one code refuse.
     #[test]
@@ -513,6 +737,7 @@ mod tests {
             "problemCode",
             "problemTitle",
             "problemDetail",
+            "problemData",
             "status",
             "filters",
             "pageSize",
@@ -523,7 +748,7 @@ mod tests {
                 "{slot} must stay in the closed vocabulary"
             );
         }
-        assert_eq!(ENVELOPE_SLOTS.len(), 13);
+        assert_eq!(ENVELOPE_SLOTS.len(), 14);
     }
 
     /// Envelope templates answer slot-mention queries in both placeholder

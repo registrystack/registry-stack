@@ -35,6 +35,7 @@ fn scripts() -> ScriptSet {
         ("scripts/to-bundle.rhai", "to_bundle"),
         ("scripts/import-summary.rhai", "is_complete_import"),
         ("scripts/import-summary.rhai", "is_partial_import"),
+        ("scripts/import-summary.rhai", "partial_import_data"),
     ] {
         set.add(&pack, directory, path, entrypoint)
             .unwrap_or_else(|error| panic!("{path}:{entrypoint} compiles: {error}"));
@@ -240,8 +241,51 @@ fn synchronous_import_summaries_distinguish_complete_partial_and_unfinished() {
     );
     let partial = exchange(
         json!({
+            "status": "ERROR",
+            "validationReport": {
+                "errorReports": [
+                    {
+                        "trackerType": "TRACKED_ENTITY-SENSITIVE-CANARY",
+                        "uid": "UID-SENSITIVE-CANARY",
+                        "errorCode": "E1005"
+                    },
+                    {
+                        "trackerType": "TRACKED_ENTITY-SENSITIVE-CANARY",
+                        "uid": "UID-SENSITIVE-CANARY",
+                        "errorCode": "E1089"
+                    },
+                    {
+                        "trackerType": "EVENT-SENSITIVE-CANARY",
+                        "uid": "UID-SENSITIVE-CANARY",
+                        "errorCode": "E1090"
+                    }
+                ]
+            },
+            "stats": {"created": 1, "updated": 2, "deleted": 0, "ignored": 1, "total": 4}
+        }),
+        json!({}),
+    );
+    let missing_error_reports = exchange(
+        json!({
             "status": "WARNING",
+            "validationReport": {},
             "stats": {"created": 1, "updated": 0, "deleted": 0, "ignored": 1, "total": 2}
+        }),
+        json!({}),
+    );
+    let malformed_error_reports = exchange(
+        json!({
+            "status": "WARNING",
+            "validationReport": {"errorReports": {}},
+            "stats": {"created": 1, "updated": 0, "deleted": 0, "ignored": 1, "total": 2}
+        }),
+        json!({}),
+    );
+    let delete_summary = exchange(
+        json!({
+            "status": "WARNING",
+            "validationReport": {"errorReports": []},
+            "stats": {"created": 1, "updated": 0, "deleted": 1, "ignored": 1, "total": 3}
         }),
         json!({}),
     );
@@ -252,6 +296,9 @@ fn synchronous_import_summaries_distinguish_complete_partial_and_unfinished() {
         ("is_partial_import", &complete, false),
         ("is_complete_import", &partial, false),
         ("is_partial_import", &partial, true),
+        ("is_partial_import", &missing_error_reports, false),
+        ("is_partial_import", &malformed_error_reports, false),
+        ("is_partial_import", &delete_summary, false),
         ("is_complete_import", &unfinished, false),
         ("is_partial_import", &unfinished, false),
     ] {
@@ -265,4 +312,37 @@ fn synchronous_import_summaries_distinguish_complete_partial_and_unfinished() {
             .unwrap_or_else(|error| panic!("{entrypoint} runs: {error}"));
         assert_eq!(result, json!(expected), "{entrypoint}");
     }
+
+    let data = set
+        .call(
+            &empty_code_maps(),
+            "scripts/import-summary.rhai",
+            "partial_import_data",
+            &partial,
+        )
+        .expect("partial_import_data runs");
+    assert_eq!(
+        data,
+        json!({
+            "imported": 1,
+            "updated": 2,
+            "ignored": 1,
+            "rejected": 2
+        }),
+        "two errors for one tracker object count once, while the same UID under another tracker type is a distinct object"
+    );
+    assert!(
+        !data.to_string().contains("SENSITIVE-CANARY"),
+        "normalization returns counts only"
+    );
+
+    let absent = set
+        .call(
+            &empty_code_maps(),
+            "scripts/import-summary.rhai",
+            "partial_import_data",
+            &missing_error_reports,
+        )
+        .expect("missing errorReports is a closed non-match, not a script error");
+    assert_eq!(absent, Value::Null);
 }

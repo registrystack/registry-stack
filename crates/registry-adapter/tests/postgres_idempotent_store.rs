@@ -33,6 +33,9 @@ use tokio_postgres::{Client, Config as PgConfig, NoTls};
 
 static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
 const V0100_SCHEMA: &str = include_str!("../src/idempotent/migrations/0100_idempotency_store.sql");
+const V0200_SCHEMA: &str =
+    include_str!("../src/idempotent/migrations/0200_logical_deployment_identity.sql");
+const RESPONSE_REQUEST_ID: &str = "00000000000000000000000000000001";
 
 #[derive(Clone)]
 struct Isolated {
@@ -128,6 +131,22 @@ async fn install_v0100(client: &impl GenericClient) {
         .expect("record the historical v0100 migration");
 }
 
+async fn install_v0200(client: &impl GenericClient) {
+    install_v0100(client).await;
+    client
+        .batch_execute(V0200_SCHEMA)
+        .await
+        .expect("apply the historical v0200 semantic migration");
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_schema_migrations(version, applied_at) \
+             VALUES (200, now())",
+            &[],
+        )
+        .await
+        .expect("record the historical v0200 migration");
+}
+
 async fn migration_versions(client: &impl GenericClient) -> Vec<i64> {
     client
         .query(
@@ -184,8 +203,13 @@ fn caller(subject: &str) -> VerifiedCallerIdentity {
 }
 
 fn response(status: u16, content_type: &[u8], body: &[u8]) -> StoredResponse {
-    StoredResponse::new(status, content_type.to_vec(), body.to_vec())
-        .expect("the synthetic facade response is bounded")
+    StoredResponse::new(
+        status,
+        content_type.to_vec(),
+        body.to_vec(),
+        RESPONSE_REQUEST_ID,
+    )
+    .expect("the synthetic facade response is bounded")
 }
 
 #[test]
@@ -220,16 +244,33 @@ fn caller_identity_and_response_custody_are_bounded_without_echoing_values() {
         StoredResponse::new(
             200,
             b"application/json".to_vec(),
-            vec![0; MAX_STORED_RESPONSE_BYTES + 1]
+            vec![0; MAX_STORED_RESPONSE_BYTES + 1],
+            RESPONSE_REQUEST_ID,
         ),
         Err(IdempotencyError::InvalidInput {
             field: "response body"
         })
     ));
     assert!(matches!(
-        StoredResponse::new(200, b"application/json\r\nsecret: marker".to_vec(), vec![]),
+        StoredResponse::new(
+            200,
+            b"application/json\r\nsecret: marker".to_vec(),
+            vec![],
+            RESPONSE_REQUEST_ID,
+        ),
         Err(IdempotencyError::InvalidInput {
             field: "response content type"
+        })
+    ));
+    assert!(matches!(
+        StoredResponse::new(
+            200,
+            b"application/json".to_vec(),
+            vec![],
+            "CALLER-CONTROLLED"
+        ),
+        Err(IdempotencyError::InvalidInput {
+            field: "response request id"
         })
     ));
 }
@@ -265,7 +306,7 @@ async fn migration_owns_a_separate_idempotency_ledger_and_is_idempotent() {
         ],
         "the idempotency migration neither creates nor borrows the journal ledger"
     );
-    assert_eq!(migration_versions(&client).await, vec![100, 200]);
+    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
 }
 
 #[tokio::test]
@@ -306,7 +347,87 @@ async fn logical_deployment_migration_accepts_an_empty_v0100_ledger() {
     idempotent::migrate(&client)
         .await
         .expect("an empty v0100 ledger can adopt the logical deployment namespace");
+    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+}
+
+#[tokio::test]
+async fn response_identity_migration_refuses_v0200_cached_responses_without_altering_them() {
+    let isolated = isolated().await;
+    let client = isolated.client().await;
+    install_v0200(&client).await;
+    for (byte, state) in [(3_u8, "completed"), (4_u8, "failed")] {
+        client
+            .execute(
+                "INSERT INTO adapter_idempotency_entries \
+                 (scope_digest, request_digest, state, claimed_at, terminal_at, expires_at, \
+                  response_status, response_content_type, response_body) \
+                 VALUES ($1, $2, $3, now(), now(), now() + interval '1 hour', \
+                         409, convert_to('application/problem+json', 'UTF8'), $4)",
+                &[
+                    &[byte; 32].as_slice(),
+                    &[byte + 10; 32].as_slice(),
+                    &state,
+                    &format!("legacy-response-{state}").into_bytes(),
+                ],
+            )
+            .await
+            .expect("insert a replayable v0200 response");
+    }
+
+    let error = idempotent::migrate(&client)
+        .await
+        .expect_err("v0200 response bytes without their original id cannot migrate");
+    assert!(matches!(
+        error,
+        IdempotencyError::LegacyResponseRequestIdEntries
+    ));
+    assert_eq!(
+        error.to_string(),
+        "adapter.idempotency-legacy-response-id: existing replayable responses require operator reconciliation before the response identity migration"
+    );
     assert_eq!(migration_versions(&client).await, vec![100, 200]);
+    let preserved = client
+        .query_one(
+            "SELECT count(*), bool_and(response_body IS NOT NULL) \
+             FROM adapter_idempotency_entries",
+            &[],
+        )
+        .await
+        .expect("inspect preserved v0200 response custody");
+    assert_eq!(preserved.get::<_, i64>(0), 2);
+    assert!(preserved.get::<_, bool>(1));
+}
+
+#[tokio::test]
+async fn response_identity_migration_accepts_and_preserves_expired_v0200_tombstones() {
+    let isolated = isolated().await;
+    let client = isolated.client().await;
+    install_v0200(&client).await;
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_entries \
+             (scope_digest, request_digest, state, claimed_at, terminal_at, expires_at) \
+             VALUES ($1, $2, 'completed_expired', now(), now(), now() - interval '1 hour')",
+            &[&[5_u8; 32].as_slice(), &[15_u8; 32].as_slice()],
+        )
+        .await
+        .expect("insert an expired v0200 tombstone");
+
+    idempotent::migrate(&client)
+        .await
+        .expect("an expired tombstone has no response identity to recover");
+    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+    let row = client
+        .query_one(
+            "SELECT state, response_request_id, response_body \
+             FROM adapter_idempotency_entries",
+            &[],
+        )
+        .await
+        .expect("inspect the migrated tombstone");
+    assert_eq!(row.get::<_, String>(0), "completed_expired");
+    assert_eq!(row.get::<_, Option<String>>(1), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(2), None);
 }
 
 #[tokio::test]
@@ -321,7 +442,7 @@ async fn current_rows_do_not_block_a_subsequent_startup() {
     idempotent::migrate(&client)
         .await
         .expect("the applied semantic migration does not inspect current rows again");
-    assert_eq!(migration_versions(&client).await, vec![100, 200]);
+    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
     assert_eq!(
         client
             .query_one("SELECT count(*) FROM adapter_idempotency_entries", &[])
@@ -329,6 +450,50 @@ async fn current_rows_do_not_block_a_subsequent_startup() {
             .expect("count the current rows")
             .get::<_, i64>(0),
         1
+    );
+}
+
+#[tokio::test]
+async fn current_cached_response_ids_do_not_block_a_subsequent_startup() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("restart-caller");
+    let now = SystemTime::now();
+    let Claim::Execute(execution) = store
+        .claim(
+            request(&caller, "records-create.person", "restart-response-key", 8),
+            now,
+        )
+        .await
+        .expect("claim a current response")
+    else {
+        panic!("the current response claim must execute");
+    };
+    store
+        .finish(
+            execution,
+            TerminalOutcome::Completed,
+            response(201, b"application/json", b"{}"),
+            now,
+        )
+        .await
+        .expect("store a response with its generated id");
+
+    let client = isolated.client().await;
+    idempotent::migrate(&client)
+        .await
+        .expect("an already-applied response-id migration accepts current custody");
+    assert_eq!(migration_versions(&client).await, vec![100, 200, 300]);
+    assert_eq!(
+        client
+            .query_one(
+                "SELECT response_request_id FROM adapter_idempotency_entries",
+                &[],
+            )
+            .await
+            .expect("read the current response id")
+            .get::<_, String>(0),
+        RESPONSE_REQUEST_ID
     );
 }
 
@@ -426,6 +591,7 @@ async fn replay_preserves_exact_bytes_status_and_content_type_and_scope_is_names
         Claim::Replay { outcome, response } => {
             assert_eq!(outcome, TerminalOutcome::Completed);
             assert_eq!(response, exact, "replay is byte-for-byte exact");
+            assert_eq!(response.request_id(), RESPONSE_REQUEST_ID);
         }
         other => panic!("the completed claim must replay, got {other:?}"),
     }
@@ -785,7 +951,8 @@ async fn sweep_erases_expired_response_custody_without_reopening_the_effect() {
     let client = isolated.client().await;
     let row = client
         .query_one(
-            "SELECT response_status, response_content_type, response_body, state \
+            "SELECT response_status, response_content_type, response_body, \
+                    response_request_id, state \
              FROM adapter_idempotency_entries",
             &[],
         )
@@ -794,5 +961,6 @@ async fn sweep_erases_expired_response_custody_without_reopening_the_effect() {
     assert_eq!(row.get::<_, Option<i16>>(0), None);
     assert_eq!(row.get::<_, Option<Vec<u8>>>(1), None);
     assert_eq!(row.get::<_, Option<Vec<u8>>>(2), None);
-    assert_eq!(row.get::<_, String>(3), "completed_expired");
+    assert_eq!(row.get::<_, Option<String>>(3), None);
+    assert_eq!(row.get::<_, String>(4), "completed_expired");
 }

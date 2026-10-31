@@ -203,6 +203,12 @@ fn has_event(outcome: &RouteOutcome, kind: &str) -> bool {
     outcome.events.iter().any(|event| event.kind == kind)
 }
 
+/// A synchronous `direct:` call exposes the target's body and property
+/// changes on the caller's same exchange.
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/component/direct/DirectNoToTypeTest.java#testNoToType` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/component/direct/DirectShouldUseSameThreadTest.java#testUseSameThread`.
 #[tokio::test]
 async fn a_direct_call_shares_the_exchange_and_its_changes() {
     let lane = Lane::over(
@@ -281,6 +287,12 @@ async fn an_unhandled_target_error_reaches_the_callers_clauses() {
     assert!(has_event(&outcome, "exchangeFailureHandled"));
 }
 
+/// This is a recorded divergence from Camel's route error handler, which
+/// redelivers through a `direct:` subroute. The Adapter never redelivers the
+/// `direct:` send itself.
+///
+/// Camel divergence anchor:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/RedeliverToSubRouteRemoveHeadersDecrementTest.java#testDecrementCounterWithRemoveHeaders`.
 #[tokio::test]
 async fn a_direct_send_is_never_redelivered() {
     // The caller's handler would redeliver a failing endpoint send three
@@ -348,6 +360,11 @@ async fn a_stop_in_the_target_ends_the_whole_route() {
     );
 }
 
+/// Camel fails an InOut `direct:` send when no consumer is available; the
+/// Adapter preserves failure but uses its closed `egress.refused` class.
+///
+/// Camel case:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/component/direct/DirectNoConsumerTest.java#testInOut`.
 #[tokio::test]
 async fn a_direct_send_to_an_undeclared_route_fails_the_exchange() {
     let lane = Lane::over(json!([{"to": {"uri": "direct:nowhere"}}]), json!({}));
@@ -356,6 +373,11 @@ async fn a_direct_send_to_an_undeclared_route_fails_the_exchange() {
     assert_eq!(lane.requests(), 0);
 }
 
+/// Unlike Camel's runtime consumer lookup, the Adapter also resolves every
+/// static target before serving a route table.
+///
+/// Camel behavior anchor:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/component/direct/DirectNoConsumerTest.java#testInOut`.
 #[test]
 fn an_undeclared_direct_target_is_refused_at_load() {
     let mut routes: RouteTable = BTreeMap::new();
@@ -402,6 +424,12 @@ async fn a_direct_chain_past_the_bounded_depth_is_refused_at_run() {
     assert_eq!(failed_class(&outcome), "budget.exhausted");
 }
 
+/// Camel accepts endpoint options such as `failIfNoConsumers`, `block`, and
+/// `timeout`; the bounded Adapter form accepts no `direct:` parameters.
+///
+/// Camel divergence anchors:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/component/direct/DirectNoConsumerTest.java#testFailIfNoConsumerFalse` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/component/direct/DirectProducerBlockingTest.java#testProducerBlocksWithNoConsumers`.
 #[test]
 fn a_direct_send_with_parameters_is_not_served() {
     let refusal = check_servable(&steps(json!([{"to": {

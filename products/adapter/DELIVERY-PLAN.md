@@ -401,7 +401,7 @@ slice of the increment, on the platform primitives of D13.
 - **C4, components and facade**, owns `src/component/**`, `src/http/**`,
   `src/auth/**`, the upstream double under `tests/support/upstream/**`, and
   `tests/camel_{direct,http,rest_dsl,header_filter}.rs`: `direct`, `http` on
-  `FixedDestinationPolicy`, the `rest` consumer on `registry-platform-httpsec`
+  `FixedDestinationPolicy`, the `rest` consumer on Axum with shared OIDC verification
   with OIDC and access profiles, filling the profile's envelope templates;
   `src/auth/**` carries all six upstream kinds of `CONCEPT.md` 10.2 with
   the token cache, the single refresh after a 401, `credential.rejected`,
@@ -438,8 +438,11 @@ per rule 11.
 Wires C1 to C6 into one engine; dhis2-tracker search and get end to end
 over the double and by replay, under both the `breg-records` profile and
 the test profile, with an identical pack (errors included); fault injection
-(13.4), read property tests (13.5), contract tests (13.6), security tests
-(13.7) in the default suite; `check-port-table.py` now requires every
+(13.4), read property tests (13.5), and pure contract/security tests in the
+default suite. Served HTTP reads and persisted security proofs run in
+`test-postgres.sh`, with a disposable database and `postgres-test`, so
+absence of a database never turns required proof into a skipped test.
+`check-port-table.py` now requires every
 Increment 1 row; review report. Then the lead migrates the
 experiments to 8.11 and reruns them, executed and not only checked: each
 experiment's fixtures replay through the engine, and each read experiment
@@ -579,15 +582,18 @@ Increment 1:
 2. `products/adapter/scripts/test-postgres.sh` exits 0 and reports a
    nonzero number of journal tests run.
 3. `CARGO test --locked -p registry-adapter` includes every
-   `camel_*` module for Increment 1 rows, the fault-injection suite, and
-   the end-to-end reads over the double.
+   `camel_*` module for Increment 1 rows and the fault-injection suite.
+   `test-postgres.sh` includes end-to-end reads over the double under
+   both profiles and the persisted security negatives.
 4. `CARGO run --locked -p registry-adapterctl -- compile <example project>`
    twice yields byte-identical `openapi.json`.
 5. `CARGO run --locked -p registry-cli-docs -- --check` (or the snapshot
    test) passes; `CARGO clippy --workspace --all-targets -- -D warnings`
    exits 0.
 6. `rg -n 'records\.(search|get|create|update|patch)|/v1/records' crates/registry-adapter*/src`
-   prints nothing (the target API lives in profile files only), and
+   has matches only inside source-internal `#[cfg(test)]` modules, with
+   that production/test boundary inspected in the integration review
+   (the target API lives in profile files only), and
    `cargo tree -p registry-adapter -e normal | rg registry-record` prints
    nothing (dev-dependency only).
 7. `CARGO test --locked -p registry-adapter --test camel_http_authentication`
@@ -603,8 +609,12 @@ Increment 1:
     `FINDINGS.md` carries the executed rerun with each command's output.
 11. Every conformance module for a row listed in rule 11 as source-bound
     cites at least one `camel-4.23.0:` path:
-    `rg --files-without-match 'camel-4\.23\.0:' crates/registry-adapter/tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle,split,loop,enrich,aggregation,direct,http,header_filter,testing}.rs`
-    prints nothing.
+    `rg --files-without-match 'camel-4\.23\.0:' crates/registry-adapter/tests/{camel_error_cluster,error_lifecycle,camel_resilience,camel_split_loop,camel_direct,egress_wiring,camel_header_filter}.rs`
+    prints nothing. Consolidated modules may cover several rows. The
+    `camel-*-attribution.md` review inventories map applicable upstream
+    test methods to actual Rust assertions and record exclusions; the
+    boundary inventory also records the bounded mock/intercept replay
+    proof. A citation by itself is not conformance evidence.
 12. Every normal dependency of `registry-adapter` is referenced by its code
     (no dependency added ahead of use survives the increment).
 
@@ -615,7 +625,9 @@ Increment 2:
    suites.
 3. Write fixtures replay in `check-contracts.sh`.
 4. `git --no-optional-locks diff --name-only <first D2 commit>^ <last D2 commit> | rg '\.rs$'`
-   prints nothing.
+   prints nothing for pack-only D2 changes. The source-neutral typed
+   problem-data prerequisite has separate core/runtime/schema tests;
+   its implementation is not claimed as a declarative pack change.
 
 Increment 3:
 

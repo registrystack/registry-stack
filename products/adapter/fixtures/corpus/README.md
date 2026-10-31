@@ -68,7 +68,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 116 members.
+finding per code. The corpus holds 125 members.
 
 ### Profile members
 
@@ -81,6 +81,13 @@ finding per code. The corpus holds 116 members.
 | `adapter.profile.response-envelope-missing-result-slot` | Response envelope names neither `record` nor `records` | `adapter.profile.response-envelope-missing-result-slot` | checks |
 | `adapter.profile.request-envelope-missing-record-slot` | A write operation's request envelope names no `record` slot | `adapter.profile.request-envelope-missing-record-slot` | checks |
 | `adapter.profile.problem-envelope-missing-code-slot` | Problem envelope names no `problemCode` slot | `adapter.profile.problem-envelope-missing-code-slot` | checks |
+| `adapter.profile.problem-data-field-duplicate` | One problem declares the same data field name twice | `adapter.profile.problem-data-field-duplicate` | checks |
+| `adapter.profile.problem-data-field-optional` | A field inside the optional problem data object is itself optional | `adapter.profile.problem-data-field-optional` | checks |
+| `adapter.profile.problem-data-fields-empty` | A problem declares an empty `dataFields` list | `adapter.profile.problem-data-fields-empty` | checks |
+| `adapter.profile.problem-data-fields-too-many` | A problem declares 17 data fields, one past the bound of 16 | `adapter.profile.problem-data-fields-too-many` | checks |
+| `adapter.profile.problem-data-slot-form` | `problemData` is a required slot instead of one optional whole-value slot | `adapter.profile.problem-data-slot-form` | checks |
+| `adapter.profile.problem-data-slot-missing` | A problem declares data fields but the problem envelope carries no `problemData` slot | `adapter.profile.problem-data-slot-missing` | checks |
+| `adapter.profile.problem-data-slot-unused` | The problem envelope carries `problemData` but no problem declares data fields | `adapter.profile.problem-data-slot-unused` | checks |
 | `adapter.profile.invalid-path` | Operation path `v2/cases/...` carries no leading slash | `adapter.profile.invalid-path` | checks |
 | `adapter.profile.unresolved-path-parameter` | Facade path carries `{case_id}`, which the operation's `pathParameters` do not declare | `adapter.profile.unresolved-path-parameter` | checks |
 | `adapter.profile.problem-envelope-uncompilable` | Problem envelope carries a `{{record}}` slot, which the problem-envelope derivation refuses | `adapter.profile.problem-envelope-uncompilable` | checks |
@@ -166,6 +173,7 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.route.unknown-direct-target` | Enrich names `direct:absent-route` | `adapter.route.unknown-direct-target` | checks |
 | `adapter.route.direct-cycle` | Internal routes `loop-a` and `loop-b` call each other | `adapter.route.direct-cycle` | checks |
 | `adapter.route.direct-depth-exceeded` | 18 chained direct routes exceed the 16-deep bound | `adapter.route.direct-depth-exceeded` | checks |
+| `adapter.route.do-try-clause-required` | A `doTry` step declares neither `doCatch` nor `doFinally` | `adapter.route.do-try-clause-required` | checks |
 | `adapter.route.from-not-direct` | A route consumes from `http:cases`, not `direct:` | `adapter.route.from-not-direct` | checks |
 | `adapter.route.maximum-items-required` | Split declares no `maximumItems` | `adapter.route.maximum-items-required` | checks |
 | `adapter.route.non-safe-send-in-split` | POST inside a split with `stopOnException: false` | `adapter.route.non-safe-send-in-split` | checks |
@@ -193,6 +201,7 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.route.invalid-query-key` | Query key `bad=key` carries an unescaped `=` | `adapter.route.invalid-query-key` | checks |
 | `adapter.route.graphql-send-members` | A graphql send carries `httpMethod`, an HTTP-send member | `adapter.route.graphql-send-members` | checks |
 | `adapter.route.stop-on-exception-exclusive` | Split sets `stopOnException` beside `errorThreshold` failure accounting | `adapter.route.stop-on-exception-exclusive` | checks |
+| `adapter.route.throw-exception-data-undeclared` | `throwException` supplies data, but the resolved problem declares no `dataFields` | `adapter.route.throw-exception-data-undeclared` | checks |
 | `adapter.route.circuit-breaker-exception-class` | Breaker `ignoreException` names the uncatchable class `script.budget-exceeded` | `adapter.route.circuit-breaker-exception-class` | checks |
 | `adapter.route.code-map-unknown` | A conversion names no declared code map | `adapter.route.code-map-unknown` | checks |
 | `adapter.route.convert-shape` | `convertBodyTo` incorrectly names a source property | `adapter.route.convert-shape` | checks |

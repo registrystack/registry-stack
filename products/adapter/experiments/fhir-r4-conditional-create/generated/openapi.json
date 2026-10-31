@@ -478,27 +478,548 @@
         "type": "object"
       },
       "Problem": {
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "type": "string"
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.upstream-error",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 502,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the source answered with an error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
           },
-          "detail": {
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.unavailable",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 504,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the source did not answer in time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
           },
-          "status": {
-            "type": "integer"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.breaker",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 503,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the circuit protecting the source is open",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
           },
-          "title": {
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.throttle",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 429,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the source is throttling requests",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.loop-bound",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the route exceeded its loop bound",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.validation",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 422,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the request failed validation",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.conversion",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "a value could not be converted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.aggregation",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the aggregation produced duplicates",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.script",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "a route script failed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.budget",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the upstream call budget was exhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.credential",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the credential for the source was rejected",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.disclosure",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the response would exceed its disclosure limits",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.egress",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 500,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the request was refused by egress policy",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.not-found",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 404,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the record could not be found",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.write-partial",
+                "type": "string"
+              },
+              "data": {
+                "additionalProperties": false,
+                "properties": {
+                  "ignored": {
+                    "type": "integer"
+                  },
+                  "imported": {
+                    "type": "integer"
+                  },
+                  "rejected": {
+                    "type": "integer"
+                  },
+                  "updated": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "ignored",
+                  "imported",
+                  "rejected",
+                  "updated"
+                ],
+                "type": "object"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 409,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the write was only partially accepted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.write-rejected",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 409,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the source refused the write",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.outcome",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "const": 422,
+                "type": "integer"
+              },
+              "title": {
+                "const": "the request could not be served",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "source.facade",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": 400,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 401,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 403,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 404,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 405,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 406,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 409,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 413,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 415,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 422,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 500,
+                    "type": "integer"
+                  },
+                  {
+                    "const": 503,
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": {
+                "const": "the facade request was not valid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "code",
-          "status",
-          "title"
-        ],
-        "type": "object"
+        ]
       }
     },
     "securitySchemes": {

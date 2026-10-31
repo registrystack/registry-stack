@@ -200,6 +200,7 @@ fn problem(code: &str, class: ErrorClass) -> Problem {
         status: BoundedU32::new(500).expect("problem status"),
         title: "the read failed".to_owned(),
         classes: UniqueList::new(vec![class]).expect("one class"),
+        data_fields: None,
     }
 }
 

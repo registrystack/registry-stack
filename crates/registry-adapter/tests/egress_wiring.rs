@@ -19,7 +19,8 @@ use registry_adapter::auth::{
     TokenBudget,
 };
 use registry_adapter::egress::{
-    Egress, EgressError, EgressFault, EgressRefusal, SendBody, SendBodyFormat, SendShape,
+    Egress, EgressError, EgressFault, EgressRefusal, OkStatusCodeRanges, SendBody, SendBodyFormat,
+    SendShape,
 };
 use registry_adapter_core::{
     ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication, EndpointBinding,
@@ -231,7 +232,7 @@ fn outbound<'a>(
         authorization: Some(authorization),
         attempt,
         maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-        ok_status_range: (200, 299),
+        ok_status_ranges: OkStatusCodeRanges::default(),
         throw_exception_on_failure: throw,
     }
 }
@@ -363,7 +364,7 @@ async fn an_oauth2_kind_acquires_and_carries_a_token_over_the_frozen_transport()
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -509,7 +510,7 @@ async fn a_refused_destination_surfaces_as_egress_refused() {
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -597,7 +598,7 @@ async fn the_credential_travels_after_the_exchange_headers() {
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -682,7 +683,7 @@ async fn an_exchange_entry_under_the_api_key_name_never_shadows_the_key() {
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -707,7 +708,12 @@ async fn an_exchange_entry_under_the_api_key_name_never_shadows_the_key() {
 
 /// A redirect is never followed, whatever its spelling: every 3xx
 /// answer raises `upstream.redirect` carrying its status, and the
-/// double sees exactly one request.
+/// double sees exactly one request. Camel's disabled-redirect test also
+/// exposes the 3xx through `HttpOperationFailedException`
+/// (`camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpRedirectTest.java#httpRedirectFalse`).
+/// Refusing every redirect and retaining no `Location` value is the Adapter's
+/// security divergence from
+/// <https://camel.apache.org/components/4.23.x/http-component.html>.
 #[tokio::test]
 async fn a_redirect_is_raised_and_never_followed() {
     for status in [301, 302, 303, 307, 308] {
@@ -748,7 +754,8 @@ async fn a_redirect_is_raised_and_never_followed() {
                 authorization: Some(&credential),
                 attempt: ATTEMPT,
                 maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-                ok_status_range: (200, 299),
+                ok_status_ranges: OkStatusCodeRanges::try_from_ranges(vec![(200, 399)])
+                    .expect("the redirect-covering status range is valid"),
                 throw_exception_on_failure: true,
             })
             .await
@@ -815,7 +822,7 @@ async fn the_pinned_origin_refuses_foreign_links_and_sends_the_target_unchanged(
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -839,7 +846,7 @@ async fn the_pinned_origin_refuses_foreign_links_and_sends_the_target_unchanged(
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -924,7 +931,7 @@ async fn a_post_send_carries_its_body_and_classifies_its_reply() {
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -1215,9 +1222,57 @@ async fn a_body_over_the_script_json_bound_raises_malformed() {
 
 // Status ranges and the throw option.
 
+/// Camel treats comma-separated status ranges as a sparse union, including
+/// singleton entries and holes
+/// (`camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/helper/HttpHelperTest.java#testIsStatusCodeOkComplexRange`;
+/// <https://camel.apache.org/components/4.23.x/http-component.html>).
+#[tokio::test]
+async fn sparse_status_ranges_accept_each_entry_and_reject_a_hole() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![
+        Response::json(400, r#"{"entry":400}"#),
+        Response::json(404, r#"{"entry":404}"#),
+        Response::json(403, r#"{"hole":403}"#),
+    ]);
+    let (egress, credential) = load_basic_and_authorize(
+        &upstream,
+        "sparse-api",
+        "EGR_C4B_SPARSE_USER",
+        "EGR_C4B_SPARSE_PASSWORD",
+        "sparse-user",
+        "sparse-pass",
+    )
+    .await;
+    let bound = egress.endpoint("sparse-api").expect("the endpoint");
+    let ranges = OkStatusCodeRanges::try_from_ranges(vec![(200, 299), (400, 400), (404, 404)])
+        .expect("the sparse status set is valid");
+    let link = upstream.url("/records");
+
+    for status in [400, 404] {
+        let mut send = outbound(&link, &credential, ATTEMPT, true);
+        send.ok_status_ranges = ranges.clone();
+        let reply = bound.send(send).await.expect("the listed status succeeds");
+        assert_eq!(reply.status, status);
+    }
+
+    let mut send = outbound(&link, &credential, ATTEMPT, true);
+    send.ok_status_ranges = ranges;
+    let failure = bound
+        .send(send)
+        .await
+        .expect_err("the hole between singletons remains out of range");
+    assert_eq!(upstream_failure(&failure).class, ErrorClass::UpstreamHttp);
+    assert_eq!(upstream_failure(&failure).status, Some(403));
+}
+
 /// Out of range and undecodable under the throw flag: the send answers
 /// `upstream.http` with no decoded body, because the route is ending
-/// anyway and the body never decoded.
+/// anyway and the body never decoded. Camel similarly raises for an
+/// out-of-range response when `throwExceptionOnFailure` is true
+/// (`camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpThrowExceptionOnFailureTest.java#httpGetWhichReturnsHttp501ShouldThrowAnException`),
+/// while the Adapter's bounded JSON-body handling is its documented
+/// divergence from
+/// <https://camel.apache.org/components/4.23.x/http-component.html>.
 #[tokio::test]
 async fn an_undecodable_out_of_range_body_raises_http_without_a_body_under_the_throw() {
     let upstream = UpstreamDouble::start();
@@ -1256,7 +1311,11 @@ async fn an_undecodable_out_of_range_body_raises_http_without_a_body_under_the_t
 
 /// Out of range and decodable under the throw flag: the failure
 /// carries the decoded body, so a clause can read the source's error
-/// detail, and its status (CONCEPT 8.11).
+/// detail, and its status (CONCEPT 8.11). Camel's failure object likewise
+/// retains the response body and status
+/// (`camel-4.23.0:components/camel-http/src/main/java/org/apache/camel/component/http/HttpProducer.java#populateHttpOperationFailedException`,
+/// `camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpThrowExceptionOnFailureTest.java#httpGetWhichReturnsHttp501ShouldThrowAnException`;
+/// <https://camel.apache.org/components/4.23.x/http-component.html>).
 #[tokio::test]
 async fn a_decodable_out_of_range_body_raises_http_with_the_body_under_the_throw() {
     let upstream = UpstreamDouble::start();
@@ -1295,7 +1354,9 @@ async fn a_decodable_out_of_range_body_raises_http_with_the_body_under_the_throw
 
 /// Without the throw option an out-of-range status is not a failure:
 /// the reply returns as it is and the route reads the status itself
-/// (CONCEPT 8.11's `throwExceptionOnFailure: false`).
+/// (CONCEPT 8.11's `throwExceptionOnFailure: false`), matching
+/// `camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpThrowExceptionOnFailureTest.java#httpGetWhichReturnsHttp501`
+/// (<https://camel.apache.org/components/4.23.x/http-component.html>).
 #[tokio::test]
 async fn without_the_throw_an_out_of_range_status_returns_the_reply() {
     let upstream = UpstreamDouble::start();
@@ -1399,7 +1460,7 @@ async fn an_unreachable_upstream_raises_connection_not_sent() {
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -1471,7 +1532,7 @@ async fn a_stalled_upstream_raises_timeout_maybe_sent() {
                 authorization: Some(&credential),
                 attempt: std::time::Duration::from_millis(800),
                 maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-                ok_status_range: (200, 299),
+                ok_status_ranges: OkStatusCodeRanges::default(),
                 throw_exception_on_failure: true,
             })
             .await
@@ -1566,7 +1627,7 @@ fn a_send_debug_render_carries_no_value() {
         authorization: Some(&credential),
         attempt: ATTEMPT,
         maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-        ok_status_range: (200, 299),
+        ok_status_ranges: OkStatusCodeRanges::default(),
         throw_exception_on_failure: true,
     };
     let rendered = format!("{send:?}");

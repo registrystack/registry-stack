@@ -66,8 +66,14 @@
 # stays upstream.http. A 200 still has to prove full acceptance through its
 # status and stats. Mixed accepted and ignored counts raise
 # `outcome.conflict`; an unfinished or malformed summary fails validation.
-# Neither path returns the raw summary. The partial problem remains
-# count-free until the profile contract has declared bounded count slots.
+# Neither path returns the raw summary. For that bounded partial problem,
+# `imported`, `updated`, and `ignored` are the documented DHIS2 aggregate
+# `created`, `updated`, and `ignored` stats. DHIS2 2.43 declares no rejected
+# stat: `rejected` is the number of distinct (`trackerType`, `uid`) pairs in
+# the explicitly present `validationReport.errorReports` array. It is an
+# orthogonal object-error count, not another term in `stats.total`; several
+# errors for one object count once, and a missing or malformed report fails
+# closed instead of becoming zero.
 #
 # Error clauses: the pack raises the closed error classes of CONCEPT 8.7
 # and never names a profile's problem codes or writes a problem body
@@ -454,6 +460,10 @@ routeTemplates:
                       - throwException:
                           exceptionType: outcome.conflict
                           message: The source accepted only part of the write.
+                          data:
+                            rhai:
+                              file: scripts/import-summary.rhai
+                              entrypoint: partial_import_data
                 otherwise:
                   steps:
                     - validate:
@@ -487,7 +497,7 @@ scripts:
   - path: scripts/accepted-record.rhai
     digest: sha256:37fbf1d1454e3eb3c2112991e8a80189dae40b460188a029ae47a0354e19adea
   - path: scripts/import-summary.rhai
-    digest: sha256:04fb7f05ce663095e5c4124255db46f618168df614bcb875753e1fd326e843d7
+    digest: sha256:0aceef8cf488ee900de1dccc465d8ed70cbd12bf6cfc8f4139e4e32c87669acd
 capabilities:
   components:
     - http

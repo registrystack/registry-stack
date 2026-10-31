@@ -6,7 +6,7 @@
 //! Ported: `expression`, `aggregationStrategy` (default returns the
 //! original message), `stopOnException` (default false), the failure
 //! accounting of `errorThreshold` and `maxFailedRecords`, and the
-//! exchange headers `CamelSplitIndex`, `CamelSplitSize`,
+//! exchange properties `CamelSplitIndex`, `CamelSplitSize`,
 //! `CamelSplitComplete`, and `CamelSplitResult`. Not ported:
 //! `parallelProcessing`, `streaming`, and `timeout`. `maximumItems` is
 //! mandatory.
@@ -22,17 +22,13 @@
 use registry_adapter_core::{AggregationStrategy, ErrorClass, Expression, SplitStep};
 use serde_json::json;
 
-use crate::exchange::{ensure_value_bounded, ensure_values_bounded};
+use crate::exchange::{
+    ensure_value_bounded, ensure_values_bounded, SPLIT_COMPLETE_PROPERTY, SPLIT_INDEX_PROPERTY,
+    SPLIT_RESULT_PROPERTY, SPLIT_SIZE_PROPERTY,
+};
 use crate::language::{compile_selector, JsonPathResult};
 use crate::processor::aggregation;
 use crate::route::{Flow, RouteFailure, Run};
-
-/// The headers the split places on each piece's exchange.
-const SPLIT_INDEX_HEADER: &str = "CamelSplitIndex";
-const SPLIT_SIZE_HEADER: &str = "CamelSplitSize";
-const SPLIT_COMPLETE_HEADER: &str = "CamelSplitComplete";
-/// The accounting summary, set only when the split declares it.
-const SPLIT_RESULT_HEADER: &str = "CamelSplitResult";
 
 pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow, RouteFailure> {
     let Some(bound) = step.maximum_items else {
@@ -57,13 +53,12 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
     for (index, piece) in pieces.into_iter().enumerate() {
         yield_within_deadline(run).await?;
         // Each piece runs on its own copy of the exchange, carrying the
-        // engine headers the piece's steps read.
+        // engine properties the piece's steps read.
         let mut item = run.exchange.clone();
         item.message.body = piece;
-        item.message.set_header(SPLIT_INDEX_HEADER, json!(index));
-        item.message.set_header(SPLIT_SIZE_HEADER, json!(total));
-        item.message
-            .set_header(SPLIT_COMPLETE_HEADER, json!(index as u64 + 1 == total));
+        item.set_property(SPLIT_INDEX_PROPERTY, json!(index));
+        item.set_property(SPLIT_SIZE_PROPERTY, json!(total));
+        item.set_property(SPLIT_COMPLETE_PROPERTY, json!(index as u64 + 1 == total));
         item.ensure_bounded().map_err(RouteFailure::of)?;
         std::mem::swap(&mut run.exchange, &mut item);
         let flow = run.run_steps(&step.steps).await;
@@ -110,6 +105,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
                 failures += 1;
                 if let Some(maximum) = step.maximum_failed_records {
                     if failures >= maximum.get() {
+                        set_accounting(run, total, processed, failures);
                         record_pending_consumed(run, &mut last_failure);
                         return Err(failure);
                     }
@@ -117,6 +113,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
                 if let Some(threshold) = step.error_threshold {
                     let share = failures as f64 / processed as f64;
                     if share >= threshold {
+                        set_accounting(run, total, processed, failures);
                         record_pending_consumed(run, &mut last_failure);
                         return Err(failure);
                     }
@@ -239,6 +236,7 @@ fn not_an_array() -> RouteFailure {
     RouteFailure {
         class: ErrorClass::Validation,
         message: Some("a split expression must yield a JSON array".to_owned()),
+        data: None,
         auth: None,
     }
 }
@@ -262,7 +260,7 @@ fn record_pending_consumed(run: &mut Run<'_, '_>, pending: &mut Option<RouteFail
 }
 
 /// Place the merged body and, with the accounting declared, its summary
-/// header on the route exchange.
+/// property on the route exchange.
 fn finish(
     run: &mut Run<'_, '_>,
     body: serde_json::Value,
@@ -273,15 +271,19 @@ fn finish(
 ) {
     run.exchange.message.body = body;
     if accounting {
-        run.exchange.message.set_header(
-            SPLIT_RESULT_HEADER,
-            json!({
-                "totalItems": total,
-                "processedItems": processed,
-                "failureCount": failures,
-            }),
-        );
+        set_accounting(run, total, processed, failures);
     }
+}
+
+fn set_accounting(run: &mut Run<'_, '_>, total: u64, processed: u64, failures: u64) {
+    run.exchange.set_property(
+        SPLIT_RESULT_PROPERTY,
+        json!({
+            "totalItems": total,
+            "processedItems": processed,
+            "failureCount": failures,
+        }),
+    );
 }
 
 /// Apply a strategy's property writes: a value sets, an absent selection

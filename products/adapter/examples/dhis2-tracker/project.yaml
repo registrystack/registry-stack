@@ -66,11 +66,11 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:2588ac9ec2b6ecc245cc1e345879d4f623eb48b155470555eeff1a22e2d5d34c
+  digest: sha256:8d254a570c9864c0a5a9ebb3aa52a7889896d8631cf7e103a0966692c881c637
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:1206bb52d15dad29b63c1837be6f369a00cdecb2b8a8a912e1a598a54a8de5ca
+  digest: sha256:246770f1ff8eb7b7f6d841c6e6b0ea8e828483f377248f3366a4dc661b3fff72
 recordTypes:
   - name: person
     fields:

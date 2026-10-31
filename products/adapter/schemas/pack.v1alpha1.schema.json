@@ -1033,7 +1033,7 @@
         },
         "retryWhile": {
           "$ref": "#/$defs/Expression",
-          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the clause as in Camel's\n`OnExceptionDefinition`, not of the redelivery policy; section\n8.7). Divergence from Camel: the predicate only stops redelivery\nearlier and `maximumRedeliveries` remains the hard cap, where\nCamel lets `retryWhile` override it, so `maximumUpstreamCalls`\nstays a check-time guarantee. The redeliveries behind it are the\nclause's own policy, or the route handler's when the clause\ndeclares none; the checks refuse the predicate when neither\ncarries any."
+          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the clause as in Camel's\n`OnExceptionDefinition`, not of the redelivery policy; section\n8.7). Divergence from Camel: the predicate only stops redelivery\nearlier and `maximumRedeliveries` remains the hard cap, where\nCamel lets `retryWhile` override it, so `maximumUpstreamCalls`\nstays a check-time guarantee. The redeliveries behind it are the\nclause's own policy, or the route handler's when the clause\ndeclares no policy and produces no output steps. An output-bearing\nclause instead has Camel's clause-local default of zero\nredeliveries. The checks refuse the predicate when its effective\npolicy carries none."
         },
         "steps": {
           "description": "The clause's steps.",
@@ -1777,6 +1777,10 @@
       "additionalProperties": false,
       "description": "A `throwException` step: raise one closed error class, with an\noptional bounded constant message\n(`products/adapter/CONCEPT.md` section 8.11.6). The checks refuse a\nboundary or facade class, which never enters a route.",
       "properties": {
+        "data": {
+          "$ref": "#/$defs/Expression",
+          "description": "The optional expression producing the selected problem's declared,\nclosed data object. The runtime validates it before disclosure."
+        },
         "exceptionType": {
           "$ref": "#/$defs/ErrorClass",
           "description": "The closed class to raise; a catchable class, typically an\n`outcome.*` class."

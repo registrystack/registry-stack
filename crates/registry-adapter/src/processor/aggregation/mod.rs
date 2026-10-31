@@ -21,10 +21,10 @@
 //! how a pagination loop's cursor ends absent on the last page
 //! (section 8.11.7).
 
-use registry_adapter_core::{AggregationStrategy, ErrorClass};
+use registry_adapter_core::{is_route_unwritable_property_name, AggregationStrategy, ErrorClass};
 use serde_json::{Map, Value};
 
-use crate::exchange::{ensure_value_bounded, Exchange};
+use crate::exchange::{ensure_value_bounded, Exchange, NEXT_CONTINUATION_PROPERTY};
 use crate::language::{compile_selector, JsonPathResult};
 use crate::route::RouteFailure;
 use crate::scripts::ScriptSet;
@@ -219,6 +219,13 @@ fn fold_into(
             }
         }
     };
+    if properties.iter().any(|(name, _)| {
+        is_route_unwritable_property_name(name) || name == NEXT_CONTINUATION_PROPERTY
+    }) {
+        return Err(fault(
+            "an aggregation strategy may not write a reserved exchange property",
+        ));
+    }
     ensure_value_bounded(old).map_err(RouteFailure::of)?;
     Ok(properties)
 }
@@ -282,6 +289,7 @@ fn fault(message: &str) -> RouteFailure {
     RouteFailure {
         class: ErrorClass::Validation,
         message: Some(message.to_owned()),
+        data: None,
         auth: None,
     }
 }

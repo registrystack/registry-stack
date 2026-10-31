@@ -35,14 +35,16 @@ class PostgresGateTest(unittest.TestCase):
             cargo.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                'printf "cargo\\n" >> "$PROBE_LOG"\n'
+                'printf "cargo:%s|ctl:%s\\n" "$*" "${ADAPTERCTL_BIN:-absent}" >> "$PROBE_LOG"\n'
             )
             docker.chmod(0o700)
             cargo.chmod(0o700)
             log = root / "probes"
             env = os.environ.copy()
             env.pop("ADAPTER_TEST_DATABASE_URL", None)
-            env.update(HOME=str(root), PATH=f"{binary}:{env['PATH']}", PROBE_LOG=str(log))
+            env.pop("ADAPTERCTL_BIN", None)
+            env.update(HOME=str(root), PATH=f"{binary}:{env['PATH']}", PROBE_LOG=str(log),
+                       CARGO_TARGET_DIR=str(root / "target"))
             result = subprocess.run(
                 ["bash", str(SCRIPT)], env=env, capture_output=True, text=True, check=False
             )
@@ -54,7 +56,15 @@ class PostgresGateTest(unittest.TestCase):
             self.assertTrue(any(" psql " in line for line in probes))
             for line in probes:
                 self.assertIn(" -h 127.0.0.1 ", line)
-            self.assertGreater(calls.index("cargo"), max(calls.index(line) for line in probes))
+            cargo_calls = [line for line in calls if line.startswith("cargo:")]
+            self.assertEqual(len(cargo_calls), 2, "build the matching CLI before feature tests")
+            self.assertEqual(cargo_calls[0], "cargo:build --locked -p registry-adapterctl|ctl:absent")
+            self.assertEqual(
+                cargo_calls[1],
+                "cargo:test --locked -p registry-adapter --features postgres-test|ctl:"
+                + str(root / "target" / "debug" / "adapterctl"),
+            )
+            self.assertGreater(calls.index(cargo_calls[0]), max(calls.index(line) for line in probes))
 
 
 if __name__ == "__main__":

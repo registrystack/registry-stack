@@ -54,6 +54,13 @@ pub enum CheckCode {
     // adapter.profile.*
     ProfileInvalidPath,
     ProfilePageSizeDefaultOutOfBounds,
+    ProfileProblemDataFieldDuplicate,
+    ProfileProblemDataFieldOptional,
+    ProfileProblemDataFieldsEmpty,
+    ProfileProblemDataFieldsTooMany,
+    ProfileProblemDataSlotForm,
+    ProfileProblemDataSlotMissing,
+    ProfileProblemDataSlotUnused,
     ProfileProblemClassDuplicate,
     ProfileProblemClassUnresolved,
     ProfileProblemEnvelopeMissingCodeSlot,
@@ -90,6 +97,7 @@ pub enum CheckCode {
     RouteConvertShape,
     RouteDirectCycle,
     RouteDirectDepthExceeded,
+    RouteDoTryClauseRequired,
     RouteEmptyExceptionList,
     RouteErrorHandlerShape,
     RouteFromNotDirect,
@@ -118,6 +126,7 @@ pub enum CheckCode {
     RouteRetryWhileWithoutRedeliveries,
     RouteStopOnExceptionExclusive,
     RouteThrowExceptionClass,
+    RouteThrowExceptionDataUndeclared,
     RouteThrowExceptionMessage,
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
@@ -171,6 +180,13 @@ impl CheckCode {
         Self::ProfilePageSizeDefaultOutOfBounds,
         Self::ProfileProblemClassDuplicate,
         Self::ProfileProblemClassUnresolved,
+        Self::ProfileProblemDataFieldDuplicate,
+        Self::ProfileProblemDataFieldOptional,
+        Self::ProfileProblemDataFieldsEmpty,
+        Self::ProfileProblemDataFieldsTooMany,
+        Self::ProfileProblemDataSlotForm,
+        Self::ProfileProblemDataSlotMissing,
+        Self::ProfileProblemDataSlotUnused,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileProblemEnvelopeUncompilable,
         Self::ProfileReadOnlyMethod,
@@ -203,6 +219,7 @@ impl CheckCode {
         Self::RouteConvertShape,
         Self::RouteDirectCycle,
         Self::RouteDirectDepthExceeded,
+        Self::RouteDoTryClauseRequired,
         Self::RouteEmptyExceptionList,
         Self::RouteErrorHandlerShape,
         Self::RouteFromNotDirect,
@@ -231,6 +248,7 @@ impl CheckCode {
         Self::RouteRetryWhileWithoutRedeliveries,
         Self::RouteStopOnExceptionExclusive,
         Self::RouteThrowExceptionClass,
+        Self::RouteThrowExceptionDataUndeclared,
         Self::RouteThrowExceptionMessage,
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
@@ -285,6 +303,15 @@ impl CheckCode {
             Self::ProfilePageSizeDefaultOutOfBounds => {
                 "adapter.profile.page-size-default-out-of-bounds"
             }
+            Self::ProfileProblemDataFieldDuplicate => {
+                "adapter.profile.problem-data-field-duplicate"
+            }
+            Self::ProfileProblemDataFieldOptional => "adapter.profile.problem-data-field-optional",
+            Self::ProfileProblemDataFieldsEmpty => "adapter.profile.problem-data-fields-empty",
+            Self::ProfileProblemDataFieldsTooMany => "adapter.profile.problem-data-fields-too-many",
+            Self::ProfileProblemDataSlotForm => "adapter.profile.problem-data-slot-form",
+            Self::ProfileProblemDataSlotMissing => "adapter.profile.problem-data-slot-missing",
+            Self::ProfileProblemDataSlotUnused => "adapter.profile.problem-data-slot-unused",
             Self::ProfileProblemClassDuplicate => "adapter.profile.problem-class-duplicate",
             Self::ProfileProblemClassUnresolved => "adapter.profile.problem-class-unresolved",
             Self::ProfileProblemEnvelopeMissingCodeSlot => {
@@ -333,6 +360,7 @@ impl CheckCode {
             Self::RouteConvertShape => "adapter.route.convert-shape",
             Self::RouteDirectCycle => "adapter.route.direct-cycle",
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
+            Self::RouteDoTryClauseRequired => "adapter.route.do-try-clause-required",
             Self::RouteEmptyExceptionList => "adapter.route.empty-exception-list",
             Self::RouteErrorHandlerShape => "adapter.route.error-handler-shape",
             Self::RoutePathParameterMismatch => "adapter.route.path-parameter-mismatch",
@@ -365,6 +393,9 @@ impl CheckCode {
             }
             Self::RouteStopOnExceptionExclusive => "adapter.route.stop-on-exception-exclusive",
             Self::RouteThrowExceptionClass => "adapter.route.throw-exception-class",
+            Self::RouteThrowExceptionDataUndeclared => {
+                "adapter.route.throw-exception-data-undeclared"
+            }
             Self::RouteThrowExceptionMessage => "adapter.route.throw-exception-message",
             Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
             Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
@@ -397,6 +428,13 @@ impl CheckCode {
             Self::EnvelopeInvalidPlaceholder
             | Self::ProfileInvalidPath
             | Self::ProfilePageSizeDefaultOutOfBounds
+            | Self::ProfileProblemDataFieldDuplicate
+            | Self::ProfileProblemDataFieldOptional
+            | Self::ProfileProblemDataFieldsEmpty
+            | Self::ProfileProblemDataFieldsTooMany
+            | Self::ProfileProblemDataSlotForm
+            | Self::ProfileProblemDataSlotMissing
+            | Self::ProfileProblemDataSlotUnused
             | Self::ProfileProblemClassDuplicate
             | Self::ProfileProblemClassUnresolved
             | Self::ProfileProblemEnvelopeMissingCodeSlot
@@ -442,6 +480,7 @@ impl CheckCode {
             | Self::RouteConvertShape
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded
+            | Self::RouteDoTryClauseRequired
             | Self::RouteEmptyExceptionList
             | Self::RouteErrorHandlerShape
             | Self::RouteFromNotDirect
@@ -470,6 +509,7 @@ impl CheckCode {
             | Self::RouteRetryWhileWithoutRedeliveries
             | Self::RouteStopOnExceptionExclusive
             | Self::RouteThrowExceptionClass
+            | Self::RouteThrowExceptionDataUndeclared
             | Self::RouteThrowExceptionMessage
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget

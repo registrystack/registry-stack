@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${CARGO_TARGET_DIR:?Set CARGO_TARGET_DIR to an external worktree Cargo target.}"
+
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"
 
 # The verification floor from products/adapter/DELIVERY-PLAN.md: format
 # over the workspace, then clippy and tests over the adapter crates. Cargo
-# runs in the caller's environment: an exported CARGO_TARGET_DIR is
-# honored, and cargo's own default (target/ in this repository) is used
-# otherwise; PATH keeps cargo reachable when it is not on the caller's
-# PATH.
+# runs in the caller's explicit worktree target, so an omitted target cannot
+# fill the source volume before the example generator rejects it. PATH keeps
+# cargo reachable when it is not on the caller's PATH.
 PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter -p registry-adapter-core -p registry-adapterctl --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter-core -p registry-adapterctl --locked

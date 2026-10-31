@@ -86,7 +86,10 @@ grants no row- or field-level disclosure authority. Operation and record-type
 scopes do not become personal disclosure authority.
 
 `problemSchema` remains the profile's problem envelope for ordinary operation
-failures. `protocolProblems` separately binds a closed problem envelope and
+failures, including the resolved profile code/title with the engine's fixed
+facade admission statuses. Profiles declaring typed problem data keep each
+code, title, allowed status set, and data shape correlated.
+`protocolProblems` separately binds a closed problem envelope and
 two code/status pairs owned by this protocol:
 
 - `adapter.contract.precondition-failed`, HTTP 412;
@@ -144,3 +147,8 @@ When the profile's problem envelope exposes its request-id slot, that body
 value and the header are identical. This increment accepts no caller-supplied
 correlation header and records no reversible digest of caller correlation
 data.
+
+Native write replays retain the original Adapter-minted response ID in both
+body and header so the cached response remains byte-identical. Their physical
+retry attempts have distinct journal IDs. Native writes remain unserved in
+the external gateway contract.

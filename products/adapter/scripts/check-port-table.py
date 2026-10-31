@@ -178,14 +178,14 @@ EVIDENCE: dict[str, list[str]] = {
     # Increment 1 rows, recorded as they land; pending until the increment
     # is delivered as a whole.
     "Splitter": [
-        "engine:tests/camel_split_loop.rs:split_runs_each_piece_under_the_engine_headers_and_returns_the_original",
+        "engine:tests/camel_split_loop.rs:split_runs_each_piece_under_engine_properties_and_returns_the_original",
         "engine:tests/camel_split_loop.rs:a_stop_inside_a_piece_ends_the_split_and_the_route",
         "engine:tests/camel_split_loop.rs:split_item_failures_raise_after_the_split_or_sooner_or_never",
         "engine:tests/camel_split_loop.rs:split_failure_accounting_counts_stops_and_reports",
         "engine:tests/camel_split_loop.rs:split_refuses_its_shape_and_bound_faults",
     ],
     "Loop": [
-        "engine:tests/camel_split_loop.rs:a_count_loop_repeats_with_the_loop_headers",
+        "engine:tests/camel_split_loop.rs:a_count_loop_repeats_with_loop_properties",
         "engine:tests/camel_split_loop.rs:a_do_while_loop_tests_its_predicate_before_each_iteration",
         "engine:tests/camel_split_loop.rs:a_loop_at_its_bound_completes_and_one_past_it_raises",
         "engine:tests/camel_split_loop.rs:a_loop_count_must_be_an_integer_and_the_shape_must_be_well_formed",
@@ -398,13 +398,18 @@ def check_references(row: int, cells: list[str]) -> list[str]:
 def has_rust_test_function(source: str, function: str) -> bool:
     """Whether source declares the named function as an attributed Rust test."""
     attributed_function = re.compile(
-        rf"(?P<attributes>(?:^[ \t]*#\[[^\]]*\][ \t]*(?:\n|$))+)"
+        rf"(?P<attributes>(?:^[ \t]*#\[[^\]]*\][ \t]*(?:\n|$)"
+        rf"|^[ \t]*//[^\n]*(?:\n|$)|^[ \t]*\n)+)"
         rf"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?"
         rf"fn[ \t]+{re.escape(function)}\b",
         re.MULTILINE,
     )
     return any(
-        re.search(r"#\[\s*(?:test|tokio::test)\b", match.group("attributes"))
+        re.search(
+            r"^[ \t]*#\[\s*(?:test|tokio::test)\b",
+            match.group("attributes"),
+            re.MULTILINE,
+        )
         for match in attributed_function.finditer(source)
     )
 

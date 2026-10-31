@@ -64,6 +64,23 @@ fn helper() {}
 
         self.assertFalse(CHECK_PORT_TABLE.has_rust_test_function(source, "helper"))
 
+    def test_accepts_documentation_between_attribute_and_function(self) -> None:
+        source = """
+#[tokio::test]
+/// The pinned upstream method this case ports.
+async fn refuses_redirects() {}
+"""
+        self.assertTrue(
+            CHECK_PORT_TABLE.has_rust_test_function(source, "refuses_redirects")
+        )
+
+    def test_documentation_cannot_supply_a_test_attribute(self) -> None:
+        source = """
+/// An example annotation: #[test]
+fn helper() {}
+"""
+        self.assertFalse(CHECK_PORT_TABLE.has_rust_test_function(source, "helper"))
+
     def test_ignores_test_attributes_inside_comments(self) -> None:
         source = """
 // #[test]

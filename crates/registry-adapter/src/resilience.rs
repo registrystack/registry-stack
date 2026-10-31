@@ -251,6 +251,7 @@ fn breaker_state(breaker: &CircuitBreakerStep) -> CircuitBreaker {
             breaker.open_state_wait_seconds.get(),
         )),
         maximum_half_open_calls: breaker.maximum_half_open_calls.get() as usize,
+        automatic_transition: breaker.automatic_transition_from_open_to_half_open_enabled,
     })
     // `check_servable` refuses every configuration the platform refuses
     // before a route is registered: the thresholds are bounded away from
@@ -278,7 +279,41 @@ fn pacer(throttle: &ThrottleStep) -> ThrottlePacer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_resilience::circuit_breaker::BreakerState;
     use std::time::Duration;
+
+    /// Camel wires the authored flag directly into resilience4j
+    /// (`camel-4.23.0:components/camel-resilience4j/src/main/java/org/apache/camel/component/resilience4j/ResilienceReifier.java#configureCircuitBreaker`).
+    /// In this timerless port, `state()` is the passive observer that makes
+    /// the elapsed transition visible without admitting a guarded call.
+    #[tokio::test]
+    async fn authored_automatic_transition_reaches_the_platform_breaker() {
+        let step: Step = serde_json::from_value(serde_json::json!({
+            "circuitBreaker": {
+                "failureRateThreshold": 50,
+                "slidingWindowCalls": 2,
+                "minimumNumberOfCalls": 2,
+                "openStateWaitSeconds": 1,
+                "maximumHalfOpenCalls": 1,
+                "automaticTransitionFromOpenToHalfOpenEnabled": true,
+                "steps": [{"throwException": {"exceptionType": "validation"}}]
+            }
+        }))
+        .expect("the breaker step parses");
+        let Step::CircuitBreaker(configured) = step else {
+            panic!("the step is a circuit breaker");
+        };
+        let breaker = breaker_state(&configured);
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Open);
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert_eq!(
+            breaker.state(),
+            BreakerState::HalfOpen,
+            "the authored automatic transition is observable without an acquire"
+        );
+    }
 
     /// A body whose future is dropped mid-run must not leak its
     /// concurrent slot: the next exchange is admitted without waiting

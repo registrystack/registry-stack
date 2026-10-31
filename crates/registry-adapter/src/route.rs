@@ -16,16 +16,19 @@
 //! table key rather than interpreted as a step.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use registry_adapter_core::{
-    is_route_unwritable_header_name, AdapterRuntimeConfig, AggregationStrategy, ConvertStep,
+    effective_clause_redelivery_policy, is_route_unwritable_header_name,
+    is_route_unwritable_property_name, problem_data_schema, resolve_problem,
+    validate_result_schema, AdapterProfile, AdapterRuntimeConfig, AggregationStrategy, ConvertStep,
     Endpoint, EndpointBinding, EnrichStep, ErrorClass, Expression, GraphQlOperationKind,
     HttpMethod, OnExceptionStep, RedeliveryOptions, SendComponent, SetPropertyStep, Step,
-    ToParameters, ToStep,
+    ToParameters, ToStep, MAX_PROBLEM_DATA_BYTES,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -35,11 +38,12 @@ use crate::auth::{
 };
 use crate::component::http::uri::{encode_path_segment, percent_encode, LinkRefusal};
 use crate::egress::{
-    EgressError, EgressFault, EndpointEgress, OutboundSend, SendBody, SendBodyFormat, SendShape,
+    EgressError, EgressFault, EndpointEgress, OkStatusCodeRanges, OutboundSend, SendBody,
+    SendBodyFormat, SendShape,
 };
 use crate::exchange::{
     Exchange, NEXT_CONTINUATION_PROPERTY, REDELIVERED_HEADER, REDELIVERY_COUNTER_HEADER,
-    REDELIVERY_MAX_COUNTER_HEADER, RESERVED_PROPERTY_PREFIX,
+    REDELIVERY_MAX_COUNTER_HEADER,
 };
 use crate::language::{compile_selector, JsonPathResult, LanguageError};
 use crate::processor;
@@ -47,8 +51,6 @@ use crate::scripts::ScriptSet;
 
 /// The step kinds this runtime interprets. Every other kind of the route
 /// model is refused at load by [`check_servable`], by name.
-const DEFAULT_OK_RANGE: (u16, u16) = (200, 299);
-
 /// The longest one exchange may run, across every attempt, redelivery
 /// pause, and script. It sits above the largest declared attempt timeout so
 /// a single attempt always finishes under its own timeout first.
@@ -105,8 +107,7 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 }
             }
             Step::RemoveProperty(name) => {
-                if name.starts_with(RESERVED_PROPERTY_PREFIX) && name != NEXT_CONTINUATION_PROPERTY
-                {
+                if is_route_unwritable_property_name(name) {
                     return Err(format!(
                         "removeProperty may not remove the reserved property {name}"
                     ));
@@ -128,7 +129,8 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
             Step::Filter(filter) => {
                 check_predicate("filter", &filter.predicate())?;
                 if let Some(name) = &filter.status_property_name {
-                    if name.starts_with(RESERVED_PROPERTY_PREFIX) {
+                    if is_route_unwritable_property_name(name) || name == NEXT_CONTINUATION_PROPERTY
+                    {
                         return Err(format!(
                             "filter statusPropertyName may not take the reserved name {name}"
                         ));
@@ -140,7 +142,11 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 check_predicate_expression("validate", &validate.expression)?
             }
             Step::Stop(_) => {}
-            Step::ThrowException(_) => {}
+            Step::ThrowException(throw) => {
+                if let Some(data) = &throw.data {
+                    check_expression("throwException data", data)?;
+                }
+            }
             Step::Split(split) => {
                 if split.maximum_items.is_none() {
                     return Err(
@@ -280,6 +286,9 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 }
             }
             Step::DoTry(block) => {
+                if block.do_catch.is_empty() && block.do_finally.is_none() {
+                    return Err("doTry declares neither doCatch nor doFinally".to_owned());
+                }
                 for catch in &block.do_catch {
                     if catch.exception.is_empty() {
                         return Err("a doCatch names no exception class".to_owned());
@@ -364,9 +373,7 @@ fn check_convert(form: &str, convert: &ConvertStep) -> Result<(), String> {
     }
     let reserved = |name: &str| match form {
         "convertHeaderTo" => is_route_unwritable_header_name(name),
-        "convertPropertyTo" => {
-            name.starts_with(RESERVED_PROPERTY_PREFIX) && name != NEXT_CONTINUATION_PROPERTY
-        }
+        "convertPropertyTo" => is_route_unwritable_property_name(name),
         _ => false,
     };
     if let Some(name) = convert.name.as_deref() {
@@ -392,9 +399,7 @@ fn check_convert(form: &str, convert: &ConvertStep) -> Result<(), String> {
 }
 
 fn check_set_property(property: &SetPropertyStep) -> Result<(), String> {
-    if property.name.starts_with(RESERVED_PROPERTY_PREFIX)
-        && property.name != NEXT_CONTINUATION_PROPERTY
-    {
+    if is_route_unwritable_property_name(&property.name) {
         return Err(format!(
             "setProperty may not write the reserved property {}",
             property.name
@@ -430,7 +435,7 @@ fn check_clause(
     check_retry_while(
         "onException",
         clause.retry_while.as_ref(),
-        clause.redelivery_policy.as_ref().or(handler_policy),
+        effective_clause_redelivery_policy(clause, handler_policy),
     )?;
     check_steps(&clause.steps, true)
 }
@@ -609,7 +614,7 @@ fn check_strategy(strategy: Option<&AggregationStrategy>) -> Result<(), String> 
                 .map_err(|fault| format!("the strategy properties jsonpath {fault}"))?;
         }
         for name in properties.keys() {
-            if name.starts_with(RESERVED_PROPERTY_PREFIX) {
+            if is_route_unwritable_property_name(name) || name == NEXT_CONTINUATION_PROPERTY {
                 return Err(format!(
                     "the strategy may not write the reserved property {name}"
                 ));
@@ -619,21 +624,26 @@ fn check_strategy(strategy: Option<&AggregationStrategy>) -> Result<(), String> 
     Ok(())
 }
 
-fn parse_ok_range(parameters: &ToParameters) -> Result<(u16, u16), String> {
+fn parse_ok_range(parameters: &ToParameters) -> Result<OkStatusCodeRanges, String> {
     let Some(text) = &parameters.ok_status_code_range else {
-        return Ok(DEFAULT_OK_RANGE);
+        return Ok(OkStatusCodeRanges::default());
     };
-    let single = || -> Option<(u16, u16)> {
-        let (low, high) = match text.split_once('-') {
-            Some((low, high)) => (low.trim().parse().ok()?, high.trim().parse().ok()?),
-            None => {
-                let code = text.trim().parse().ok()?;
-                (code, code)
-            }
-        };
-        Some((low, high))
-    };
-    single().ok_or_else(|| "an okStatusCodeRange list is not served; write one range".to_owned())
+    let ranges = text
+        .split(',')
+        .map(|entry| {
+            let (low, high) = match entry.split_once('-') {
+                Some((low, high)) => (low.trim().parse().ok()?, high.trim().parse().ok()?),
+                None => {
+                    let code = entry.trim().parse().ok()?;
+                    (code, code)
+                }
+            };
+            Some((low, high))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "okStatusCodeRange is not a comma-separated status range list".to_owned())?;
+    OkStatusCodeRanges::try_from_ranges(ranges)
+        .map_err(|_| "okStatusCodeRange contains an invalid status range".to_owned())
 }
 
 /// One upstream endpoint as the interpreter reaches it.
@@ -871,13 +881,29 @@ fn auth_failure(error: &AuthError, events: &[AuthEvent]) -> RouteFailure {
 
 /// How a route run failed: the class it raised and, when a
 /// `throwException` raised it, the message that fills `problemDetail`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RouteFailure {
     pub class: ErrorClass,
     pub message: Option<String>,
+    /// The unevaluated route never carries this value. A `throwException`
+    /// may attach one evaluated JSON value within the hard problem-data
+    /// byte bound; the facade still validates it against the selected
+    /// problem's exact closed declaration before release.
+    pub data: Option<Value>,
     /// The value-free authentication events of a send that failed at its
     /// credential, for the failure's own journal row.
     pub auth: Option<Value>,
+}
+
+impl fmt::Debug for RouteFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("RouteFailure");
+        debug.field("class", &self.class);
+        debug.field("message", &self.message);
+        debug.field("data", &self.data.as_ref().map(|_| "<redacted>"));
+        debug.field("auth", &self.auth);
+        debug.finish()
+    }
 }
 
 impl RouteFailure {
@@ -885,6 +911,7 @@ impl RouteFailure {
         Self {
             class,
             message: None,
+            data: None,
             auth: None,
         }
     }
@@ -928,7 +955,20 @@ pub async fn run_route(
     steps: &[Step],
     exchange: Exchange,
 ) -> RouteOutcome {
-    run_route_within(context, steps, exchange, EXCHANGE_DEADLINE).await
+    run_route_within_profile(context, None, steps, exchange, EXCHANGE_DEADLINE).await
+}
+
+/// Run a route with the checked facade profile that governs any optional
+/// `throwException.data`. A data-bearing throw without this trusted profile
+/// fails closed as `disclosure.violation`; live serving and fixture replay
+/// always call this entry point.
+pub async fn run_route_with_profile(
+    context: &RouteContext<'_>,
+    profile: &AdapterProfile,
+    steps: &[Step],
+    exchange: Exchange,
+) -> RouteOutcome {
+    run_route_within_profile(context, Some(profile), steps, exchange, EXCHANGE_DEADLINE).await
 }
 
 /// Run `steps` over `exchange`, failing it as `budget.exhausted` when
@@ -941,6 +981,16 @@ pub async fn run_route_within(
     exchange: Exchange,
     deadline: Duration,
 ) -> RouteOutcome {
+    run_route_within_profile(context, None, steps, exchange, deadline).await
+}
+
+async fn run_route_within_profile<'a>(
+    context: &'a RouteContext<'_>,
+    problem_profile: Option<&'a AdapterProfile>,
+    steps: &[Step],
+    exchange: Exchange,
+    deadline: Duration,
+) -> RouteOutcome {
     if let Err(class) = exchange.ensure_bounded() {
         return RouteOutcome {
             result: Err(RouteFailure::of(class)),
@@ -949,6 +999,7 @@ pub async fn run_route_within(
     }
     let mut run = Run {
         context,
+        problem_profile,
         exchange,
         events: Vec::new(),
         sends: 0,
@@ -983,6 +1034,7 @@ pub(crate) fn script_failure(failure: crate::scripts::ScriptFailure) -> RouteFai
         crate::scripts::ScriptFailure::Unmapped(_) => RouteFailure {
             class: failure.class(),
             message: Some(failure.to_string()),
+            data: None,
             auth: None,
         },
         other => RouteFailure::of(other.class()),
@@ -991,6 +1043,9 @@ pub(crate) fn script_failure(failure: crate::scripts::ScriptFailure) -> RouteFai
 
 pub(crate) struct Run<'a, 'c> {
     pub(crate) context: &'a RouteContext<'c>,
+    /// The checked facade profile whose closest problem declaration governs
+    /// `throwException.data`. Absent in profile-neutral engine tests only.
+    problem_profile: Option<&'a AdapterProfile>,
     pub(crate) exchange: Exchange,
     events: Vec<RouteEvent>,
     sends: u64,
@@ -1122,7 +1177,7 @@ impl Run<'_, '_> {
                 matches!(step, Step::To(sent) if sent.uri.component != SendComponent::Direct);
             let retryable_upstream = failure.class.is_within(ErrorClass::Upstream);
             let policy = match (clause, endpoint_send && retryable_upstream) {
-                (Some(clause), true) => clause.redelivery_policy.as_ref().or(handler_policy),
+                (Some(clause), true) => effective_clause_redelivery_policy(clause, handler_policy),
                 (None, true) => handler_policy,
                 _ => None,
             };
@@ -1312,11 +1367,33 @@ impl Run<'_, '_> {
             Step::Filter(filter) => processor::filter::run(self, filter).await,
             Step::Validate(validate) => processor::validate::run(self, validate),
             Step::Stop(_) => Ok(Flow::Stop),
-            Step::ThrowException(throw) => Err(RouteFailure {
-                class: throw.exception_type,
-                message: throw.message.clone(),
-                auth: None,
-            }),
+            Step::ThrowException(throw) => {
+                let data = match &throw.data {
+                    Some(expression) => {
+                        let value = self.eval(expression)?;
+                        let within_bound = serde_json::to_vec(&value)
+                            .is_ok_and(|bytes| bytes.len() <= MAX_PROBLEM_DATA_BYTES);
+                        let declared = self
+                            .problem_profile
+                            .and_then(|profile| resolve_problem(profile, throw.exception_type))
+                            .and_then(problem_data_schema)
+                            .is_some_and(|schema| {
+                                validate_result_schema(&value, &schema).is_empty()
+                            });
+                        if !within_bound || !declared {
+                            return Err(RouteFailure::of(ErrorClass::DisclosureViolation));
+                        }
+                        Some(value)
+                    }
+                    None => None,
+                };
+                Err(RouteFailure {
+                    class: throw.exception_type,
+                    message: throw.message.clone(),
+                    data,
+                    auth: None,
+                })
+            }
             Step::To(to) => self.send(to).await,
             Step::Split(split) => processor::split::run(self, split).await,
             Step::Loop(counted) => processor::r#loop::run(self, counted).await,
@@ -1470,7 +1547,7 @@ impl Run<'_, '_> {
             Some(Ok(range)) => range,
             // A refused range never reaches the transport: the authoring
             // checks hold it, and a graphql send declares none.
-            Some(Err(_)) | None => DEFAULT_OK_RANGE,
+            Some(Err(_)) | None => OkStatusCodeRanges::default(),
         };
         // A graphql send posts one document over the endpoint's base link:
         // the pinned query text, the endpoint's operation name, and the
@@ -1498,6 +1575,7 @@ impl Run<'_, '_> {
                 return Err(RouteFailure {
                     class: ErrorClass::Validation,
                     message: Some("graphql variables must yield an object".to_owned()),
+                    data: None,
                     auth: None,
                 });
             }
@@ -1603,7 +1681,7 @@ impl Run<'_, '_> {
                     authorization: credential.as_ref().map(|c| &c.header),
                     attempt: endpoint.attempt.min(remaining),
                     maximum_response_bytes: endpoint.maximum_response_bytes,
-                    ok_status_range: ok_range,
+                    ok_status_ranges: ok_range.clone(),
                     throw_exception_on_failure: parameters
                         .map(|parameters| parameters.throw_exception_on_failure)
                         .unwrap_or(graphql),
@@ -1824,6 +1902,7 @@ impl Run<'_, '_> {
                 return Err(RouteFailure {
                     class: ErrorClass::Validation,
                     message: Some("an httpUri must yield a string".to_owned()),
+                    data: None,
                     auth: None,
                 })
             }
@@ -1898,6 +1977,7 @@ fn graphql_reply_body(body: &Value) -> Result<Value, RouteFailure> {
         return Err(RouteFailure {
             class: ErrorClass::UpstreamHttp,
             message: Some("the graphql reply carries an errors array".to_owned()),
+            data: None,
             auth: None,
         });
     }
@@ -2048,7 +2128,13 @@ mod served_tests {
             {"setProperty": {"name": "AdapterNextContinuation", "value": {"constant": 2}}}
         ]));
         check_servable(&next).expect("served");
-        for reserved in ["AdapterContinuation", "AdapterFilters", "AdapterAnything"] {
+        for reserved in [
+            "AdapterContinuation",
+            "AdapterFilters",
+            "AdapterAnything",
+            "CamelSplitIndex",
+            "CamelLoopIndex",
+        ] {
             let steps = steps(json!([
                 {"setProperty": {"name": reserved, "value": {"constant": 1}}}
             ]));
@@ -2108,6 +2194,42 @@ mod served_tests {
             {"to": {"uri": "http:tracker", "parameters": {"httpMethod": "POST", "path": "/x"}}}
         ]));
         assert!(check_servable(&steps).is_err());
+    }
+
+    fn parameters(range: Option<&str>) -> ToParameters {
+        serde_json::from_value(match range {
+            Some(range) => json!({ "okStatusCodeRange": range }),
+            None => json!({}),
+        })
+        .expect("send parameters parse")
+    }
+
+    #[test]
+    fn ok_status_code_range_parses_sparse_comma_lists() {
+        let ranges =
+            parse_ok_range(&parameters(Some("200-299, 400, 404"))).expect("sparse ranges parse");
+        for status in [200, 299, 400, 404] {
+            assert!(ranges.contains(status), "{status} is declared");
+        }
+        for status in [199, 300, 399, 401, 403, 405] {
+            assert!(!ranges.contains(status), "{status} is a hole");
+        }
+        assert!(parse_ok_range(&parameters(None))
+            .expect("default range")
+            .contains(200));
+    }
+
+    #[test]
+    fn ok_status_code_range_refusals_are_value_free() {
+        for invalid in ["", "200-", "99", "200-600", "299-200", "200,,201"] {
+            let error = parse_ok_range(&parameters(Some(invalid))).expect_err("range refuses");
+            if !invalid.is_empty() {
+                assert!(
+                    !error.contains(invalid),
+                    "diagnostic repeated authored value"
+                );
+            }
+        }
     }
 }
 

@@ -18,7 +18,7 @@
 use registry_adapter::auth::{
     AuthError, ClientAssertion, ClientAssertionSigner, ProtectedText, TokenBudget,
 };
-use registry_adapter::egress::{Egress, EgressError, SendShape};
+use registry_adapter::egress::{Egress, EgressError, OkStatusCodeRanges, SendShape};
 use registry_adapter_core::{
     ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication, EndpointBinding,
     ErrorClass, RuntimeCredential,
@@ -432,7 +432,7 @@ async fn the_right_ca_completes_the_token_and_data_sends_over_tls() {
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await
@@ -507,7 +507,7 @@ async fn the_wrong_ca_completes_neither_handshake() {
             authorization: Some(&credential),
             attempt: ATTEMPT,
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            ok_status_range: (200, 299),
+            ok_status_ranges: OkStatusCodeRanges::default(),
             throw_exception_on_failure: true,
         })
         .await

@@ -3,7 +3,7 @@
 //! Engine conformance for the splitting and repeating processors of the
 //! port table (`products/adapter/CONCEPT.md` sections 8.6 and 8.11.7):
 //! `split`, `loop`, `enrich`, and the aggregation strategies, with the
-//! engine-set exchange headers each places.
+//! engine-set exchange properties each places.
 
 use std::collections::BTreeMap;
 
@@ -113,7 +113,7 @@ fn counting_script() -> ScriptSet {
     )
 }
 
-/// A predicate script over the piece's engine headers.
+/// A predicate script over the piece's engine properties.
 fn piece_predicate(entrypoint: &str, test: &str) -> ScriptSet {
     one_script(
         entrypoint,
@@ -150,16 +150,21 @@ fn split_of(extra: Value, item_steps: Value) -> Value {
     split
 }
 
-/// Each piece runs on its own exchange carrying the engine headers
+/// Each piece runs on its own exchange carrying the engine properties
 /// `CamelSplitIndex` (zero-based), `CamelSplitSize`, and
 /// `CamelSplitComplete` on the last piece (manual/split-eip.html), and a
 /// split without a strategy returns the original message, Camel's
 /// `use-original` default (section 8.6).
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterTest.java#testSendingAMessageUsingMulticastReceivesItsOwnExchange`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterCompletedPropertyTest.java#testSplitterCompleted`, and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterNoAggregationStrategyTest.java#testSplitNoAggregationStrategy`.
 #[tokio::test]
-async fn split_runs_each_piece_under_the_engine_headers_and_returns_the_original() {
+async fn split_runs_each_piece_under_engine_properties_and_returns_the_original() {
     let second = piece_predicate(
         "piece",
-        "exchange.headers.camelsplitindex == 1 && exchange.headers.camelsplitsize == 3",
+        "exchange.properties.CamelSplitIndex == 1 && exchange.properties.CamelSplitSize == 3 && exchange.headers.camelsplitindex == () && exchange.headers.camelsplitsize == ()",
     );
     let outcome = run(
         steps(json!([split_of(
@@ -177,7 +182,10 @@ async fn split_runs_each_piece_under_the_engine_headers_and_returns_the_original
         &json!([{"id": "a"}, "second", {"id": "c"}])
     );
 
-    let last = piece_predicate("last", "exchange.headers.camelsplitcomplete == true");
+    let last = piece_predicate(
+        "last",
+        "exchange.properties.CamelSplitComplete == true && exchange.headers.camelsplitcomplete == ()",
+    );
     let outcome = run(
         steps(json!([split_of(
             json!({"aggregationStrategy": {"type": "grouped-body"}}),
@@ -208,12 +216,41 @@ async fn split_runs_each_piece_under_the_engine_headers_and_returns_the_original
     );
 }
 
+/// Camel's `use-latest` aggregation strategy returns the final split
+/// exchange, including its transformed body.
+///
+/// Camel case:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterTest.java#testSplitterWithAggregationStrategy`.
+#[tokio::test]
+async fn split_use_latest_returns_the_last_piece() {
+    let last = piece_predicate(
+        "last",
+        "exchange.properties.CamelSplitComplete == true && exchange.headers.camelsplitcomplete == ()",
+    );
+    let outcome = run(
+        steps(json!([split_of(
+            json!({"aggregationStrategy": {"type": "use-latest"}}),
+            json!([{"choice": {"when": [
+                {"rhai": {"file": "props.rhai", "entrypoint": "last"},
+                 "steps": [{"setBody": {"constant": "last"}}]}
+            ]}}])
+        )])),
+        &last,
+    )
+    .await;
+
+    assert_eq!(body_of(&outcome), &json!("last"));
+}
+
 /// A `stop` inside a piece ends the split and then the route: the
 /// stopped piece still aggregates and no step after the split runs
 /// (manual/stop-eip.html inside a splitter).
 #[tokio::test]
 async fn a_stop_inside_a_piece_ends_the_split_and_the_route() {
-    let first = piece_predicate("piece", "exchange.headers.camelsplitindex == 0");
+    let first = piece_predicate(
+        "piece",
+        "exchange.properties.CamelSplitIndex == 0 && exchange.headers.camelsplitindex == ()",
+    );
     let outcome = run(
         steps(json!([
             split_of(
@@ -241,6 +278,12 @@ async fn a_stop_inside_a_piece_ends_the_split_and_the_route() {
 /// the first failure instead, and a declared `use-original` with
 /// `propagateException: false` swallows the failures
 /// (manual/split-eip.html, section 8.6).
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterNoStopOnExceptionTest.java#testSplitNoStopOnExceptionStop`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterStopOnExceptionTest.java#testSplitStopOnExceptionStop`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterUseOriginalNotPropagateExceptionTest.java#testUseOriginalNotPropagateException`, and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterUseOriginalPropagateExceptionTest.java#testUseOriginalPropagateException`.
 #[tokio::test]
 async fn split_item_failures_raise_after_the_split_or_sooner_or_never() {
     let failing_records = json!({"records": [{"id": "a", "fail": true}, {"id": "b"}, {"id": "c"}]});
@@ -316,6 +359,7 @@ async fn split_item_failures_raise_after_the_split_or_sooner_or_never() {
         exchange.message.body,
         json!({"records": [{"id": "a", "fail": true}, {"id": "b"}, {"id": "c"}]})
     );
+    assert_eq!(exchange.property("CamelSplitResult"), None);
     assert_eq!(exchange.message.header("CamelSplitResult"), None);
     assert_eq!(
         swallowed
@@ -332,6 +376,17 @@ async fn split_item_failures_raise_after_the_split_or_sooner_or_never() {
 /// sets `CamelSplitResult` on the exchange with the counts, and stops at
 /// the threshold, raising the piece's failure
 /// (manual/split-eip.html, section 8.6).
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterErrorThresholdTest.java#testErrorThresholdBelowRatio`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterErrorThresholdTest.java#testErrorThresholdStopsWhenRatioExceeded`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterErrorThresholdTest.java#testCombinedErrorThresholdAndMaxFailedRecords`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterMaxFailedRecordsTest.java#testMaxFailedRecordsStopsAfterThreshold`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterSplitResultTest.java#testSplitResultWithFailures`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterSplitResultTest.java#testSplitResultAllSuccess`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterSplitResultTest.java#testSplitResultWhenAborted`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterSplitResultTest.java#testSplitResultEmptyInput`, and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterSplitResultTest.java#testNoSplitResultWithoutErrorThreshold`.
 #[tokio::test]
 async fn split_failure_accounting_counts_stops_and_reports() {
     // The failure sits in the middle: a first-piece failure fails every
@@ -362,13 +417,14 @@ async fn split_failure_accounting_counts_stops_and_reports() {
         .expect("the split completes under the threshold");
     assert_eq!(exchange.message.body, json!(["a", "c"]));
     assert_eq!(
-        exchange.message.header("CamelSplitResult"),
+        exchange.property("CamelSplitResult"),
         Some(&json!({
             "totalItems": 3,
             "processedItems": 3,
             "failureCount": 1,
         }))
     );
+    assert_eq!(exchange.message.header("CamelSplitResult"), None);
     assert_eq!(
         under
             .events
@@ -410,6 +466,88 @@ async fn split_failure_accounting_counts_stops_and_reports() {
             .class,
         ErrorClass::Validation
     );
+
+    let combined = run(
+        steps(json!([
+            {"onException": {
+                "exception": ["validation"],
+                "handled": true,
+                "steps": []
+            }},
+            {"setBody": {"constant": failing_records}},
+            split_of(
+                json!({
+                    "aggregationStrategy": {"type": "grouped-body"},
+                    "errorThreshold": 0.5,
+                    "maximumFailedRecords": 2
+                }),
+                failing_piece
+            )
+        ])),
+        &ScriptSet::default(),
+    )
+    .await;
+    let exchange = combined
+        .result
+        .expect("the outer clause handles the first reached threshold");
+    assert_eq!(
+        exchange.property("CamelSplitResult"),
+        Some(&json!({
+            "totalItems": 3,
+            "processedItems": 2,
+            "failureCount": 1,
+        }))
+    );
+    assert_eq!(exchange.message.header("CamelSplitResult"), None);
+
+    let all_success = run(
+        steps(json!([split_of(
+            json!({
+                "aggregationStrategy": {"type": "grouped-body"},
+                "errorThreshold": 0.5
+            }),
+            json!([{"setBody": {"jsonpath": "$.id"}}])
+        )])),
+        &ScriptSet::default(),
+    )
+    .await;
+    assert_eq!(
+        all_success
+            .result
+            .expect("all pieces succeed")
+            .property("CamelSplitResult"),
+        Some(&json!({
+            "totalItems": 3,
+            "processedItems": 3,
+            "failureCount": 0,
+        }))
+    );
+
+    let empty = run(
+        steps(json!([
+            {"setBody": {"constant": {"records": []}}},
+            split_of(
+                json!({
+                    "aggregationStrategy": {"type": "grouped-body"},
+                    "maximumFailedRecords": 1
+                }),
+                json!([])
+            )
+        ])),
+        &ScriptSet::default(),
+    )
+    .await;
+    let exchange = empty.result.expect("an empty split succeeds");
+    assert_eq!(exchange.message.body, json!([]));
+    assert_eq!(
+        exchange.property("CamelSplitResult"),
+        Some(&json!({
+            "totalItems": 0,
+            "processedItems": 0,
+            "failureCount": 0,
+        }))
+    );
+    assert_eq!(exchange.message.header("CamelSplitResult"), None);
 }
 
 /// `json-array-append` appends the array held by the named property of
@@ -500,6 +638,44 @@ async fn split_json_array_append_merges_a_named_property_and_refuses_duplicates(
             .class,
         ErrorClass::Validation
     );
+
+    let merging = json!({
+        "record": {"existing": 1},
+        "pieces": [
+            {"patch": {"a": 1}},
+            {"patch": {"b": 2, "a": 3}}
+        ]
+    });
+    let merged = run(
+        steps(json!([
+            {"setBody": {"constant": merging}},
+            {"split": {
+                "expression": {"jsonpath": "$.pieces"},
+                "maximumItems": 5,
+                "aggregationStrategy": {
+                    "type": "json-merge",
+                    "from": "patch",
+                    "into": "record"
+                },
+                "steps": [{"setProperty": {
+                    "name": "patch",
+                    "value": {"jsonpath": "$.patch"}
+                }}]
+            }}
+        ])),
+        &ScriptSet::default(),
+    )
+    .await;
+    assert_eq!(
+        body_of(&merged),
+        &json!({
+            "record": {"existing": 1, "a": 3, "b": 2},
+            "pieces": [
+                {"patch": {"a": 1}},
+                {"patch": {"b": 2, "a": 3}}
+            ]
+        })
+    );
 }
 
 /// The `properties` map of a JSON strategy carries named values out of
@@ -584,6 +760,67 @@ async fn split_strategy_properties_carry_values_and_clear_absent_ones() {
     .expect_err("a strategy may not write a reserved property");
 }
 
+/// Split and loop metadata belongs to the engine. Authored steps may read the
+/// exact exchange-property names, but may not set or remove them.
+#[test]
+fn collection_metadata_properties_are_not_author_writable() {
+    for name in [
+        "CamelSplitIndex",
+        "CamelSplitSize",
+        "CamelSplitComplete",
+        "CamelSplitResult",
+        "CamelLoopIndex",
+        "CamelLoopSize",
+    ] {
+        check_servable(&steps(json!([{"setProperty": {
+            "name": name,
+            "value": {"constant": 1}
+        }}])))
+        .expect_err("an authored step may not manufacture collection metadata");
+        check_servable(&steps(json!([{"removeProperty": name}])))
+            .expect_err("an authored step may not remove collection metadata");
+    }
+
+    check_servable(&steps(json!([{"split": {
+        "expression": {"constant": []},
+        "maximumItems": 1,
+        "aggregationStrategy": {
+            "type": "json-merge",
+            "from": "patch",
+            "into": "record",
+            "properties": {"CamelSplitIndex": "$.index"}
+        },
+        "steps": []
+    }}])))
+    .expect_err("a strategy may not manufacture collection metadata");
+}
+
+#[tokio::test]
+async fn a_custom_split_strategy_cannot_manufacture_collection_metadata() {
+    let scripts = strategy_script(
+        "merge",
+        r#"#{ "body": newExchange, "properties": #{ "CamelSplitIndex": 99 } }"#,
+    );
+    let outcome = run(
+        steps(json!([split_of(
+            json!({"aggregationStrategy": {"type": "rhai", "expression": {
+                "file": "props.rhai", "entrypoint": "merge"
+            }}}),
+            json!([])
+        )])),
+        &scripts,
+    )
+    .await;
+
+    assert_eq!(
+        outcome
+            .result
+            .expect_err("a custom strategy may not write engine metadata")
+            .class,
+        ErrorClass::Validation
+    );
+}
+
 /// A split expression that yields no array fails as `validation`, a
 /// piece count over the declared bound fails as `budget.exhausted`, and
 /// the load refuses a split without its bound (sections 8.6 and 5.5).
@@ -602,6 +839,22 @@ async fn split_refuses_its_shape_and_bound_faults() {
         not_an_array
             .result
             .expect_err("a non-array expression fails")
+            .class,
+        ErrorClass::Validation
+    );
+
+    let null = run(
+        steps(json!([{"split": {
+            "expression": {"constant": null},
+            "maximumItems": 5,
+            "steps": []
+        }}])),
+        &ScriptSet::default(),
+    )
+    .await;
+    assert_eq!(
+        null.result
+            .expect_err("a null expression is not an empty split")
             .class,
         ErrorClass::Validation
     );
@@ -629,8 +882,12 @@ async fn split_refuses_its_shape_and_bound_faults() {
 /// A count loop repeats its steps on the same exchange, carrying
 /// `CamelLoopIndex` (zero-based) and `CamelLoopSize`, and a count of
 /// zero runs nothing (manual/loop-eip.html, `LoopProcessor`).
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/LoopTest.java#testCounterLoop` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/LoopTest.java#testLoopProperties`.
 #[tokio::test]
-async fn a_count_loop_repeats_with_the_loop_headers() {
+async fn a_count_loop_repeats_with_loop_properties() {
     let outcome = run(
         steps(json!([
             {"loop": {
@@ -644,8 +901,10 @@ async fn a_count_loop_repeats_with_the_loop_headers() {
     .await;
     let exchange = outcome.result.expect("the route succeeds");
     assert_eq!(exchange.property("count"), Some(&json!(3)));
-    assert_eq!(exchange.message.header("CamelLoopIndex"), Some(&json!(2)));
-    assert_eq!(exchange.message.header("CamelLoopSize"), Some(&json!(3)));
+    assert_eq!(exchange.property("CamelLoopIndex"), Some(&json!(2)));
+    assert_eq!(exchange.property("CamelLoopSize"), Some(&json!(3)));
+    assert_eq!(exchange.message.header("CamelLoopIndex"), None);
+    assert_eq!(exchange.message.header("CamelLoopSize"), None);
 
     let zero = run(
         steps(json!([
@@ -660,7 +919,68 @@ async fn a_count_loop_repeats_with_the_loop_headers() {
     .await;
     let exchange = zero.result.expect("the route succeeds");
     assert_eq!(exchange.property("count"), None);
-    assert_eq!(exchange.message.header("CamelLoopSize"), Some(&json!(0)));
+    assert_eq!(exchange.property("CamelLoopSize"), Some(&json!(0)));
+    assert_eq!(exchange.property("CamelLoopIndex"), None);
+    assert_eq!(exchange.message.header("CamelLoopSize"), None);
+    assert_eq!(exchange.message.header("CamelLoopIndex"), None);
+}
+
+/// An iteration failure stops both loop modes. Copy mode restores the last
+/// successful iteration exchange before the route-level handler runs.
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/LoopExceptionTest.java#testLoopException` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/LoopCopyErrorTest.java#testLoopCopy`.
+#[tokio::test]
+async fn an_iteration_failure_stops_copy_and_no_copy_loops() {
+    let scripts = scripts_of(
+        r#"fn apply(exchange) {
+    let count = exchange.properties.count;
+    if count == () { count = 0; }
+    #{ "count": count + 1 }
+}
+fn second(exchange) { exchange.properties.CamelLoopIndex == 1 }"#,
+        &["apply", "second"],
+    );
+    let route = |copy: bool| {
+        steps(json!([
+            {"onException": {
+                "exception": ["validation"],
+                "handled": true,
+                "steps": [{"setProperty": {
+                    "name": "handled", "value": {"constant": true}
+                }}]
+            }},
+            {"loop": {
+                "constant": 3,
+                "copy": copy,
+                "maximumIterations": 5,
+                "steps": [
+                    {"script": {"rhai": {"file": "props.rhai", "entrypoint": "apply"}}},
+                    {"choice": {"when": [
+                        {"rhai": {"file": "props.rhai", "entrypoint": "second"},
+                         "steps": [{"validate": {"expression": {"constant": false}}}]}
+                    ]}}
+                ]
+            }},
+            {"setProperty": {"name": "after", "value": {"constant": true}}}
+        ]))
+    };
+
+    let no_copy = run(route(false), &scripts).await;
+    let exchange = no_copy.result.expect("the loop failure is handled");
+    assert_eq!(exchange.property("count"), Some(&json!(2)));
+    assert_eq!(exchange.property("CamelLoopIndex"), Some(&json!(1)));
+    assert_eq!(exchange.property("handled"), Some(&json!(true)));
+    assert_eq!(exchange.property("after"), None);
+    assert_eq!(exchange.message.header("CamelLoopIndex"), None);
+
+    let copied = run(route(true), &scripts).await;
+    let exchange = copied.result.expect("the copied-loop failure is handled");
+    assert_eq!(exchange.property("count"), Some(&json!(1)));
+    assert_eq!(exchange.property("CamelLoopIndex"), Some(&json!(0)));
+    assert_eq!(exchange.property("handled"), Some(&json!(true)));
+    assert_eq!(exchange.property("after"), None);
     assert_eq!(exchange.message.header("CamelLoopIndex"), None);
 }
 
@@ -668,6 +988,9 @@ async fn a_count_loop_repeats_with_the_loop_headers() {
 /// every iteration, the first included, so a predicate already false
 /// runs nothing and one its steps make false runs once
 /// (`LoopProcessor`).
+///
+/// Camel case:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/LoopDoWhileTest.java#testLoopDoWhileSimple`.
 #[tokio::test]
 async fn a_do_while_loop_tests_its_predicate_before_each_iteration() {
     let once = run(
@@ -838,6 +1161,10 @@ async fn a_loop_count_must_be_an_integer_and_the_shape_must_be_well_formed() {
 /// exchange becomes the result (`LoopProcessor`'s `copy`), and a `stop`
 /// inside an iteration ends the loop and the route with the exchange as
 /// it stopped.
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/LoopNoCopyTest.java#testLoopNoCopy` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/LoopCopyTest.java#testLoopCopy`.
 #[tokio::test]
 async fn copy_mode_starts_each_iteration_from_the_original_and_keeps_the_last() {
     let outcome = run(
@@ -858,7 +1185,10 @@ async fn copy_mode_starts_each_iteration_from_the_original_and_keeps_the_last() 
     let exchange = outcome.result.expect("the route succeeds");
     assert_eq!(exchange.property("count"), Some(&json!(1)));
     assert_eq!(exchange.message.body, json!({"iterated": true}));
-    assert_eq!(exchange.message.header("CamelLoopIndex"), Some(&json!(2)));
+    assert_eq!(exchange.property("CamelLoopIndex"), Some(&json!(2)));
+    assert_eq!(exchange.property("CamelLoopSize"), Some(&json!(3)));
+    assert_eq!(exchange.message.header("CamelLoopIndex"), None);
+    assert_eq!(exchange.message.header("CamelLoopSize"), None);
 
     let stopping = scripts_of(
         r#"fn apply(exchange) {
@@ -1004,6 +1334,12 @@ async fn run_enrich(
 /// A `direct:` resource route still sends over HTTP on its copied exchange;
 /// aggregation carries only the selected body and properties back, never an
 /// ordinary resource header.
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherDefaultAggregationStrategyTest.java#testEnrichInOut` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherTest.java#testEnrichInOutPlusHeader`.
+/// The latter confirms that a header on the original exchange survives
+/// enrichment. Discarding an ordinary resource header is Adapter-specific.
 #[tokio::test]
 async fn direct_enrich_runs_the_resource_route_on_a_copy() {
     let double = upstream::UpstreamDouble::start();
@@ -1072,6 +1408,10 @@ async fn direct_enrich_runs_the_resource_route_on_a_copy() {
 /// its strategy: the default replaces the body with the resource reply,
 /// `use-original` keeps the route's body, and a custom strategy folds
 /// both bodies (manual/enrich-eip.html, section 8.11.7).
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherDefaultAggregationStrategyTest.java#testEnrichInOut` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherTest.java#testEnrichInOut`.
 #[tokio::test]
 async fn enrich_merges_the_resource_reply_through_its_strategy() {
     let reply = upstream::Response::json(200, r#"{"answer": 42}"#);
@@ -1124,6 +1464,30 @@ async fn enrich_merges_the_resource_reply_through_its_strategy() {
     let exchange = custom.result.expect("the route succeeds");
     assert_eq!(exchange.message.body, json!({"kept": 1, "answer": 42}));
     assert_eq!(exchange.property("saw"), Some(&json!(true)));
+
+    let blocked = strategy_script(
+        "merge",
+        r#"#{ "body": newExchange, "properties": #{ "CamelLoopIndex": 99 } }"#,
+    );
+    let blocked = run_enrich(
+        json!({"enrich": {
+            "uri": "http:tracker",
+            "aggregationStrategy": {"type": "rhai", "expression": {
+                "file": "props.rhai", "entrypoint": "merge"
+            }},
+            "parameters": {"httpMethod": "GET", "path": "/thing"}
+        }}),
+        &blocked,
+        vec![upstream::Response::json(200, r#"{"answer": 42}"#)],
+    )
+    .await;
+    assert_eq!(
+        blocked
+            .result
+            .expect_err("a custom strategy may not write engine metadata")
+            .class,
+        ErrorClass::Validation
+    );
 }
 
 /// A failed resource send propagates to the error handler unless the
@@ -1131,6 +1495,10 @@ async fn enrich_merges_the_resource_reply_through_its_strategy() {
 /// merges instead; and the JSON strategies, which read a named property
 /// of the resource exchange, find none on an http reply
 /// (section 8.6, section 8.11.7).
+///
+/// Camel cases:
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherAggregateOnExceptionTest.java#testEnrichTrueKaboom` and
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherAggregateOnExceptionTest.java#testEnrichFalseKaboom`.
 #[tokio::test]
 async fn enrich_failure_propagates_unless_it_aggregates_on_exception() {
     let failure = vec![upstream::Response::json(500, r#"{"boom": true}"#)];

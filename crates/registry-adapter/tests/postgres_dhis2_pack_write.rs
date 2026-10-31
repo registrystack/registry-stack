@@ -67,12 +67,22 @@ fn raw_write(
     (status, response[head_end + 4..].to_vec())
 }
 
-fn import_summary(status: &str, created: u64, updated: u64, ignored: u64) -> String {
+fn import_summary(
+    status: &str,
+    created: u64,
+    updated: u64,
+    ignored: u64,
+    error_reports: Value,
+) -> String {
     json!({
         "status": status,
         "validationReport": {
-            "errorReports": [],
-            "warningReports": [{"message": "UPSTREAM-SENSITIVE-CANARY"}]
+            "errorReports": error_reports,
+            "warningReports": [{
+                "message": "UPSTREAM-SENSITIVE-CANARY",
+                "trackerType": "TRACKED_ENTITY-SENSITIVE-CANARY",
+                "uid": "UID-SENSITIVE-CANARY"
+            }]
         },
         "stats": {
             "created": created,
@@ -85,10 +95,33 @@ fn import_summary(status: &str, created: u64, updated: u64, ignored: u64) -> Str
     .to_string()
 }
 
+async fn journal_rows(served: &Served) -> String {
+    let (client, connection) = tokio_postgres::connect(&served.database, tokio_postgres::NoTls)
+        .await
+        .expect("connect the served journal schema");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .query(
+            "SELECT to_jsonb(e)::text FROM adapter_journal_events AS e ORDER BY event_id",
+            &[],
+        )
+        .await
+        .expect("read every journal column")
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[tokio::test]
 async fn a_synchronous_create_uses_the_supplied_uid_and_replays_without_a_second_send() {
     let upstream = UpstreamDouble::start();
-    upstream.respond_with(vec![Response::json(200, &import_summary("OK", 0, 1, 0))]);
+    upstream.respond_with(vec![Response::json(
+        200,
+        &import_summary("OK", 0, 1, 0, json!([])),
+    )]);
     let served = Served::start(&upstream.url("")).await;
     let token = served.token("records.write");
     let request = record("wk4JlTuVO9o");
@@ -122,31 +155,64 @@ async fn a_synchronous_create_uses_the_supplied_uid_and_replays_without_a_second
 }
 
 #[tokio::test]
-async fn a_partial_summary_is_a_count_free_conflict_and_never_leaks_the_summary() {
+async fn a_partial_summary_discloses_only_four_counts_and_replays_without_a_second_send() {
     let upstream = UpstreamDouble::start();
     upstream.respond_with(vec![Response::json(
         200,
-        &import_summary("WARNING", 1, 0, 1),
+        &import_summary("WARNING", 1, 2, 1, json!([])),
     )]);
     let served = Served::start(&upstream.url("")).await;
     let token = served.token("records.write");
+    let request = record("wk4JlTuVO9o");
 
-    let (status, body) = raw_write(
+    let first = raw_write(
         &served,
         &token,
         "POST",
         "/v1/records/person",
         "partial-person-1",
-        &record("wk4JlTuVO9o"),
+        &request,
     );
-    let problem: Value = serde_json::from_slice(&body).expect("facade problem JSON");
-    assert_eq!(status, 409, "{}", String::from_utf8_lossy(&body));
-    assert_eq!(problem["code"], "source.write-partial");
-    assert!(
-        !String::from_utf8_lossy(&body).contains("UPSTREAM-SENSITIVE-CANARY"),
-        "the raw import summary must not cross the facade"
+    let replay = raw_write(
+        &served,
+        &token,
+        "POST",
+        "/v1/records/person",
+        "partial-person-1",
+        &request,
     );
-    assert_eq!(upstream.request_count(), 1);
+    let (status, body) = &first;
+    let problem: Value = serde_json::from_slice(body).expect("facade problem JSON");
+    assert_eq!(*status, 409, "{}", String::from_utf8_lossy(body));
+    assert_eq!(
+        problem,
+        json!({
+            "title": "the write was only partially accepted",
+            "status": 409,
+            "detail": "The source accepted only part of the write.",
+            "code": "source.write-partial",
+            "data": {
+                "imported": 1,
+                "updated": 2,
+                "ignored": 1,
+                "rejected": 0
+            }
+        })
+    );
+    assert_eq!(replay, first, "the terminal 409 replays exact bytes");
+    assert_eq!(upstream.request_count(), 1, "replay makes no second send");
+
+    let problem_text = String::from_utf8_lossy(body);
+    let journal = journal_rows(&served).await;
+    for marker in [
+        "UPSTREAM-SENSITIVE-CANARY",
+        "TRACKED_ENTITY-SENSITIVE-CANARY",
+        "EVENT-SENSITIVE-CANARY",
+        "UID-SENSITIVE-CANARY",
+    ] {
+        assert!(!problem_text.contains(marker), "problem leaked {marker}");
+        assert!(!journal.contains(marker), "journal leaked {marker}");
+    }
 }
 
 #[tokio::test]

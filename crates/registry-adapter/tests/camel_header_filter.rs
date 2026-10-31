@@ -54,8 +54,10 @@ fn copied(filter: &HeaderFilter, upstream: &[(&str, &[u8])]) -> Vec<(String, Str
 /// absent from the exchange is not sent. Camel sends every exchange
 /// header its filter does not drop
 /// (`camel-4.23.0:components/camel-http/src/main/java/org/apache/camel/component/http/HttpProducer.java#process`,
-/// the `strategy.applyFilterToCamelHeaders` loop); the Adapter inverts
-/// that into an allowlist.
+/// the `strategy.applyFilterToCamelHeaders` loop;
+/// `camel-4.23.0:components/camel-http-common/src/test/java/org/apache/camel/http/common/HttpHeaderFilterStrategyTest.java#applyFilterToCamelHeaders`);
+/// the Adapter inverts that into an allowlist
+/// (<https://camel.apache.org/components/4.23.x/http-component.html>).
 #[test]
 fn only_listed_request_headers_are_sent() {
     let filter = filter(&["Accept", "Prefer", "If-None-Exist"], NONE, None);
@@ -79,7 +81,9 @@ fn only_listed_request_headers_are_sent() {
 /// Engine headers and facade inputs are exchange headers like any other:
 /// never sent unless listed. Camel drops `Camel*` by prefix
 /// (`camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/DefaultHeaderFilterStrategy.java#doFiltering`);
-/// the allowlist drops them because they are not listed.
+/// `camel-4.23.0:components/camel-http-common/src/test/java/org/apache/camel/http/common/HttpHeaderFilterStrategyTest.java#applyFilterToCamelHeaders` exercises that rule.
+/// The allowlist drops them because they are not listed
+/// (<https://camel.apache.org/components/4.23.x/http-component.html>).
 #[test]
 fn engine_headers_and_facade_inputs_are_not_sent_unless_listed() {
     let unlisted = filter(&["Accept"], NONE, None);
@@ -180,7 +184,10 @@ fn a_request_header_value_over_the_transport_bound_is_refused() {
 /// Two exchange entries for one listed name, in any case, are never
 /// resolved by picking one. Camel would join them as `[a, b]`
 /// (`camel-4.23.0:components/camel-http/src/main/java/org/apache/camel/component/http/HttpProducer.java#applyHeader`);
-/// the Adapter refuses.
+/// `camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpProducerTwoHeadersWithSameKeyTest.java#testTwoHeadersWithSameKeyHeader`
+/// exercises Camel's multi-value request. The Adapter instead refuses the
+/// ambiguous exchange representation
+/// (<https://camel.apache.org/components/4.23.x/http-component.html>).
 #[test]
 fn two_exchange_entries_for_one_listed_name_are_refused() {
     let filter = filter(&["Accept"], NONE, None);
@@ -208,7 +215,11 @@ fn an_outbound_refusal_is_value_free() {
 /// Every never-allowlistable name of section 8.11.4 is refused in either
 /// list at construction, in any case, so a filter that exists can never
 /// emit one. The credential injected after the filter therefore cannot
-/// be shadowed or replaced by an exchange header.
+/// be shadowed or replaced by an exchange header. Camel's common request
+/// filters are exercised by
+/// `camel-4.23.0:components/camel-http-common/src/test/java/org/apache/camel/http/common/HttpHeaderFilterStrategyTest.java#applyFilterToCamelHeaders`;
+/// refusing the same set on the response allowlist is an Adapter divergence
+/// (<https://camel.apache.org/components/4.23.x/http-component.html>).
 #[test]
 fn every_reserved_name_is_refused_in_either_list() {
     for name in [
@@ -317,7 +328,9 @@ fn an_allowlist_over_the_transport_header_bound_is_refused() {
 /// An upstream may not write a header the engine places on the exchange:
 /// Camel's `Camel`/`camel` prefix rule applies to inbound headers too
 /// (`camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/DefaultHeaderFilterStrategy.java#applyFilterToExternalHeaders`,
-/// `CAMEL_FILTER_STARTS_WITH` with `lowerCase` on).
+/// `CAMEL_FILTER_STARTS_WITH` with `lowerCase` on;
+/// `camel-4.23.0:components/camel-http-common/src/test/java/org/apache/camel/http/common/HttpHeaderFilterStrategyTest.java#applyFilterToExternalHeaders`;
+/// <https://camel.apache.org/components/4.23.x/http-component.html>).
 #[test]
 fn a_camel_engine_header_is_refused_as_a_response_header() {
     for name in ["CamelHttpResponseCode", "camelSplitIndex", "CAMELFOO"] {
@@ -460,7 +473,10 @@ fn the_outbound_set_never_carries_a_credential_name() {
 /// Only declared names are copied, under their declared spelling, in
 /// declaration order. Camel copies every response header its filter
 /// does not drop
-/// (`camel-4.23.0:components/camel-http/src/main/java/org/apache/camel/component/http/HttpProducer.java#populateResponse`).
+/// (`camel-4.23.0:components/camel-http/src/main/java/org/apache/camel/component/http/HttpProducer.java#populateResponse`,
+/// `camel-4.23.0:components/camel-http-common/src/test/java/org/apache/camel/http/common/HttpHeaderFilterStrategyTest.java#applyFilterToExternalHeaders`).
+/// The Adapter's allowlist and declared spelling are its divergence from
+/// <https://camel.apache.org/components/4.23.x/http-component.html>.
 #[test]
 fn only_declared_response_headers_are_copied_under_their_declared_names() {
     let filter = filter(NONE, &["ETag", "Location"], None);
@@ -495,9 +511,12 @@ fn an_absent_declared_response_header_is_not_copied() {
 /// `upstream.malformed`. Camel turns the second occurrence into a list
 /// (`camel-4.23.0:components/camel-http/src/main/java/org/apache/camel/component/http/HttpProducer.java#populateResponse`
 /// through `camel-4.23.0:core/camel-util/src/main/java/org/apache/camel/util/CollectionHelper.java#appendEntry`),
-/// so the header's type depends on the upstream; the Adapter keeps a
+/// as exercised by
+/// `camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpProducerTwoHeadersWithSameKeyTest.java#testTwoHeadersWithSameKeyHeader`.
+/// Camel's header type therefore depends on the upstream; the Adapter keeps a
 /// header a single string and matches the platform transport's
-/// duplicate refusal.
+/// duplicate refusal
+/// (<https://camel.apache.org/components/4.23.x/http-component.html>).
 #[test]
 fn a_repeated_declared_response_header_is_upstream_malformed() {
     let filter = filter(NONE, &["Link", "ETag"], None);

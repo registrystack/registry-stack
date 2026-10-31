@@ -1,5 +1,9 @@
 # Adapter API transformation experiments: findings
 
+The opening assessment records the pre-runtime state on 2026-10-30.
+The dated executed Increment 1 rerun below supersedes its runtime-absence
+claims and records the current proof and its limits.
+
 Run on 2026-10-30 by the lead reviewer's session, before the Increment 1
 runtime exists. Each experiment is authored config only (pack, project,
 runtime config, fixtures, scripts), checked with `adapterctl check`; no Rust
@@ -158,3 +162,47 @@ New check defects found by the rerun:
 
 Passing `check` still does not mean the packs run: the gaps above wait for
 the Increment 1 runtime, and each experiment is replayed there (DoD item 9).
+
+## Executed Increment 1 rerun (2026-10-31)
+
+The five experiments now execute through the native `adapter` binary over an
+isolated PostgreSQL journal schema and a socket upstream double. The run used
+only the committed documented fixtures. It did not contact FHIR, GraphQL,
+JSON:API, or any other external service, and it does not turn documented
+fixtures into captured evidence.
+
+For every experiment, the native `adapterctl` binary ran all three acceptance
+commands before the facade request:
+
+- `check` exited 0 with a complete, diagnostic-free report.
+- `fixtures replay` exited 0 with `drive: completed` and the fixture's exact
+  entry and upstream-exchange counts.
+- `verify --live` exited 0 with `drove: 0`. It reported one waited binding for
+  each FHIR experiment and two for each GraphQL/JSON:API experiment, all as
+  `caller-sourced`. These waits are authoring verdicts, not transport probes.
+  The native runtime journey below is the execution proof.
+
+The native results were:
+
+| Experiment | Native upstream transcript | Facade result |
+|---|---|---|
+| `fhir-r4-patient-source` | OAuth2 client-credentials token request, then both documented FHIR search pages with exact methods, paths, queries, and bodies | 200, exactly the fixture's two Patient records and closed `breg-records` envelope |
+| `fhir-r4-conditional-create` | OAuth2 client-credentials token request, transaction Bundle POST, then the exact Patient read-back | 201, exactly the fixture's created Patient and closed `breg-records` envelope |
+| `graphql-cursor-source` | Exact GraphQL POST document and variables with the declared static API-key header | 200, fixture case values in the closed `case-api` envelope; the upstream cursor was sealed rather than disclosed |
+| `rest-offset-mtls` | RFC 7523 assertion token request and JSON:API search over TLS that required the generated client certificate | 200, exactly the fixture's two households and closed `breg-records` envelope |
+| `second-target-profile` | The same private-key-JWT and mutual-TLS JSON:API transcript over the unchanged pack | 200, exactly the fixture values in the distinct closed `fhir-facade` envelope |
+
+The OAuth token replies used the fixture's synthetic bearer token with
+`expires_in: 300`. The private-key JWT was cryptographically verified against
+its public JWK, including issuer and audience, and the mutual-TLS server
+required a CA-signed client certificate on both token and data connections.
+Before each accepted facade request, a token signed by an untrusted key was
+refused with 401 and caused zero upstream requests. This proves inbound JWT
+verification precedes every source effect; no caller token was forwarded.
+
+Focused execution command and result:
+
+```text
+cargo test --locked -p registry-adapter --features postgres-test --test experiments_served
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```

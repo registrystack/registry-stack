@@ -26,8 +26,8 @@ changing the product or any `registry-adapter*` crate.
 | `products/adapter/` | `CONCEPT.md`, `DELIVERY-PLAN.md`, schemas, profiles, packs, examples, fixtures, and product scripts |
 
 `CONCEPT.md` section 8.1 fixes the platform reuse: the runtime reaches
-`registry-platform-script`, `-oidc`, `-httputil`, `-httpsec`,
-`-ratelimit`, `-audit`, `-config`, and `-yaml`, and never another
+`registry-platform-script`, `-oidc`, `-httputil`, `-ratelimit`,
+`-config`, `-yaml`, `-authcommon`, `-crypto`, and `-canonical-json`, and never another
 product's runtime, tooling, or protocol types. Product logic (routes, EIP
 processors, mapping, disclosure) never moves into a platform crate. The
 generic primitives under `throttle`, `circuitBreaker`, and redelivery live in

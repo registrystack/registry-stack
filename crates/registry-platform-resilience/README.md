@@ -18,11 +18,12 @@ Two independent primitives live here:
   over `Closed`, `Open`, and `HalfOpen`. It judges a fixed count-based
   window of recorded calls once the window holds the declared minimum:
   a failure rate, or a slow-call rate, at or above its threshold opens
-  it. The move from open to half-open is lazy, on the first acquire
-  whose wait has elapsed, so the breaker starts no task and holds no
-  thread; a caller that declares an automatic transition observes the
-  same admission behavior, because nothing outside the breaker can see
-  a phase nobody asked about. A failing half-open trial reopens with a
+  it. With automatic transition disabled, an elapsed open wait becomes
+  half-open on the next acquire. When enabled, passive `state()` observation
+  also materializes that elapsed transition without admitting a trial.
+  Both modes admit the first guarded call after the wait. The primitive
+  has no transition events or half-open timeout, so deriving the phase
+  when observed needs no timer task or thread. A failing half-open trial reopens with a
   fresh wait; trials that all succeed close the breaker with a fresh
   window. Admission hands the caller a
   [`circuit_breaker::BreakerPermit`]: the call's outcome is recorded

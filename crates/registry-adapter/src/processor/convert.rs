@@ -21,6 +21,7 @@ fn unmapped(map_id: &str, condition: &str) -> RouteFailure {
     RouteFailure {
         class: ErrorClass::ConversionUnmapped,
         message: Some(format!("code map {map_id} {condition}")),
+        data: None,
         auth: None,
     }
 }

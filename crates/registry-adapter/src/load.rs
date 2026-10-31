@@ -1060,6 +1060,7 @@ fn step_expressions(step: &Step) -> Vec<Expression> {
         Step::SetHeader(header) => vec![header.value.clone()],
         Step::SetProperty(property) => vec![property.value.clone()],
         Step::Validate(validate) => vec![validate.expression.clone()],
+        Step::ThrowException(throw) => throw.data.iter().cloned().collect(),
         Step::Choice(choice) => choice
             .when
             .iter()
@@ -1227,6 +1228,27 @@ mod tests {
         for file in ["uri.rhai", "body.rhai", "path.rhai", "query.rhai"] {
             assert!(files.iter().any(|seen| seen == file), "missing {file}");
         }
+    }
+
+    #[test]
+    fn throw_exception_data_expression_is_in_the_load_inventory() {
+        let step = Step::ThrowException(registry_adapter_core::ThrowExceptionStep {
+            exception_type: registry_adapter_core::ErrorClass::OutcomeRejected,
+            message: None,
+            data: Some(Expression::Rhai(registry_adapter_core::RhaiExpression {
+                file: "problem.rhai".to_owned(),
+                entrypoint: "problem_data".to_owned(),
+            })),
+        });
+
+        let files: Vec<String> = step_expressions(&step)
+            .into_iter()
+            .filter_map(|expression| match expression {
+                Expression::Rhai(script) => Some(script.file),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(files, ["problem.rhai"]);
     }
 
     fn template() -> RouteTemplate {

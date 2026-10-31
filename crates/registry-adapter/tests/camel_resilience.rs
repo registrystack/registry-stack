@@ -198,6 +198,13 @@ impl Lane {
     }
 
     async fn run(&self) -> RouteOutcome {
+        self.run_exchange(Exchange::new("resilience".to_owned()))
+            .await
+    }
+
+    /// One run with a prepared exchange, used when an expression reads a
+    /// caller-controlled test header.
+    async fn run_exchange(&self, exchange: Exchange) -> RouteOutcome {
         let routes = RouteTable::new();
         let context = RouteContext {
             endpoints: &self.endpoints,
@@ -208,12 +215,7 @@ impl Lane {
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
         };
-        run_route(
-            &context,
-            &self.steps,
-            Exchange::new("resilience".to_owned()),
-        )
-        .await
+        run_route(&context, &self.steps, exchange).await
     }
 
     /// One run under an explicit exchange deadline, the way a caller
@@ -241,6 +243,19 @@ impl Lane {
     fn requests(&self) -> usize {
         self.double.request_count()
     }
+
+    /// Wait until the loopback double has recorded `expected` requests.
+    /// Recording happens before its test-only answer delay, so this is an
+    /// admission barrier rather than a timing assertion.
+    async fn wait_for_requests(&self, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while self.requests() < expected {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the admitted requests reach the loopback double");
+    }
 }
 
 fn failed(outcome: &RouteOutcome) -> &RouteFailure {
@@ -260,6 +275,11 @@ fn has_event(outcome: &RouteOutcome, kind: &str) -> bool {
 }
 
 #[tokio::test]
+/// Two failures fill the count window and the next call is rejected, as in
+/// Camel's resilience4j EIP test
+/// (`camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceOpenWithFallbackExchangePropertyTest.java#testRejectedOnlyWhenBreakerOpen`).
+/// The Adapter's rejection raises `breaker.open`, its recorded divergence
+/// from <https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>.
 async fn a_failure_storm_opens_the_breaker_and_refuses_without_calling() {
     let lane = Lane::over(json!([breaker(get(), json!({}))]));
     lane.replies(&[500, 500, 200]);
@@ -282,6 +302,110 @@ async fn a_failure_storm_opens_the_breaker_and_refuses_without_calling() {
 }
 
 #[tokio::test]
+/// Camel passes the slow-call duration and rate thresholds into resilience4j
+/// (`camel-4.23.0:components/camel-resilience4j/src/main/java/org/apache/camel/component/resilience4j/ResilienceReifier.java#configureCircuitBreaker`).
+/// This processor-level case records one delayed success and one fast success
+/// in the same two-call window. The resulting 50 percent slow-call rate opens
+/// the breaker without treating either HTTP response as a failure.
+async fn successful_slow_calls_open_at_the_authored_duration_and_rate() {
+    let lane = Lane::over(json!([breaker(
+        get(),
+        json!({
+            "slowCallDurationThresholdSeconds": 1,
+            "slowCallRateThreshold": 50
+        }),
+    )]));
+    lane.replies(&[200, 200, 200]);
+
+    lane.double.delay_answers(Duration::from_millis(1_100));
+    assert!(lane.run().await.result.is_ok(), "the slow call succeeds");
+    lane.double.delay_answers(Duration::ZERO);
+    assert!(lane.run().await.result.is_ok(), "the fast call succeeds");
+    assert_eq!(lane.requests(), 2, "both judged calls reached the source");
+
+    let refused = lane.run().await;
+    assert_eq!(failed_class(&refused), "breaker.open");
+    assert_eq!(
+        lane.requests(),
+        2,
+        "the exact 50 percent slow-call rate opened the breaker"
+    );
+}
+
+#[tokio::test]
+/// Camel delegates omitted breaker settings to resilience4j defaults through
+/// `camel-4.23.0:components/camel-resilience4j/src/main/java/org/apache/camel/component/resilience4j/ResilienceReifier.java#configureCircuitBreaker`.
+/// The Adapter authors those defaults explicitly. One lane proves the
+/// 100-call minimum; a second proves the 100-call window by opening only when
+/// call 101 evicts the oldest success and raises the retained failure rate to
+/// the default 50 percent threshold.
+async fn default_breaker_enforces_one_hundred_call_minimum_and_window() {
+    let minimum_lane = Lane::over(json!([{
+        "circuitBreaker": {"steps": [get()]}
+    }]));
+    minimum_lane.replies(&[500; 100]);
+
+    for expected_requests in 1..=99 {
+        assert_eq!(failed_class(&minimum_lane.run().await), "upstream.http");
+        assert_eq!(
+            minimum_lane.requests(),
+            expected_requests,
+            "every call below the default minimum reaches the source"
+        );
+    }
+    assert_eq!(failed_class(&minimum_lane.run().await), "upstream.http");
+    assert_eq!(minimum_lane.requests(), 100, "call 100 meets the minimum");
+    let refused = minimum_lane.run().await;
+    assert_eq!(failed_class(&refused), "breaker.open");
+    assert_eq!(
+        minimum_lane.requests(),
+        100,
+        "call 101 is refused after the minimum permits judgment"
+    );
+
+    let window_lane = Lane::over(json!([{
+        "circuitBreaker": {"steps": [get()]}
+    }]));
+    let mut statuses = vec![200; 51];
+    statuses.extend([500; 50]);
+    window_lane.replies(&statuses);
+
+    for _ in 0..51 {
+        assert!(
+            window_lane.run().await.result.is_ok(),
+            "a success is admitted"
+        );
+    }
+    for _ in 0..49 {
+        assert_eq!(failed_class(&window_lane.run().await), "upstream.http");
+    }
+    assert_eq!(
+        window_lane.requests(),
+        100,
+        "49 failures in the first 100 calls leave the breaker closed"
+    );
+
+    assert_eq!(failed_class(&window_lane.run().await), "upstream.http");
+    assert_eq!(
+        window_lane.requests(),
+        101,
+        "call 101 is admitted before its result updates the window"
+    );
+    let refused = window_lane.run().await;
+    assert_eq!(failed_class(&refused), "breaker.open");
+    assert_eq!(
+        window_lane.requests(),
+        101,
+        "the retained 100 calls contain 50 failures after one success is evicted"
+    );
+}
+
+#[tokio::test]
+/// Camel runs `onFallback` for a guarded failure and for an open-breaker
+/// rejection
+/// (`camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceRouteFallbackTest.java#testResilience`,
+/// `camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceOpenWithFallbackExchangePropertyTest.java#testRejectedOnlyWhenBreakerOpen`;
+/// <https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn on_fallback_answers_on_failure_and_on_rejection() {
     let fallback = json!({"onFallback": {"steps": [
         {"setProperty": {"name": "saw", "value": {"constant": "fallback"}}}
@@ -311,6 +435,12 @@ async fn on_fallback_answers_on_failure_and_on_rejection() {
 }
 
 #[tokio::test]
+/// A configured recorded parent matches its descendant while an unrelated
+/// exception is not recorded, adapted from Camel's IOException and
+/// FileNotFoundException cases
+/// (`camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceRecordExceptionTest.java#testFile`,
+/// `camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceRecordExceptionTest.java#testKaboom`;
+/// <https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn record_exception_matches_descendants_and_only_recorded_failures_use_fallback() {
     let fallback = json!({"steps": [
         {"setProperty": {"name": "saw", "value": {"constant": "fallback"}}}
@@ -357,6 +487,11 @@ async fn record_exception_matches_descendants_and_only_recorded_failures_use_fal
 }
 
 #[tokio::test]
+/// Camel gives `ignoreException` precedence when its subclass also matches
+/// `recordException`
+/// (`camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceRecordIgnoreExceptionTest.java#testFile`,
+/// `camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceRecordIgnoreExceptionTest.java#testIo`;
+/// <https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn ignore_exception_wins_overlap_and_never_uses_fallback() {
     let mut node = breaker(
         get(),
@@ -391,6 +526,10 @@ async fn ignore_exception_wins_overlap_and_never_uses_fallback() {
 }
 
 #[tokio::test]
+/// The Adapter always records an uncatchable boundary failure and lets it
+/// escape filters and fallback. This is an Adapter security divergence, not a
+/// Camel exception-class port
+/// (<https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn boundary_failure_is_recorded_and_propagates_past_filters_and_fallback() {
     let mut node = breaker(
         json!({"throwException": {
@@ -427,6 +566,10 @@ async fn boundary_failure_is_recorded_and_propagates_past_filters_and_fallback()
 }
 
 #[tokio::test]
+/// A successful permitted call after the open-state wait closes the breaker
+/// for subsequent calls, the half-open transition documented by Camel's
+/// resilience4j EIP
+/// (<https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn an_open_breaker_recovers_through_half_open_trials() {
     let lane = Lane::over(json!([breaker(
         get(),
@@ -448,6 +591,11 @@ async fn an_open_breaker_recovers_through_half_open_trials() {
 }
 
 #[tokio::test]
+/// Camel can opt into wrapping a breaker with the route error handler
+/// (`camel-4.23.0:components/camel-resilience4j/src/test/java/org/apache/camel/component/resilience4j/ResilienceInheritErrorHandlerTest.java#testResilience`).
+/// The Adapter deliberately fixes the opposite behavior, so guarded steps run
+/// bare
+/// (<https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn the_route_error_handler_does_not_wrap_a_breaker_block() {
     // The clause would answer the guarded failure with a second send;
     // a breaker and its steps run bare (section 8.7), so neither the
@@ -468,6 +616,10 @@ async fn the_route_error_handler_does_not_wrap_a_breaker_block() {
 }
 
 #[tokio::test]
+/// Total-requests mode admits only the configured count in each period,
+/// adapted from Camel's constant-expression pacing case
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/requests/ThrottlerTest.java#testConfigurationWithConstantExpression`;
+/// <https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
 async fn the_throttler_paces_requests_over_the_period() {
     let lane = Lane::over(json!([throttle(
         get(),
@@ -491,6 +643,49 @@ async fn the_throttler_paces_requests_over_the_period() {
 }
 
 #[tokio::test]
+/// Camel evaluates a header limit for each exchange and applies a changed
+/// value to later exchanges
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/requests/ThrottlerTest.java#testConfigurationWithHeaderExpression`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/requests/ThrottlerTest.java#testConfigurationWithChangingHeaderExpression`;
+/// <https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
+async fn a_header_limit_is_re_evaluated_for_each_exchange() {
+    let lane = Lane::over(json!([throttle(
+        get(),
+        json!({
+            "limit": {"header": "lim"},
+            "timePeriodMilliseconds": 60_000,
+            "rejectExecution": true
+        }),
+    )]));
+    lane.replies(&[200, 200, 200]);
+
+    let mut first = Exchange::new("first".to_owned());
+    first.message.set_header("lim", json!(1));
+    assert!(lane.run_exchange(first).await.result.is_ok());
+
+    let mut second = Exchange::new("second".to_owned());
+    second.message.set_header("lim", json!(2));
+    assert!(
+        lane.run_exchange(second).await.result.is_ok(),
+        "raising the evaluated limit admits the next exchange in the same window"
+    );
+
+    let mut third = Exchange::new("third".to_owned());
+    third.message.set_header("lim", json!(2));
+    let refused = lane.run_exchange(third).await;
+    assert_eq!(failed_class(&refused), "throttle.rejected");
+    assert_eq!(
+        lane.requests(),
+        2,
+        "the third exchange never reaches the source"
+    );
+}
+
+#[tokio::test]
+/// `rejectExecution` refuses calls over the total-requests limit instead of
+/// delaying them
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/requests/ThrottlerTest.java#testSendLotsOfMessagesWithRejectExecution`;
+/// <https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
 async fn reject_execution_refuses_instead_of_waiting() {
     let lane = Lane::over(json!([throttle(get(), json!({"rejectExecution": true}))]));
     lane.replies(&[200, 200]);
@@ -501,6 +696,10 @@ async fn reject_execution_refuses_instead_of_waiting() {
 }
 
 #[tokio::test]
+/// Waiting is additionally bounded by the Adapter exchange deadline. Raising
+/// `throttle.rejected` at that deadline is the port-table divergence from
+/// Camel's delay behavior
+/// (<https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
 async fn a_wait_past_the_deadline_raises_throttle_rejected() {
     let lane = Lane::over(json!([throttle(
         get(),
@@ -522,6 +721,10 @@ async fn a_wait_past_the_deadline_raises_throttle_rejected() {
 }
 
 #[tokio::test]
+/// Concurrent-requests mode holds the configured number of in-flight calls
+/// and delays the rest
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/concurrent/ConcurrentRequestsThrottlerTest.java#testSendLotsOfMessagesSimultaneouslyButOnly3GetThrough`;
+/// <https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
 async fn concurrent_requests_mode_bounds_in_flight_calls() {
     let lane = Lane::over(json!([throttle(
         get(),
@@ -543,6 +746,59 @@ async fn concurrent_requests_mode_bounds_in_flight_calls() {
 }
 
 #[tokio::test]
+/// Camel re-evaluates a concurrent-request header expression when its value
+/// changes between exchanges
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/concurrent/ConcurrentRequestsThrottlerTest.java#testConfigurationWithChangingHeaderExpression`).
+/// The first exchange enters under limit 1, the changed limit 2 admits a
+/// second body concurrently, and a third exchange at limit 2 is refused.
+async fn concurrent_requests_mode_re_reads_a_changed_header_limit() {
+    let lane = Lane::over(json!([throttle(
+        get(),
+        json!({
+            "mode": "concurrent-requests",
+            "limit": {"header": "lim"},
+            "rejectExecution": true
+        }),
+    )]));
+    lane.replies(&[200, 200]);
+    lane.double.delay_answers(Duration::from_secs(2));
+
+    let mut first_exchange = Exchange::new("first".to_owned());
+    first_exchange.message.set_header("lim", json!(1));
+    let mut first = Box::pin(lane.run_exchange(first_exchange));
+    tokio::select! {
+        _ = &mut first => panic!("the first body finished before admission was observed"),
+        () = lane.wait_for_requests(1) => {}
+    }
+
+    let mut second_exchange = Exchange::new("second".to_owned());
+    second_exchange.message.set_header("lim", json!(2));
+    let mut second = Box::pin(lane.run_exchange(second_exchange));
+    tokio::select! {
+        _ = &mut first => panic!("the first body finished before the raised limit was exercised"),
+        _ = &mut second => panic!("the second body finished before admission was observed"),
+        () = lane.wait_for_requests(2) => {}
+    }
+
+    let mut third_exchange = Exchange::new("third".to_owned());
+    third_exchange.message.set_header("lim", json!(2));
+    let refused = lane.run_exchange(third_exchange).await;
+    assert_eq!(failed_class(&refused), "throttle.rejected");
+    assert_eq!(
+        lane.requests(),
+        2,
+        "the changed limit admitted exactly two concurrent bodies"
+    );
+
+    let (first, second) = tokio::join!(first, second);
+    assert!(first.result.is_ok(), "the limit-1 body completes");
+    assert!(second.result.is_ok(), "the changed limit-2 body completes");
+}
+
+#[tokio::test]
+/// `rejectExecution` also refuses calls over the concurrent-requests limit
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/concurrent/ConcurrentRequestsThrottlerTest.java#testSendLotsOfMessagesWithRejectExecution`;
+/// <https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
 async fn concurrent_requests_mode_rejects_over_the_limit() {
     let lane = Lane::over(json!([throttle(
         get(),
@@ -564,6 +820,41 @@ async fn concurrent_requests_mode_rejects_over_the_limit() {
 }
 
 #[tokio::test]
+/// A failed guarded processor releases its concurrent-request permit, as in
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/concurrent/ConcurrentRequestsThrottlerTest.java#testPermitReleaseOnException`
+/// (<https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
+async fn concurrent_requests_mode_releases_its_permit_on_failure() {
+    let body = json!({"throwException": {
+        "exceptionType": "validation",
+        "message": "expected failure"
+    }});
+    let lane = Lane::over(json!([throttle(
+        body,
+        json!({
+            "mode": "concurrent-requests",
+            "limit": {"constant": 1},
+            "rejectExecution": true
+        }),
+    )]));
+
+    let first = lane.run().await;
+    assert_eq!(failed_class(&first), "validation");
+    let second = lane.run().await;
+    assert_eq!(
+        failed_class(&second),
+        "validation",
+        "the second call entered the body instead of seeing a leaked permit"
+    );
+}
+
+#[tokio::test]
+/// Camel dead-letters a first missing limit but lets a later missing limit
+/// continue under the established throttler
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/ThrottlerNullEvalTest.java#testFirstNoHeaderTest`,
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/ThrottlerNullEvalTest.java#testNoHeaderTest`).
+/// The Adapter deliberately requires every evaluation to be a positive integer
+/// and fails closed
+/// (<https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>).
 async fn a_non_integer_limit_fails_the_exchange() {
     let lane = Lane::over(json!([throttle(
         get(),
@@ -577,6 +868,12 @@ async fn a_non_integer_limit_fails_the_exchange() {
 }
 
 #[tokio::test]
+/// Camel refuses a throttler with no limit expression at startup
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/throttle/ThrottlerInvalidConfiguredTest.java#testInvalid`).
+/// The Adapter adds bounded-shape checks for non-empty processor bodies and
+/// positive constant limits
+/// (<https://camel.apache.org/components/4.23.x/eips/throttle-eip.html>,
+/// <https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn the_resilience_steps_refuse_their_unservable_shapes_at_load() {
     let refused =
         |step_list: Value| check_servable(&steps(step_list)).expect_err("the shape is refused");

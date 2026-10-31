@@ -50,6 +50,20 @@ pub const CONTINUATION_PROPERTY: &str = "AdapterContinuation";
 /// The one reserved property a route sets: the continuation the engine
 /// seals as the next cursor. Absent or null is the last page.
 pub const NEXT_CONTINUATION_PROPERTY: &str = "AdapterNextContinuation";
+/// Split piece position, matching Camel's `Exchange.SPLIT_INDEX` property.
+pub const SPLIT_INDEX_PROPERTY: &str = "CamelSplitIndex";
+/// Total split size, matching Camel's `Exchange.SPLIT_SIZE` property.
+pub const SPLIT_SIZE_PROPERTY: &str = "CamelSplitSize";
+/// Whether this is the final split piece, matching Camel's
+/// `Exchange.SPLIT_COMPLETE` property.
+pub const SPLIT_COMPLETE_PROPERTY: &str = "CamelSplitComplete";
+/// Split failure-accounting summary, matching Camel's
+/// `Exchange.SPLIT_RESULT` property.
+pub const SPLIT_RESULT_PROPERTY: &str = "CamelSplitResult";
+/// Loop iteration position, matching Camel's `Exchange.LOOP_INDEX` property.
+pub const LOOP_INDEX_PROPERTY: &str = "CamelLoopIndex";
+/// Count-loop size, matching Camel's `Exchange.LOOP_SIZE` property.
+pub const LOOP_SIZE_PROPERTY: &str = "CamelLoopSize";
 /// The page size header the facade sets on a search.
 pub const PAGE_SIZE_HEADER: &str = "pageSize";
 

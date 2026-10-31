@@ -60,7 +60,7 @@ fn failed_class(outcome: &RouteOutcome) -> &'static str {
 
 /// A top-level `doTry` owns its complete failure scope. An error that no
 /// `doCatch` claims leaves the route without entering its outer error handler
-/// (camel-4.23.0:core/camel-core-processor/src/main/java/org/apache/camel/processor/errorhandler/ProcessorDefinitionHelper.java:426-440).
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DoTryEdgeCasesTest.java#testNestedDoTryKeepsTryBlock`).
 #[tokio::test]
 async fn a_top_level_do_try_runs_bare() {
     let outcome = run_empty(
@@ -73,7 +73,8 @@ async fn a_top_level_do_try_runs_bare() {
                 }}]
             }},
             {"doTry": {
-                "steps": [{"throwException": {"exceptionType": "upstream.http"}}]
+                "steps": [{"throwException": {"exceptionType": "upstream.http"}}],
+                "doFinally": {}
             }}
         ]),
         json!({}),
@@ -90,9 +91,23 @@ async fn a_top_level_do_try_runs_bare() {
     );
 }
 
+/// A `doTry` without either `doCatch` or `doFinally` is structurally invalid
+/// and is refused while the route is loaded
+/// (`camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/DoTryEdgeCasesTest.java#testDoTryWithoutCatchOrFinally`).
+#[test]
+fn an_unanchored_do_try_is_refused_at_load() {
+    let error = check_servable(&steps(json!([{"doTry": {
+        "steps": [{"throwException": {"exceptionType": "upstream.http"}}]
+    }}])))
+    .expect_err("a doTry requires a catch or finally clause");
+
+    assert_eq!(error, "doTry declares neither doCatch nor doFinally");
+}
+
 /// The Adapter divergence keeps a `direct:` call made by an exception clause
 /// inside that clause. The callee's own handler must not recursively handle a
-/// failure raised there (`CONCEPT.md` section 8.7).
+/// failure raised there, unlike
+/// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/onexception/OnExceptionRecursionTest.java#testRecursionDirect`.
 #[tokio::test]
 async fn a_direct_call_inside_an_exception_clause_does_not_activate_callee_handlers() {
     let outcome = run_empty(

@@ -239,6 +239,7 @@ fn problem(prefix: &str, class: ErrorClass) -> Problem {
         status: BoundedU32::new(500).expect("problem status"),
         title: "generated problem".to_owned(),
         classes: UniqueList::new(vec![class]).expect("one class"),
+        data_fields: None,
     }
 }
 
@@ -396,7 +397,7 @@ proptest! {
         let findings = check_profile(&profile);
         prop_assert!(findings.is_empty(), "generated total mapping was refused: {findings:?}");
         for class in ErrorClass::ALL.iter().copied() {
-            prop_assert!(select_problem(&profile, class).is_some(), "{} did not resolve", class.class());
+            prop_assert!(registry_adapter_core::resolve_problem(&profile, class).is_some(), "{} did not resolve", class.class());
         }
 
         // Source failures the closed hierarchy distinguishes still fall
@@ -410,7 +411,8 @@ proptest! {
             ErrorClass::UpstreamTooLarge,
             ErrorClass::UpstreamRedirect,
         ] {
-            let selected = select_problem(&profile, class).expect("an upstream problem");
+            let selected = registry_adapter_core::resolve_problem(&profile, class)
+                .expect("an upstream problem");
             let class_index = ErrorClass::ALL
                 .iter()
                 .position(|candidate| *candidate == class)

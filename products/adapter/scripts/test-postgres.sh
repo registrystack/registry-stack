@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${CARGO_TARGET_DIR:?Set CARGO_TARGET_DIR to an external worktree Cargo target.}"
+
 # The Adapter PostgreSQL gate (products/adapter/DELIVERY-PLAN.md,
 # Increment 1 wave 0): runs the adapter crates' PostgreSQL-gated suites.
 # Without ADAPTER_TEST_DATABASE_URL this script starts its own disposable
@@ -67,6 +69,12 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 else
 	printf '%s\n' 'Using ADAPTER_TEST_DATABASE_URL from the environment.' >&2
 fi
+
+# Native experiment acceptance invokes the matching authoring CLI as well as
+# the feature-enabled runtime. Build the CLI first: building default-feature
+# binaries during native tests can replace the runtime they are executing.
+PATH="$HOME/.cargo/bin:$PATH" cargo build --locked -p registry-adapterctl
+export ADAPTERCTL_BIN="${CARGO_TARGET_DIR}/debug/adapterctl"
 
 # The postgres-test feature gates the suites that need the database, so a
 # plain cargo test run never silently skips them (DELIVERY-PLAN.md rule 8).
