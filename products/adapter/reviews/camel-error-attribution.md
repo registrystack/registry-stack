@@ -10,7 +10,7 @@ surface in `CONCEPT.md` section 8.7. It does not repeat the broader C6a review.
 
 The read-only upstream source was Apache Camel tag `camel-4.23.0`, commit
 `b2329103df8f5d1edfca2ad262be09e3be95ee68`, at
-`/Volumes/CodexWorktrees/agent-scratch/camel-src/camel-4.23.0`. The clone was
+`<camel-source-checkout>`. The clone was
 clean when inspected. It was not edited, copied, or built.
 
 `Mapped` below means an executable Rust test asserts the corresponding

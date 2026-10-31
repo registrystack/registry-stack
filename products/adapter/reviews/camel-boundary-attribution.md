@@ -12,7 +12,7 @@ whole Increment 1 or C6 acceptance surface passed.
 - Contract pin: Apache Camel tag `camel-4.23.0`, commit
   `b2329103df8f5d1edfca2ad262be09e3be95ee68`.
 - Inspected clone:
-  `/Volumes/CodexWorktrees/agent-scratch/camel-src/camel-4.23.0`.
+  `<camel-source-checkout>`.
 - Readback: `git rev-parse HEAD` returned the contract pin and
   `git status --short` returned no entries.
 - The clone was read only. It was not edited, built, or copied.

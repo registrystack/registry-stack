@@ -10,7 +10,7 @@ repeat the broader C6a review and does not claim full Camel conformance from
 source citations alone.
 
 The read-only reference was
-`/Volumes/CodexWorktrees/agent-scratch/camel-src/camel-4.23.0`, exact tag
+`<camel-source-checkout>`, exact tag
 `camel-4.23.0`, commit `b2329103df8f5d1edfca2ad262be09e3be95ee68`.
 The reference tree was clean. It was neither edited nor built.
 

@@ -21,9 +21,9 @@ Every brief carries these rules by reference; they are not optional.
 1. The current lead owns integration and may delegate bounded work to its
    own agents only. Each brief assigns disjoint paths; delegated agents do
    not spawn agents, and parallel agents never edit the same file.
-2. Worktree: `/Users/jeremi/orca/workspaces/registry-stack/live-adapter`.
+2. Worktree: `<worktree>`.
     Absolute paths only; never `cd`. First command: verify
-    `git -C /Users/jeremi/orca/workspaces/registry-stack/live-adapter
+    `git -C <worktree>
     --no-optional-locks rev-parse HEAD` equals the SHA in your brief; if it
     differs, stop and report.
 3. Never push, merge, rebase, tag, reset, stash, `checkout --`, or clean.
@@ -68,7 +68,7 @@ Every brief carries these rules by reference; they are not optional.
     corrects the concept. Never write a default from memory.
     The pinned reference (`CONCEPT.md` 5.4) is a read-only shallow clone of
     tag `camel-4.23.0` at
-    `/Volumes/CodexWorktrees/agent-scratch/camel-src/camel-4.23.0`; never
+    `<camel-source-checkout>`; never
     edit, build, or commit from it, and never copy it into the repository.
     Where the page is silent, ambiguous, or gone, read the implementing
     Java there and cite it (`camel-4.23.0:<path>`). Rows where this is
@@ -541,7 +541,7 @@ the lead before launching.
 
 ```
 Stream: <id>, Increment <n>, Wave <m>
-Worktree: /Users/jeremi/orca/workspaces/registry-stack/live-adapter
+Worktree: <worktree>
 Expected HEAD: <sha captured at launch>
 You own these paths (create or edit only these): <paths>
 Read first: products/adapter/CONCEPT.md sections <s> and the port-table
