@@ -519,11 +519,9 @@ mod tests {
 
         let missing = missing.to_string();
         let malformed = malformed.to_string();
-        assert!(missing.contains("no readable secret"), "{missing}");
-        assert!(
-            malformed.contains("not a usable private JWK"),
-            "{malformed}"
-        );
+        // Keep panic output value-free if diagnostic rendering regresses.
+        assert!(missing.contains("no readable secret"));
+        assert!(malformed.contains("not a usable private JWK"));
         assert!(missing.contains("binding staff-review at /bindings/2/provider/"));
         assert!(malformed.contains("binding staff-review at /bindings/2/provider/"));
         assert!(!missing.contains(CANARY_REFERENCE));
