@@ -155,3 +155,32 @@ not silently dropped.
   job source and replaces it with its own source-coverage rule under
   `adapter.job.source-unbound`. A core `sources`-aware coverage rule
   would retire the filter.
+
+
+## done-file match on both static sides (recorded divergence)
+
+Camel's `isDoneFile` matches the pattern's static text as a prefix when
+the placeholder is not at the start, else as a suffix, never both
+(camel-4.23.0:components/camel-file/src/main/java/org/apache/camel/component/file/GenericFileEndpoint.java,
+`isDoneFile`). The port matches prefix and suffix together, so a
+pattern with static text on both sides (`done-${file:name}.ok`)
+recognizes the done file its own `createDoneFileName` spelling
+produces; Camel's prefix-only match does not.
+
+## The redelivery delay cap is always on (recorded divergence)
+
+Camel's `maximumRedeliveryDelay` of zero disables the delay cap
+(camel-4.23.0:core/camel-core-processor/src/main/java/org/apache/camel/processor/errorhandler/RedeliveryPolicy.java,
+`calculateRedeliveryDelay`). The bounded model carries the cap as a
+positive bound with a 60-second default and cannot express "no cap";
+the same situation as `maxMessagesPerPoll` above.
+
+## The breaker's node key (follow-up, not ported)
+
+The resilience state keys breaker and throttle nodes by the address of
+the served step (`std::ptr::from_ref(step)`), an identity that holds
+under the documented invariant that the compiled step tree is never
+moved or rebuilt after compile. A structural key, a step index vector
+produced by the same walk the interpreter uses, would keep the
+identity by construction under any future restructuring; noted here
+for the pass that next touches resilience.

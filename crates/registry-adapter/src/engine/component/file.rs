@@ -10,7 +10,13 @@
 //! (camel-4.23.0:components/camel-file/src/main/java/org/apache/camel/component/file/AntPathMatcherFileFilter.java
 //! over
 //! camel-4.23.0:core/camel-util/src/main/java/org/apache/camel/util/AntPathMatcher.java),
-//! sorted by name ascending (the `sortBy` default), limited to
+//! sorted by name ascending (an addition: Camel ships no default
+//! sorter, and the cursor's resume order needs a stable one), hidden
+//! files refused (names beginning with a dot, Camel's own default
+//! posture,
+//! camel-4.23.0:components/camel-file/src/main/java/org/apache/camel/component/file/GenericFileConsumer.java,
+//! `isMatchedHiddenFile`, which also keeps `.camelLock` and editor
+//! backups out of the data), limited to
 //! `maxMessagesPerPoll` candidates, and, when the source declares
 //! `doneFileName`, admitted only while its done file exists
 //! (camel-4.23.0:components/camel-file/src/main/java/org/apache/camel/component/file/FileConsumer.java,
@@ -235,6 +241,12 @@ fn candidates(config: &FileSourceConfig) -> Result<Vec<Candidate>, FileReadFault
         };
         if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
             return Err(FileReadFault::Traversal);
+        }
+        // Hidden files never enter the candidate chain: Camel's default
+        // posture skips dot names before any include or done-file
+        // filter, keeping lock and editor-backup files out of the data.
+        if name.starts_with('.') {
+            continue;
         }
         let path = entry.path();
         if !std::fs::metadata(&path)

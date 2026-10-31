@@ -15,9 +15,17 @@
 //! failure under the accounting thresholds is counted and its piece is
 //! left out of the merged result; the accounting exists to let a split
 //! finish with some pieces failed, and a piece that failed has no body
-//! worth merging. Without the accounting every piece runs and the last
-//! item failure is raised after the split completes, Camel's
-//! newest-first `checkException` (`Splitter.java`).
+//! worth merging. This is a recorded divergence: Camel clears the
+//! failed piece's exception so aggregation proceeds and the piece's
+//! body still joins the aggregate
+//! (camel-4.23.0:core/camel-core-processor/src/main/java/org/apache/camel/processor/Splitter.java,
+//! `shouldContinueOnFailure`); the merged body here omits it. Without
+//! the accounting every piece runs and the last item failure is raised
+//! after the split completes, Camel's newest-first `checkException`
+//! (`Splitter.java`). The `CamelSplitResult` property carries
+//! totalItems, processedItems, and failureCount; Camel's per-item
+//! failures map is dropped for the value-free contract and its
+//! aborted flag is the raised failure itself.
 
 use registry_adapter_core::{AggregationStrategy, ErrorClass, Expression, SplitStep};
 use serde_json::json;

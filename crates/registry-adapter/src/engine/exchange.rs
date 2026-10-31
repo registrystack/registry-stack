@@ -70,7 +70,10 @@ pub const REDELIVERY_COUNTER_HEADER: &str = "camelredeliverycounter";
 pub const REDELIVERY_MAX_COUNTER_HEADER: &str = "camelredeliverymaxcounter";
 /// The header the engine sets to the caught class while a `doCatch`'s
 /// steps run (Camel's `CamelExceptionCaught`, section 8.7); it does not
-/// outlive the catch.
+/// outlive the catch. Two recorded changes from Camel: the slot is a
+/// header here where Camel sets an exchange property, and the value is
+/// the closed error-class name where Camel carries the throwable
+/// itself, the value-free contract.
 pub const EXCEPTION_CAUGHT_HEADER: &str = "camelexceptioncaught";
 
 /// One message: lowercased header names and one JSON body.

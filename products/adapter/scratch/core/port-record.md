@@ -57,9 +57,9 @@ Every remaining `CsvDataFormat` field, with the reason:
 | `format` | The reference format is fixed at `DEFAULT`; a second format (MYSQL, TSV, and cousins) is a new port-table row when a source needs it. The defaults below follow from `DEFAULT`. |
 | `escape`, `escapeDisabled` | `CSVFormat.DEFAULT` escapes a quote with a quote; the bounded decoder keeps the reference behavior and offers no override. |
 | `headerDisabled` | Folded into the complemented `header` boolean. |
-| `allowMissingColumnNames` | A row with fewer columns than the header is a malformed row with a deterministic per-item refusal, never a silent short map. |
+| `allowMissingColumnNames` | Not ported. A row with fewer columns than the header pads its missing members with the empty string, deterministically: a recorded divergence from Camel's `toMap` short map, chosen so a source whose trailing columns are optional still reads. A row with more columns than the header refuses per item. |
 | `ignoreEmptyLines` | Fixed at the `DEFAULT` format behavior Camel's default gives (empty lines are ignored); no source asked for the strict form. |
-| `ignoreSurroundingSpaces` | Subsumed by `trim`, which Commons CSV applies to the same blanks on read. |
+| `ignoreSurroundingSpaces` | Subsumed by `trim`. A recorded divergence sits inside `trim` itself: Commons CSV trims unquoted fields only, the reader trims quoted fields too, so a quoted field carrying meaningful surrounding blanks is stripped where Camel would keep it. |
 | `nullString`, `nullStringDisabled` | Fixed at Camel's default (no null string): an empty field decodes as an empty string and never as null, so empty versus null is deterministic. |
 | `recordSeparator`, `recordSeparatorDisabled` | The reference separators; a bounded reader accepts the platform line endings the file carries and the option buys nothing. |
 | `skipHeaderRecord` | Marshalling only; the decoder never writes CSV. |

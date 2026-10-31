@@ -295,9 +295,11 @@ pub struct FileSourceConfig {
     /// The read lock: `none` (the Camel default) or `changed`
     /// (camel-4.23.0:components/camel-file/src/main/java/org/apache/camel/component/file/GenericFileEndpoint.java,
     /// `readLock`, "none" is the default of the options the read-only
-    /// port keeps).
+    /// port keeps). The reader carries the closed set itself, so a lock
+    /// name outside the pair refuses at the reader and never reaches a
+    /// read.
     #[serde(default)]
-    pub(crate) read_lock: Option<String>,
+    pub(crate) read_lock: Option<ReadLockName>,
     /// The `changed` lock's timeout, in milliseconds (1 to 30000);
     /// camel-4.23.0's `readLockTimeout` field default of 10000. Refused
     /// beside any read lock but `changed`.
@@ -320,6 +322,17 @@ pub struct FileSourceConfig {
 
 fn default_max_messages_per_poll() -> u32 {
     500
+}
+
+/// The read lock's closed name set, as the reader carries it.
+#[cfg_attr(not(feature = "job-file"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub enum ReadLockName {
+    /// No lock: a candidate is read as it stands, Camel's default.
+    None,
+    /// Camel's `changed` lock.
+    Changed,
 }
 
 /// The resolved read lock of one file source.
@@ -352,13 +365,7 @@ impl FileSourceConfig {
     /// `readLockCheckIntervalMilliseconds` beside any lock but
     /// `changed`.
     pub fn read_lock(&self) -> Result<ReadLockKind, String> {
-        let changed = match self.read_lock.as_deref() {
-            None | Some("none") => false,
-            Some("changed") => true,
-            Some(_) => {
-                return Err("the file source readLock names neither none nor changed".to_owned())
-            }
-        };
+        let changed = matches!(self.read_lock, Some(ReadLockName::Changed));
         if !changed
             && (self.read_lock_timeout_milliseconds.is_some()
                 || self.read_lock_check_interval_milliseconds.is_some())
@@ -708,11 +715,12 @@ mod tests {
             stray.read_lock().is_err(),
             "a timeout beside no changed lock refuses"
         );
-        let unknown: FileSourceConfig = serde_json::from_str(
+        // The closed set rides the reader itself: a lock name outside
+        // the pair never reaches a read to be resolved.
+        let unknown: Result<FileSourceConfig, _> = serde_json::from_str(
             r#"{ "directory": "/var/data", "namespace": "exports", "readLock": "rename" }"#,
-        )
-        .expect("the reader carries the members");
-        assert!(unknown.read_lock().is_err(), "rename is not ported");
+        );
+        assert!(unknown.is_err(), "rename is not ported");
     }
 }
 
