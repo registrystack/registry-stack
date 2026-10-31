@@ -90,6 +90,8 @@ sourceRoutes:
   - id: odk-submissions
     scan: ongoing
     nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
     steps:
       - onException:
           exception:
@@ -157,6 +159,8 @@ sourceRoutes:
   - id: odk-repeats
     scan: ongoing
     nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
     steps:
       - onException:
           exception:

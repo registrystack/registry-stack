@@ -77,6 +77,8 @@ sourceRoutes:
   - id: kobo-submissions
     scan: ongoing
     nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
     steps:
       - onException:
           exception:

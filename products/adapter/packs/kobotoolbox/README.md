@@ -76,6 +76,14 @@ The pack is unproved until a controlled deployment confirms each of
 these (CONCEPT 17.7: every behavior that rests on documentation rather
 than a probe is listed as unproved):
 
+The source route declares `edits: rescan` with a one-hour
+`rescanDelaySeconds`: the documentation does not say whether an edited
+submission moves in the API's read order, so the safe declaration is
+that an edit stays behind the position and a periodic rescan re-reads
+from the first page. The probe below settles it; if an edit moves the
+submission past the read position, the declaration changes to `ordered`
+and the rescan cost disappears.
+
 1. `_id` as the item key. Hypothesis from community posts and the
    docs sentence that `_id` is unchanged by edits
    (https://community.kobotoolbox.org/t/submission-id-and-uuid/6370;
