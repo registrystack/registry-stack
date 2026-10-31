@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.profile-endpoint-bound: this artifact set must be refused with
+# exactly adapter.job.profile-endpoint-bound. The profile's maximumResponseBytes is tighter than the ledger endpoint's declared bound, which the source route reaches.
+#
+# The job definition is refused by the job compiler's check_job over the
+# pinned pack beside this file (the workspace itself stays clean):
+#   job check products/adapter/fixtures/corpus/bad/adapter.job.profile-endpoint-bound/job.yaml
+#     --pack products/adapter/fixtures/corpus/bad/adapter.job.profile-endpoint-bound/pack.yaml
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobo-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: sha256:67dda40ffc31f0a57b9941ff83f86b899b682d996209f0ac022f3abe1835696f
+  route: kobo-submissions
+projection:
+  fields:
+    - submission.id
+    - submission.status
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 1048575
+  maximumPageItems: 500
+  maximumPageBytes: 1048575
+  maximumUpstreamCalls: 4
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 500

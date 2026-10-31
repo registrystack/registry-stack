@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# The clean job-mode control: this workspace and the job artifact beside
+# it must pass with zero findings.
+#
+# Check with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/base-job/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:2cb00864792dbf81197c33658fc2645d7aecdf43c7f7eb9298c9940395439b2b
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:ad0b2c2866ed6d3f2d5383bb0a945fe9d438cc630f552fb5e86d711187ccc8da
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

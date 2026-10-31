@@ -1,0 +1,20 @@
+# The workspace the job's checks run over: the profile above, the
+# pinned pack, no facade binding, and no record type, because a job
+# serves no facade operation (CONCEPT 17.1). The pack digest is the
+# sha256 of products/adapter/packs/kobotoolbox/pack.yaml; repin it when
+# the pack changes.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: kobotoolbox-job-example
+  version: "1"
+profile:
+  id: kobotoolbox
+  version: "1"
+  digest: sha256:15129bb4710c44173c066dc8dc1b5edb49c168aa0ef02aa812dada954716218a
+pack:
+  id: kobotoolbox
+  version: "1"
+  digest: sha256:34c7463250f0f235194c3a06cdf3ceddadc3b89f0a0ab5c3daf98741262e28b2
+recordTypes: []
+bindings: []

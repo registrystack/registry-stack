@@ -18,7 +18,7 @@
 //! client will.
 
 use http::{HeaderName, HeaderValue};
-use registry_adapter::auth::{
+use registry_adapter::engine::auth::{
     ProtectedText, TokenClientAuthentication, TokenRequest, TokenSend, TokenWire, TransportFailure,
     TOKEN_REQUEST_ACCEPT, TOKEN_REQUEST_CONTENT_TYPE,
 };

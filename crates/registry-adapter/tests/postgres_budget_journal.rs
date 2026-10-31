@@ -9,13 +9,15 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 #[path = "support/served/mod.rs"]
 mod served_harness;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{run_route_within, EndpointRuntime, RouteContext, RouteTable};
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
+    run_route_within, EndpointRuntime, RouteContext, RouteTable,
+};
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, AuditRetention, Cidr, ComponentKind, Endpoint, EndpointAuthentication,
-    EndpointBinding, ErrorClass, RuntimeCredential, Step,
+    AdapterEndpointBindings, AdapterRuntimeConfig, AuditRetention, Cidr, ComponentKind, Endpoint,
+    EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::{
@@ -134,7 +136,7 @@ async fn the_kernel_stops_before_a_send_over_the_call_budget() {
         operation_name: None,
         variables: None,
     };
-    let config = AdapterRuntimeConfig {
+    let config = AdapterEndpointBindings {
         id: LocalId::new("budget-runtime").expect("runtime id"),
         endpoints: UniqueIdList::new(vec![EndpointBinding {
             endpoint: ExternalId::new("source").expect("endpoint id"),
@@ -152,28 +154,6 @@ async fn the_kernel_stops_before_a_send_over_the_call_budget() {
         ])
         .expect("one CIDR"),
         outbound_tls: None,
-        listener: serde_json::from_value(json!({"bind": "127.0.0.1:8080"})).expect("listener"),
-        database: serde_json::from_value(json!({
-            "runtimeUrlRef": "secret:env/BUDGET_TEST_DB",
-            "migrationUrlRef": "secret:env/BUDGET_TEST_DB"
-        }))
-        .expect("database"),
-        oidc: serde_json::from_value(json!({
-            "issuer": "https://issuer.example.invalid",
-            "audience": "budget-tests"
-        }))
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(
-            vec![ExternalId::new("budget-client").expect("client id")],
-        )
-        .expect("one client"),
-        audit: AuditRetention {
-            retention_days: BoundedU32::new(90).expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     };
     let resolver =
         SecretResolver::new([SecretProvider::Environment], "").expect("the resolver builds");
@@ -192,6 +172,7 @@ async fn the_kernel_stops_before_a_send_over_the_call_budget() {
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 1,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
 
     let outcome = run_route_within(

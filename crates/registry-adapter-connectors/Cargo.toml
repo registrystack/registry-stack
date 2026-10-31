@@ -1,0 +1,46 @@
+[package]
+name = "registry-adapter-connectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Stack Adapter parked BReg connector over the maintained client."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The BReg connector is compiled only when named. The feature is off by
+# default: no facade binary and no job path links this crate, a build
+# without the feature carries no product client, and only
+# registry-breg-client is admitted while the crate is parked. The
+# connector needs a runtime to run its client's async exchanges under the
+# synchronous operation contract, so the feature carries the smallest
+# tokio runtime slice.
+breg = ["dep:registry-breg-client", "dep:tokio"]
+
+[dependencies]
+registry-adapter-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["rt"], optional = true }
+registry-breg-client = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sha2.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+reqwest.workspace = true
+serde_norway.workspace = true
+tempfile.workspace = true
+tokio-postgres.workspace = true
+url.workspace = true

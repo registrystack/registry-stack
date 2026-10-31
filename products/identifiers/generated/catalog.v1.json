@@ -4182,7 +4182,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "2cb1516f0600f74f9631e26dbc18ead937cf8f99f45ce63b2d0cbce70ff0faba"
+        "sha256": "1253b93fadc0e0a9ad3c824a86626287af8b5483505d52bdfee2c26c7dc596b9"
       },
       "artifact": {
         "path": "products/adapter/schemas/effective-contract.v1alpha1.schema.json",
@@ -4200,11 +4200,29 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "2cb1516f0600f74f9631e26dbc18ead937cf8f99f45ce63b2d0cbce70ff0faba"
+        "sha256": "1253b93fadc0e0a9ad3c824a86626287af8b5483505d52bdfee2c26c7dc596b9"
       },
       "artifact": {
         "path": "products/adapter/schemas/fixture.v1alpha1.schema.json",
         "sha256": "7dad7b4b386158cd5694c965522713a627f2ffd37409ecf703366eca554b284c",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "adapter",
+      "title": "Registry Adapter ingestion job",
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema.",
+      "source": {
+        "path": "crates/registry-adapterctl/src/schemas.rs",
+        "sha256": "1253b93fadc0e0a9ad3c824a86626287af8b5483505d52bdfee2c26c7dc596b9"
+      },
+      "artifact": {
+        "path": "products/adapter/schemas/job.v1alpha1.schema.json",
+        "sha256": "eee32c7f92a70cbb49739156d9db90664438822bc7428b897d6a3fbae2a65e4a",
         "mediaType": "application/schema+json"
       }
     },
@@ -4218,11 +4236,11 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "2cb1516f0600f74f9631e26dbc18ead937cf8f99f45ce63b2d0cbce70ff0faba"
+        "sha256": "1253b93fadc0e0a9ad3c824a86626287af8b5483505d52bdfee2c26c7dc596b9"
       },
       "artifact": {
         "path": "products/adapter/schemas/pack.v1alpha1.schema.json",
-        "sha256": "cbc18fb48f5b29957fbd2f95c762eb0ad2f7e271c2d8e6ba37eb6c574cac2c78",
+        "sha256": "9483c04f956125129ada9cc306b5a24e2cf1446a732f1f82e6fa29f7f2653a13",
         "mediaType": "application/schema+json"
       }
     },
@@ -4236,7 +4254,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "2cb1516f0600f74f9631e26dbc18ead937cf8f99f45ce63b2d0cbce70ff0faba"
+        "sha256": "1253b93fadc0e0a9ad3c824a86626287af8b5483505d52bdfee2c26c7dc596b9"
       },
       "artifact": {
         "path": "products/adapter/schemas/profile.v1alpha1.schema.json",
@@ -4254,7 +4272,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "2cb1516f0600f74f9631e26dbc18ead937cf8f99f45ce63b2d0cbce70ff0faba"
+        "sha256": "1253b93fadc0e0a9ad3c824a86626287af8b5483505d52bdfee2c26c7dc596b9"
       },
       "artifact": {
         "path": "products/adapter/schemas/project.v1alpha1.schema.json",
@@ -4272,7 +4290,7 @@
       "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema.",
       "source": {
         "path": "crates/registry-adapterctl/src/schemas.rs",
-        "sha256": "2cb1516f0600f74f9631e26dbc18ead937cf8f99f45ce63b2d0cbce70ff0faba"
+        "sha256": "1253b93fadc0e0a9ad3c824a86626287af8b5483505d52bdfee2c26c7dc596b9"
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",

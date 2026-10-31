@@ -1,0 +1,42 @@
+# The odk-central example job deployment's runtime configuration, in
+# the example form: every secret is a reference into the operator's
+# provider, never a value. A job runtime document carries the endpoint
+# bindings alone beside its own blocks: no listener, no facade
+# database, no OIDC issuer, no admitted clients, and no audit
+# retention, which the facade's runtime document alone carries
+# (CONCEPT 10.2, 17).
+#
+# The deployment-owned scoping lives in the base URL: the endpoint
+# binding pins the origin plus the base path, and the pack's sends stay
+# under it (CONCEPT 8.11.5). Bind `odk-odata` to the entity-set URL of
+# the deployment's own form - origin, /v1/projects/<project
+# id>/forms/<form id>.svc/Submissions (or the repeat entity set for the
+# odk-repeats sketch), no trailing slash; the pack's `path: /` lands on
+# the entity set. The project id and form id below are obviously
+# synthetic stand-ins.
+#
+# The `store` block names the item table's connection reference, the
+# job host's own block of this document; the store runs its migrations
+# on the same connection it serves from, so it carries no separate
+# migration member.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: odk-central-job-example
+endpoints:
+  - endpoint: odk-odata
+    baseUrl: https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/Submissions
+    credential:
+      type: basic
+      usernameRef: secret:env/ODK_EMAIL
+      passwordRef: secret:env/ODK_PASSWORD
+# A deployment whose source presents a private CA declares it under
+# outboundTls.trustProfiles and names the profile on the endpoint
+# binding; the example trusts the system roots, so the file resolves
+# wherever the example is checked.
+allowedPrivateCidrs:
+  # The private ranges this deployment may call upstream. The example
+  # range stands in for the deployment's own; private endpoints stay
+  # refused unless their range is listed here.
+  - 10.0.0.0/8
+store:
+  runtimeUrlRef: secret:env/ADAPTER_JOB_DB

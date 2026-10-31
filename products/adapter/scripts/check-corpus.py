@@ -44,15 +44,19 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CORPUS = REPO_ROOT / "products" / "adapter" / "fixtures" / "corpus"
 
 #: The owning registries of the codes a corpus refusal can carry: the
-#: authoring diagnostics catalog of the core crate and the platform YAML
-#: reader's code catalog.
+#: authoring diagnostics catalog of the core crate, the ingestion-job
+#: code catalog beside it (job.rs, same arm shape), and the platform
+#: YAML reader's code catalog.
 AUTHORING_REGISTRY = (
     REPO_ROOT / "crates" / "registry-adapter-core" / "src" / "diagnostics.rs"
+)
+JOB_REGISTRY = (
+    REPO_ROOT / "crates" / "registry-adapter-core" / "src" / "job.rs"
 )
 READER_REGISTRY = (
     REPO_ROOT / "crates" / "registry-platform-yaml" / "src" / "messages.rs"
 )
-REGISTRIES = (AUTHORING_REGISTRY, READER_REGISTRY)
+REGISTRIES = (AUTHORING_REGISTRY, JOB_REGISTRY, READER_REGISTRY)
 
 #: A registered code as a quoted literal: dot-separated lowercase kebab
 #: segments, at least two. The inner dots must be matched: a scan whose
@@ -86,6 +90,11 @@ def authoring_codes(source: str | None = None) -> set[str]:
 def registered_codes() -> set[str]:
     """The codes the owning registries register, read live."""
     codes = authoring_codes()
+    # The job catalog holds the same arm shape without the artifact
+    # sentinel the diagnostics catalog slices between; every arm in it is
+    # a registry member (its tests live outside the file).
+    job_source = JOB_REGISTRY.read_text(encoding="utf-8")
+    codes.update(AUTHORING_CODE.findall(job_source))
     codes.update(CODE.findall(READER_REGISTRY.read_text(encoding="utf-8")))
     return codes
 

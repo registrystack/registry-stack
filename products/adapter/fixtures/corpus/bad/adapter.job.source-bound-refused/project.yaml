@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.source-bound-refused: this artifact set must be refused with
+# exactly adapter.job.source-bound-refused. The binding names the source route id kobo-submissions (it co-fires adapter.project.unknown-route, whose condition is the strict superset here).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.source-bound-refused/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:6aca2f3c426a965f69a52c7d66ed3c8ba9b204b8b5aebfbf8eb000f10d332dac
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:9ac828e0c22fdb9efa7423304f758349a36d901d493d0cc7a4d5f0f55d428bba
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: kobo-submissions
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

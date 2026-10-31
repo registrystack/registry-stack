@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use registry_adapter::replay;
+use registry_adapter::replay_serve as replay;
 use registry_adapter_core::{
     AdapterFixture, AdapterPack, AdapterProfile, AdapterProject, ADAPTER_FIXTURE_API_VERSION,
     ADAPTER_FIXTURE_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION,

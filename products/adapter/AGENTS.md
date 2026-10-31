@@ -19,6 +19,7 @@ verification scripts. Read the workspace `AGENTS.md`, this file,
 | `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks; no I/O (it depends on `registry-platform-httputil` only for its pure header predicates and bounds) |
 | `crates/registry-adapter` | Adapter runtime: the governed facade, the Camel-port engine (exchange, routes, EIP processors, components), the security surface, the audit journal, and the idempotency store |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
+| `crates/registry-adapter-connectors` | The parked BReg connector over `registry-breg-client`, behind an off-by-default cargo feature; linked by no facade binary and no job path while the governed-ingestion delivery design is decided. The dependency gate names exactly what it may reach |
 | `products/adapter/` | `README.md`, `CONCEPT.md`, schemas, profiles, packs, examples, fixtures (including the source-shape fixtures and the bad-authoring corpus), and product scripts |
 
 `CONCEPT.md` section 8.1 fixes the platform reuse: the runtime reaches
@@ -31,6 +32,12 @@ generic primitives under `throttle`, `circuitBreaker`, and redelivery live in
 processors and the redelivery loop stay here. This program changes no
 Evidence crate; its other platform edits are format registration in
 `products/platform/` and additive constructors accepted in review.
+`[ingestion]` The one exception to "never another product's protocol
+types" is the connector crate above: it reaches the maintained product
+clients only, never a product runtime, CLI, or database crate, and
+`products/adapter/scripts/check_dependency_direction.py` enforces that
+boundary mechanically (`CONCEPT.md` section 17.5). No facade binary and
+neither engine crate links the connector crate or any product client.
 
 ## Gates
 
@@ -40,6 +47,7 @@ target directory for `<target-dir>`.
 
 ```bash
 products/adapter/scripts/check-contracts.sh
+products/adapter/scripts/check_dependency_direction.py
 products/adapter/scripts/test-postgres.sh
 ```
 

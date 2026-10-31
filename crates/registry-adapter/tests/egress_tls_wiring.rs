@@ -15,10 +15,10 @@
 
 #![cfg(feature = "postgres-test")]
 
-use registry_adapter::auth::{
+use registry_adapter::engine::auth::{
     AuthError, ClientAssertion, ClientAssertionSigner, ProtectedText, TokenBudget,
 };
-use registry_adapter::egress::{Egress, EgressError, OkStatusCodeRanges, SendShape};
+use registry_adapter::engine::egress::{Egress, EgressError, OkStatusCodeRanges, SendShape};
 use registry_adapter_core::{
     AnonymousHttpsAcknowledgement, ComponentKind, CredentialPlacement, Endpoint,
     EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential,
@@ -258,8 +258,8 @@ fn header<'a>(request: &'a RecordedRequest, name: &str) -> Option<&'a str> {
 fn tls_config(
     binding: EndpointBinding,
     bundle_path: &std::path::Path,
-) -> registry_adapter_core::AdapterRuntimeConfig {
-    registry_adapter_core::AdapterRuntimeConfig {
+) -> registry_adapter_core::AdapterEndpointBindings {
+    registry_adapter_core::AdapterEndpointBindings {
         id: LocalId::new("tls-deployment").expect("deployment id"),
         endpoints: registry_platform_yaml::UniqueIdList::new(vec![binding]).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(Vec::new()).expect("cidrs"),
@@ -271,28 +271,6 @@ fn tls_config(
                 },
             )]),
         }),
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/TLS_C4B_DB_RUNTIME",
-                "migrationUrlRef": "secret:env/TLS_C4B_DB_MIGRATION"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "tls" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("tls-client").expect("client")])
-            .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 
@@ -416,7 +394,7 @@ async fn acknowledged_anonymous_https_sends_no_authentication_header() {
         .expect("none authorization succeeds");
     assert!(credential.is_none());
     bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -482,7 +460,7 @@ async fn the_right_ca_completes_the_token_and_data_sends_over_tls() {
     let credential = credential.expect("an oauth2 kind produces a header").header;
 
     let reply = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -557,7 +535,7 @@ async fn the_wrong_ca_completes_neither_handshake() {
         .expect("a basic kind resolves its pair");
     let credential = credential.expect("a basic kind produces a header").header;
     let error = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -614,7 +592,7 @@ async fn the_wrong_ca_completes_neither_handshake() {
         .await
         .expect_err("the acquisition fails inside the handshake");
     match &error {
-        AuthError::Token(registry_adapter::auth::TokenFault::Transport { kind }) => {
+        AuthError::Token(registry_adapter::engine::auth::TokenFault::Transport { kind }) => {
             assert_eq!(
                 kind.kind(),
                 "connect",

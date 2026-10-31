@@ -203,7 +203,7 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     let mut writes_simulated = 0;
     for (fixture_index, fixture) in fixtures.iter().enumerate() {
         for (entry_index, entry) in fixture.entries.iter().enumerate() {
-            let actual = match runtime.block_on(registry_adapter::replay::run(
+            let actual = match runtime.block_on(registry_adapter::replay_serve::run(
                 &project,
                 &profile,
                 &pack,
@@ -222,7 +222,9 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
                     continue;
                 }
             };
-            if actual.write_durability == registry_adapter::replay::ReplayDurability::Simulated {
+            if actual.write_durability
+                == registry_adapter::replay_serve::ReplayDurability::Simulated
+            {
                 writes_simulated += 1;
             }
             if let Some(member) = facade_mismatch(&actual, &entry.expected) {
@@ -257,7 +259,7 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
 }
 
 fn facade_mismatch(
-    actual: &registry_adapter::replay::ReplayFacade,
+    actual: &registry_adapter::replay_serve::ReplayFacade,
     expected: &ExpectedFacade,
 ) -> Option<&'static str> {
     match expected {

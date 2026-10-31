@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real ODK Central
+# server): repeat-table sketch: one short page of a repeat entity set, keys <parent>/<position>, revision optional. The upstream shape follows the documented Central
+# OData page (https://docs.getodk.org/central-api-odata-endpoints/).
+# Every value is a made-up stand-in. The entry shape is PROVISIONAL:
+# the maintained AdapterFixture artifact is facade-shaped (a profile
+# operation per entry), which a job route does not have, so this suite
+# keeps the stable envelope and carries the job replay contract in a
+# documented form until the engine stream's job compiler defines the
+# job-mode fixture format.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: odk-central-repeats-page
+pack: odk-central
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://docs.getodk.org/central-api-odata-endpoints/
+intercepts:
+- type: endpoint
+  endpoint: odk-odata
+entries:
+- jobRun:
+    cursor: null
+  upstream:
+  - request:
+      endpoint: odk-odata
+      method: GET
+      path: /
+      query: '%24count=true&%24top=100'
+    response:
+      status: 200
+      body:
+        value:
+        - &id001
+          __id: 00000000-9abc-2468-be14-48c048c048c0
+          __parent-id: 76543210-0000-9abc-2468-be147ad0369c
+          child_name: Fixture Child One
+          child_age: 0
+          __system:
+            updatedAt: '2026-08-20T07:00:00.000Z'
+        - &id002
+          __id: 9abcdef0-2468-be14-48c0-d27c16b05af4
+          __parent-id: 00000000-9abc-2468-be14-48c048c048c0
+          child_name: Fixture Child Two
+          child_age: 1
+        - &id003
+          __id: 2468ace0-be14-48c0-d27c-6c28e4a06c28
+          __parent-id: 9abcdef0-2468-be14-48c0-d27c16b05af4
+          child_name: Fixture Child Three
+          child_age: 2
+          __system:
+            updatedAt: '2026-08-22T07:02:00.000Z'
+        '@odata.count': 3
+  expected:
+    type: page
+    page:
+      items:
+      - key: 76543210-0000-9abc-2468-be147ad0369c/0
+        value: *id001
+        revision: '2026-08-20T07:00:00.000Z'
+      - key: 00000000-9abc-2468-be14-48c048c048c0/1
+        value: *id002
+      - key: 9abcdef0-2468-be14-48c0-d27c16b05af4/2
+        value: *id003
+        revision: '2026-08-22T07:02:00.000Z'

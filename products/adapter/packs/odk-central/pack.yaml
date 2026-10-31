@@ -1,0 +1,238 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# The odk-central pack: ODK Central submission acquisition for the
+# governed-ingestion job mode over the Central OData endpoints, two
+# source routes, one page per run (CONCEPT 17.1 and 17.2). Unproved
+# state, stated plainly: no ODK Central server has been reached. Every
+# upstream shape here is synthesized from the published documentation
+# (https://docs.getodk.org/central-api-odata-endpoints/ and
+# https://docs.getodk.org/central-api-authentication/), and every
+# fixture beside this pack is synthetic and `documented`, never
+# `captured`. `testedVersions` is empty on purpose: it lists versions a
+# pack was exercised against, and none was. The Central documentation
+# names feature versions (the `$skiptoken` nextLink since v2023.4,
+# `$orderby` since v2024.1) but pins no server version this pack was
+# run against; the acceptance row of CONCEPT 17.7 lists every behavior
+# resting on documentation as unproved, and the pack README carries the
+# probe questions.
+#
+# What the pack covers: the Submissions entity set of one form's OData
+# service (`GET /v1/projects/{projectId}/forms/{xmlFormId}.svc/Submissions`)
+# and, as a sketch, one repeat entity set (Central exposes repeats as
+# separate entity sets such as `Submissions.children.child`). With
+# `$top` the reply carries `@odata.nextLink`, which since Central
+# v2023.4 holds a `$skiptoken` opaque cursor; the pack hands the link
+# on as written and the next run sends it through the engine's
+# origin-pinned link rules (CONCEPT 8.11.5), never a reparse. No
+# `$expand`, no `$filter`, no `$select`: one page of one entity set per
+# run, nothing else. No write, patch, or delete endpoint exists in
+# this pack; OData over `http` is read-only here.
+#
+# Deployment scoping: the project, form, and entity set a job reads are
+# deployment values, and a source route carries no template
+# parameters. The deployment-owned slot is the endpoint binding's
+# `baseUrl`: the engine pins the origin plus its base path (CONCEPT
+# 8.11.5) and every send stays under it, so the runtime config binds
+# `odk-odata` to the entity-set URL of the deployment's own form (see
+# products/adapter/examples/odk-central-job/runtime.example.yaml) and
+# this pack sends `path: /` for the first page. A `@odata.nextLink`
+# whose path equals or sits under that base path passes the pin
+# (`is_under` in the engine's link rules); a Central nextLink carries
+# the entity-set path itself, so the pin holds. If the job compiler
+# grows a parameters block on the job definition, these bindings
+# should move there.
+#
+# Authentication (cited choice): Central accepts Basic auth over
+# HTTPS - its own docs call it "allowed, but strongly discouraged"
+# because every request re-verifies the password
+# (https://docs.getodk.org/central-api-authentication/) - and bearer
+# session tokens minted by `POST /v1/sessions`, expiring by default
+# after 24 hours. An endpoint declares one kind, so this pack declares
+# `basic`. The session-token alternative needs a credential kind that
+# owns the session exchange (mint once, carry `Authorization: Bearer`,
+# re-mint on expiry); a `static-authorization` pin carries one static
+# value and a 24-hour session token is not static, so the honest
+# statement is: Basic today, a session-token note for the engine's
+# credential ladder, and the deployment's TLS termination stays
+# mandatory either way. Central answers 401 without a
+# `WWW-Authenticate` challenge; the engine's authentication plan
+# raises the uncatchable `credential.rejected` for a refused Basic
+# credential before any route step sees it.
+#
+# Item mapping (probe-gated, see the pack README): key = the entity's
+# `__id` (the documented OData key, mapped by Central's own field
+# table to the submission `instanceId`), revision =
+# `__system/updatedAt` (hypothesis: changes on edit), value = the
+# entity object as returned. The repeat sketch composes its key as the
+# hypothesized `__parent-id` plus the absolute row position, and the
+# README records the semantics question that composition rests on.
+#
+# Error clauses: as on kobotoolbox, the 401 answer never reaches the
+# route, and the transport faults redeliver once. A GET is safe to
+# repeat. Every other error propagates as its own class.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: odk-central
+version: "1"
+testedVersions: []
+endpoints:
+  - id: odk-odata
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    operations:
+      - id: submissions-page
+      - id: repeats-page
+    testedVersions: []
+sourceRoutes:
+  - id: odk-submissions
+    scan: ongoing
+    nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      # The position this run fetches: the engine restores the job
+      # cursor into the AdapterJobCursor property, absent on the first
+      # run (CONCEPT 17.2). A cursor here carries the source's own
+      # `@odata.nextLink`; scripts/cursor.rhai reads it.
+      - setProperty:
+          name: odkNextLink
+          value:
+            rhai:
+              file: scripts/cursor.rhai
+              entrypoint: seed_next_link
+      # Two sends, one per run shape: a continuation follows the
+      # cursor's nextLink as an origin-pinned link (CONCEPT 8.11.5;
+      # exactly one of path and httpUri, and no query beside an
+      # httpUri), the first run opens the entity set with the fixed
+      # page size. The link is parsed once by the engine and sent as
+      # written.
+      - choice:
+          when:
+            - rhai:
+                file: scripts/has-next-link.rhai
+                entrypoint: has_next_link
+              steps:
+                - to:
+                    uri: http:odk-odata
+                    parameters:
+                      httpMethod: GET
+                      httpUri:
+                        exchangeProperty: odkNextLink
+                      operation: submissions-page
+          otherwise:
+            steps:
+              - to:
+                  uri: http:odk-odata
+                  parameters:
+                    httpMethod: GET
+                    path: /
+                    operation: submissions-page
+                    query:
+                      $count:
+                        constant: "true"
+                      # The fixed page size: the documented example
+                      # size, not a server bound. scripts/shape-page.rhai
+                      # does not repeat this constant: the continue
+                      # signal is the reply's @odata.nextLink, never a
+                      # fullness test.
+                      $top:
+                        constant: "100"
+      # The item page: one F5 item per entity, the nextLink cursor
+      # while the reply carries one, no cursor at the end
+      # (scripts/shape-page.rhai). This body is the whole route
+      # output; the job entry validates it against the item contract
+      # and the job profile (CONCEPT 17.2).
+      - setBody:
+          rhai:
+            file: scripts/shape-page.rhai
+            entrypoint: shape_page
+  - id: odk-repeats
+    scan: ongoing
+    nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      # The repeat sketch needs both halves of its cursor: the
+      # accumulated row count its `<parent>/<position>` key composes
+      # from, and the source's nextLink when a continuation follows.
+      - setProperty:
+          name: odkRepeatStart
+          value:
+            rhai:
+              file: scripts/cursor.rhai
+              entrypoint: seed_repeat_offset
+      - setProperty:
+          name: odkNextLink
+          value:
+            rhai:
+              file: scripts/cursor.rhai
+              entrypoint: seed_next_link
+      - choice:
+          when:
+            - rhai:
+                file: scripts/has-next-link.rhai
+                entrypoint: has_next_link
+              steps:
+                - to:
+                    uri: http:odk-odata
+                    parameters:
+                      httpMethod: GET
+                      httpUri:
+                        exchangeProperty: odkNextLink
+                      operation: repeats-page
+          otherwise:
+            steps:
+              - to:
+                  uri: http:odk-odata
+                  parameters:
+                    httpMethod: GET
+                    path: /
+                    operation: repeats-page
+                    query:
+                      $count:
+                        constant: "true"
+                      $top:
+                        constant: "100"
+      - setBody:
+          rhai:
+            file: scripts/shape-repeats.rhai
+            entrypoint: shape_repeats
+scripts:
+  - path: scripts/cursor.rhai
+    digest: sha256:c8794920082507483048c07978fa0f5556cb35d2d1f2c2665b69996a1b388575
+  - path: scripts/has-next-link.rhai
+    digest: sha256:af29393f0c194d0178298192f9225d877cf5f8298ff819ed891bd82e3ecb9042
+  - path: scripts/shape-page.rhai
+    digest: sha256:ce18d6dad2ad154bc8e14e963dfa73ad8b82c127e26d8e9e2feec9e8b8a52aa7
+  - path: scripts/shape-repeats.rhai
+    digest: sha256:a625d8e06f877d73e577013ff51b3a2213ca86b93631304162778ada32397c4a
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - exchangeProperty
+    - rhai
+  eips:
+    - choice
+    - onException
+    - setBody
+    - setProperty
+    - to

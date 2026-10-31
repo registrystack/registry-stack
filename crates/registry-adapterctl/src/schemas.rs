@@ -9,12 +9,19 @@
 
 use clap::Args;
 use registry_adapter_core::{
-    ErrorClass, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND, ADAPTER_FIXTURE_SCHEMA_ID,
-    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PACK_SCHEMA_ID,
-    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_SCHEMA_ID,
-    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_SCHEMA_ID,
-    ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND, ADAPTER_RUNTIME_SCHEMA_ID,
+    AdapterJob, ErrorClass, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND,
+    ADAPTER_FIXTURE_SCHEMA_ID, ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND, ADAPTER_PACK_API_VERSION,
+    ADAPTER_PACK_KIND, ADAPTER_PACK_SCHEMA_ID, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_PROFILE_SCHEMA_ID, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND,
+    ADAPTER_PROJECT_SCHEMA_ID, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    ADAPTER_RUNTIME_SCHEMA_ID,
 };
+
+/// `$id` of the ingestion job's JSON Schema. The core carries the
+/// format's apiVersion and kind; the `$id` follows the platform path
+/// the other Adapter formats' ids spell.
+const ADAPTER_JOB_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json";
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -26,9 +33,11 @@ use crate::report;
 /// the repository root the command runs from.
 pub const DEFAULT_OUTPUT_DIR: &str = "products/adapter/schemas";
 
-/// The static send URIs `SendUri::parse` accepts. Pinned to the parser by
-/// the generator's own test.
-const SEND_URI_PATTERN: &str = "^(direct|http|graphql):.+$";
+/// The static send URIs `SendUri::parse` accepts, the four producer
+/// components and the job sources the authoring checks read through
+/// `pollEnrich` or refuse as sends. Pinned to the parser by the
+/// generator's own test.
+const SEND_URI_PATTERN: &str = "^(direct|http|graphql|postgres|file|sftp):.+$";
 
 #[derive(Debug, Args)]
 pub struct SchemasArgs {
@@ -58,6 +67,14 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
         AdapterFixture, AdapterPack, AdapterProfile, AdapterProject, AdapterRuntimeConfig,
     };
     Ok(vec![
+        Entry {
+            file: "job.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(AdapterJob))?,
+            title: "Registry Adapter ingestion job",
+            schema_id: ADAPTER_JOB_SCHEMA_ID,
+            api_version: ADAPTER_JOB_API_VERSION,
+            kind: ADAPTER_JOB_KIND,
+        },
         Entry {
             file: "profile.v1alpha1.schema.json",
             derived: serde_json::to_value(schemars::schema_for!(AdapterProfile))?,
@@ -135,7 +152,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
     }
     documents.insert(
         "effective-contract.v1alpha1.schema.json",
-        render(&registry_adapter::effective_contract::schema())?,
+        render(&registry_adapter::engine::effective_contract::schema())?,
     );
     Ok(documents)
 }
@@ -254,6 +271,12 @@ fn apply_manual_wire_forms(schema: &mut Value, file: &str) {
         "pack.v1alpha1.schema.json" => {
             rewrite_send_uri(definitions);
             rewrite_error_class(definitions);
+            internally_tagged(
+                definitions
+                    .get_mut("AggregationStrategy")
+                    .expect("the pack schema defines the aggregation strategies"),
+                "type",
+            );
             internally_tagged(
                 definitions
                     .get_mut("EndpointAuthentication")
@@ -516,13 +539,13 @@ mod tests {
     fn documents_are_deterministic_and_versioned() {
         let first = documents().unwrap();
         assert_eq!(documents().unwrap(), first);
-        assert_eq!(first.len(), 6);
+        assert_eq!(first.len(), 7);
         let effective: Value =
             serde_json::from_str(&first["effective-contract.v1alpha1.schema.json"])
                 .expect("the effective contract schema is JSON");
         assert_eq!(
             effective,
-            registry_adapter::effective_contract::schema(),
+            registry_adapter::engine::effective_contract::schema(),
             "the generated file is the runtime's exact projection"
         );
         for (file, contents) in &first {

@@ -111,7 +111,7 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_http_authentication.rs:basic_sends_one_preemptive_header",
         "engine:tests/camel_http_authentication.rs:static_kinds_render_no_marker",
         "engine:tests/camel_http_authentication.rs:a_401_with_an_unparseable_body_is_still_rejected",
-        "engine:src/auth/material.rs:basic_values_encode_and_refuse",
+        "engine:src/engine/auth/material.rs:basic_values_encode_and_refuse",
     ],
     "Languages": [
         "engine:tests/language.rs:a_selector_over_the_length_bound_is_refused",
@@ -128,7 +128,7 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_processors.rs:header_writes_refuse_the_read_only_targets_at_load",
         "engine:tests/camel_processors.rs:remove_header_removes_a_route_set_header",
         "engine:tests/camel_processors.rs:remove_property_removes_a_route_property_and_refuses_facade_names",
-        "engine:src/route.rs:a_route_may_set_its_own_property_and_the_next_continuation_only",
+        "engine:src/engine/route.rs:a_route_may_set_its_own_property_and_the_next_continuation_only",
     ],
     "script": [
         "engine:tests/camel_processors.rs:script_sets_properties_from_a_returned_map_and_leaves_the_body",
@@ -196,13 +196,13 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_split_loop.rs:enrich_refuses_the_unserved_shapes_at_load",
     ],
     "Aggregation strategies": [
-        "engine:src/processor/aggregation/mod.rs:use_latest_and_use_original_pick_their_bodies",
-        "engine:src/processor/aggregation/mod.rs:grouped_body_concatenates_and_skips_null_bodies",
-        "engine:src/processor/aggregation/mod.rs:json_array_append_appends_into_the_named_member_and_refuses_duplicates",
-        "engine:src/processor/aggregation/mod.rs:json_merge_merges_member_wise_into_the_named_member",
-        "engine:src/processor/aggregation/mod.rs:the_properties_map_sets_carries_and_clears",
-        "engine:src/processor/aggregation/mod.rs:a_custom_strategy_returns_its_body_and_properties",
-        "engine:src/processor/aggregation/mod.rs:a_custom_strategy_without_a_body_member_fails",
+        "engine:src/engine/processor/aggregation/mod.rs:use_latest_and_use_original_pick_their_bodies",
+        "engine:src/engine/processor/aggregation/mod.rs:grouped_body_concatenates_and_skips_null_bodies",
+        "engine:src/engine/processor/aggregation/mod.rs:json_array_append_appends_into_the_named_member_and_refuses_duplicates",
+        "engine:src/engine/processor/aggregation/mod.rs:json_merge_merges_member_wise_into_the_named_member",
+        "engine:src/engine/processor/aggregation/mod.rs:the_properties_map_sets_carries_and_clears",
+        "engine:src/engine/processor/aggregation/mod.rs:a_custom_strategy_returns_its_body_and_properties",
+        "engine:src/engine/processor/aggregation/mod.rs:a_custom_strategy_without_a_body_member_fails",
     ],
     "Default error handler": [
         "engine:tests/camel_error_cluster.rs:the_error_handler_shapes_the_attempts_and_clause_reach",
@@ -211,8 +211,8 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_error_cluster.rs:the_route_error_handler_does_not_wrap_a_do_try_block",
     ],
     "Redelivery policy": [
-        "engine:src/processor/redelivery.rs:the_model_policy_maps_onto_the_platform_computation",
-        "engine:src/processor/redelivery.rs:a_draw_stays_inside_the_factor",
+        "engine:src/engine/processor/redelivery.rs:the_model_policy_maps_onto_the_platform_computation",
+        "engine:src/engine/processor/redelivery.rs:a_draw_stays_inside_the_factor",
         "platform:registry-platform-resilience/src/redelivery.rs:the_first_delay_is_the_retry_delay_whatever_the_growth",
         "platform:registry-platform-resilience/src/redelivery.rs:the_delay_grows_only_with_back_off_and_a_multiplier_above_one",
         "platform:registry-platform-resilience/src/redelivery.rs:the_variance_applies_after_the_growth_and_the_cap_bounds_it",
@@ -300,12 +300,12 @@ EVIDENCE: dict[str, list[str]] = {
         "checks.rs:pack_refuses_a_code_map_no_conversion_references",
     ],
     "Exchange, MEP": [
-        "engine:src/exchange.rs:headers_are_case_insensitive",
+        "engine:src/engine/exchange.rs:headers_are_case_insensitive",
         "engine:tests/records_get_served.rs:a_found_record_comes_back_shaped_through_the_served_binary",
     ],
     "Message": [
-        "engine:src/exchange.rs:headers_are_case_insensitive",
-        "engine:src/exchange.rs:script_value_lowercases_headers_and_keeps_a_null_body",
+        "engine:src/engine/exchange.rs:headers_are_case_insensitive",
+        "engine:src/engine/exchange.rs:script_value_lowercases_headers_and_keeps_a_null_body",
     ],
     "REST DSL contract-first": [
         "engine:tests/records_get_served.rs:a_found_record_comes_back_shaped_through_the_served_binary",

@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# The kobotoolbox pack: KoboToolbox submission acquisition for the
+# governed-ingestion job mode, one source route, one page per run
+# (CONCEPT 17.1 and 17.2). Unproved state, stated plainly: no KoboToolbox
+# server has been reached. Every upstream shape here is synthesized from
+# the published documentation, and every fixture beside this pack is
+# synthetic and `documented`, never `captured`. `testedVersions` is
+# empty on purpose: it lists versions a pack was exercised against, and
+# none was. The hosted KoboToolbox documentation carries no server
+# version, so there is no honest version list to write; the acceptance
+# row of CONCEPT 17.7 lists every behavior resting on documentation as
+# unproved, and the pack README carries the probe questions.
+#
+# What the pack covers: the v2 submissions listing, `GET
+# /api/v2/assets/{uid}/data/` (the v1 `/submissions/` name was renamed
+# to `data` in v2; kobotoolbox/docs source/migrating_api.md, published
+# from https://support.kobotoolbox.org/api.html). One route,
+# `kobo-submissions`: one page per run, `limit` fixed at 100 (the
+# documented default page size; a pack never raises a server bound),
+# `start` from the job cursor. The reply envelope is
+# `{count, next, previous, results}`; the route reads `results` only and
+# never follows the reply's `next` URL, because the cursor is this
+# pack's own `{offset}` object and paging stays origin-pinned by
+# construction.
+#
+# Deployment scoping: the asset (form) a job reads is a deployment
+# value, and a source route carries no template parameters. The
+# deployment-owned slot is the endpoint binding's `baseUrl`: the engine
+# pins the origin plus its base path (CONCEPT 8.11.5) and every send
+# stays under it, so the runtime config binds `kobo-api` to the data
+# URL of the deployment's own asset (see
+# products/adapter/examples/kobotoolbox-job/runtime.example.yaml) and
+# this pack sends `path: /`, which lands on the documented trailing
+# slash. If the job compiler grows a parameters block on the job
+# definition, these bindings should move there.
+#
+# Authentication (cited choice): KoboToolbox API requests authenticate
+# with an API token over `Authorization: Token <token>`
+# (kobotoolbox/docs source/migrating_api.md) or with Basic auth over
+# TLS (the same documentation retrieves the token with
+# `curl -u username:password`). An endpoint declares one kind, so this
+# pack declares `basic`; a deployment that prefers the token swaps the
+# kind to `static-authorization` with `scheme: Token` and binds
+# tokenRef in the runtime config. Both sides of the kind match must
+# move together. The endpoint declares no request or response header
+# allowlists: the documented data read consumes no header the engine
+# would copy, so the engine sends and copies nothing beyond its own.
+#
+# Item mapping (probe-gated, see the pack README): key = `_id` as
+# text, revision = `_uuid`, value = the submission object as returned.
+# `_validation_status` never appears in any step; it may pass through
+# only inside `value`. No write, patch, or delete endpoint exists in
+# this pack.
+#
+# Error clauses: the 401 answer never reaches the route - the engine's
+# authentication plan raises the uncatchable `credential.rejected` for
+# a refused Basic credential - so the pack adds no clause for it. The
+# transport faults redeliver once, like the dhis2-tracker reads; a GET
+# is safe to repeat. Every other error propagates as its own class.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: kobotoolbox
+version: "1"
+testedVersions: []
+endpoints:
+  - id: kobo-api
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    operations:
+      - id: submissions-page
+    testedVersions: []
+sourceRoutes:
+  - id: kobo-submissions
+    scan: ongoing
+    nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      # The offset this run fetches: the engine restores the job cursor
+      # into the AdapterJobCursor property, absent on the first run
+      # (CONCEPT 17.2); scripts/seed-offset.rhai turns that into the
+      # Kobo `start` value.
+      - setProperty:
+          name: koboStart
+          value:
+            rhai:
+              file: scripts/seed-offset.rhai
+              entrypoint: seed_offset
+      - to:
+          uri: http:kobo-api
+          parameters:
+            httpMethod: GET
+            path: /
+            operation: submissions-page
+            query:
+              format:
+                constant: json
+              # The fixed page size: the documented default page size of
+              # the v2 data endpoint. scripts/shape-page.rhai repeats
+              # this constant as the fullness test; the two move
+              # together.
+              limit:
+                constant: "100"
+              start:
+                exchangeProperty: koboStart
+      # The item page: one F5 item per submission, the `{offset}`
+      # cursor while the page was full, no cursor when short or empty
+      # (scripts/shape-page.rhai). This body is the whole route output;
+      # the job entry validates it against the item contract and the
+      # job profile (CONCEPT 17.2).
+      - setBody:
+          rhai:
+            file: scripts/shape-page.rhai
+            entrypoint: shape_page
+scripts:
+  - path: scripts/seed-offset.rhai
+    digest: sha256:bbfca7e32def9f4bc6f152e8d99febbeb090930a1afd104f751ebb5e997d266f
+  - path: scripts/shape-page.rhai
+    digest: sha256:53d5ec547d9cdb6e3426777712c9046ce87aa2bde055bc02f5fbdff27265856e
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - exchangeProperty
+    - rhai
+  eips:
+    - onException
+    - setBody
+    - setProperty
+    - to

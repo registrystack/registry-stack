@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# The kobotoolbox example job: the kobotoolbox pack's kobo-submissions
+# source route, bounded by this profile. One page per run, 100
+# submissions at most, the endpoint's 1 MiB response bound as the
+# profile's response and page bound. The read bounds carry the job
+# profile's documented members at their defaults; no pollEnrich read
+# is in this route, so the file and row bounds stay at the format's
+# widest values.
+#
+# The pack pin is exact (CFG-ID-4): id, version, and the sha256 of the
+# pack document
+# (products/adapter/packs/kobotoolbox/pack.yaml). If the pack changes,
+# repin the digest.
+#
+# What can check this today: nothing. `adapterctl job check` lands in
+# the parallel engine stream; until then this artifact is a reviewed
+# document. The files that check should read: this job.yaml, the
+# pack (pack.yaml with its scripts/), and the runtime config beside
+# this file.
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobotoolbox-submissions-example
+  version: "1"
+source:
+  pack:
+    id: kobotoolbox
+    version: "1"
+    digest: sha256:34c7463250f0f235194c3a06cdf3ceddadc3b89f0a0ab5c3daf98741262e28b2
+  route: kobo-submissions
+projection:
+  fields:
+    - id
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  # One route run: one send, one redelivery at most, well inside the
+  # page deadline.
+  pageDeadlineMilliseconds: 300000
+  # The endpoint declares 1048576; the profile is never tighter than a
+  # bound of an endpoint the source route reaches.
+  maximumResponseBytes: 1048576
+  # The pack's fixed page size.
+  maximumPageItems: 100
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 8
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 100

@@ -2498,9 +2498,12 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-breg", outputs["rust_packages"])
         # bregctl examples uses the SDK's recoverable write-attempt contract.
         self.assertIn("registry-bregctl", outputs["rust_packages"])
+        # The parked adapter connector links the client behind its feature,
+        # so a client change runs the adapter shard beside the BReg
+        # surfaces.
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"breg", "casework", "stack-client", "developer-tools", "mcp"},
+            {"adapter", "breg", "casework", "stack-client", "developer-tools", "mcp"},
         )
 
     def test_registry_record_change_runs_the_breg_client_and_facade(self) -> None:
