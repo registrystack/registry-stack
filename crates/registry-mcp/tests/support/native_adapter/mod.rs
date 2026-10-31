@@ -579,6 +579,8 @@ allowedClients: [{MACHINE_CLIENT}]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90
+idempotency:
+  responseRetentionSeconds: 86400
 cursorKeyRef: secret:env/TEST_CURSOR_KEY
 "#,
             issuer = authorization.issuer(),
