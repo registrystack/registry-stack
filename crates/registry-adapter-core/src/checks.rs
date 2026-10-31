@@ -1340,6 +1340,13 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             .unwrap_or_else(|| format!("/routes/{id}"));
         let steps: &[Step] = steps;
         let mut route_findings = Vec::new();
+        let handler_policy = steps.iter().find_map(|step| match step {
+            Step::ErrorHandler(handler) => handler
+                .default_error_handler
+                .as_ref()
+                .and_then(|handler| handler.redelivery_policy.as_ref()),
+            _ => None,
+        });
         let sends = collect_non_safe_sends(steps, &bodies, &body_prefixes, &prefix, pack);
         walk_steps(steps, &mut |step, path| match step {
             Step::To(to) => {
@@ -1709,18 +1716,21 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         "Carry exactly one of defaultErrorHandler or noErrorHandler.",
                     ));
                 }
-                if let Some(policy) = handler
-                    .default_error_handler
-                    .as_ref()
-                    .and_then(|handler| handler.redelivery_policy.as_ref())
-                {
+                if let Some(handler) = handler.default_error_handler.as_ref() {
                     // A retryWhile only stops redelivery earlier; with no
                     // redeliveries behind it, it could never fire.
-                    if policy.retry_while.is_some() && policy.maximum_redeliveries.get() == 0 {
+                    if handler.retry_while.is_some()
+                        && handler
+                            .redelivery_policy
+                            .as_ref()
+                            .map(|policy| policy.maximum_redeliveries.get())
+                            .unwrap_or(0)
+                            == 0
+                    {
                         route_findings.push(finding(
                             CheckCode::RouteRetryWhileWithoutRedeliveries,
                             &format!("{prefix}/steps{path}"),
-                            "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
+                            "a retryWhile predicate sits on a defaultErrorHandler with maximumRedeliveries 0",
                             "Set maximumRedeliveries above zero, or drop the retryWhile.",
                         ));
                     }
@@ -1755,16 +1765,23 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 ));
             }
             // A retryWhile only stops redelivery earlier; with no
-            // redeliveries behind it, it could never fire.
+            // redeliveries behind it, it could never fire. The
+            // redeliveries behind a clause are its own policy's, or the
+            // route handler's when the clause declares none (section 8.7).
             Step::OnException(clause)
-                if clause.redelivery_policy.as_ref().is_some_and(|policy| {
-                    policy.retry_while.is_some() && policy.maximum_redeliveries.get() == 0
-                }) =>
+                if clause.retry_while.is_some()
+                    && clause
+                        .redelivery_policy
+                        .as_ref()
+                        .or(handler_policy)
+                        .map(|policy| policy.maximum_redeliveries.get())
+                        .unwrap_or(0)
+                        == 0 =>
             {
                 route_findings.push(finding(
                     CheckCode::RouteRetryWhileWithoutRedeliveries,
                     &format!("{prefix}/steps{path}"),
-                    "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
+                    "a retryWhile predicate sits on an onException clause with maximumRedeliveries 0",
                     "Set maximumRedeliveries above zero, or drop the retryWhile.",
                 ));
             }
@@ -2254,21 +2271,26 @@ fn query_key_fault(key: &str) -> Option<&'static str> {
 fn declares_redelivery(steps: &[Step]) -> bool {
     let mut declared = false;
     walk_steps(steps, &mut |step, _| match step {
-        Step::ErrorHandler(handler) => {
-            if let Some(policy) = handler
+        Step::ErrorHandler(handler)
+            if handler
                 .default_error_handler
                 .as_ref()
-                .and_then(|handler| handler.redelivery_policy.as_ref())
-            {
-                if policy.maximum_redeliveries.get() > 0 || policy.retry_while.is_some() {
-                    declared = true;
-                }
-            }
+                .is_some_and(|handler| {
+                    handler
+                        .redelivery_policy
+                        .as_ref()
+                        .is_some_and(|policy| policy.maximum_redeliveries.get() > 0)
+                        || handler.retry_while.is_some()
+                }) =>
+        {
+            declared = true;
         }
         Step::OnException(clause)
-            if clause.redelivery_policy.as_ref().is_some_and(|policy| {
-                policy.maximum_redeliveries.get() > 0 || policy.retry_while.is_some()
-            }) =>
+            if clause
+                .redelivery_policy
+                .as_ref()
+                .is_some_and(|policy| policy.maximum_redeliveries.get() > 0)
+                || clause.retry_while.is_some() =>
         {
             declared = true;
         }
@@ -2817,15 +2839,12 @@ pub fn step_expressions(step: &Step) -> Vec<Expression> {
             }
             expressions
         }
-        Step::OnException(clause) => {
-            let mut expressions = clause.on_when.iter().cloned().collect::<Vec<_>>();
-            if let Some(policy) = &clause.redelivery_policy {
-                if let Some(retry_while) = &policy.retry_while {
-                    expressions.push(retry_while.clone());
-                }
-            }
-            expressions
-        }
+        Step::OnException(clause) => clause
+            .on_when
+            .iter()
+            .chain(clause.retry_while.iter())
+            .cloned()
+            .collect(),
         Step::DoTry(do_try) => do_try
             .do_catch
             .iter()
@@ -2834,8 +2853,7 @@ pub fn step_expressions(step: &Step) -> Vec<Expression> {
         Step::ErrorHandler(handler) => handler
             .default_error_handler
             .as_ref()
-            .and_then(|handler| handler.redelivery_policy.as_ref())
-            .and_then(|policy| policy.retry_while.clone())
+            .and_then(|handler| handler.retry_while.clone())
             .into_iter()
             .collect(),
         _ => Vec::new(),
@@ -5236,6 +5254,7 @@ mod tests {
                     on_when: None,
                     handled: Some(true),
                     continued: None,
+                    retry_while: None,
                     redelivery_policy: None,
                     steps: vec![],
                 })],
@@ -6001,6 +6020,7 @@ mod tests {
             vec![route(ErrorHandlerStep {
                 default_error_handler: Some(DefaultErrorHandler {
                     redelivery_policy: None,
+                    retry_while: None,
                 }),
                 no_error_handler: Some(crate::route::NoErrorHandler {}),
             })],
@@ -6014,6 +6034,7 @@ mod tests {
             vec![route(ErrorHandlerStep {
                 default_error_handler: Some(DefaultErrorHandler {
                     redelivery_policy: None,
+                    retry_while: None,
                 }),
                 no_error_handler: None,
             })],
@@ -6157,6 +6178,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),
@@ -6200,10 +6222,8 @@ mod tests {
                 on_when: None,
                 handled: None,
                 continued: None,
-                redelivery_policy: Some(RedeliveryOptions {
-                    retry_while: Some(rhai("scripts/again.rhai")),
-                    ..Default::default()
-                }),
+                retry_while: Some(rhai("scripts/again.rhai")),
+                redelivery_policy: Some(RedeliveryOptions::default()),
                 steps: vec![],
             }),
             Step::Split(SplitStep {
@@ -6312,6 +6332,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),
@@ -6444,6 +6465,7 @@ mod tests {
                         maximum_redeliveries: BoundedU32::<0, 100>::new(2).expect("redeliveries"),
                         ..Default::default()
                     }),
+                    retry_while: None,
                 }),
                 no_error_handler: None,
             })];
@@ -6629,6 +6651,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),
@@ -6889,6 +6912,7 @@ mod tests {
                     on_when: None,
                     handled: Some(true),
                     continued: None,
+                    retry_while: None,
                     redelivery_policy: None,
                     steps: vec![],
                 })],
@@ -6930,6 +6954,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
+                retry_while: None,
                 redelivery_policy: None,
                 steps: vec![],
             })],
@@ -6956,6 +6981,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
+                retry_while: None,
                 redelivery_policy: None,
                 steps: vec![],
             })],
@@ -7034,10 +7060,8 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
-                redelivery_policy: Some(RedeliveryOptions {
-                    retry_while: Some(rhai("scripts/map.rhai")),
-                    ..Default::default()
-                }),
+                retry_while: Some(rhai("scripts/map.rhai")),
+                redelivery_policy: Some(RedeliveryOptions::default()),
                 steps: vec![],
             })],
         };
@@ -7053,10 +7077,8 @@ mod tests {
             },
             steps: vec![Step::ErrorHandler(ErrorHandlerStep {
                 default_error_handler: Some(DefaultErrorHandler {
-                    redelivery_policy: Some(RedeliveryOptions {
-                        retry_while: Some(rhai("scripts/map.rhai")),
-                        ..Default::default()
-                    }),
+                    redelivery_policy: Some(RedeliveryOptions::default()),
+                    retry_while: Some(rhai("scripts/map.rhai")),
                 }),
                 no_error_handler: None,
             })],
@@ -7080,9 +7102,9 @@ mod tests {
                     on_when: None,
                     handled: Some(true),
                     continued: None,
+                    retry_while: Some(rhai("scripts/map.rhai")),
                     redelivery_policy: Some(RedeliveryOptions {
                         maximum_redeliveries: BoundedU32::<0, 100>::new(2).expect("redeliveries"),
-                        retry_while: Some(rhai("scripts/map.rhai")),
                         ..Default::default()
                     }),
                     steps: vec![],
@@ -7150,6 +7172,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
+                retry_while: None,
                 redelivery_policy: None,
                 steps: vec![],
             })],
@@ -7170,6 +7193,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: Some(true),
+                retry_while: None,
                 redelivery_policy: None,
                 steps: vec![],
             })],
@@ -7211,6 +7235,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
+                retry_while: None,
                 redelivery_policy: None,
                 steps: vec![],
             })],
@@ -7234,6 +7259,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),
@@ -7462,6 +7488,7 @@ mod tests {
             on_when: None,
             handled: None,
             continued: Some(true),
+            retry_while: None,
             redelivery_policy: None,
             steps: vec![to_get("case-api")],
         });
@@ -8127,6 +8154,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),
@@ -8160,6 +8188,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),
@@ -8183,6 +8212,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),
@@ -8215,6 +8245,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: Some(continued),
+                retry_while: None,
                 redelivery_policy: None,
                 steps: vec![to_get("case-api")],
             })
@@ -8293,6 +8324,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
+                retry_while: None,
                 redelivery_policy: Some(RedeliveryOptions {
                     maximum_redeliveries: BoundedU32::<0, 100>::new(2).expect("redeliveries"),
                     ..Default::default()
@@ -9483,6 +9515,7 @@ mod tests {
                                 .expect("redeliveries"),
                             ..Default::default()
                         }),
+                        retry_while: None,
                     }),
                     no_error_handler: None,
                 }),

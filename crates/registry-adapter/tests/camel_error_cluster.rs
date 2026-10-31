@@ -315,19 +315,22 @@ async fn the_clause_policy_governs_its_classes_and_the_handler_the_rest() {
     );
 }
 
-/// `retryWhile` continues redelivery while it holds, stops early when it
-/// does not, and a raising predicate ends the redelivery; the cap stays
-/// `maximumRedeliveries` (section 8.7).
+/// `retryWhile` sits on the clause and the default handler, as in Camel,
+/// never on the redelivery policy (section 8.7). It continues redelivery
+/// while it holds, stops early when it does not, and a raising predicate
+/// ends the redelivery; the cap stays `maximumRedeliveries`. A matched
+/// clause's own predicate governs its classes, the handler's every other
+/// failure, and a clause without its own policy redelivers under the
+/// handler's.
 #[tokio::test]
 async fn retry_while_narrows_redelivery_without_raising_the_cap() {
     // A predicate that does not hold stops before any redelivery.
     let (stopped, requests) = run_over(
         json!([
-            {"errorHandler": {"defaultErrorHandler": {"redeliveryPolicy": {
-                "maximumRedeliveries": 2,
-                "retryDelaySeconds": 1,
-                "retryWhile": {"constant": false}
-            }}}},
+            {"errorHandler": {"defaultErrorHandler": {
+                "retryWhile": {"constant": false},
+                "redeliveryPolicy": {"maximumRedeliveries": 2, "retryDelaySeconds": 1}
+            }}},
             get()
         ]),
         vec![
@@ -344,11 +347,10 @@ async fn retry_while_narrows_redelivery_without_raising_the_cap() {
     // constant that is no boolean is a raising predicate.
     let (raised, requests) = run_over(
         json!([
-            {"errorHandler": {"defaultErrorHandler": {"redeliveryPolicy": {
-                "maximumRedeliveries": 2,
-                "retryDelaySeconds": 1,
-                "retryWhile": {"constant": 1}
-            }}}},
+            {"errorHandler": {"defaultErrorHandler": {
+                "retryWhile": {"constant": 1},
+                "redeliveryPolicy": {"maximumRedeliveries": 2, "retryDelaySeconds": 1}
+            }}},
             get()
         ]),
         vec![
@@ -363,11 +365,10 @@ async fn retry_while_narrows_redelivery_without_raising_the_cap() {
     // With the predicate held by a constant, the cap alone stops it.
     let (capped, requests) = run_over(
         json!([
-            {"errorHandler": {"defaultErrorHandler": {"redeliveryPolicy": {
-                "maximumRedeliveries": 2,
-                "retryDelaySeconds": 1,
-                "retryWhile": {"constant": true}
-            }}}},
+            {"errorHandler": {"defaultErrorHandler": {
+                "retryWhile": {"constant": true},
+                "redeliveryPolicy": {"maximumRedeliveries": 2, "retryDelaySeconds": 1}
+            }}},
             get()
         ]),
         vec![
@@ -379,6 +380,90 @@ async fn retry_while_narrows_redelivery_without_raising_the_cap() {
     .await;
     assert_eq!(failed_class(&capped), "upstream.http");
     assert_eq!(requests, 3, "one attempt plus the two capped redeliveries");
+
+    // The clause's own predicate governs its classes: false stops before
+    // any redelivery, whatever the handler carries.
+    let (clause_stopped, requests) = run_over(
+        json!([
+            {"errorHandler": {"defaultErrorHandler": {
+                "retryWhile": {"constant": true},
+                "redeliveryPolicy": {"maximumRedeliveries": 2, "retryDelaySeconds": 1}
+            }}},
+            {"onException": {
+                "exception": ["upstream"],
+                "retryWhile": {"constant": false},
+                "redeliveryPolicy": {"maximumRedeliveries": 2, "retryDelaySeconds": 1},
+                "handled": true
+            }},
+            get()
+        ]),
+        vec![
+            upstream::Response::json(500, r#"{"boom": true}"#),
+            upstream::Response::json(500, r#"{"boom": true}"#),
+        ],
+    )
+    .await;
+    assert!(clause_stopped.result.is_ok(), "the handled clause ends it");
+    assert_eq!(
+        requests, 1,
+        "the clause's own retryWhile governs its classes"
+    );
+
+    // A clause that carries no predicate does not inherit the handler's:
+    // its redeliveries run to their own cap while the handler's held
+    // predicate would have stopped them.
+    let (clause_capped, requests) = run_over(
+        json!([
+            {"errorHandler": {"defaultErrorHandler": {
+                "retryWhile": {"constant": false},
+                "redeliveryPolicy": {"maximumRedeliveries": 1, "retryDelaySeconds": 1}
+            }}},
+            {"onException": {
+                "exception": ["upstream"],
+                "redeliveryPolicy": {"maximumRedeliveries": 2, "retryDelaySeconds": 1},
+                "handled": true
+            }},
+            get()
+        ]),
+        vec![
+            upstream::Response::json(500, r#"{"boom": true}"#),
+            upstream::Response::json(500, r#"{"boom": true}"#),
+            upstream::Response::json(500, r#"{"boom": true}"#),
+        ],
+    )
+    .await;
+    assert!(clause_capped.result.is_ok(), "the handled clause ends it");
+    assert_eq!(
+        requests, 3,
+        "a clause without its own predicate does not take the handler's"
+    );
+
+    // A clause without its own policy redelivers under the handler's,
+    // with its own predicate in force.
+    let (inherited, requests) = run_over(
+        json!([
+            {"errorHandler": {"defaultErrorHandler": {
+                "redeliveryPolicy": {"maximumRedeliveries": 2, "retryDelaySeconds": 1}
+            }}},
+            {"onException": {
+                "exception": ["upstream"],
+                "retryWhile": {"constant": true},
+                "handled": true
+            }},
+            get()
+        ]),
+        vec![
+            upstream::Response::json(500, r#"{"boom": true}"#),
+            upstream::Response::json(500, r#"{"boom": true}"#),
+            upstream::Response::json(500, r#"{"boom": true}"#),
+        ],
+    )
+    .await;
+    assert!(inherited.result.is_ok(), "the handled clause ends it");
+    assert_eq!(
+        requests, 3,
+        "a clause with no policy of its own redelivers under the handler's"
+    );
 }
 
 /// `handled` ends the exchange with the clause's result and `continued`
@@ -719,13 +804,22 @@ async fn the_cluster_refuses_its_unservable_shapes_at_load() {
     .expect_err("a clause never nests inside a clause");
 
     check_servable(&steps(json!([
-        {"errorHandler": {"defaultErrorHandler": {"redeliveryPolicy": {
-            "maximumRedeliveries": 0,
-            "retryWhile": {"constant": true}
-        }}}},
+        {"errorHandler": {"defaultErrorHandler": {
+            "retryWhile": {"constant": true},
+            "redeliveryPolicy": {"maximumRedeliveries": 0}
+        }}},
         get()
     ])))
     .expect_err("a retryWhile with no redeliveries behind it");
+
+    check_servable(&steps(json!([
+        {"onException": {
+            "exception": ["upstream"],
+            "retryWhile": {"constant": true}
+        }},
+        get()
+    ])))
+    .expect_err("a clause retryWhile with no redeliveries behind it");
 
     check_servable(&steps(json!([
         {"doTry": {"steps": [], "doCatch": [

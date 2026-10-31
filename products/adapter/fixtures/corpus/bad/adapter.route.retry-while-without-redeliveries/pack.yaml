@@ -30,9 +30,8 @@ routeTemplates:
     steps:
       - errorHandler:
           defaultErrorHandler:
-            redeliveryPolicy:
-              retryWhile:
-                jsonpath: "$.retry"
+            retryWhile:
+              jsonpath: "$.retry"
       - to:
           uri: http:cases
           parameters:

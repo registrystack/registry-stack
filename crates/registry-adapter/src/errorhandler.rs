@@ -13,13 +13,14 @@
 //! journaled. Redelivery options: `maximumRedeliveries` (default 0),
 //! `retryDelaySeconds` (default 1 s), `useExponentialBackOff` with
 //! `backOffMultiplier` (default 2), `maximumRetryDelaySeconds` (default
-//! 60 s), collision avoidance, and `retryWhile`, which only stops
-//! redelivery earlier. Redelivery is per failing endpoint send and
+//! 60 s), and collision avoidance. `retryWhile` sits on the clause and
+//! the default handler, as in Camel, and only stops redelivery earlier.
+//! Redelivery is per failing endpoint send and
 //! reaches upstream component sends only, never a `to: direct:` send.
 //! `onException` clauses carry `exception`, `onWhen`, `handled`,
-//! `continued`, redelivery options, and nested steps; an error raised
-//! inside a clause is not handled again and becomes the exchange's
-//! failure.
+//! `continued`, `retryWhile`, redelivery options, and nested steps; an
+//! error raised inside a clause is not handled again and becomes the
+//! exchange's failure.
 //!
 //! The uncatchable, terminal, journaled classes (`budget.exhausted`,
 //! `credential.rejected`, `disclosure.violation`, `egress.refused`,

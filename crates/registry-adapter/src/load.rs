@@ -872,19 +872,13 @@ fn step_expressions(step: &Step) -> Vec<Expression> {
         Step::OnException(clause) => clause
             .on_when
             .iter()
-            .chain(
-                clause
-                    .redelivery_policy
-                    .as_ref()
-                    .and_then(|policy| policy.retry_while.as_ref()),
-            )
+            .chain(clause.retry_while.iter())
             .cloned()
             .collect(),
         Step::ErrorHandler(handler) => handler
             .default_error_handler
             .as_ref()
-            .and_then(|handler| handler.redelivery_policy.as_ref())
-            .and_then(|policy| policy.retry_while.as_ref())
+            .and_then(|handler| handler.retry_while.as_ref())
             .into_iter()
             .cloned()
             .collect(),

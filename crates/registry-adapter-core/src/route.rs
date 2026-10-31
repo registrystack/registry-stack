@@ -788,6 +788,17 @@ pub struct DefaultErrorHandler {
     /// so the error propagates after the first attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redelivery_policy: Option<RedeliveryOptions>,
+    /// Stop redelivering early while this predicate holds (Camel
+    /// `retryWhile`, an option of the default error handler as in
+    /// Camel's `DefaultErrorHandlerDefinition`, not of the redelivery
+    /// policy; section 8.7). Divergence from Camel: the predicate only
+    /// stops redelivery earlier and `maximumRedeliveries` remains the
+    /// hard cap, where Camel lets `retryWhile` override it, so
+    /// `maximumUpstreamCalls` stays a check-time guarantee. The checks
+    /// refuse the predicate when the handler's policy carries no
+    /// redeliveries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_while: Option<Expression>,
 }
 
 /// Camel's `noErrorHandler`. The empty mapping `{}` is the whole variant.
@@ -818,6 +829,18 @@ pub struct OnExceptionStep {
     /// `continued`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued: Option<bool>,
+    /// Stop redelivering early while this predicate holds (Camel
+    /// `retryWhile`, an option of the clause as in Camel's
+    /// `OnExceptionDefinition`, not of the redelivery policy; section
+    /// 8.7). Divergence from Camel: the predicate only stops redelivery
+    /// earlier and `maximumRedeliveries` remains the hard cap, where
+    /// Camel lets `retryWhile` override it, so `maximumUpstreamCalls`
+    /// stays a check-time guarantee. The redeliveries behind it are the
+    /// clause's own policy, or the route handler's when the clause
+    /// declares none; the checks refuse the predicate when neither
+    /// carries any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_while: Option<Expression>,
     /// Redelivery options, as on the error handler, nested under
     /// `redeliveryPolicy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -878,15 +901,6 @@ pub struct RedeliveryOptions {
         skip_serializing_if = "is_default_collision_avoidance_factor"
     )]
     pub collision_avoidance_factor: f64,
-    /// Stop redelivering early while this predicate holds (Camel
-    /// `retryWhile`). Divergence from Camel: the predicate only stops
-    /// redelivery earlier and `maximumRedeliveries` remains the hard cap,
-    /// where Camel lets `retryWhile` override it, so
-    /// `maximumUpstreamCalls` stays a check-time guarantee. The checks
-    /// refuse the predicate together with `maximumRedeliveries` 0, where
-    /// it could never fire.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_while: Option<Expression>,
 }
 
 impl Default for RedeliveryOptions {
@@ -899,7 +913,6 @@ impl Default for RedeliveryOptions {
             maximum_retry_delay_seconds: default_maximum_retry_delay_seconds(),
             use_collision_avoidance: false,
             collision_avoidance_factor: default_collision_avoidance_factor(),
-            retry_while: None,
         }
     }
 }
@@ -1039,7 +1052,6 @@ impl PartialEq for RedeliveryOptions {
             && self.use_collision_avoidance == other.use_collision_avoidance
             && self.collision_avoidance_factor.to_bits()
                 == other.collision_avoidance_factor.to_bits()
-            && self.retry_while == other.retry_while
     }
 }
 
@@ -1054,7 +1066,6 @@ impl std::hash::Hash for RedeliveryOptions {
         self.maximum_retry_delay_seconds.hash(state);
         self.use_collision_avoidance.hash(state);
         self.collision_avoidance_factor.to_bits().hash(state);
-        self.retry_while.hash(state);
     }
 }
 

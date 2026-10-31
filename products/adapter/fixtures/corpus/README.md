@@ -172,7 +172,7 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.route.redelivery-over-non-safe-send` | Redelivery over a POST send whose endpoint operation claims no `idempotentUpstream` | `adapter.route.redelivery-over-non-safe-send` | checks |
 | `adapter.route.uncatchable-clause` | onException names `budget.exhausted` | `adapter.route.uncatchable-clause` | checks |
 | `adapter.route.redelivery-without-upstream-send` | Redelivery declared, no upstream send reachable | `adapter.route.redelivery-without-upstream-send` | checks |
-| `adapter.route.retry-while-without-redeliveries` | `retryWhile` on a policy with `maximumRedeliveries` 0 | `adapter.route.retry-while-without-redeliveries` | checks |
+| `adapter.route.retry-while-without-redeliveries` | `retryWhile` on a handler or clause with `maximumRedeliveries` 0 | `adapter.route.retry-while-without-redeliveries` | checks |
 | `adapter.route.predicate-ambiguous` | `when` clause carries `constant` and `jsonpath` | `adapter.route.predicate-ambiguous` | checks |
 | `adapter.route.predicate-language-required` | `when` clause carries no language key | `adapter.route.predicate-language-required` | checks |
 | `adapter.route.read-unsafe-send` | Read operation's route reaches a POST send whose endpoint claims no `safeUpstream` | `adapter.route.read-unsafe-send` | checks |

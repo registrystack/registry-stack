@@ -105,6 +105,16 @@ pub fn check_servable(steps: &[Step]) -> Result<(), String> {
 }
 
 fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
+    // The redeliveries behind a clause's retryWhile are its own policy's,
+    // or the route handler's when the clause declares none (section 8.7).
+    // Nested bodies serve no errorHandler, so their clauses find none.
+    let handler_policy = steps.iter().find_map(|step| match step {
+        Step::ErrorHandler(handler) => handler
+            .default_error_handler
+            .as_ref()
+            .and_then(|handler| handler.redelivery_policy.as_ref()),
+        _ => None,
+    });
     for step in steps {
         match step {
             Step::To(to) => check_to(to)?,
@@ -251,7 +261,7 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 check_expression("throttle", &throttle.limit)?;
                 check_steps(&throttle.steps, true)?;
             }
-            Step::OnException(clause) if !in_clause => check_clause(clause)?,
+            Step::OnException(clause) if !in_clause => check_clause(clause, handler_policy)?,
             Step::OnException(_) => {
                 return Err("an onException clause is served at route top level only".to_owned())
             }
@@ -259,12 +269,12 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 if in_clause {
                     return Err("an errorHandler step is served at route top level only".to_owned());
                 }
-                if let Some(policy) = handler
-                    .default_error_handler
-                    .as_ref()
-                    .and_then(|handler| handler.redelivery_policy.as_ref())
-                {
-                    check_policy("errorHandler", policy)?;
+                if let Some(handler) = handler.default_error_handler.as_ref() {
+                    check_retry_while(
+                        "errorHandler",
+                        handler.retry_while.as_ref(),
+                        handler.redelivery_policy.as_ref(),
+                    )?;
                 }
             }
             Step::DoTry(block) => {
@@ -376,7 +386,10 @@ fn check_set_property(property: &SetPropertyStep) -> Result<(), String> {
     check_expression("setProperty", &property.value)
 }
 
-fn check_clause(clause: &OnExceptionStep) -> Result<(), String> {
+fn check_clause(
+    clause: &OnExceptionStep,
+    handler_policy: Option<&RedeliveryOptions>,
+) -> Result<(), String> {
     if clause.exception.is_empty() {
         return Err("an onException clause names no exception class".to_owned());
     }
@@ -394,16 +407,31 @@ fn check_clause(clause: &OnExceptionStep) -> Result<(), String> {
     if let Some(expression) = &clause.on_when {
         check_predicate_expression("onWhen", expression)?;
     }
-    if let Some(policy) = &clause.redelivery_policy {
-        check_policy("onException", policy)?;
+    if let Some(expression) = &clause.retry_while {
+        check_predicate_expression("retryWhile", expression)?;
     }
+    check_retry_while(
+        "onException",
+        clause.retry_while.as_ref(),
+        clause.redelivery_policy.as_ref().or(handler_policy),
+    )?;
     check_steps(&clause.steps, true)
 }
 
-/// A policy whose `retryWhile` could never fire, because no redelivery
-/// stands behind it (section 8.7).
-fn check_policy(site: &str, policy: &RedeliveryOptions) -> Result<(), String> {
-    if policy.retry_while.is_some() && policy.maximum_redeliveries.get() == 0 {
+/// A `retryWhile` that could never fire, because no redelivery stands
+/// behind it: the redeliveries are the site's own policy's, or none at
+/// all when the site declares no policy (section 8.7).
+fn check_retry_while(
+    site: &str,
+    retry_while: Option<&Expression>,
+    policy: Option<&RedeliveryOptions>,
+) -> Result<(), String> {
+    if retry_while.is_some()
+        && policy
+            .map(|policy| policy.maximum_redeliveries.get())
+            .unwrap_or(0)
+            == 0
+    {
         return Err(format!(
             "a {site} retryWhile has no redeliveries behind it; raise maximumRedeliveries or drop retryWhile"
         ));
@@ -862,6 +890,13 @@ impl Run<'_, '_> {
                 .and_then(|handler| handler.redelivery_policy.as_ref()),
             _ => None,
         });
+        let handler_retry_while = steps.iter().find_map(|step| match step {
+            Step::ErrorHandler(handler) => handler
+                .default_error_handler
+                .as_ref()
+                .and_then(|handler| handler.retry_while.as_ref()),
+            _ => None,
+        });
         let clauses: Vec<&OnExceptionStep> = if clauses_enabled {
             steps
                 .iter()
@@ -880,7 +915,7 @@ impl Run<'_, '_> {
             let attempted = match step {
                 Step::CircuitBreaker(_) => self.step(step).await,
                 other => {
-                    self.step_with_clauses(other, &clauses, handler_policy)
+                    self.step_with_clauses(other, &clauses, handler_policy, handler_retry_while)
                         .await
                 }
             };
@@ -902,13 +937,16 @@ impl Run<'_, '_> {
     ///
     /// Redelivery reaches only a failing upstream component send
     /// (section 8.7): the matched clause's policy for its classes, the
-    /// handler's for every other failure. `retryWhile` only stops
-    /// redelivery earlier; `maximumRedeliveries` stays the hard cap.
+    /// handler's for every other failure. The `retryWhile` in force
+    /// follows the same split: a matched clause's own predicate governs
+    /// its classes, the handler's governs every other failure. It only
+    /// stops redelivery earlier; `maximumRedeliveries` stays the hard cap.
     async fn step_with_clauses(
         &mut self,
         step: &Step,
         clauses: &[&OnExceptionStep],
         handler_policy: Option<&RedeliveryOptions>,
+        handler_retry_while: Option<&Expression>,
     ) -> Result<Flow, RouteFailure> {
         let mut redeliveries = 0_u32;
         let mut previous_delay: Option<Duration> = None;
@@ -928,9 +966,15 @@ impl Run<'_, '_> {
                 (None, true) => handler_policy,
                 _ => None,
             };
+            // The predicate follows the clause that claimed the failure,
+            // not the site the policy came from (section 8.7).
+            let retry_while = match clause {
+                Some(clause) => clause.retry_while.as_ref(),
+                None => handler_retry_while,
+            };
             if let Some(policy) = policy {
                 if redeliveries < policy.maximum_redeliveries.get()
-                    && self.retry_while_allows(policy)
+                    && self.retry_while_allows(retry_while)
                 {
                     redeliveries += 1;
                     let delay = crate::processor::redelivery::calculate_redelivery_delay(
@@ -991,14 +1035,11 @@ impl Run<'_, '_> {
         }
     }
 
-    /// Whether the policy's `retryWhile` still allows another redelivery:
+    /// Whether the `retryWhile` in force still allows another redelivery:
     /// absent is yes; a predicate that does not hold, or one that raises,
     /// stops the redelivery (section 8.7).
-    fn retry_while_allows(&self, policy: &RedeliveryOptions) -> bool {
-        policy
-            .retry_while
-            .as_ref()
-            .is_none_or(|condition| self.predicate(condition).unwrap_or(false))
+    fn retry_while_allows(&self, retry_while: Option<&Expression>) -> bool {
+        retry_while.is_none_or(|condition| self.predicate(condition).unwrap_or(false))
     }
 
     /// One journal-bound engine event.

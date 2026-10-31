@@ -342,6 +342,10 @@
         "redeliveryPolicy": {
           "$ref": "#/$defs/RedeliveryOptions",
           "description": "The nested redelivery policy; the default carries no redelivery,\nso the error propagates after the first attempt."
+        },
+        "retryWhile": {
+          "$ref": "#/$defs/Expression",
+          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the default error handler as in\nCamel's `DefaultErrorHandlerDefinition`, not of the redelivery\npolicy; section 8.7). Divergence from Camel: the predicate only\nstops redelivery earlier and `maximumRedeliveries` remains the\nhard cap, where Camel lets `retryWhile` override it, so\n`maximumUpstreamCalls` stays a check-time guarantee. The checks\nrefuse the predicate when the handler's policy carries no\nredeliveries."
         }
       },
       "type": "object"
@@ -1007,6 +1011,10 @@
           "$ref": "#/$defs/RedeliveryOptions",
           "description": "Redelivery options, as on the error handler, nested under\n`redeliveryPolicy`."
         },
+        "retryWhile": {
+          "$ref": "#/$defs/Expression",
+          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the clause as in Camel's\n`OnExceptionDefinition`, not of the redelivery policy; section\n8.7). Divergence from Camel: the predicate only stops redelivery\nearlier and `maximumRedeliveries` remains the hard cap, where\nCamel lets `retryWhile` override it, so `maximumUpstreamCalls`\nstays a check-time guarantee. The redeliveries behind it are the\nclause's own policy, or the route handler's when the clause\ndeclares none; the checks refuse the predicate when neither\ncarries any."
+        },
         "steps": {
           "description": "The clause's steps.",
           "items": {
@@ -1082,10 +1090,6 @@
           "maximum": 4294967295,
           "minimum": 1,
           "type": "integer"
-        },
-        "retryWhile": {
-          "$ref": "#/$defs/Expression",
-          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`). Divergence from Camel: the predicate only stops\nredelivery earlier and `maximumRedeliveries` remains the hard cap,\nwhere Camel lets `retryWhile` override it, so\n`maximumUpstreamCalls` stays a check-time guarantee. The checks\nrefuse the predicate together with `maximumRedeliveries` 0, where\nit could never fire."
         },
         "useCollisionAvoidance": {
           "description": "Add collision avoidance jitter (default false).",
