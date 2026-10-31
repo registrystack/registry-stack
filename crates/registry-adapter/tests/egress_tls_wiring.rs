@@ -394,7 +394,7 @@ async fn acknowledged_anonymous_https_sends_no_authentication_header() {
         .expect("none authorization succeeds");
     assert!(credential.is_none());
     bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
