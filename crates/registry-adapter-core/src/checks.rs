@@ -1027,6 +1027,16 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
                 "Reference a digest-pinned query file from the pack inventory.",
             ));
         }
+        if endpoint.component == crate::model::ComponentKind::GraphQl
+            && endpoint.operation_name.is_none()
+        {
+            findings.push(finding(
+                CheckCode::PackGraphQlOperationRequired,
+                &format!("{prefix}/operationName"),
+                "a graphql endpoint names no operation",
+                "Name the operation the endpoint's digest-pinned query file declares.",
+            ));
+        }
         if let EndpointAuthentication::StaticApiKey { header_name } = &endpoint.authentication {
             if !is_header_token(header_name) {
                 findings.push(finding(
@@ -1568,6 +1578,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     "convertBodyTo",
                     convert,
                     &code_map_ids,
+                    &api_key_headers,
                 );
             }
             Step::ConvertHeaderTo(convert) => {
@@ -1577,6 +1588,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     "convertHeaderTo",
                     convert,
                     &code_map_ids,
+                    &api_key_headers,
                 );
             }
             Step::ConvertPropertyTo(convert) => {
@@ -1586,6 +1598,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     "convertPropertyTo",
                     convert,
                     &code_map_ids,
+                    &api_key_headers,
                 );
             }
             Step::Split(split) => {
@@ -1702,6 +1715,34 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                                 "Raise maximumIterations above the count, or lower the count.",
                             ));
                         }
+                    }
+                }
+            }
+            Step::CircuitBreaker(breaker) => {
+                for (member, classes) in [
+                    ("recordException", breaker.record_exception.as_ref()),
+                    ("ignoreException", breaker.ignore_exception.as_ref()),
+                ] {
+                    let Some(classes) = classes else { continue };
+                    let pointer = format!("{prefix}/steps{path}/{member}");
+                    if classes.is_empty() {
+                        route_findings.push(finding(
+                            CheckCode::RouteEmptyExceptionList,
+                            &pointer,
+                            "a circuit-breaker exception filter is empty",
+                            "Remove the filter, or name at least one catchable route error class.",
+                        ));
+                    }
+                    if classes
+                        .iter()
+                        .any(|class| class.is_uncatchable() || class.is_facade())
+                    {
+                        route_findings.push(finding(
+                            CheckCode::RouteCircuitBreakerExceptionClass,
+                            &pointer,
+                            "a circuit-breaker exception filter names a boundary or facade class",
+                            "Name only catchable classes that can arise inside the guarded route steps.",
+                        ));
                     }
                 }
             }
@@ -2057,6 +2098,7 @@ fn push_convert_findings(
     form: &str,
     convert: &crate::route::ConvertStep,
     code_map_ids: &HashSet<&str>,
+    api_key_headers: &HashSet<String>,
 ) {
     let body_form = form == "convertBodyTo";
     if body_form && (convert.name.is_some() || convert.to_name.is_some()) {
@@ -2082,6 +2124,37 @@ fn push_convert_findings(
             "a conversion with toName and no name names no source",
             "Name the source with name; toName only redirects the result.",
         ));
+    }
+    // Apply the setHeader/setProperty reserved-name boundary to both the
+    // source and redirected target. A conversion may neither read nor write
+    // consumer, engine, transport, or credential state through those names.
+    for (member, name) in [
+        ("name", convert.name.as_deref()),
+        ("toName", convert.to_name.as_deref()),
+    ] {
+        let Some(name) = name else { continue };
+        if form == "convertHeaderTo"
+            && (is_route_unwritable_header_name(name)
+                || api_key_headers.contains(&name.to_ascii_lowercase()))
+        {
+            route_findings.push(finding(
+                CheckCode::RouteReservedHeaderName,
+                &format!("{pointer}/{member}"),
+                "the conversion uses a header reserved to the consumer, the engine, the HTTP hop, or an endpoint credential",
+                "Use only route-owned headers as conversion sources and targets.",
+            ));
+        }
+        if form == "convertPropertyTo"
+            && name.starts_with("Adapter")
+            && name != "AdapterNextContinuation"
+        {
+            route_findings.push(finding(
+                CheckCode::RouteReservedPropertyName,
+                &format!("{pointer}/{member}"),
+                "the conversion uses a property reserved to the engine",
+                "Use only route-owned properties as conversion sources and targets; AdapterNextContinuation is the one reserved property a route may use.",
+            ));
+        }
     }
     match convert.code_map_id() {
         Some(id) if code_map_ids.contains(id) => {}
@@ -4414,7 +4487,7 @@ mod tests {
         AdapterFixture, ExpectedFacade, FixtureEntry, FixtureProvenance, Intercept,
         RecordedExchange, RecordedHeaders, RecordedRequest, RecordedResponse,
     };
-    use crate::model::{ComponentKind, HttpMethod, RhaiExpression, SendUri};
+    use crate::model::{ComponentKind, ErrorClass, HttpMethod, RhaiExpression, SendUri};
     use crate::pack::{AdapterPack, Capabilities, CodeMap, Endpoint, EndpointOperation};
     use crate::profile::{PaginationParameters, ParameterizedPart, ProfileOperation};
     use crate::project::{
@@ -5600,6 +5673,24 @@ mod tests {
     }
 
     #[test]
+    fn pack_refuses_a_graphql_endpoint_without_an_operation_name() {
+        let mut endpoint = oauth_endpoint();
+        endpoint.component = ComponentKind::GraphQl;
+        endpoint.query_file = Some("queries/missing.graphql".to_string());
+        endpoint.operation_name = None;
+        let findings = check_pack(&pack_builder(vec![endpoint], vec![]));
+        assert_has(&findings, CheckCode::PackGraphQlOperationRequired);
+        assert_eq!(
+            findings
+                .iter()
+                .find(|finding| finding.code == CheckCode::PackGraphQlOperationRequired.code())
+                .expect("the missing operation is reported")
+                .path,
+            "/endpoints/0/operationName"
+        );
+    }
+
+    #[test]
     fn pack_refuses_an_unpinned_rhai_reference() {
         let route = RouteDefinition {
             id: local("fetch-case"),
@@ -5775,6 +5866,70 @@ mod tests {
                 CheckCode::RouteConvertShape,
             );
         }
+    }
+
+    #[test]
+    fn named_conversions_refuse_reserved_sources_and_targets() {
+        let check = |step: Step| {
+            let route = one_direct_route(vec![step]);
+            let mut pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+            pack.code_maps = UniqueIdList::new(vec![code_map(
+                "statuses",
+                &[("active", serde_json::json!("ACTIVE"))],
+            )])
+            .expect("unique");
+            check_routes(&pack, &project_builder(&pack))
+        };
+        let convert_header = |name: &str, to_name: Option<&str>| {
+            Step::ConvertHeaderTo(ConvertStep {
+                r#type: "codeMap:statuses".to_owned(),
+                name: Some(name.to_owned()),
+                to_name: to_name.map(str::to_owned),
+                mandatory: None,
+            })
+        };
+        let convert_property = |name: &str, to_name: Option<&str>| {
+            Step::ConvertPropertyTo(ConvertStep {
+                r#type: "codeMap:statuses".to_owned(),
+                name: Some(name.to_owned()),
+                to_name: to_name.map(str::to_owned),
+                mandatory: None,
+            })
+        };
+
+        assert_has(
+            &check(convert_header("recordId", None)),
+            CheckCode::RouteReservedHeaderName,
+        );
+        assert_has(
+            &check(convert_header("scratch", Some("CamelHttpResponseCode"))),
+            CheckCode::RouteReservedHeaderName,
+        );
+        assert_has(
+            &check(convert_header("recordId", Some("scratch"))),
+            CheckCode::RouteReservedHeaderName,
+        );
+
+        assert_has(
+            &check(convert_property("AdapterFilters", None)),
+            CheckCode::RouteReservedPropertyName,
+        );
+        assert_has(
+            &check(convert_property("scratch", Some("AdapterContinuation"))),
+            CheckCode::RouteReservedPropertyName,
+        );
+        assert_has(
+            &check(convert_property("AdapterFilters", Some("scratch"))),
+            CheckCode::RouteReservedPropertyName,
+        );
+        assert!(
+            !codes(&check(convert_property(
+                "scratch",
+                Some("AdapterNextContinuation")
+            )))
+            .contains(&CheckCode::RouteReservedPropertyName.code()),
+            "AdapterNextContinuation is the one writable reserved property"
+        );
     }
 
     #[test]
@@ -7354,9 +7509,54 @@ mod tests {
             automatic_transition_from_open_to_half_open_enabled: false,
             slow_call_rate_threshold: Percentage::new(100).expect("a percentage"),
             slow_call_duration_threshold_seconds: PositiveU32::new(60).expect("a count"),
+            record_exception: None,
+            ignore_exception: None,
             steps,
             on_fallback: fallback.map(|steps| OnFallback { steps }),
         })
+    }
+
+    #[test]
+    fn breaker_filters_refuse_empty_and_boundary_class_lists() {
+        let check = |record: Option<Vec<ErrorClass>>, ignore: Option<Vec<ErrorClass>>| {
+            let mut step = breaker_of(Vec::new(), None);
+            let Step::CircuitBreaker(breaker) = &mut step else {
+                unreachable!("breaker helper returns a breaker")
+            };
+            breaker.record_exception =
+                record.map(|classes| UniqueList::new(classes).expect("unique classes"));
+            breaker.ignore_exception =
+                ignore.map(|classes| UniqueList::new(classes).expect("unique classes"));
+            let route = one_direct_route(vec![step]);
+            let pack = pack_builder(vec![], vec![route]);
+            check_routes(&pack, &project_builder(&pack))
+        };
+
+        assert_has(
+            &check(Some(Vec::new()), None),
+            CheckCode::RouteEmptyExceptionList,
+        );
+        assert_has(
+            &check(None, Some(Vec::new())),
+            CheckCode::RouteEmptyExceptionList,
+        );
+        assert_has(
+            &check(Some(vec![ErrorClass::BudgetExhausted]), None),
+            CheckCode::RouteCircuitBreakerExceptionClass,
+        );
+        assert_has(
+            &check(None, Some(vec![ErrorClass::FacadeForbidden])),
+            CheckCode::RouteCircuitBreakerExceptionClass,
+        );
+
+        let overlap = check(
+            Some(vec![ErrorClass::Upstream]),
+            Some(vec![ErrorClass::UpstreamHttp]),
+        );
+        assert!(
+            !codes(&overlap).contains(&CheckCode::RouteCircuitBreakerExceptionClass.code()),
+            "overlap is valid because ignoreException has defined precedence"
+        );
     }
 
     /// A breaker adds its body and its fallback to the running total:
@@ -8978,6 +9178,7 @@ mod tests {
             cursor_key_ref: None,
             previous_cursor_key_ref: None,
             cursor_ttl_seconds: None,
+            idempotency: None,
         }
     }
 
@@ -10561,13 +10762,13 @@ mod tests {
         assert_clean(check_pack(&pack_builder(vec![endpoint], vec![])));
     }
 
-    /// A route never writes an endpoint's `static-api-key` header name:
+    /// A route never reads or writes an endpoint's `static-api-key` header name:
     /// the credential injector owns it after the filter, so a
     /// `setHeader` or `removeHeader` naming it refuses under
     /// `RouteReservedHeaderName`, compared without case
     /// (`products/adapter/CONCEPT.md` section 8.11.4).
     #[test]
-    fn routes_refuse_writing_an_api_key_header_name() {
+    fn routes_refuse_using_an_api_key_header_name() {
         let route = |steps: Vec<Step>| RouteDefinition {
             id: local("fetch-case"),
             from: RouteFrom {
@@ -10591,6 +10792,24 @@ mod tests {
             CheckCode::RouteReservedHeaderName,
         );
         let pack = api_key_pack(vec![Step::RemoveHeader("X-Api-Key".to_string())]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteReservedHeaderName,
+        );
+        let convert = |name: &str, to_name: Option<&str>| {
+            Step::ConvertHeaderTo(ConvertStep {
+                r#type: "codeMap:statuses".to_owned(),
+                name: Some(name.to_owned()),
+                to_name: to_name.map(str::to_owned),
+                mandatory: None,
+            })
+        };
+        let pack = api_key_pack(vec![convert("x-api-key", Some("scratch"))]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteReservedHeaderName,
+        );
+        let pack = api_key_pack(vec![convert("scratch", Some("X-Api-Key"))]);
         assert_has(
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteReservedHeaderName,

@@ -11,6 +11,12 @@
 # with E1323 (fixture no-program-type-import-repeat) and the entity
 # reads back 404; the pack header carries the full captured behavior.
 #
+# Attribute disclosure and writes are project-owned. The same
+# `attribute_fields` map is supplied to search, fetch, and import. This
+# maintained example chooses the empty map, so it preserves the base record
+# and writes no attribute values. A deployment that maps attributes also
+# declares those record fields, then replaces all three empty maps together.
+#
 # Upstream-call budgets, under the worst-case rule (route body plus the
 # widest exception-clause body; every send counts one plus the widest
 # declared maximumRedeliveries; token requests none, the endpoint is
@@ -18,7 +24,7 @@
 #   - person-search: 1 send x (1 + 1 redelivery) = 2; budget 4. The search
 #     answers one facade page from one upstream page (CONCEPT 8.11.2).
 #   - person-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
-#   - person-import: 1 send x (1 + 1 redelivery) = 2; budget 4.
+#   - person-create: 1 send x (1 + 1 redelivery) = 2; budget 4.
 #
 # This folder holds only the project. The profile and pack its pins name are
 # the maintained artifacts (products/adapter/profiles/breg-records/profile.yaml
@@ -64,7 +70,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:fd28b9b0b8ab6a12215a18da6f9ef76750869de922fc0a86017372e92c78148b
+  digest: sha256:1206bb52d15dad29b63c1837be6f369a00cdecb2b8a8a912e1a598a54a8de5ca
 recordTypes:
   - name: person
     fields:
@@ -85,10 +91,15 @@ templatedRoutes:
     routeId: person-search
     parameters:
       program: qyVpUaAYv2A
+      attribute_fields: {}
   - routeTemplate: fetch-tracked-entity
     routeId: person-fetch
+    parameters:
+      attribute_fields: {}
   - routeTemplate: import-tracked-entity
     routeId: person-import
+    parameters:
+      attribute_fields: {}
 bindings:
   - id: person-search
     operation: records-search

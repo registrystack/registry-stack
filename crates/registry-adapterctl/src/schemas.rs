@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The generated JSON Schemas of the five Adapter formats, derived from the
-//! source-neutral model in `registry-adapter-core` with `schemars` and
+//! The generated JSON Schemas of the six Adapter formats, derived from the
+//! source-neutral model in `registry-adapter-core` with `schemars` or from
+//! the runtime's pure effective-contract projection, and
 //! written to `products/adapter/schemas/` (`products/adapter/CONCEPT.md`
 //! sections 6 and 12). The committed files are generated outputs: never
 //! hand-edited, held to their sources by `adapterctl schemas --check`.
@@ -100,7 +101,7 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     ])
 }
 
-/// The five generated schema documents, keyed by file name. Deterministic:
+/// The six generated schema documents, keyed by file name. Deterministic:
 /// the same workspace state renders the same bytes.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let shared: Value =
@@ -132,6 +133,10 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
         object.insert("title".to_owned(), Value::String(entry.title.to_owned()));
         documents.insert(entry.file, render(&Value::Object(object))?);
     }
+    documents.insert(
+        "effective-contract.v1alpha1.schema.json",
+        render(&registry_adapter::effective_contract::schema())?,
+    );
     Ok(documents)
 }
 
@@ -511,7 +516,15 @@ mod tests {
     fn documents_are_deterministic_and_versioned() {
         let first = documents().unwrap();
         assert_eq!(documents().unwrap(), first);
-        assert_eq!(first.len(), 5);
+        assert_eq!(first.len(), 6);
+        let effective: Value =
+            serde_json::from_str(&first["effective-contract.v1alpha1.schema.json"])
+                .expect("the effective contract schema is JSON");
+        assert_eq!(
+            effective,
+            registry_adapter::effective_contract::schema(),
+            "the generated file is the runtime's exact projection"
+        );
         for (file, contents) in &first {
             let document: Value = serde_json::from_str(contents).unwrap();
             let id = document["$id"].as_str().unwrap();

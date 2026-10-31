@@ -4,7 +4,8 @@
 // (CONCEPT 8.11.3); for this write operation the exchange body is the
 // validated facade request record (CONCEPT 8.11.1). The script returns
 // the POST /api/tracker payload: one tracked entity keyed by the
-// record's own identifier, so a redelivered import with the same UID
+// validated path identifier for update, or the record's own identifier for
+// create, so a redelivered import with the same UID
 // updates the same object instead of creating a second one; the capture
 // answers such a repeat with status OK and stats.updated 1, provided the
 // deployment's account reaches a program of the entity's type (a repeat
@@ -18,10 +19,22 @@
 // record and throws when the record carries none. A record without a
 // recordIdentifier, or an org unit, would create an upstream-assigned
 // UID or an importable object without a home: the script throws
-// instead. Pure and deterministic; no I/O.
+// instead. The `attribute_fields` route parameter is held in the
+// `dhis2AttributeMap` property as record field to DHIS2 attribute UID. Only
+// mapped fields that the validated record carries become attribute rows;
+// every other record field is excluded. The default empty map preserves the
+// earlier no-attribute payload. Pure and deterministic; no I/O.
 fn to_bundle(exchange) {
     let record = exchange.body;
-    if record.recordIdentifier == () {
+    let record_id = record.recordIdentifier;
+    let path_id = exchange.headers.recordid;
+    if path_id != () && path_id != "" {
+        if record_id != () && record_id != path_id {
+            throw "recordIdentifier does not match the update path";
+        }
+        record_id = path_id;
+    }
+    if record_id == () || record_id == "" {
         throw "record carries no recordIdentifier";
     }
     if record.domainData.org_unit == () {
@@ -30,17 +43,23 @@ fn to_bundle(exchange) {
     if record.domainData.tracked_entity_type == () {
         throw "record carries no tracked_entity_type";
     }
+    let attributes = [];
+    let map = exchange.properties.dhis2AttributeMap;
+    if map != () {
+        for field in map.keys() {
+            let value = record.domainData[field];
+            if value != () {
+                attributes.push(#{attribute: map[field], value: value});
+            }
+        }
+    }
     #{
         trackedEntities: [
             #{
-                trackedEntity: record.recordIdentifier,
+                trackedEntity: record_id,
                 trackedEntityType: record.domainData.tracked_entity_type,
                 orgUnit: record.domainData.org_unit,
-                // No attributes: DHIS2 reads an empty attribute list as no
-                // attribute change, so an import through this pack updates
-                // an existing entity's stamps only and never alters an
-                // attribute value (captured update with an empty list).
-                attributes: []
+                attributes: attributes
             }
         ]
     }

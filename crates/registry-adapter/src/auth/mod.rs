@@ -35,11 +35,13 @@
 //! [`AuthEvent`] records the endpoint's kind and token-request outcomes
 //! in value-free form, which is all the journal may keep.
 
+mod assertion;
 mod material;
 mod plan;
 pub(crate) mod tls;
 mod token;
 
+pub use assertion::PlatformAssertionSigner;
 pub use material::{AuthHeader, ProtectedText};
 pub use plan::{
     AuthKind, AuthPlan, AuthPlanFault, AuthorizeContext, AuthorizedCredential, StaticCredential,

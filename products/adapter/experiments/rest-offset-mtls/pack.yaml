@@ -261,17 +261,17 @@ scripts:
   - path: scripts/has-more.rhai
     digest: sha256:896d298f6f400e813983a6ff253c123f979448f3f40688c655149e2a180c4467
   - path: scripts/within-cap.rhai
-    digest: sha256:d62470fb4e04d479b33a6489bb376e193d56eae7bfea9fed9c08f68a6b5293ae
+    digest: sha256:2fd3fd9fcf8df7faa462fff122cdb142cf43a7e25545fdaa54b9c47e135162c2
   - path: scripts/append-page.rhai
     digest: sha256:f5afff72c1e8829bf0e6feaad7484bf3043e0ac502de7e846ff0694e79db25cf
   - path: scripts/next-offset.rhai
-    digest: sha256:99423930d78ad15067e0866bf6e60ec21af027aa33f5cd52258d6ccd9fe7f660
+    digest: sha256:1eae876ceee311a89311505a7730c8d813115118e7b887fea92408567345ea19
   - path: scripts/is-not-found.rhai
     digest: sha256:7d2e9e274f6dd4377b8f3209c42a7907ec1f80f930202afe7e0bfea7d9e6fa3e
   - path: scripts/is-present.rhai
     digest: sha256:e749ecd4e94d9f484ff97c0df07b10410b9104b1af2f802a6ef017893df542a8
   - path: scripts/to-households.rhai
-    digest: sha256:b568345838cece67caca102cbb40b06197e1e9bc6438e90ac8db0586a5b7e8ea
+    digest: sha256:90c1bf942c402ec13cd85cf83df2ea99bb67465b1cf377084b016e20fbf7e37c
   - path: scripts/to-household.rhai
     digest: sha256:2e4c67a3abc34f799b15be1e6be4d44debbd7689f8c303f089eb95bb965f7fc0
 capabilities:

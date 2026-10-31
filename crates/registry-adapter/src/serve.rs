@@ -7,7 +7,7 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use jsonwebtoken::Algorithm;
@@ -24,11 +24,16 @@ use registry_platform_oidc::{
 use registry_platform_yaml::SecretReference;
 use thiserror::Error;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio_postgres::Config as PgConfig;
 use zeroize::Zeroizing;
 
 use crate::component::rest::continuation::{ContinuationCodec, CursorKey, CursorTtl};
+use crate::effective_contract::EffectiveContract;
 use crate::facade::{router, FacadeState};
+use crate::idempotent::{
+    self, PostgresIdempotencyStore, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
+};
 use crate::journal;
 use crate::load::{load, LoadError};
 
@@ -47,12 +52,18 @@ pub enum ServeError {
     Serve(String),
     #[error("the stop signal handler could not be installed: {0}")]
     Signal(String),
+    #[error("the idempotency response-retention sweep stopped: {0}")]
+    Retention(String),
 }
 
 /// A verified caller.
 pub struct Caller {
     /// The verified subject, journaled as the caller reference.
     pub reference: String,
+    /// The verified issuer and admitted acting client remain process-local;
+    /// the idempotency store receives only their namespace digest.
+    pub issuer: String,
+    pub client_id: String,
     pub scopes: Vec<String>,
 }
 
@@ -124,6 +135,41 @@ impl Authenticator {
             );
             return Err(CallerRefusal::Unauthenticated);
         }
+        let issuer = verified
+            .claims
+            .iss
+            .clone()
+            .filter(|issuer| {
+                !issuer.is_empty()
+                    && issuer.len() <= MAX_CALLER_ISSUER_BYTES
+                    && !issuer.contains('\0')
+            })
+            .ok_or_else(|| {
+                registry_platform_oidc::log_authentication_refusal!(
+                    self.verifier,
+                    AuthenticationStage::Profile,
+                    "Adapter authentication refused: the issuer is absent or unusable for caller isolation"
+                );
+                CallerRefusal::Unauthenticated
+            })?;
+        let client_id = verified
+            .matched_client_id()
+            .ok()
+            .flatten()
+            .filter(|client| {
+                !client.is_empty()
+                    && client.len() <= MAX_CALLER_IDENTITY_BYTES
+                    && !client.contains('\0')
+            })
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                registry_platform_oidc::log_authentication_refusal!(
+                    self.verifier,
+                    AuthenticationStage::Client,
+                    "Adapter authentication refused: the admitted client identity is unavailable"
+                );
+                CallerRefusal::Unauthenticated
+            })?;
         let reference = verified
             .claims
             .sub
@@ -143,6 +189,8 @@ impl Authenticator {
             })?;
         Ok(Caller {
             reference,
+            issuer,
+            client_id,
             scopes: verified.scopes,
         })
     }
@@ -353,6 +401,55 @@ fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, ServeError
     })
 }
 
+/// Erase one bounded response batch per cadence. Claim-time expiry remains a
+/// correctness backstop, but custody does not depend on a duplicate arriving.
+/// A database failure stops the supervised server instead of silently
+/// extending retention.
+async fn sweep_idempotency_responses(
+    store: PostgresIdempotencyStore,
+    cadence: Duration,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), ServeError> {
+    let mut interval = tokio::time::interval(cadence);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                changed.map_err(|_| ServeError::Retention("the shutdown channel closed".to_owned()))?;
+                return Ok(());
+            }
+            _ = interval.tick() => {
+                loop {
+                    let erased = tokio::select! {
+                        changed = shutdown.changed() => {
+                            changed.map_err(|_| ServeError::Retention("the shutdown channel closed".to_owned()))?;
+                            return Ok(());
+                        }
+                        result = store.sweep_expired(SystemTime::now(), idempotent::MAX_SWEEP_BATCH) => {
+                            result.map_err(|error| ServeError::Retention(error.to_string()))?
+                        }
+                    };
+                    if erased < u64::from(idempotent::MAX_SWEEP_BATCH) {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+    }
+}
+
+fn retention_cadence(retention: Duration) -> Duration {
+    (retention / 2).clamp(Duration::from_secs(1), Duration::from_secs(60))
+}
+
+async fn await_read_only_shutdown(mut shutdown: watch::Receiver<bool>) -> Result<(), ServeError> {
+    shutdown
+        .changed()
+        .await
+        .map_err(|_| ServeError::Serve("the read-only shutdown channel closed".to_owned()))
+}
+
 /// Load the deployment, migrate the journal, and serve until a stop signal.
 pub async fn run(
     project_directory: &std::path::Path,
@@ -361,14 +458,17 @@ pub async fn run(
     runtime_path: &std::path::Path,
 ) -> Result<(), ServeError> {
     let loaded = load(project_directory, profile_path, pack_path, runtime_path)?;
-    for (binding, reason) in &loaded.unserved {
-        tracing::warn!(binding = %binding, reason = %reason, "binding not served");
+    for unserved in &loaded.unserved {
+        tracing::warn!(binding = %unserved.binding, reason = %unserved.reason,
+            reason_code = unserved.reason_code, "binding not served");
     }
     if loaded.served.is_empty() {
         return Err(ServeError::Configuration(
             "no binding is servable by this runtime".to_owned(),
         ));
     }
+    let effective_contract = EffectiveContract::from_loaded(&loaded)
+        .map_err(|error| ServeError::Configuration(error.to_string()))?;
     let authenticator = authenticator(&loaded.runtime, &loaded.resolver).await?;
     // Every secret the runtime reads resolves before the listener binds.
     let codec = codec(&loaded.runtime, &loaded.resolver)?;
@@ -382,8 +482,36 @@ pub async fn run(
         journal::migrate(&client)
             .await
             .map_err(|error| ServeError::Configuration(format!("journal migration: {error}")))?;
+        idempotent::migrate(&client).await.map_err(|error| {
+            ServeError::Configuration(format!("idempotency migration: {error}"))
+        })?;
     }
     let journal = pool(&loaded.runtime.database, &loaded.resolver, false)?;
+    let serves_write = loaded.served.iter().any(|served| {
+        loaded
+            .profile
+            .operations
+            .get(served.operation.as_str())
+            .is_some_and(|operation| !operation.is_read())
+    });
+    let idempotency = match (serves_write, loaded.runtime.idempotency) {
+        (true, Some(retention)) => Some((
+            PostgresIdempotencyStore::new(
+                journal.clone(),
+                Duration::from_secs(retention.response_retention_seconds.get()),
+            )
+            .map_err(|error| ServeError::Configuration(format!("idempotency: {error}")))?,
+            Duration::from_secs(retention.response_retention_seconds.get()),
+        )),
+        (true, None) => {
+            return Err(ServeError::Configuration(
+                "idempotency.responseRetentionSeconds is required when a write is served"
+                    .to_owned(),
+            ));
+        }
+        (false, _) => None,
+    };
+    let facade_idempotency = idempotency.as_ref().map(|(store, _)| store.clone());
     let address: SocketAddr = loaded.runtime.listener.bind.0;
     let listener = TcpListener::bind(address)
         .await
@@ -398,11 +526,79 @@ pub async fn run(
     let state = Arc::new(FacadeState {
         codec,
         loaded,
+        effective_contract,
         authenticator,
         journal,
+        idempotency: facade_idempotency,
     });
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown)
-        .await
-        .map_err(|error| ServeError::Serve(error.to_string()))
+    let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let mut server_shutdown = shutdown_receiver.clone();
+    let serving = axum::serve(listener, router(state)).with_graceful_shutdown(async move {
+        let _closed = server_shutdown.changed().await;
+    });
+    let server = async move { serving.await };
+    let sweeper = async move {
+        match idempotency {
+            Some((store, retention)) => {
+                sweep_idempotency_responses(store, retention_cadence(retention), shutdown_receiver)
+                    .await
+            }
+            None => await_read_only_shutdown(shutdown_receiver).await,
+        }
+    };
+    tokio::pin!(server);
+    tokio::pin!(sweeper);
+    tokio::select! {
+        result = &mut server => {
+            shutdown_sender.send(true).map_err(|_| ServeError::Serve("the retention supervisor stopped before the server".to_owned()))?;
+            result.map_err(|error| ServeError::Serve(error.to_string()))?;
+            sweeper.await
+        }
+        result = &mut sweeper => {
+            let failure = result;
+            shutdown_sender.send(true).map_err(|_| ServeError::Serve("the server supervisor stopped before retention".to_owned()))?;
+            server.await.map_err(|error| ServeError::Serve(error.to_string()))?;
+            failure
+        }
+        () = shutdown => {
+            shutdown_sender.send(true).map_err(|_| ServeError::Serve("the server shutdown channel closed".to_owned()))?;
+            let server_result = server.await.map_err(|error| ServeError::Serve(error.to_string()));
+            let sweeper_result = sweeper.await;
+            server_result?;
+            sweeper_result
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_read_only_retention_supervisor_exits_on_shutdown() {
+        let (sender, receiver) = watch::channel(false);
+        let waiting = tokio::spawn(await_read_only_shutdown(receiver));
+        sender.send(true).expect("the supervisor is listening");
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("read-only shutdown stays responsive")
+            .expect("the supervisor task joins")
+            .expect("read-only shutdown succeeds");
+    }
+
+    #[test]
+    fn response_retention_drives_a_bounded_sweep_cadence() {
+        assert_eq!(
+            retention_cadence(Duration::from_secs(1)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            retention_cadence(Duration::from_secs(120)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            retention_cadence(Duration::from_secs(365 * 24 * 60 * 60)),
+            Duration::from_secs(60)
+        );
+    }
 }

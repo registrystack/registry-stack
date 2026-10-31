@@ -536,6 +536,12 @@ pub(crate) fn encode_path_segment(text: &str) -> Option<String> {
     is_canonical_path(&format!("/{encoded}")).then_some(encoded)
 }
 
+/// A JSON Schema regular expression that finds any scalar the canonical
+/// single-segment encoder refuses. It stays beside [`encode_path_segment`]
+/// so runtime admission and exported input schemas share one grammar.
+pub(crate) const CONTRACT_PATH_SEGMENT_DISALLOWED_PATTERN: &str =
+    "[/\\\\?;:%\\u{0000}-\\u{001f}\\u{007f}-\\u{009f}\\u{00ad}\\u{034f}\\u{061c}\\u{180e}\\u{200b}-\\u{200f}\\u{2028}-\\u{202e}\\u{2060}-\\u{206f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0001}\\u{e0020}-\\u{e007f}]";
+
 #[cfg(test)]
 mod segment_tests {
     use super::*;
@@ -601,6 +607,56 @@ mod segment_tests {
             origin
                 .pin(&format!("https://source.example.invalid/api/{segment}"))
                 .unwrap_or_else(|refusal| panic!("{value:?}: {refusal}"));
+        }
+    }
+
+    #[test]
+    fn exported_schema_grammar_matches_runtime_admission() {
+        let schema = serde_json::json!({
+            "type": "string",
+            "minLength": 1,
+            "not": {"anyOf": [
+                {"enum": [".", ".."]},
+                {"pattern": CONTRACT_PATH_SEGMENT_DISALLOWED_PATTERN},
+            ]},
+        });
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .expect("the exported segment schema compiles");
+        for value in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a%2Fb",
+            "a\\b",
+            "a?b",
+            "a;b",
+            "a:b",
+            "a%b",
+            "a\u{1}b",
+            "a\u{7f}b",
+            "a\u{200b}b",
+            "a\u{202e}b",
+            "a\u{feff}b",
+            "a b",
+            "caf\u{e9}",
+            "EeBJ3Sn9uLg",
+            "a.b-c_d~e",
+            "x!y",
+            "a'b",
+            "a(b)",
+            "a,b",
+            "a=b",
+            "a@b",
+            "a#b",
+        ] {
+            assert_eq!(
+                validator.is_valid(&serde_json::Value::String(value.to_owned())),
+                encode_path_segment(value).is_some(),
+                "schema/runtime mismatch for {value:?}"
+            );
         }
     }
 }

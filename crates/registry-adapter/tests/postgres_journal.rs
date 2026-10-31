@@ -92,6 +92,53 @@ impl Isolated {
     }
 }
 
+#[tokio::test]
+async fn readiness_requires_the_exact_migration_set_and_journal_table() {
+    let database = isolated().await;
+    let client = database.client().await;
+    journal::migrate(&client)
+        .await
+        .expect("the journal migrates");
+    assert!(journal::ready(&client)
+        .await
+        .expect("the ledger is readable"));
+
+    client
+        .execute(
+            "DELETE FROM adapter_schema_migrations WHERE version = 100",
+            &[],
+        )
+        .await
+        .expect("simulate a missing baseline below the unchanged maximum");
+    assert!(!journal::ready(&client)
+        .await
+        .expect("the ledger is readable"));
+    client
+        .execute("INSERT INTO adapter_schema_migrations(version, applied_at) VALUES (100, now()), (250, now())", &[])
+        .await
+        .expect("restore the baseline and add an unknown intermediate version");
+    assert!(!journal::ready(&client)
+        .await
+        .expect("the ledger is readable"));
+    client
+        .execute(
+            "DELETE FROM adapter_schema_migrations WHERE version = 250",
+            &[],
+        )
+        .await
+        .expect("restore the supported exact migration set");
+    assert!(journal::ready(&client)
+        .await
+        .expect("the ledger is readable"));
+    client
+        .batch_execute("ALTER TABLE adapter_journal_events RENAME TO unavailable_journal_events")
+        .await
+        .expect("simulate a missing journal table");
+    assert!(!journal::ready(&client)
+        .await
+        .expect("the ledger is still readable"));
+}
+
 /// One value-free journal event for the tests to append.
 fn event(event_kind: &'static str) -> JournalEvent {
     JournalEvent {
@@ -409,7 +456,7 @@ async fn the_journal_refuses_unknown_kinds_and_oversized_details() {
 }
 
 #[tokio::test]
-async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_refused_calls() {
+async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_kinds() {
     let isolated = isolated().await;
     let client = isolated.client().await;
     client
@@ -438,6 +485,14 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_refused_call
         .await
         .expect_err("version 100 does not know callRefused");
     expect_check_violation(error, "callRefused before the upgrade");
+    let error = journal::append(&client, event("breakerFallback"), SystemTime::now())
+        .await
+        .expect_err("version 100 does not know breakerFallback");
+    expect_check_violation(error, "breakerFallback before the upgrade");
+    let error = journal::append(&client, event("breakerRefused"), SystemTime::now())
+        .await
+        .expect_err("version 100 does not know breakerRefused");
+    expect_check_violation(error, "breakerRefused before the upgrade");
 
     journal::migrate(&client)
         .await
@@ -446,6 +501,14 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_refused_call
     journal::append(&client, event("callRefused"), SystemTime::now())
         .await
         .expect("version 200 accepts callRefused");
+    // An open-breaker facade exchange emits this pair in order. The journal
+    // must admit the whole lifecycle, not just the fallback that answers it.
+    journal::append(&client, event("breakerRefused"), SystemTime::now())
+        .await
+        .expect("the current schema accepts breakerRefused");
+    journal::append(&client, event("breakerFallback"), SystemTime::now())
+        .await
+        .expect("the current schema accepts breakerFallback");
     let rows = client
         .query(
             "SELECT event_kind FROM adapter_journal_events ORDER BY 1",
@@ -454,5 +517,13 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_refused_call
         .await
         .expect("read the journal");
     let kinds: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
-    assert_eq!(kinds, ["callRefused", "exchangeCreated"]);
+    assert_eq!(
+        kinds,
+        [
+            "breakerFallback",
+            "breakerRefused",
+            "callRefused",
+            "exchangeCreated"
+        ]
+    );
 }

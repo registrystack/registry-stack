@@ -36,17 +36,21 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &LoopStep) -> Result<Flow, 
         return Err(RouteFailure::of(ErrorClass::Validation));
     };
     // With `copy`, every iteration starts from the exchange as the loop
-    // received it, whatever the earlier iterations did to their own.
-    let original = run.exchange.clone();
+    // received it, whatever the earlier iterations did to their own. A
+    // chaining loop needs no retained clone of the whole exchange.
+    let original = step.copy.then(|| run.exchange.clone());
     if step.do_while {
         // The predicate is tested before every iteration, the first
         // included; a loop still holding at the bound raises instead of
         // stopping silently (section 8.6).
         for index in 0..bound.get() {
+            yield_within_deadline(run).await?;
             if !run.predicate(&expression)? {
                 return Ok(Flow::Continue);
             }
-            if let flow @ (Ok(Flow::Stop) | Err(_)) = iterate(run, step, &original, index).await {
+            if let flow @ (Ok(Flow::Stop) | Err(_)) =
+                iterate(run, step, original.as_ref(), index).await
+            {
                 return flow;
             }
         }
@@ -76,7 +80,9 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &LoopStep) -> Result<Flow, 
     // A count above the bound runs exactly the bound's iterations, then
     // raises: never a silent stop, never more than the bound.
     for index in 0..count.min(bound.get()) {
-        if let flow @ (Ok(Flow::Stop) | Err(_)) = iterate(run, step, &original, index).await {
+        yield_within_deadline(run).await?;
+        if let flow @ (Ok(Flow::Stop) | Err(_)) = iterate(run, step, original.as_ref(), index).await
+        {
             return flow;
         }
     }
@@ -102,7 +108,7 @@ fn not_an_integer() -> RouteFailure {
 async fn iterate(
     run: &mut Run<'_, '_>,
     step: &LoopStep,
-    original: &crate::exchange::Exchange,
+    original: Option<&crate::exchange::Exchange>,
     index: u64,
 ) -> Result<Flow, RouteFailure> {
     if !step.copy {
@@ -111,6 +117,9 @@ async fn iterate(
             .set_header(LOOP_INDEX_HEADER, json!(index));
         return run.run_steps(&step.steps).await;
     }
+    let Some(original) = original else {
+        return Err(RouteFailure::of(ErrorClass::Validation));
+    };
     let mut iteration = original.clone();
     iteration
         .message
@@ -128,4 +137,16 @@ async fn iterate(
             Err(failure)
         }
     }
+}
+
+/// A no-send loop must still give the deadline timer a scheduling point.
+async fn yield_within_deadline(run: &Run<'_, '_>) -> Result<(), RouteFailure> {
+    if tokio::time::Instant::now() >= run.deadline {
+        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+    }
+    tokio::task::yield_now().await;
+    if tokio::time::Instant::now() >= run.deadline {
+        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+    }
+    Ok(())
 }

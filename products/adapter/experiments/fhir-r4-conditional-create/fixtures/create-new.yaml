@@ -5,10 +5,10 @@
 # (https://hl7.org/fhir/R4/http.html#ccreate,
 # https://hl7.org/fhir/R4/http.html#transaction). No server was contacted.
 #
-# One facade create is two upstream exchanges (the transaction, then the
-# read-back) plus a token request. An entry holds one upstream exchange,
-# no facade request body, and no Idempotency-Key, so this file records the
-# transaction exchange only; the README records the gap.
+# One facade create drives one token acquisition, then reuses that credential
+# for the transaction and read-back. The write replay exercises the real
+# idempotent-consumer control path in memory; it does not claim PostgreSQL
+# durability.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: fhir-r4-conditional-create-new
@@ -23,43 +23,92 @@ intercepts:
   - type: endpoint
     endpoint: fhir
 entries:
-  - operation: records-create
-    given:
-      endpoint: fhir
-      method: POST
-      path: /
-      query: _format=json
+  - facadeRequest:
+      operation: records-create
+      path: /v1/records/patient
+      headers:
+        content-type: application/json
+        idempotency-key: documented-create-pat-002
       body:
-        resourceType: Bundle
-        type: transaction
-        entry:
-          - resource:
-              resourceType: Patient
-              identifier:
-                - system: https://id.example.invalid/national-id
-                  value: NID-0002
-              name:
-                - family: Okafor
-                  given:
-                    - Chidi
-              birthDate: "1990-07-01"
-              gender: male
-            request:
-              method: POST
-              url: Patient
-              ifNoneExist: identifier=https://id.example.invalid/national-id|NID-0002
-    upstreamResponse:
-      status: 200
-      body:
-        resourceType: Bundle
-        type: transaction-response
-        entry:
-          - response:
-              status: 201 Created
-              location: Patient/pat-002/_history/1
-              etag: W/"1"
-    expectedFacadeResponse:
+        data:
+          national_id: NID-0002
+          family_name: Okafor
+          given_names: Chidi
+          birth_date: "1990-07-01"
+          gender: male
+    upstream:
+      - request:
+          endpoint: fhir
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: fhir
+          method: POST
+          path: /
+          query: _format=json
+          body:
+            resourceType: Bundle
+            type: transaction
+            entry:
+              - resource:
+                  resourceType: Patient
+                  identifier:
+                    - system: https://id.example.invalid/national-id
+                      value: NID-0002
+                  name:
+                    - family: Okafor
+                      given:
+                        - Chidi
+                  birthDate: "1990-07-01"
+                  gender: male
+                request:
+                  method: POST
+                  url: Patient
+                  ifNoneExist: identifier=https://id.example.invalid/national-id|NID-0002
+        response:
+          status: 200
+          body:
+            resourceType: Bundle
+            type: transaction-response
+            entry:
+              - response:
+                  status: 201 Created
+                  location: Patient/pat-002/_history/1
+                  etag: W/"1"
+      - request:
+          endpoint: fhir
+          method: GET
+          path: /Patient/pat-002
+          query: _format=json
+        response:
+          status: 200
+          body:
+            resourceType: Patient
+            id: pat-002
+            meta:
+              versionId: "1"
+            identifier:
+              - system: https://id.example.invalid/national-id
+                value: NID-0002
+            name:
+              - family: Okafor
+                given:
+                  - Chidi
+            birthDate: "1990-07-01"
+            gender: male
+    expected:
+      type: response
       status: 201
+      headers:
+        cache-control: no-store
+        content-type: application/json
       body:
         data:
           national_id: NID-0002
@@ -68,6 +117,6 @@ entries:
           birth_date: "1990-07-01"
           gender: male
         meta:
-          registryIdentifier: registryIdentifier
-          datasetIdentifier: datasetIdentifier
+          registryIdentifier: fhir-r4-conditional-create-registry
+          datasetIdentifier: records
           entityTypeIdentifier: patient

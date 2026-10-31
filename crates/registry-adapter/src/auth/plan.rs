@@ -17,8 +17,9 @@
 use crate::auth::{
     material::{basic_payload, is_credential_value_bytes, token_value, AuthHeader},
     token::{
-        acquire_token, resolve_protected, CacheBounds, ClientAssertionSigner, TokenBudget,
-        TokenEndpointPlan, TokenRequestParameters, TokenSend, UpstreamStatusAction,
+        acquire_token, acquire_token_with_render, resolve_protected, CacheBounds,
+        ClientAssertionSigner, TokenBudget, TokenClientAuthentication, TokenEndpointPlan,
+        TokenRequest, TokenRequestParameters, TokenSend, UpstreamStatusAction,
     },
     AuthError, AuthEvent,
 };
@@ -30,6 +31,8 @@ use registry_platform_httputil::valid_resource_uri;
 use registry_platform_yaml::SecretReference;
 use std::fmt;
 use std::time::Duration;
+
+use crate::replay::ReplayAuthCapability;
 
 /// The six closed kinds, spelled as Evidence's `SourceAuthentication`
 /// tags are.
@@ -465,6 +468,44 @@ impl AuthPlan {
             header: AuthHeader::new("authorization", value),
             generation,
         }))
+    }
+
+    /// Acquire an OAuth credential for offline fixture replay through the
+    /// production cache, budget, response reader, and generation logic. The
+    /// sealed capability is constructible only by a replay transcript; no
+    /// runtime path can replace secret resolution with this synthetic request.
+    pub(crate) async fn authorize_replay(
+        &self,
+        _capability: ReplayAuthCapability,
+        budget: &mut TokenBudget,
+        send: &dyn TokenSend,
+        events: &mut Vec<AuthEvent>,
+    ) -> Result<AuthorizedCredential, AuthError> {
+        let plan = self
+            .token
+            .as_ref()
+            .ok_or(AuthError::Plan(AuthPlanFault::KindMismatch))?;
+        let (token, generation) = acquire_token_with_render(
+            plan,
+            budget,
+            || {
+                Ok(TokenRequest {
+                    url: plan.url().to_owned(),
+                    authentication: TokenClientAuthentication::None,
+                    body: crate::auth::ProtectedText::from_str_value(
+                        "grant_type=client_credentials",
+                    ),
+                })
+            },
+            send,
+            events,
+        )
+        .await?;
+        let value = token_value(token.as_bytes()).map_err(|_| AuthError::Credential)?;
+        Ok(AuthorizedCredential {
+            header: AuthHeader::new("authorization", value),
+            generation,
+        })
     }
 
     /// Apply the 401 rule of section 10.2 to one upstream status.

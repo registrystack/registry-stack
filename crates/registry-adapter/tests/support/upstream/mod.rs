@@ -25,7 +25,7 @@ use registry_platform_httputil::TransportKind;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -90,12 +90,22 @@ impl Response {
     }
 }
 
+/// How the double delivers one otherwise ordinary HTTP response. These
+/// faults stay test-only and preserve the response's declared length, so the
+/// production client must detect truncation or spend its own deadline.
+#[derive(Debug, Clone)]
+enum ResponseDelivery {
+    Complete,
+    ResetAfter(usize),
+    Trickle { chunk_bytes: usize, delay: Duration },
+}
+
 /// The double: a loopback TCP server with a scripted response queue and
 /// a complete request record.
 pub struct UpstreamDouble {
     listener: TcpListener,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
-    responses: Arc<Mutex<VecDeque<Response>>>,
+    responses: Arc<Mutex<VecDeque<(Response, ResponseDelivery)>>>,
     delay_millis: Arc<AtomicU64>,
 }
 
@@ -138,7 +148,24 @@ impl UpstreamDouble {
 
     /// Script the responses, served in order, one per request.
     pub fn respond_with(&self, responses: Vec<Response>) {
-        *self.responses.lock().expect("the response script") = responses.into();
+        *self.responses.lock().expect("the response script") = responses
+            .into_iter()
+            .map(|response| (response, ResponseDelivery::Complete))
+            .collect();
+    }
+
+    /// Send the declared head and `body_bytes` body bytes, then close the
+    /// connection before the declared body is complete.
+    pub fn respond_with_reset(&self, response: Response, body_bytes: usize) {
+        *self.responses.lock().expect("the response script") =
+            [(response, ResponseDelivery::ResetAfter(body_bytes))].into();
+    }
+
+    /// Send one response body in fixed chunks, pausing after each chunk.
+    pub fn respond_with_trickle(&self, response: Response, chunk_bytes: usize, delay: Duration) {
+        assert!(chunk_bytes > 0, "a trickle chunk must carry bytes");
+        *self.responses.lock().expect("the response script") =
+            [(response, ResponseDelivery::Trickle { chunk_bytes, delay })].into();
     }
 
     /// Hold every answer back by `delay` after the request is recorded.
@@ -164,7 +191,7 @@ impl UpstreamDouble {
 fn serve(
     mut stream: TcpStream,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
-    responses: Arc<Mutex<VecDeque<Response>>>,
+    responses: Arc<Mutex<VecDeque<(Response, ResponseDelivery)>>>,
     delay_millis: Arc<AtomicU64>,
 ) {
     let request = match read_request(&mut stream) {
@@ -175,26 +202,33 @@ fn serve(
                 400,
                 "text/plain",
                 "the double could not read the request",
+                &ResponseDelivery::Complete,
             );
             return;
         }
     };
     requests.lock().expect("the request record").push(request);
     std::thread::sleep(Duration::from_millis(delay_millis.load(Ordering::SeqCst)));
-    let response = responses
+    let (response, delivery) = responses
         .lock()
         .expect("the response script")
         .pop_front()
-        .unwrap_or_else(|| Response {
-            status: 500,
-            media_type: "text/plain",
-            body: "the double's response script is exhausted".to_owned(),
+        .unwrap_or_else(|| {
+            (
+                Response {
+                    status: 500,
+                    media_type: "text/plain",
+                    body: "the double's response script is exhausted".to_owned(),
+                },
+                ResponseDelivery::Complete,
+            )
         });
     write_response(
         &mut stream,
         response.status,
         response.media_type,
         &response.body,
+        &delivery,
     );
 }
 
@@ -258,7 +292,13 @@ fn find_head_end(buffer: &[u8]) -> Option<usize> {
 }
 
 /// Write one response and close the connection.
-fn write_response(stream: &mut TcpStream, status: u16, media_type: &str, body: &str) {
+fn write_response(
+    stream: &mut TcpStream,
+    status: u16,
+    media_type: &str,
+    body: &str,
+    delivery: &ResponseDelivery,
+) {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -272,8 +312,30 @@ fn write_response(stream: &mut TcpStream, status: u16, media_type: &str, body: &
         body.len()
     );
     let _ = stream.write_all(head.as_bytes());
-    let _ = stream.write_all(body.as_bytes());
-    let _ = stream.flush();
+    match delivery {
+        ResponseDelivery::Complete => {
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+        }
+        ResponseDelivery::ResetAfter(body_bytes) => {
+            let end = (*body_bytes).min(body.len());
+            let _ = stream.write_all(&body.as_bytes()[..end]);
+            let _ = stream.flush();
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        ResponseDelivery::Trickle { chunk_bytes, delay } => {
+            for chunk in body.as_bytes().chunks(*chunk_bytes) {
+                if stream
+                    .write_all(chunk)
+                    .and_then(|_| stream.flush())
+                    .is_err()
+                {
+                    return;
+                }
+                std::thread::sleep(*delay);
+            }
+        }
+    }
 }
 
 /// A token send over loopback TCP, the client the tests drive the token

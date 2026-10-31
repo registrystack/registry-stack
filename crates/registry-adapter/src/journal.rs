@@ -20,11 +20,15 @@ use tokio_postgres::Error as PgError;
 
 /// Every schema version, in the order it is applied. Each later migration
 /// takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 3] = [
     (100, include_str!("journal/migrations/0100_journal.sql")),
     (
         200,
         include_str!("journal/migrations/0200_call_refused.sql"),
+    ),
+    (
+        300,
+        include_str!("journal/migrations/0300_breaker_fallback.sql"),
     ),
 ];
 
@@ -105,6 +109,36 @@ pub async fn migrate(client: &impl GenericClient) -> Result<(), JournalError> {
     } else {
         Err(JournalError::MigrationLock)
     }
+}
+
+/// Check journal readiness without reading records or appending an event.
+/// The exact migration set must match this binary, and the active role must
+/// be able to append to the journal table in the configured search path.
+pub async fn ready(client: &impl GenericClient) -> Result<bool, JournalError> {
+    let applied = client
+        .query(
+            "SELECT version FROM adapter_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| row.get::<_, i64>(0))
+        .collect::<Vec<_>>();
+    if applied
+        != MIGRATIONS
+            .iter()
+            .map(|(version, _)| *version)
+            .collect::<Vec<_>>()
+    {
+        return Ok(false);
+    }
+    let row = client
+        .query_one(
+            "SELECT has_table_privilege(current_user, to_regclass('adapter_journal_events'), 'INSERT')",
+            &[],
+        )
+        .await?;
+    Ok(row.get::<_, Option<bool>>(0).unwrap_or(false))
 }
 
 async fn apply_migrations(client: &impl GenericClient) -> Result<(), JournalError> {

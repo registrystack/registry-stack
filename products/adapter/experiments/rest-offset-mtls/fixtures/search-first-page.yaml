@@ -8,10 +8,8 @@
 # follow the profile the spec names as an example. No server was contacted.
 #
 # One page holds the whole result (total 2 under a page[limit] of 100), so
-# the loop runs once. The fixture format cannot express the facade request
-# (filter, cursor, limit), a second upstream exchange, or the upstream
-# response's Content-Type (application/vnd.api+json); response headers are
-# refused.
+# the loop runs once. Replay records the synthetic token exchange and exact
+# JSON:API request before comparing the facade response.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: jsonapi-households-search-first-page
@@ -26,48 +24,71 @@ intercepts:
   - type: endpoint
     endpoint: registry
 entries:
-  - operation: records-search
-    given:
-      endpoint: registry
-      method: GET
-      path: /households
-      query: filter%5BregionCode%5D=R-07&page%5Boffset%5D=0&page%5Blimit%5D=100
-    upstreamResponse:
+  - facadeRequest:
+      operation: records-search
+      path: /v1/records/household
+      query: limit=100
+    upstream:
+      - request:
+          endpoint: registry
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: registry
+          method: GET
+          path: /households
+          query: filter%5BregionCode%5D=R-07&page%5Blimit%5D=100&page%5Boffset%5D=0
+        response:
+          status: 200
+          body:
+            meta:
+              total: 2
+            links:
+              self: https://households.example.invalid/api/households?filter%5BregionCode%5D=R-07&page%5Boffset%5D=0&page%5Blimit%5D=100
+            data:
+              - type: households
+                id: hh-1001
+                attributes:
+                  householdNumber: H-2024-1001
+                  regionCode: R-07
+                  memberCount: 4
+                  registeredOn: "2024-02-19"
+              - type: households
+                id: hh-1002
+                attributes:
+                  householdNumber: H-2024-1002
+                  regionCode: R-07
+                  memberCount: 2
+                  registeredOn: "2024-05-03"
+    expected:
+      type: response
       status: 200
-      body:
-        meta:
-          total: 2
-        links:
-          self: https://households.example.invalid/api/households?filter%5BregionCode%5D=R-07&page%5Boffset%5D=0&page%5Blimit%5D=100
-        data:
-          - type: households
-            id: hh-1001
-            attributes:
-              householdNumber: H-2024-1001
-              regionCode: R-07
-              memberCount: 4
-              registeredOn: "2024-02-19"
-          - type: households
-            id: hh-1002
-            attributes:
-              householdNumber: H-2024-1002
-              regionCode: R-07
-              memberCount: 2
-              registeredOn: "2024-05-03"
-    expectedFacadeResponse:
-      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
       body:
         items:
-          - household_number: H-2024-1001
-            region_code: R-07
-            member_count: 4
-            registered_on: "2024-02-19"
-          - household_number: H-2024-1002
-            region_code: R-07
-            member_count: 2
-            registered_on: "2024-05-03"
+          - recordIdentifier: hh-1001
+            domainData:
+              household_number: H-2024-1001
+              region_code: R-07
+              member_count: 4
+              registered_on: "2024-02-19"
+          - recordIdentifier: hh-1002
+            domainData:
+              household_number: H-2024-1002
+              region_code: R-07
+              member_count: 2
+              registered_on: "2024-05-03"
         pageInfo: {}
         meta:
-          registryIdentifier: registryIdentifier
-          datasetIdentifier: datasetIdentifier
+          registryIdentifier: rest-offset-mtls-registry
+          datasetIdentifier: records
           entityTypeIdentifier: household

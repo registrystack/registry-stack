@@ -8,6 +8,10 @@
 # runtime are the same. The program UID is the deployment's own DHIS2
 # program; every secret travels through the runtime config as a secret
 # reference, never here.
+# The same project-owned `attribute_fields` map is supplied to both search
+# routes and fetch. This example chooses the empty map, so no DHIS2 attribute
+# crosses the facade. A deployment that maps attributes also declares the
+# matching collection fields and replaces all three maps together.
 #
 # Four operations are bound:
 #   - records-get and records-lookup resolve one tracked entity by its UID
@@ -44,7 +48,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:fd28b9b0b8ab6a12215a18da6f9ef76750869de922fc0a86017372e92c78148b
+  digest: sha256:1206bb52d15dad29b63c1837be6f369a00cdecb2b8a8a912e1a598a54a8de5ca
 recordTypes:
   - name: persons
     fields:
@@ -65,12 +69,16 @@ templatedRoutes:
     routeId: person-list
     parameters:
       program: qyVpUaAYv2A
+      attribute_fields: {}
   - routeTemplate: search-tracked-entities-by-org-unit
     routeId: person-search
     parameters:
       program: qyVpUaAYv2A
+      attribute_fields: {}
   - routeTemplate: fetch-tracked-entity
     routeId: person-fetch
+    parameters:
+      attribute_fields: {}
 bindings:
   - id: person-get
     operation: records-get

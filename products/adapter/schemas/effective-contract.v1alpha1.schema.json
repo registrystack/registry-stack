@@ -1,0 +1,422 @@
+{
+  "$defs": {
+    "DerivedId": {
+      "description": "An identifier the runtime derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+      "type": "string"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "access": {
+      "additionalProperties": false,
+      "properties": {
+        "anyOf": {
+          "items": {
+            "$ref": "#/$defs/scopeSet"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "anyOf"
+      ],
+      "type": "object"
+    },
+    "authentication": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "clientAdmission": {
+          "const": "allowlist"
+        },
+        "scheme": {
+          "const": "bearer"
+        }
+      },
+      "required": [
+        "scheme",
+        "audience",
+        "clientAdmission"
+      ],
+      "type": "object"
+    },
+    "authority": {
+      "additionalProperties": false,
+      "properties": {
+        "callerMode": {
+          "const": "trusted-machine"
+        },
+        "fieldDisclosureAuthority": {
+          "const": "not-granted"
+        },
+        "personalDelegation": {
+          "const": "unsupported"
+        },
+        "representedSubject": {
+          "const": "unsupported"
+        },
+        "rowDisclosureAuthority": {
+          "const": "not-granted"
+        },
+        "targetBinding": {
+          "const": "unsupported"
+        }
+      },
+      "required": [
+        "callerMode",
+        "representedSubject",
+        "personalDelegation",
+        "targetBinding",
+        "rowDisclosureAuthority",
+        "fieldDisclosureAuthority"
+      ],
+      "type": "object"
+    },
+    "contract": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactDeploymentDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "authentication": {
+          "$ref": "#/$defs/authentication"
+        },
+        "authority": {
+          "$ref": "#/$defs/authority"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/operation"
+          },
+          "type": "array"
+        },
+        "problemSchema": {
+          "$ref": "#/$defs/jsonSchema"
+        },
+        "profileVersion": {
+          "type": "string"
+        },
+        "project": {
+          "$ref": "#/$defs/project"
+        },
+        "protocolProblems": {
+          "$ref": "#/$defs/protocolProblems"
+        },
+        "schemaDialect": {
+          "const": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "unserved": {
+          "items": {
+            "$ref": "#/$defs/unserved"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schemaDialect",
+        "project",
+        "profileVersion",
+        "artifactDeploymentDigest",
+        "authentication",
+        "authority",
+        "operations",
+        "unserved",
+        "problemSchema",
+        "protocolProblems"
+      ],
+      "type": "object"
+    },
+    "input": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/jsonSchema"
+        },
+        "path": {
+          "$ref": "#/$defs/jsonSchema"
+        },
+        "query": {
+          "$ref": "#/$defs/jsonSchema"
+        }
+      },
+      "required": [
+        "path",
+        "query"
+      ],
+      "type": "object"
+    },
+    "jsonSchema": {
+      "type": "object",
+      "x-registry-passthrough": "The embedded JSON Schema document is governed by JSON Schema 2020-12."
+    },
+    "nonEmptyText": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "operation": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "bindingId": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "effect": {
+          "const": "read"
+        },
+        "id": {
+          "$ref": "#/$defs/DerivedId"
+        },
+        "input": {
+          "$ref": "#/$defs/input"
+        },
+        "method": {
+          "pattern": "^(GET|POST)$",
+          "type": "string"
+        },
+        "output": {
+          "$ref": "#/$defs/jsonSchema"
+        },
+        "path": {
+          "pattern": "^/",
+          "type": "string"
+        },
+        "profileOperationId": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "requestMaximumBytes": {
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "successStatus": {
+          "maximum": 299,
+          "minimum": 200,
+          "type": "integer"
+        },
+        "support": {
+          "const": "served"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "bindingId",
+        "profileOperationId",
+        "method",
+        "path",
+        "support",
+        "effect",
+        "successStatus",
+        "input",
+        "output",
+        "access"
+      ],
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "protocolProblems": {
+      "additionalProperties": false,
+      "properties": {
+        "problems": {
+          "items": false,
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "adapter.contract.precondition-failed"
+                },
+                "status": {
+                  "const": 412
+                },
+                "title": {
+                  "const": "Effective contract precondition failed"
+                }
+              },
+              "required": [
+                "code",
+                "status",
+                "title"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "adapter.contract.unavailable"
+                },
+                "status": {
+                  "const": 503
+                },
+                "title": {
+                  "const": "Effective contract unavailable"
+                }
+              },
+              "required": [
+                "code",
+                "status",
+                "title"
+              ],
+              "type": "object"
+            }
+          ],
+          "type": "array",
+          "uniqueItems": true
+        },
+        "schema": {
+          "$ref": "#/$defs/jsonSchema"
+        }
+      },
+      "required": [
+        "schema",
+        "problems"
+      ],
+      "type": "object"
+    },
+    "readiness": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration": {
+          "const": "ready"
+        },
+        "journal": {
+          "const": "ready"
+        },
+        "ready": {
+          "const": true
+        }
+      },
+      "required": [
+        "ready",
+        "configuration",
+        "journal"
+      ],
+      "type": "object"
+    },
+    "scopeSet": {
+      "additionalProperties": false,
+      "properties": {
+        "allScopes": {
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "allScopes"
+      ],
+      "type": "object"
+    },
+    "unserved": {
+      "additionalProperties": false,
+      "properties": {
+        "bindingId": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "effect": {
+          "enum": [
+            "read",
+            "write",
+            "unknown"
+          ]
+        },
+        "operationId": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "profileOperationId": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "reasonCode": {
+          "pattern": "^adapter\\.[a-z0-9.-]+$",
+          "type": "string"
+        },
+        "support": {
+          "const": "unserved"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operationId",
+        "version",
+        "bindingId",
+        "profileOperationId",
+        "support",
+        "effect",
+        "reasonCode",
+        "reason"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/effective-contract/effective-contract.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1"
+    },
+    "contract": {
+      "$ref": "#/$defs/contract"
+    },
+    "digest": {
+      "$ref": "#/$defs/Digest"
+    },
+    "kind": {
+      "const": "AdapterEffectiveContract"
+    },
+    "readiness": {
+      "$ref": "#/$defs/readiness"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "digest",
+    "contract"
+  ],
+  "title": "Registry Adapter effective contract",
+  "type": "object"
+}

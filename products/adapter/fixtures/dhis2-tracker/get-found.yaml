@@ -8,7 +8,7 @@
 # expected facade body carries the type UID, the org unit, and the
 # stamps. The meta registry and dataset identifiers are deployment
 # values the engine writes at instantiation, so the replay expectation
-# carries the envelope template's stand-in literals.
+# carries this project's concrete values.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-get-found
@@ -59,6 +59,9 @@ entries:
     expected:
       type: response
       status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
       body:
         data:
           recordIdentifier: EeBJ3Sn9uLg
@@ -68,6 +71,6 @@ entries:
             created_at: "2017-01-20T10:44:02.770"
             updated_at: "2017-05-26T11:46:22.372"
         meta:
-          registryIdentifier: registryIdentifier
-          datasetIdentifier: datasetIdentifier
+          registryIdentifier: dhis2-tracker-registry
+          datasetIdentifier: persons
           entityTypeIdentifier: person

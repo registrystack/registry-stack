@@ -117,6 +117,23 @@
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
+    "IdempotencyRetention": {
+      "additionalProperties": false,
+      "description": "Exact write-response custody in the idempotency store\n(`products/adapter/CONCEPT.md` section 9 and D12).",
+      "properties": {
+        "responseRetentionSeconds": {
+          "description": "Seconds an exact facade response remains available for replay. The\nspent-key tombstone remains after its response body is erased.",
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "responseRetentionSeconds"
+      ],
+      "type": "object"
+    },
     "JwksSource": {
       "description": "Where a runtime obtains the OIDC issuer's signing keys.",
       "oneOf": [
@@ -546,6 +563,10 @@
     "id": {
       "$ref": "#/$defs/LocalId",
       "description": "The deployment this config binds."
+    },
+    "idempotency": {
+      "$ref": "#/$defs/IdempotencyRetention",
+      "description": "Exact write-response custody. A read-only deployment may omit this;\nstartup refuses a served write without an explicit operator choice."
     },
     "kind": {
       "const": "AdapterRuntimeConfig",

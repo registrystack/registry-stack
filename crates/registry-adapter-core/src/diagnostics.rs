@@ -38,6 +38,8 @@ pub enum CheckCode {
     PackDuplicateHeaderName,
     PackEndpointComponentInvalid,
     PackEntrypointParameter,
+    PackGraphQlOperationKindMismatch,
+    PackGraphQlOperationRequired,
     PackGraphQlOperationUnknown,
     PackGraphQlQueryInvalid,
     PackGraphQlQueryRequired,
@@ -83,6 +85,7 @@ pub enum CheckCode {
     ProjectUnknownTemplateParameter,
     ProjectUpstreamBudgetExceeded,
     // adapter.route.*
+    RouteCircuitBreakerExceptionClass,
     RouteCodeMapUnknown,
     RouteConvertShape,
     RouteDirectCycle,
@@ -111,6 +114,7 @@ pub enum CheckCode {
     RouteRedeliveryOverNonSafeSend,
     RouteRedeliveryWithoutUpstreamSend,
     RouteReservedHeaderName,
+    RouteReservedPropertyName,
     RouteRetryWhileWithoutRedeliveries,
     RouteStopOnExceptionExclusive,
     RouteThrowExceptionClass,
@@ -150,6 +154,8 @@ impl CheckCode {
         Self::PackDuplicateHeaderName,
         Self::PackEndpointComponentInvalid,
         Self::PackEntrypointParameter,
+        Self::PackGraphQlOperationKindMismatch,
+        Self::PackGraphQlOperationRequired,
         Self::PackGraphQlOperationUnknown,
         Self::PackGraphQlQueryInvalid,
         Self::PackGraphQlQueryRequired,
@@ -192,6 +198,7 @@ impl CheckCode {
         Self::ProjectUnknownTemplate,
         Self::ProjectUnknownTemplateParameter,
         Self::ProjectUpstreamBudgetExceeded,
+        Self::RouteCircuitBreakerExceptionClass,
         Self::RouteCodeMapUnknown,
         Self::RouteConvertShape,
         Self::RouteDirectCycle,
@@ -220,6 +227,7 @@ impl CheckCode {
         Self::RouteRedeliveryOverNonSafeSend,
         Self::RouteRedeliveryWithoutUpstreamSend,
         Self::RouteReservedHeaderName,
+        Self::RouteReservedPropertyName,
         Self::RouteRetryWhileWithoutRedeliveries,
         Self::RouteStopOnExceptionExclusive,
         Self::RouteThrowExceptionClass,
@@ -258,6 +266,10 @@ impl CheckCode {
             Self::PackDuplicateHeaderName => "adapter.pack.duplicate-header-name",
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
             Self::PackEntrypointParameter => "adapter.pack.entrypoint-parameter",
+            Self::PackGraphQlOperationKindMismatch => {
+                "adapter.pack.graphql-operation-kind-mismatch"
+            }
+            Self::PackGraphQlOperationRequired => "adapter.pack.graphql-operation-required",
             Self::PackGraphQlOperationUnknown => "adapter.pack.graphql-operation-unknown",
             Self::PackGraphQlQueryInvalid => "adapter.pack.graphql-query-invalid",
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
@@ -315,6 +327,9 @@ impl CheckCode {
             Self::ProjectUnknownTemplateParameter => "adapter.project.unknown-template-parameter",
             Self::ProjectUpstreamBudgetExceeded => "adapter.project.upstream-budget-exceeded",
             Self::RouteCodeMapUnknown => "adapter.route.code-map-unknown",
+            Self::RouteCircuitBreakerExceptionClass => {
+                "adapter.route.circuit-breaker-exception-class"
+            }
             Self::RouteConvertShape => "adapter.route.convert-shape",
             Self::RouteDirectCycle => "adapter.route.direct-cycle",
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
@@ -344,6 +359,7 @@ impl CheckCode {
                 "adapter.route.redelivery-without-upstream-send"
             }
             Self::RouteReservedHeaderName => "adapter.route.reserved-header-name",
+            Self::RouteReservedPropertyName => "adapter.route.reserved-property-name",
             Self::RouteRetryWhileWithoutRedeliveries => {
                 "adapter.route.retry-while-without-redeliveries"
             }
@@ -408,6 +424,8 @@ impl CheckCode {
             | Self::PackDuplicateHeaderName
             | Self::PackEndpointComponentInvalid
             | Self::PackEntrypointParameter
+            | Self::PackGraphQlOperationKindMismatch
+            | Self::PackGraphQlOperationRequired
             | Self::PackGraphQlOperationUnknown
             | Self::PackGraphQlQueryInvalid
             | Self::PackGraphQlQueryRequired
@@ -420,6 +438,7 @@ impl CheckCode {
             | Self::PackUnknownScript
             | Self::PackUnknownTemplateParameter
             | Self::RouteCodeMapUnknown
+            | Self::RouteCircuitBreakerExceptionClass
             | Self::RouteConvertShape
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded
@@ -447,6 +466,7 @@ impl CheckCode {
             | Self::RouteRedeliveryOverNonSafeSend
             | Self::RouteRedeliveryWithoutUpstreamSend
             | Self::RouteReservedHeaderName
+            | Self::RouteReservedPropertyName
             | Self::RouteRetryWhileWithoutRedeliveries
             | Self::RouteStopOnExceptionExclusive
             | Self::RouteThrowExceptionClass
@@ -513,8 +533,20 @@ mod tests {
             Some(CheckCode::PackGraphQlQueryInvalid)
         );
         assert_eq!(
+            CheckCode::from_code("adapter.pack.graphql-operation-kind-mismatch"),
+            Some(CheckCode::PackGraphQlOperationKindMismatch)
+        );
+        assert_eq!(
+            CheckCode::from_code("adapter.pack.graphql-operation-required"),
+            Some(CheckCode::PackGraphQlOperationRequired)
+        );
+        assert_eq!(
             CheckCode::from_code("adapter.pack.graphql-operation-unknown"),
             Some(CheckCode::PackGraphQlOperationUnknown)
+        );
+        assert_eq!(
+            CheckCode::from_code("adapter.route.reserved-property-name"),
+            Some(CheckCode::RouteReservedPropertyName)
         );
     }
 

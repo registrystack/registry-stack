@@ -220,6 +220,16 @@
           "minimum": 1,
           "type": "integer"
         },
+        "ignoreException": {
+          "description": "Closed classes that count as neither success nor failure. This filter\ntakes precedence over `recordException`, as resilience4j specifies.",
+          "items": {
+            "$ref": "#/$defs/ErrorClass"
+          },
+          "maxItems": 37,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "maximumHalfOpenCalls": {
           "description": "Permitted half-open calls (default 10).",
           "format": "uint32",
@@ -236,7 +246,7 @@
         },
         "onFallback": {
           "$ref": "#/$defs/OnFallback",
-          "description": "The fallback, run on failure and on rejection; its output is\nvalidated like any route output."
+          "description": "The fallback, run on a recorded failure and on rejection; its output\nis validated like any route output."
         },
         "openStateWaitSeconds": {
           "description": "Seconds the breaker stays open (resilience4j\n`waitDurationInOpenState`, default 60).",
@@ -244,6 +254,16 @@
           "maximum": 4294967295,
           "minimum": 1,
           "type": "integer"
+        },
+        "recordException": {
+          "description": "Closed classes that count as breaker failures. When omitted, every\ncatchable failure counts. A named parent covers its descendants, as\nCamel's Java exception predicate covers inheriting exceptions.",
+          "items": {
+            "$ref": "#/$defs/ErrorClass"
+          },
+          "maxItems": 37,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
         },
         "slidingWindowCalls": {
           "description": "The count-based window size in calls (default 100); the window type\nis fixed count-based and not configurable.",

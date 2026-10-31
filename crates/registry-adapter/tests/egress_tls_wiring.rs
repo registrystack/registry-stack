@@ -292,6 +292,7 @@ fn tls_config(
         cursor_key_ref: None,
         previous_cursor_key_ref: None,
         cursor_ttl_seconds: None,
+        idempotency: None,
     }
 }
 

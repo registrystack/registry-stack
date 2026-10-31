@@ -5,11 +5,9 @@
 # https://hl7.org/fhir/R4/bundle.html) and HAPI FHIR's documented
 # continuation link spelling. No server was contacted.
 #
-# The search fetches two pages, so it is two upstream exchanges plus a
-# token request. The fixture format holds one upstream exchange per entry
-# and no facade request (the national_id filter, cursor, limit), so the
-# second page cannot be expressed as part of the same facade call; this
-# file records the first page only and the README records the gap.
+# The facade search drives one synthetic token acquisition, reused for both
+# documented FHIR pages. The second data request reconstructs the HAPI
+# continuation query exactly as this experiment's route declares.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: fhir-r4-patient-search-two-pages
@@ -24,54 +22,115 @@ intercepts:
   - type: endpoint
     endpoint: fhir
 entries:
-  - operation: records-search
-    given:
-      endpoint: fhir
-      method: GET
-      path: /Patient
-      query: _count=50&_format=json&identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-0001
-    upstreamResponse:
+  - facadeRequest:
+      operation: records-search
+      path: /v1/records/patient
+      query: national_id=NID-0001&limit=50
+    upstream:
+      - request:
+          endpoint: fhir
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: fhir
+          method: GET
+          path: /Patient
+          query: _count=50&_format=json&identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-0001
+        response:
+          status: 200
+          body:
+            resourceType: Bundle
+            type: searchset
+            total: 2
+            link:
+              - relation: self
+                url: https://fhir.example.invalid/baseR4/Patient?identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-0001&_count=50
+              - relation: next
+                url: https://fhir.example.invalid/baseR4?_getpages=7f3c2a&_getpagesoffset=1&_count=1&_bundletype=searchset
+            entry:
+              - fullUrl: https://fhir.example.invalid/baseR4/Patient/pat-001
+                resource:
+                  resourceType: Patient
+                  id: pat-001
+                  meta:
+                    versionId: "3"
+                  identifier:
+                    - system: https://id.example.invalid/national-id
+                      value: NID-0001
+                  name:
+                    - use: official
+                      family: Rivera
+                      given:
+                        - Ana
+                        - Lucia
+                  gender: female
+                  birthDate: "1984-03-12"
+                search:
+                  mode: match
+      - request:
+          endpoint: fhir
+          method: GET
+          path: /
+          query: _bundletype=searchset&_count=50&_format=json&_getpages=7f3c2a&_getpagesoffset=1
+        response:
+          status: 200
+          body:
+            resourceType: Bundle
+            type: searchset
+            total: 2
+            link:
+              - relation: self
+                url: https://fhir.example.invalid/baseR4?_getpages=7f3c2a&_getpagesoffset=1&_count=50&_bundletype=searchset
+            entry:
+              - fullUrl: https://fhir.example.invalid/baseR4/Patient/pat-002
+                resource:
+                  resourceType: Patient
+                  id: pat-002
+                  meta:
+                    versionId: "1"
+                  identifier:
+                    - system: https://id.example.invalid/national-id
+                      value: NID-0001
+                  name:
+                    - use: official
+                      family: Rivera
+                      given:
+                        - Mateo
+                  gender: male
+                  birthDate: "2012-08-09"
+                search:
+                  mode: match
+    expected:
+      type: response
       status: 200
-      body:
-        resourceType: Bundle
-        type: searchset
-        total: 2
-        link:
-          - relation: self
-            url: https://fhir.example.invalid/baseR4/Patient?identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-0001&_count=50
-          - relation: next
-            url: https://fhir.example.invalid/baseR4?_getpages=7f3c2a&_getpagesoffset=1&_count=1&_bundletype=searchset
-        entry:
-          - fullUrl: https://fhir.example.invalid/baseR4/Patient/pat-001
-            resource:
-              resourceType: Patient
-              id: pat-001
-              meta:
-                versionId: "3"
-              identifier:
-                - system: https://id.example.invalid/national-id
-                  value: NID-0001
-              name:
-                - use: official
-                  family: Rivera
-                  given:
-                    - Ana
-                    - Lucia
-              gender: female
-              birthDate: "1984-03-12"
-            search:
-              mode: match
-    expectedFacadeResponse:
-      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
       body:
         items:
-          - national_id: NID-0001
-            family_name: Rivera
-            given_names: Ana Lucia
-            birth_date: "1984-03-12"
-            gender: female
+          - recordIdentifier: pat-001
+            domainData:
+              national_id: NID-0001
+              family_name: Rivera
+              given_names: Ana Lucia
+              birth_date: "1984-03-12"
+              gender: female
+          - recordIdentifier: pat-002
+            domainData:
+              national_id: NID-0001
+              family_name: Rivera
+              given_names: Mateo
+              birth_date: "2012-08-09"
+              gender: male
         pageInfo: {}
         meta:
-          registryIdentifier: registryIdentifier
-          datasetIdentifier: datasetIdentifier
+          registryIdentifier: fhir-r4-patient-source-registry
+          datasetIdentifier: records
           entityTypeIdentifier: patient

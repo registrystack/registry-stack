@@ -22,6 +22,8 @@ pub(crate) type Percentage = BoundedU32<1, 100>;
 /// A positive count or unit quantity; zero cannot bound a behavior
 /// (CFG-QTY-4).
 pub(crate) type PositiveU32 = BoundedU32<1, { u32::MAX }>;
+/// A breaker filter cannot contain more entries than the closed class model.
+pub const MAXIMUM_ERROR_CLASSES_PER_FILTER: usize = ErrorClass::ALL.len();
 
 /// A route as Camel's YAML DSL writes it: one `from`, `direct:` only, and
 /// an ordered step list (`products/adapter/CONCEPT.md` section 8.3). Pack
@@ -677,11 +679,28 @@ pub struct CircuitBreakerStep {
         skip_serializing_if = "is_default_slow_call_duration_threshold_seconds"
     )]
     pub slow_call_duration_threshold_seconds: PositiveU32,
+    /// Closed classes that count as breaker failures. When omitted, every
+    /// catchable failure counts. A named parent covers its descendants, as
+    /// Camel's Java exception predicate covers inheriting exceptions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAXIMUM_ERROR_CLASSES_PER_FILTER))
+    )]
+    pub record_exception: Option<UniqueList<ErrorClass>>,
+    /// Closed classes that count as neither success nor failure. This filter
+    /// takes precedence over `recordException`, as resilience4j specifies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAXIMUM_ERROR_CLASSES_PER_FILTER))
+    )]
+    pub ignore_exception: Option<UniqueList<ErrorClass>>,
     /// The guarded steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
-    /// The fallback, run on failure and on rejection; its output is
-    /// validated like any route output.
+    /// The fallback, run on a recorded failure and on rejection; its output
+    /// is validated like any route output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_fallback: Option<OnFallback>,
 }
@@ -1747,6 +1766,52 @@ mod tests {
         assert!(
             !plain.to_string().contains("slidingWindow"),
             "default members do not serialize"
+        );
+    }
+
+    /// Resilience4j exception predicates use Camel's singular member names,
+    /// closed Adapter error classes, and superclass matching at runtime.
+    #[test]
+    fn circuit_breaker_exception_filters_round_trip_as_closed_unique_lists() {
+        let step: Step = serde_json::from_str(
+            r#"{
+                "circuitBreaker": {
+                    "recordException": ["upstream"],
+                    "ignoreException": ["upstream.http"],
+                    "steps": []
+                }
+            }"#,
+        )
+        .expect("parse");
+        let Step::CircuitBreaker(breaker) = &step else {
+            panic!("expected a circuitBreaker step");
+        };
+        assert_eq!(
+            breaker.record_exception.as_deref(),
+            Some(&[ErrorClass::Upstream][..])
+        );
+        assert_eq!(
+            breaker.ignore_exception.as_deref(),
+            Some(&[ErrorClass::UpstreamHttp][..])
+        );
+        let wire = serde_json::to_string(&step).expect("serialize");
+        assert!(wire.contains("\"recordException\""));
+        assert!(wire.contains("\"ignoreException\""));
+        assert_eq!(serde_json::from_str::<Step>(&wire).ok(), Some(step));
+
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "circuitBreaker": { "recordException": ["java.io.IOException"] } }"#
+            )
+            .is_err(),
+            "an arbitrary exception class is outside the closed ErrorClass model"
+        );
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "circuitBreaker": { "ignoreException": ["upstream", "upstream"] } }"#
+            )
+            .is_err(),
+            "duplicate filter classes are refused"
         );
     }
 

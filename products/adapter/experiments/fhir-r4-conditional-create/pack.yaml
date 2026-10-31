@@ -111,14 +111,14 @@ routeTemplates:
                   status: 502
                   code: source.upstream-error
             - stop: {}
-      - setProperty:
-          name: fhirIdentifierSystem
-          value:
-            constant: "{{identifier_system}}"
       - idempotentConsumer:
           expression:
             header: Idempotency-Key
           steps:
+            - setProperty:
+                name: fhirIdentifierSystem
+                value:
+                  constant: "{{identifier_system}}"
             - to:
                 uri: http:fhir
                 parameters:
@@ -156,9 +156,9 @@ routeTemplates:
                   entrypoint: to_record
 scripts:
   - path: scripts/to-transaction.rhai
-    digest: sha256:2d137ca3978853260eb91b1b3a71dba5dfbefb06f46b08adda4931f67fa5e18e
+    digest: sha256:850ef5e8907640da4481edfbc82a3f0b3ddbafa98d48873f8bbc5b19b58aa7d6
   - path: scripts/created-id.rhai
-    digest: sha256:f3052a16aa52d4afb434c5e676ec15f1f044c519bd171bb5e4d7d131e759a5ec
+    digest: sha256:792f0a6362f8b5d0c34338b6572c3bb6577a5945bfc5d5be5852b9e92c856d76
   - path: scripts/is-multiple-match.rhai
     digest: sha256:eb6e0c34291a0ba6a566321471bf9b80325c5d16925361996267f28866b15619
   - path: scripts/to-record.rhai

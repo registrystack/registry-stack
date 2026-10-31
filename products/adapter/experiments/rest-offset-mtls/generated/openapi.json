@@ -1,6 +1,482 @@
 {
   "components": {
     "schemas": {
+      "ContractPreconditionProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "adapter.contract.precondition-failed"
+          },
+          "requestId": {
+            "maxLength": 32,
+            "minLength": 32,
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "status": {
+            "const": 412
+          },
+          "title": {
+            "const": "Effective contract precondition failed"
+          }
+        },
+        "required": [
+          "code",
+          "status",
+          "title",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "ContractUnavailableProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "adapter.contract.unavailable"
+          },
+          "requestId": {
+            "maxLength": 32,
+            "minLength": 32,
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "status": {
+            "const": 503
+          },
+          "title": {
+            "const": "Effective contract unavailable"
+          }
+        },
+        "required": [
+          "code",
+          "status",
+          "title",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "EffectiveContract": {
+        "$defs": {
+          "DerivedId": {
+            "description": "An identifier the runtime derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+            "type": "string"
+          },
+          "Digest": {
+            "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "LocalId": {
+            "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "access": {
+            "additionalProperties": false,
+            "properties": {
+              "anyOf": {
+                "items": {
+                  "$ref": "#/components/schemas/EffectiveContract/$defs/scopeSet"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "anyOf"
+            ],
+            "type": "object"
+          },
+          "authentication": {
+            "additionalProperties": false,
+            "properties": {
+              "audience": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/nonEmptyText"
+              },
+              "clientAdmission": {
+                "const": "allowlist"
+              },
+              "scheme": {
+                "const": "bearer"
+              }
+            },
+            "required": [
+              "scheme",
+              "audience",
+              "clientAdmission"
+            ],
+            "type": "object"
+          },
+          "authority": {
+            "additionalProperties": false,
+            "properties": {
+              "callerMode": {
+                "const": "trusted-machine"
+              },
+              "fieldDisclosureAuthority": {
+                "const": "not-granted"
+              },
+              "personalDelegation": {
+                "const": "unsupported"
+              },
+              "representedSubject": {
+                "const": "unsupported"
+              },
+              "rowDisclosureAuthority": {
+                "const": "not-granted"
+              },
+              "targetBinding": {
+                "const": "unsupported"
+              }
+            },
+            "required": [
+              "callerMode",
+              "representedSubject",
+              "personalDelegation",
+              "targetBinding",
+              "rowDisclosureAuthority",
+              "fieldDisclosureAuthority"
+            ],
+            "type": "object"
+          },
+          "contract": {
+            "additionalProperties": false,
+            "properties": {
+              "artifactDeploymentDigest": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/Digest"
+              },
+              "authentication": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/authentication"
+              },
+              "authority": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/authority"
+              },
+              "operations": {
+                "items": {
+                  "$ref": "#/components/schemas/EffectiveContract/$defs/operation"
+                },
+                "type": "array"
+              },
+              "problemSchema": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/jsonSchema"
+              },
+              "profileVersion": {
+                "type": "string"
+              },
+              "project": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/project"
+              },
+              "protocolProblems": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/protocolProblems"
+              },
+              "schemaDialect": {
+                "const": "https://json-schema.org/draft/2020-12/schema"
+              },
+              "unserved": {
+                "items": {
+                  "$ref": "#/components/schemas/EffectiveContract/$defs/unserved"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "schemaDialect",
+              "project",
+              "profileVersion",
+              "artifactDeploymentDigest",
+              "authentication",
+              "authority",
+              "operations",
+              "unserved",
+              "problemSchema",
+              "protocolProblems"
+            ],
+            "type": "object"
+          },
+          "input": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/jsonSchema"
+              },
+              "path": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/jsonSchema"
+              },
+              "query": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/jsonSchema"
+              }
+            },
+            "required": [
+              "path",
+              "query"
+            ],
+            "type": "object"
+          },
+          "jsonSchema": {
+            "type": "object",
+            "x-registry-passthrough": "The embedded JSON Schema document is governed by JSON Schema 2020-12."
+          },
+          "nonEmptyText": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "operation": {
+            "additionalProperties": false,
+            "properties": {
+              "access": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/access"
+              },
+              "bindingId": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/LocalId"
+              },
+              "effect": {
+                "const": "read"
+              },
+              "id": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/DerivedId"
+              },
+              "input": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/input"
+              },
+              "method": {
+                "pattern": "^(GET|POST)$",
+                "type": "string"
+              },
+              "output": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/jsonSchema"
+              },
+              "path": {
+                "pattern": "^/",
+                "type": "string"
+              },
+              "profileOperationId": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/LocalId"
+              },
+              "requestMaximumBytes": {
+                "maximum": 1048576,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "successStatus": {
+                "maximum": 299,
+                "minimum": 200,
+                "type": "integer"
+              },
+              "support": {
+                "const": "served"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "version",
+              "bindingId",
+              "profileOperationId",
+              "method",
+              "path",
+              "support",
+              "effect",
+              "successStatus",
+              "input",
+              "output",
+              "access"
+            ],
+            "type": "object"
+          },
+          "project": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/LocalId"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "type": "object"
+          },
+          "protocolProblems": {
+            "additionalProperties": false,
+            "properties": {
+              "problems": {
+                "items": false,
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "const": "adapter.contract.precondition-failed"
+                      },
+                      "status": {
+                        "const": 412
+                      },
+                      "title": {
+                        "const": "Effective contract precondition failed"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "status",
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "const": "adapter.contract.unavailable"
+                      },
+                      "status": {
+                        "const": 503
+                      },
+                      "title": {
+                        "const": "Effective contract unavailable"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "status",
+                      "title"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "type": "array",
+                "uniqueItems": true
+              },
+              "schema": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/jsonSchema"
+              }
+            },
+            "required": [
+              "schema",
+              "problems"
+            ],
+            "type": "object"
+          },
+          "readiness": {
+            "additionalProperties": false,
+            "properties": {
+              "configuration": {
+                "const": "ready"
+              },
+              "journal": {
+                "const": "ready"
+              },
+              "ready": {
+                "const": true
+              }
+            },
+            "required": [
+              "ready",
+              "configuration",
+              "journal"
+            ],
+            "type": "object"
+          },
+          "scopeSet": {
+            "additionalProperties": false,
+            "properties": {
+              "allScopes": {
+                "items": {
+                  "$ref": "#/components/schemas/EffectiveContract/$defs/nonEmptyText"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "allScopes"
+            ],
+            "type": "object"
+          },
+          "unserved": {
+            "additionalProperties": false,
+            "properties": {
+              "bindingId": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/LocalId"
+              },
+              "effect": {
+                "enum": [
+                  "read",
+                  "write",
+                  "unknown"
+                ]
+              },
+              "operationId": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/nonEmptyText"
+              },
+              "profileOperationId": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/LocalId"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/EffectiveContract/$defs/nonEmptyText"
+              },
+              "reasonCode": {
+                "pattern": "^adapter\\.[a-z0-9.-]+$",
+                "type": "string"
+              },
+              "support": {
+                "const": "unserved"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operationId",
+              "version",
+              "bindingId",
+              "profileOperationId",
+              "support",
+              "effect",
+              "reasonCode",
+              "reason"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1"
+          },
+          "contract": {
+            "$ref": "#/components/schemas/EffectiveContract/$defs/contract"
+          },
+          "digest": {
+            "$ref": "#/components/schemas/EffectiveContract/$defs/Digest"
+          },
+          "kind": {
+            "const": "AdapterEffectiveContract"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/EffectiveContract/$defs/readiness"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "digest",
+          "contract",
+          "readiness"
+        ],
+        "title": "Registry Adapter effective contract",
+        "type": "object"
+      },
       "Problem": {
         "additionalProperties": false,
         "properties": {
@@ -39,6 +515,49 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/.well-known/registry-adapter/effective-contract": {
+      "get": {
+        "operationId": "adapter-effective-contract",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EffectiveContract"
+                }
+              }
+            },
+            "description": "The loaded gateway contract and current Adapter readiness."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The machine caller was not authenticated."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractUnavailableProblem"
+                }
+              }
+            },
+            "description": "The Adapter could not verify protocol readiness."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/records/household": {
       "get": {
         "operationId": "records-search.household",
@@ -59,6 +578,16 @@
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
+            }
+          },
+          {
+            "description": "Optional whole effective-contract digest pin. A wrong or repeated header is refused with HTTP 412 before the request body or source is read.",
+            "in": "header",
+            "name": "x-registry-adapter-contract",
+            "required": false,
+            "schema": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
             }
           }
         ],
@@ -177,6 +706,16 @@
             },
             "description": "the write was only partially accepted"
           },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractPreconditionProblem"
+                }
+              }
+            },
+            "description": "The effective contract pin was wrong or repeated."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -223,6 +762,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractUnavailableProblem"
+                }
               }
             },
             "description": "the circuit protecting the source is open"
@@ -254,6 +798,16 @@
             "name": "record_id",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional whole effective-contract digest pin. A wrong or repeated header is refused with HTTP 412 before the request body or source is read.",
+            "in": "header",
+            "name": "x-registry-adapter-contract",
+            "required": false,
+            "schema": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
               "type": "string"
             }
           }
@@ -359,6 +913,16 @@
             },
             "description": "the write was only partially accepted"
           },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractPreconditionProblem"
+                }
+              }
+            },
+            "description": "The effective contract pin was wrong or repeated."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -404,6 +968,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractUnavailableProblem"
                 }
               }
             },

@@ -115,24 +115,28 @@ fn codes(report: &Value) -> Vec<&str> {
 /// The minimal suite replays clean against its compiled contract: both
 /// entries, the ordered token and read exchanges, the response expectation
 /// with its headers, and the problem expectation by class and code
-/// (G-FIXTURES, CONCEPT 13.3). The report says what did not run: until the
-/// route engine drives sends, `drive` stays `not-run`, so no gate mistakes
-/// the contract check for a replay.
+/// (G-FIXTURES, CONCEPT 13.3). `drive: completed` is emitted only after the
+/// actual runtime interpreter consumes every recorded send.
 #[test]
 fn the_minimal_suite_replays_against_its_compiled_contract() {
     let project = minimal_dir().join("project.yaml");
-    let (exit, report, _) = run_json(&["fixtures", "replay", project.to_str().unwrap()]);
+    let (exit, report, stderr) = run_json(&["fixtures", "replay", project.to_str().unwrap()]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert_eq!(report["command"], "fixtures replay");
     assert_eq!(report["status"], "complete");
-    assert_eq!(report["drive"], "not-run");
+    assert_eq!(report["drive"], "completed");
     assert_eq!(report["fixtures"], json!(1));
-    assert_eq!(report["entries"], json!(2));
-    assert_eq!(report["upstreamExchanges"], json!(4));
+    assert_eq!(report["entries"], json!(4));
+    assert_eq!(report["upstreamExchanges"], json!(8));
+    assert_eq!(report["writesSimulated"], json!(1));
+    assert_eq!(report["journalDurability"], "not-run");
+    assert!(!report
+        .to_string()
+        .contains("MUST_NOT_LEAK_FROM_DISCLOSURE_PROBLEM"));
+    assert!(!String::from_utf8_lossy(&stderr).contains("MUST_NOT_LEAK_FROM_DISCLOSURE_PROBLEM"));
 }
 
-/// The human form of a passed replay names its limits in its lead line:
-/// the contracts hold, and the send-by-send replay is not run yet.
+/// The human form says the actual engine completed the offline drive.
 #[test]
 fn a_passed_replay_names_its_limits_in_the_human_lead() {
     let project = minimal_dir().join("project.yaml");
@@ -147,9 +151,31 @@ fn a_passed_replay_names_its_limits_in_the_human_lead() {
     let exit = registry_adapterctl::main_entry_from(all, &mut stdout, &mut stderr);
     assert_eq!(exit, ExitCode::SUCCESS);
     let human = String::from_utf8_lossy(&stdout);
-    assert!(human.contains("Fixture contracts hold"));
-    assert!(human.contains("send-by-send replay is not driven here"));
+    assert!(human.contains("Fixture replay completed through the runtime engine"));
+    assert!(human.contains("upstream sends were intercepted offline"));
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+}
+
+#[test]
+fn an_exact_facade_mismatch_names_the_structural_member() {
+    let (_root, project) = edited_tree(|text| {
+        text.replacen(
+            "        content-type: application/json\n        cache-control: no-store",
+            "        content-type: application/json\n        cache-control: public",
+            1,
+        )
+    });
+    let (exit, report, _) = run_json(&["fixtures", "replay", &project]);
+    assert_eq!(exit, ExitCode::FAILURE, "{report}");
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .and_then(|diagnostics| {
+            diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic["code"] == "adapterctl.fixtures.facade-mismatch")
+        })
+        .expect("the exact facade comparison refuses");
+    assert_eq!(diagnostic["path"], "/fixtures/0/entries/0/expected/headers");
 }
 
 /// A 2xx expectation the compiled operation does not declare refuses only
@@ -190,13 +216,14 @@ fn replay_refuses_an_exchange_no_intercept_answers() {
     let (exit, report, _) = run_json(&["fixtures", "replay", &project]);
     assert_eq!(exit, ExitCode::FAILURE, "{report}");
     assert!(codes(&report).contains(&"adapter.fixture.uncovered-exchange"));
-    // Both read exchanges are stranded; the token ones stay answered.
+    // All three read exchanges and the write exchange are stranded; the
+    // token ones stay answered.
     assert_eq!(
         codes(&report)
             .iter()
             .filter(|code| **code == "adapter.fixture.uncovered-exchange")
             .count(),
-        2
+        4
     );
 }
 
@@ -207,7 +234,7 @@ fn replay_refuses_an_exchange_no_intercept_answers() {
 fn replay_refuses_an_entry_without_upstream_exchanges() {
     let (_root, project) = edited_tree(|text| {
         text.replace(
-            "    upstream:\n      - request:\n          endpoint: case-api\n          tokenRequest: true\n          method: POST\n          path: /oauth/token\n        response:\n          status: 200\n          body:\n            access_token: synthetic-replay-token\n      - request:\n          endpoint: case-api\n          method: GET\n          path: /api/cases/case\n        response:\n          status: 503\n          body: null\n",
+            "    upstream:\n      - request:\n          endpoint: case-api\n          tokenRequest: true\n          method: POST\n          path: /oauth/token\n        response:\n          status: 200\n          body:\n            access_token: synthetic-replay-token\n            token_type: Bearer\n            expires_in: 300\n      - request:\n          endpoint: case-api\n          method: GET\n          path: /api/cases/case\n        response:\n          status: 503\n          body: null\n",
             "    upstream: []\n",
         )
     });

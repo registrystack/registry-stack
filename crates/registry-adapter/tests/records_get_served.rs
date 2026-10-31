@@ -451,41 +451,75 @@ async fn an_unresolvable_endpoint_credential_refuses_startup() {
 }
 
 #[tokio::test]
-async fn a_write_binding_is_left_unserved_with_a_named_reason() {
+async fn a_post_write_binding_is_served_with_its_configured_success_status() {
     let upstream = UpstreamDouble::start();
+    let (status, body) = capture("import-accepted");
+    upstream.respond_with(vec![Response::json(status, &body)]);
     let served = Served::start(&upstream.url("")).await;
 
-    let token = served.token("records.read");
-    let (status, _, _) = served.get("/v1/records/person", Some(&token));
-    assert_ne!(status, 200, "the search binding is served; create is not");
-    let stderr = served.stop_and_read_stderr();
-
-    assert!(
-        stderr.contains("binding not served") && stderr.contains("other than GET"),
-        "the unserved write binding is named: {stderr}"
+    let token = served.token("records.write");
+    let request = json!({
+        "data": {
+            "recordIdentifier": "wk4JlTuVO9o",
+            "domainData": {
+                "tracked_entity_type": "cQWYtUfH6Vx",
+                "org_unit": "qfg4XUDJtgS",
+                "created_at": "2026-03-01T12:00:00.000",
+                "updated_at": "2026-03-01T12:00:00.000"
+            }
+        }
+    });
+    let (status, _, body) = served.request(
+        "POST",
+        "/v1/records/person",
+        Some(&token),
+        &[
+            ("Content-Type", "application/json"),
+            ("Idempotency-Key", "records-get-served-create-1"),
+        ],
+        request.to_string().as_bytes(),
     );
+
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["data"]["org_unit"], "qfg4XUDJtgS");
+    assert_eq!(body["meta"]["entityTypeIdentifier"], "person");
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].target, "/api/tracker?async=false");
 }
 
 #[tokio::test]
-async fn a_success_status_other_than_200_leaves_the_binding_unserved() {
+async fn a_put_write_binding_is_left_unserved_with_a_named_reason() {
     let upstream = UpstreamDouble::start();
     let directory = tempfile::tempdir().expect("a scratch directory");
     copy_example_project(directory.path());
     replace_profile_text(
         directory.path(),
-        "    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
-        "    successStatus: 202\n    responseEnvelope: '{\"data\": {{record}}, \"meta\"",
+        "  - id: records-create\n    method: POST\n",
+        "  - id: records-create\n    method: PUT\n",
     );
     let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
 
-    let token = served.token("records.read");
-    let (status, _, _) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+    let token = served.token("records.write");
+    let (status, _, _) = served.request(
+        "POST",
+        "/v1/records/person",
+        Some(&token),
+        &[
+            ("Content-Type", "application/json"),
+            ("Idempotency-Key", "unsupported-put-create"),
+        ],
+        br#"{"data":{}}"#,
+    );
     let stderr = served.stop_and_read_stderr();
 
-    assert_ne!(status, 200);
+    assert_eq!(status, 405);
     assert!(
-        stderr.contains("successStatus other than 200"),
-        "the reason is named: {stderr}"
+        stderr.contains("binding not served")
+            && stderr.contains("adapter.operation.method-unsupported")
+            && stderr.contains("write facade operation is served as POST only"),
+        "the unserved PUT binding is named: {stderr}"
     );
     assert_eq!(upstream.request_count(), 0);
 }

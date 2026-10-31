@@ -1,9 +1,11 @@
 # Adapter Delivery Plan
 
-Status: active, revised 2026-10-30 for the Camel port (`CONCEPT.md` D7 to
-D15) and again the same day for the exchange contract (`CONCEPT.md` 8.11,
-D20 to D28), which the first API transformation experiments showed the
-Increment 1 runtime could not be designed without. Companion to `CONCEPT.md`: the concept is the product contract; this
+Status: active. Revised 2026-10-30 for the Camel port (`CONCEPT.md` D7 to
+D15) and again that day for the exchange contract (`CONCEPT.md` 8.11, D20
+to D28), which the first API transformation experiments showed the
+Increment 1 runtime could not be designed without. Revised 2026-10-31 for
+current engine semantics and lead-owned orchestration. Companion to
+`CONCEPT.md`: the concept is the product contract; this
 file decomposes its section 14 into parallel workstreams with definitions of
 done and runnable acceptance commands. On any conflict, `CONCEPT.md` wins.
 
@@ -16,7 +18,9 @@ needs; a row that cannot land says so in its report.
 
 Every brief carries these rules by reference; they are not optional.
 
-1. Do NOT spawn subagents (do not use the Agent tool).
+1. The current lead owns integration and may delegate bounded work to its
+   own agents only. Each brief assigns disjoint paths; delegated agents do
+   not spawn agents, and parallel agents never edit the same file.
 2. Worktree: `/Users/jeremi/orca/workspaces/registry-stack/live-adapter`.
     Absolute paths only; never `cd`. First command: verify
     `git -C /Users/jeremi/orca/workspaces/registry-stack/live-adapter
@@ -84,29 +88,22 @@ Every brief carries these rules by reference; they are not optional.
 
 ## Wave model and review protocol
 
-Waves run sequentially; streams inside a wave run in parallel on disjoint
-paths and commit their own work. Each increment opens with a scaffold step
-(module roots and dependency additions, serial) so parallel streams never
-touch a shared file. The integration stream closes each increment; an Opus
-review agent then reviews it. HEAD SHAs are captured at wave launch and
-carried in every brief.
+Waves run sequentially. The current lead may run a bounded set of streams in
+parallel only on disjoint paths, and reviews every hand-back before
+integration. Each increment opens with a serial scaffold step (module roots
+and dependency additions), so parallel streams never touch a shared file.
+The lead captures the HEAD SHA at wave launch, carries it in every brief,
+closes the integration stream, runs the acceptance commands, records open
+findings, and makes the go or stop decision for the next wave.
 
-After each increment's own Opus review, the orchestrator sends the lead
-reviewer (the session in the Orca terminal "Live adapter CONCEPT and
-DELIVERY-PLAN review") a message through orca with: the increment, the HEAD
-SHA, the acceptance command results verbatim, the review report path, and
-open findings. It then waits for the reviewer's go or feedback before
-starting the next increment. Blockers and any `CONCEPT.md` contradiction
-are sent the same way as they happen. The reviewer's feedback is binding
-in the same way as Jeremi's for this program.
-
-At every increment the lead reviewer also runs an independent staff
-engineer review (Opus) of the increment's diff against `CONCEPT.md`: is it
-still a faithful Camel port, is the architecture holding up for the next
-increment, what should change in the plan. Its findings become the
-reviewer's feedback and, where the plan should change, a doc commit before
-the next increment launches. The report lands as
-`products/adapter/reviews/increment-<n>-staff.md`.
+At every increment the lead assigns an independent staff-engineer review of
+the integrated diff against `CONCEPT.md` to a fresh agent that owns no
+concurrent edit path: is it still a faithful Camel port, is the architecture
+holding up for the next increment, and what should change in the plan. The
+lead resolves that feedback before the next increment and records the report
+as `products/adapter/reviews/increment-<n>-staff.md`. Blockers and any
+`CONCEPT.md` contradiction go directly to the lead as they happen; Jeremi's
+fresh decisions remain authoritative.
 
 ## API transformation experiments (before Increment 1, after it, after 3)
 
@@ -120,7 +117,7 @@ streams below. `products/adapter/experiments/FINDINGS.md` holds the record.
 The experiments are rerun after Increment 1, migrated to 8.11, and after
 Increment 3.
 
-Owned by the lead reviewer, under `products/adapter/experiments/**`, no
+Owned by the lead, under `products/adapter/experiments/**`, no
 `.rs` file. Each experiment is a pack, a profile, a project, and
 `documented` fixtures served over the upstream double, chosen to stress the
 engine on API shapes the two maintained packs do not cover:
@@ -147,10 +144,9 @@ experiment that forces one of them records it there.
 
 ## Takeover
 
-When the orchestrator reports Increment 3 (or stops earlier), the lead
-reviewer takes the branch over: runs every acceptance command and the
-final multi-expert review, fixes the remaining findings directly, and
-writes the report to Jeremi.
+When Increment 3 closes (or the program stops earlier), the lead runs every
+acceptance command and the final multi-expert review, fixes the remaining
+findings directly, and writes the report to Jeremi.
 
 ## Increment 0: formats and the route model
 
@@ -257,14 +253,14 @@ the pack uses only port-table constructs.
 Owns cross-cutting wiring: `check-contracts.sh` gains schema drift,
 `check-port-table.py`, fixture check, corpus participation; reconciles B1
 and B2; corrects `CONCEPT.md` where rule 11 found a contradiction; writes
-`products/adapter/reviews/increment-0.md` after the Opus review.
+`products/adapter/reviews/increment-0.md` after the independent review.
 
 DoD: `check-contracts.sh` green from a clean shell; report lists every gate
 result verbatim.
 
 ### Closing rounds (staff review)
 
-Increment 0 closes when the lead reviewer's staff-review rounds have
+Increment 0 closes when the lead's staff-review rounds have
 landed, recorded in `products/adapter/reviews/increment-0-staff.md`. The
 last round carries the experiments' check defects (FINDINGS.md C1 to C23,
 O8, O9), split by owner:
@@ -399,7 +395,7 @@ slice of the increment, on the platform primitives of D13.
   `tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle}.rs`:
   the clause semantics of 8.7 and 8.11.6 (a handled clause answers with a
   success body; `throwException` inside a clause ends the exchange; an
-  uncatchable in the chain fires no clause), `direct:` error propagation
+  uncatchable `RouteFailure` class fires no clause), `direct:` error propagation
   without redelivery (8.11.7), the class-to-problem resolution, and the
   breaker's `recordException` and `ignoreException`.
 - **C4, components and facade**, owns `src/component/**`, `src/http/**`,
@@ -444,7 +440,7 @@ over the double and by replay, under both the `breg-records` profile and
 the test profile, with an identical pack (errors included); fault injection
 (13.4), read property tests (13.5), contract tests (13.6), security tests
 (13.7) in the default suite; `check-port-table.py` now requires every
-Increment 1 row; review report. Then the lead reviewer migrates the
+Increment 1 row; review report. Then the lead migrates the
 experiments to 8.11 and reruns them, executed and not only checked: each
 experiment's fixtures replay through the engine, and each read experiment
 runs over HTTP against the upstream double through the compiled package.
@@ -496,13 +492,13 @@ is refused.
 
 ## Increment 3: the second system
 
-Pre-launch check (orchestrator, before any stream): confirm from current
+Pre-launch check (lead, before any stream): confirm from current
 OpenCRVS documentation which API the current release exposes for reads and
 registration (GraphQL gateway or REST events API) and how an integration
 client authenticates (which `CONCEPT.md` 10.2 kind; if its token endpoint
 needs credentials in the query string, that is a finding, not an engine
 change), and send the finding to
-the lead reviewer before launching.
+the lead before launching.
 
 - **E1, graphql component** (if OpenCRVS is GraphQL), owns
   `src/component/graphql.rs`, `tests/camel_graphql.rs`; its own commit.

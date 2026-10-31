@@ -11,27 +11,27 @@
 //! then, per binding in declaration order, walks the route's linear
 //! spine to its first upstream `to` send, follows `direct:` hops, and
 //! renders the send from constants and the instantiation's parameters
-//! alone. One probe send per binding, plain HTTP/1.1 with
-//! `Connection: close` (the [`send`] seam); the answer's status must
+//! alone. One probe send per binding rides the platform's frozen HTTP/HTTPS
+//! destination transport (the [`send`] seam); the answer's status must
 //! fall inside the send's `okStatusCodeRange` (Camel default
 //! `200-299`). The response body is not validated against the compiled
 //! contract: that comparison is the facade mapping the engine owns.
 //!
 //! What the command waits for instead of driving, as one warning per
-//! binding and nothing more (the engine data path owns these): TLS and
-//! mTLS destinations (`tls-transport`), token-kind credentials
+//! binding and nothing more (the engine data path owns these): mTLS
+//! destinations (`tls-transport`), token-kind credentials
 //! (`token-credential`), `graphql:` sends (`graphql-transport`),
 //! file-provider secrets (`secret-provider`), and any send whose inputs
 //! the exchange, not the artifacts, decide: a header, exchange
 //! property, JSONPath, or Rhai expression, an origin-pinned link, a
 //! control-flow step ahead of the send, or an unbound optional
-//! placeholder (`caller-sourced`). A run that only waits still
-//! completes: waiting is the honest answer, not a failure.
+//! placeholder (`caller-sourced`). A run that only waits still completes,
+//! but reports `drove: 0`; it is explicitly not live transport proof.
 //!
 //! Destinations and credentials come from the runtime configuration
 //! only. Credentials resolve through the platform resolver with the
 //! environment provider, and no resolved value ever reaches a report:
-//! failures name the reference, the endpoint, and the host, never the
+//! failures name the reference and endpoint, never the destination or
 //! secret. The static credential composition mirrors the engine's own
 //! rules (`crates/registry-adapter/src/auth/material.rs`) without
 //! linking the engine, which this tooling crate never depends on.
@@ -42,19 +42,23 @@ use base64::Engine as _;
 use clap::Args;
 use registry_adapter_core::{
     check_workspace, is_placeholder_name, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, EndpointAuthentication, Expression, HttpMethod, RuntimeCredential,
-    SendComponent, Step, ToParameters, ToStep, Workspace,
+    AdapterRuntimeConfig, EndpointAuthentication, EndpointBinding, Expression, HttpMethod,
+    RuntimeCredential, SendComponent, Step, ToParameters, ToStep, Workspace,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_httputil::destination::{
+    DataDestinationPolicy, DestinationProfile, DestinationTlsMaterial,
+    MAX_DESTINATION_CA_BUNDLE_BYTES,
+};
 use registry_platform_yaml::{Diagnostic, Report, SecretReference, Url};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::io;
-use std::net::SocketAddr;
+use std::io::{self, Read};
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 
 use crate::report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT};
-use crate::verify::send::{send_once, TransportFailure, WireRequest};
+use crate::verify::send::{send_once, TransportCredential, TransportFailure, WireRequest};
 
 /// Why a binding waits rather than drives; the wait reasons the report
 /// names, one family of `adapterctl.verify.wait-*` codes.
@@ -67,7 +71,7 @@ const SECRET_PROVIDER: &str = "secret-provider";
 /// The suggested action of each wait: what unblocks the binding.
 fn wait_action(reason: &str) -> &'static str {
     match reason {
-        TLS_TRANSPORT => "Run the engine runtime against this deployment, or point the binding at a plain-HTTP loopback double.",
+        TLS_TRANSPORT => "Run the engine runtime, whose TLS layer presents this binding's client identity.",
         TOKEN_CREDENTIAL => "Run the engine runtime, whose token acquisition drives this binding.",
         GRAPHQL_TRANSPORT => "Run the engine runtime, whose graphql component drives this send.",
         SECRET_PROVIDER => "Expose the secret through the environment provider, or run the engine runtime with the file provider configured.",
@@ -609,7 +613,7 @@ fn render_send(
 
 /// What the credential composition produced, or why it stopped.
 enum CredentialOutcome {
-    Header(Option<(String, Vec<u8>)>),
+    Credential(TransportCredential),
     Wait(&'static str, String),
     Secret { reference: String, fault: String },
     Refused(&'static str),
@@ -622,7 +626,7 @@ enum CredentialOutcome {
 fn resolved(
     reference: &SecretReference,
     resolver: &SecretResolver,
-) -> Result<Vec<u8>, CredentialOutcome> {
+) -> Result<Zeroizing<Vec<u8>>, CredentialOutcome> {
     if reference.provider() == SecretProvider::File {
         return Err(CredentialOutcome::Wait(
             SECRET_PROVIDER,
@@ -631,7 +635,7 @@ fn resolved(
     }
     resolver
         .resolve(reference.as_str())
-        .map(|secret| secret.expose_secret().to_vec())
+        .map(|secret| Zeroizing::new(secret.expose_secret().to_vec()))
         .map_err(|fault| CredentialOutcome::Secret {
             reference: reference.as_str().to_owned(),
             fault: fault.to_string(),
@@ -666,7 +670,7 @@ fn credential_header(
     resolver: &SecretResolver,
 ) -> CredentialOutcome {
     let Some(credential) = credential else {
-        return CredentialOutcome::Header(None);
+        return CredentialOutcome::Credential(TransportCredential::None);
     };
     if authentication.kind() != credential.kind() {
         // The checks refuse a kind mismatch; this is the same refusal,
@@ -703,11 +707,10 @@ fn credential_header(
             let mut joined = username;
             joined.push(b':');
             joined.extend_from_slice(&password);
-            let value = format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(joined)
-            );
-            CredentialOutcome::Header(Some(("Authorization".to_owned(), value.into_bytes())))
+            let value = base64::engine::general_purpose::STANDARD.encode(joined.as_slice());
+            CredentialOutcome::Credential(TransportCredential::Basic(Zeroizing::new(
+                value.into_bytes(),
+            )))
         }
         (
             EndpointAuthentication::StaticAuthorization { scheme },
@@ -725,13 +728,10 @@ fn credential_header(
                     "the resolved token carries bytes outside visible ASCII",
                 );
             }
-            let mut value = scheme
-                .clone()
-                .unwrap_or_else(|| "Bearer".to_owned())
-                .into_bytes();
-            value.push(b' ');
-            value.extend_from_slice(&token);
-            CredentialOutcome::Header(Some(("Authorization".to_owned(), value)))
+            CredentialOutcome::Credential(TransportCredential::StaticAuthorization {
+                scheme: scheme.clone().unwrap_or_else(|| "Bearer".to_owned()),
+                token,
+            })
         }
         (
             EndpointAuthentication::StaticApiKey { header_name },
@@ -749,7 +749,10 @@ fn credential_header(
                     "the resolved API key carries a control byte or a stripped edge",
                 );
             }
-            CredentialOutcome::Header(Some((header_name.clone(), key)))
+            CredentialOutcome::Credential(TransportCredential::ApiKey {
+                header_name: header_name.clone(),
+                value: key,
+            })
         }
         (
             EndpointAuthentication::Oauth2ClientCredentials {},
@@ -763,7 +766,7 @@ fn credential_header(
             "the endpoint's token grant is acquired by the engine's auth layer".to_owned(),
         ),
         (EndpointAuthentication::None {}, RuntimeCredential::None {}) => {
-            CredentialOutcome::Header(None)
+            CredentialOutcome::Credential(TransportCredential::None)
         }
         // Kind equality already matched the pairs above; this arm only
         // covers a shape the checks refused.
@@ -774,50 +777,115 @@ fn credential_header(
     }
 }
 
-/// Why a destination is not dialed: the engine's transport owns it, or
-/// the egress policy refuses it.
+/// Why the frozen destination policy refuses a binding.
 enum EgressFault {
-    Wait(&'static str, String),
     Refused(String),
 }
 
-/// The address a plain-HTTP probe may dial, once the destination passes
-/// the egress policy the checks already enforce: TLS waits for the
-/// engine's transport, a plain-HTTP destination must be an address
-/// literal that is loopback or inside an allowed private range, and a
-/// named host is never resolved here.
-fn admitted_address(base: &Url, runtime: &AdapterRuntimeConfig) -> Result<SocketAddr, EgressFault> {
+/// Freeze the same class of fixed-origin policy the runtime uses. Default
+/// builds apply production HTTPS rules; only the explicit `tls-test`
+/// feature admits a pinned loopback TLS origin for the real handshake tests.
+fn destination_policy(
+    binding: &EndpointBinding,
+    runtime: &AdapterRuntimeConfig,
+) -> Result<DataDestinationPolicy, EgressFault> {
+    let base = &binding.base_url;
     let parsed = base.to_url();
-    let host = parsed.host_str().unwrap_or_default();
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    if parsed.scheme() == "https" {
-        return Err(EgressFault::Wait(
-            TLS_TRANSPORT,
-            format!("the destination {host} is TLS; only the engine's transport dials it"),
+    #[cfg(not(feature = "tls-test"))]
+    if parsed.scheme() == "https" && denotes_loopback(base) {
+        return Err(EgressFault::Refused(
+            "the destination is not admitted by the frozen policy".to_owned(),
         ));
     }
-    if parsed.scheme() != "http" {
-        return Err(EgressFault::Refused(format!(
-            "the destination {host} carries the scheme {}, not http or https",
-            parsed.scheme()
-        )));
+    let profile = destination_profile(base);
+    let mut origin = parsed.clone();
+    origin.set_path("/");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    let networks: Vec<_> = runtime
+        .allowed_private_cidrs
+        .iter()
+        .map(registry_adapter_core::Cidr::network)
+        .collect();
+    let mut policy = DataDestinationPolicy::new(
+        &binding.endpoint.as_str().to_ascii_lowercase(),
+        origin.as_str(),
+        profile,
+        &networks,
+    )
+    .map_err(|_| {
+        EgressFault::Refused("the destination is not admitted by the frozen policy".to_owned())
+    })?;
+    if let Some(profile) = &binding.tls_trust_profile {
+        let bundle = resolve_ca_bundle(runtime, profile.as_str()).map_err(|_| {
+            EgressFault::Refused(
+                "the configured destination trust material is unavailable".to_owned(),
+            )
+        })?;
+        let material =
+            DestinationTlsMaterial::from_pem(Some(bundle.as_slice()), None).map_err(|_| {
+                EgressFault::Refused(
+                    "the configured destination trust material is invalid".to_owned(),
+                )
+            })?;
+        policy = policy.require_configured_tls();
+        policy.install_configured_tls(material).map_err(|_| {
+            EgressFault::Refused("the configured destination trust material was refused".to_owned())
+        })?;
     }
-    let Ok(address) = host.parse::<std::net::IpAddr>() else {
-        return Err(EgressFault::Refused(format!(
-            "the plain-HTTP destination host {host} is not an address the allowlist admits"
-        )));
-    };
-    if !address.is_loopback()
-        && !runtime
-            .allowed_private_cidrs
-            .iter()
-            .any(|cidr| cidr.contains(address))
-    {
-        return Err(EgressFault::Refused(format!(
-            "the plain-HTTP destination {host} is neither loopback nor inside an allowed private range"
-        )));
+    Ok(policy)
+}
+
+fn destination_profile(base: &Url) -> DestinationProfile {
+    let parsed = base.to_url();
+    #[cfg(feature = "tls-test")]
+    if parsed.scheme() == "https" && denotes_loopback(base) {
+        return DestinationProfile::PinnedLoopbackHttpsTest;
     }
-    Ok(SocketAddr::new(address, port))
+    match parsed.scheme() {
+        "https" => DestinationProfile::ProductionHttps,
+        _ if denotes_loopback(base) => DestinationProfile::LoopbackDevelopmentHttp,
+        _ => DestinationProfile::PrivateServiceHttp,
+    }
+}
+
+fn denotes_loopback(origin: &Url) -> bool {
+    let parsed = origin.to_url();
+    parsed.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
+}
+
+/// Read one declared CA bundle under the platform ceiling. Every failure is
+/// value-free, and special files are refused before opening.
+fn resolve_ca_bundle(
+    runtime: &AdapterRuntimeConfig,
+    profile: &str,
+) -> Result<Zeroizing<Vec<u8>>, ()> {
+    let path = runtime
+        .outbound_tls
+        .as_ref()
+        .and_then(|tls| tls.trust_profiles.get(profile))
+        .map(|declared| declared.ca_bundle_file.as_str())
+        .ok_or(())?;
+    if !std::fs::metadata(path).map_err(|_| ())?.is_file() {
+        return Err(());
+    }
+    let file = std::fs::File::open(path).map_err(|_| ())?;
+    if !file.metadata().map_err(|_| ())?.is_file() {
+        return Err(());
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take((MAX_DESTINATION_CA_BUNDLE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() > MAX_DESTINATION_CA_BUNDLE_BYTES {
+        return Err(());
+    }
+    Ok(bytes)
 }
 
 /// Drive one probe per binding, in declaration order. The first send
@@ -920,20 +988,8 @@ fn drive(
             );
             continue;
         }
-        let address = match admitted_address(&runtime_binding.base_url, runtime) {
-            Ok(address) => address,
-            Err(EgressFault::Wait(reason, message)) => {
-                record_wait(
-                    index,
-                    &binding_id,
-                    &endpoint_id,
-                    reason,
-                    message,
-                    &mut waits,
-                    warnings,
-                );
-                continue;
-            }
+        let policy = match destination_policy(runtime_binding, runtime) {
+            Ok(policy) => policy,
             Err(EgressFault::Refused(message)) => {
                 return Err(VerifyFailure::Stopped {
                     exit: DOMAIN_REFUSAL_EXIT,
@@ -965,12 +1021,12 @@ fn drive(
             );
             continue;
         };
-        let authorization = match credential_header(
+        let credential = match credential_header(
             &endpoint.authentication,
             runtime_binding.credential.as_ref(),
             resolver,
         ) {
-            CredentialOutcome::Header(header) => header,
+            CredentialOutcome::Credential(credential) => credential,
             CredentialOutcome::Wait(reason, message) => {
                 record_wait(
                     index,
@@ -1017,22 +1073,16 @@ fn drive(
             }
         };
         let parsed_base = runtime_binding.base_url.to_url();
-        let host = parsed_base.host_str().unwrap_or_default().to_owned();
-        let host_header = match parsed_base.port() {
-            Some(port) => format!("{host}:{port}"),
-            None => host.clone(),
-        };
         let mut target = parsed_base.path().trim_end_matches('/').to_owned();
         target.push_str(&rendered.target);
         let request = WireRequest {
-            host_header,
-            address,
+            policy,
             method: rendered.method.to_owned(),
             target,
-            authorization,
+            credential,
             body: rendered.body,
         };
-        let status = match send_once(&request) {
+        let status = match send_once(request) {
             Ok(status) => status,
             Err(TransportFailure(fault)) => {
                 return Err(VerifyFailure::Stopped {
@@ -1043,7 +1093,7 @@ fn drive(
                         "artifact": "runtime",
                         "path": format!("/bindings/{index}"),
                         "message": format!(
-                            "the send to endpoint {endpoint_id} at {host} failed: {fault}"
+                            "the send to endpoint {endpoint_id} failed: {fault}"
                         ),
                         "suggestedAction":
                             "Check the destination is serving and reachable, then retry.",
@@ -1066,8 +1116,8 @@ fn drive(
                     "artifact": "upstream-answer",
                     "path": format!("/bindings/{index}"),
                     "message": format!(
-                        "the endpoint {endpoint_id} answered {status} to {} {}, outside the send's declared range {}",
-                        rendered.method, request.target, rendered.ok_range
+                        "the endpoint {endpoint_id} answered {status}, outside the send's declared range {}",
+                        rendered.ok_range
                     ),
                     "suggestedAction":
                         "Check the upstream's status contract, or re-author the send's okStatusCodeRange.",

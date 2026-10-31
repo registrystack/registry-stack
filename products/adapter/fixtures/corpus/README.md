@@ -68,7 +68,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 104 members.
+finding per code. The corpus holds 116 members.
 
 ### Profile members
 
@@ -106,6 +106,10 @@ finding per code. The corpus holds 104 members.
 | `adapter.pack.entrypoint-parameter` | A pinned script's entrypoint takes `record`, not the `exchange` the slot passes (CONCEPT 8.11.3); the script parses and hashes to its pin | `adapter.pack.entrypoint-parameter` | tool |
 | `adapter.pack.graphql-query-invalid` | The pinned query file does not parse as a GraphQL document (its pin matches the broken bytes) | `adapter.pack.graphql-query-invalid` | tool |
 | `adapter.pack.graphql-operation-unknown` | The graphql endpoint names operation `FindCases`, which its pinned query file does not declare | `adapter.pack.graphql-operation-unknown` | tool |
+| `adapter.pack.graphql-operation-required` | A graphql endpoint pins a query file but omits `operationName` | `adapter.pack.graphql-operation-required` | checks |
+| `adapter.pack.graphql-operation-kind-mismatch` | The pinned operation is a mutation, but the endpoint operation declares `graphql: query` | `adapter.pack.graphql-operation-kind-mismatch` | tool |
+| `adapter.pack.code-map-entry-not-scalar` | One code-map entry is an object rather than a whole JSON scalar | `adapter.pack.code-map-entry-not-scalar` | checks |
+| `adapter.pack.code-map-unreferenced` | A declared code map is referenced by no conversion step | `adapter.pack.code-map-unreferenced` | checks |
 
 `adapter.route.nesting-depth-exceeded` has no corpus member: it fires when
 the worst-case walk saturates past the reader's depth bound, and a YAML
@@ -189,6 +193,10 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.route.invalid-query-key` | Query key `bad=key` carries an unescaped `=` | `adapter.route.invalid-query-key` | checks |
 | `adapter.route.graphql-send-members` | A graphql send carries `httpMethod`, an HTTP-send member | `adapter.route.graphql-send-members` | checks |
 | `adapter.route.stop-on-exception-exclusive` | Split sets `stopOnException` beside `errorThreshold` failure accounting | `adapter.route.stop-on-exception-exclusive` | checks |
+| `adapter.route.circuit-breaker-exception-class` | Breaker `ignoreException` names the uncatchable class `script.budget-exceeded` | `adapter.route.circuit-breaker-exception-class` | checks |
+| `adapter.route.code-map-unknown` | A conversion names no declared code map | `adapter.route.code-map-unknown` | checks |
+| `adapter.route.convert-shape` | `convertBodyTo` incorrectly names a source property | `adapter.route.convert-shape` | checks |
+| `adapter.route.reserved-property-name` | A conversion reads the engine-owned property `AdapterFilters` | `adapter.route.reserved-property-name` | checks |
 
 ### Runtime and auth members
 

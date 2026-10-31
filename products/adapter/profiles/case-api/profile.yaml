@@ -16,17 +16,19 @@ version: "1"
 operations:
   - id: cases-find
     method: POST
+    readOnly: true
     path: /v2/cases/{type}
     pathParameters:
       - type
     recordTypeParameter: type
-    requestEnvelope: '{"query": {{record}}}'
+    requestEnvelope: '{"query": {{filters}}, "maxResults": {{?pageSize}}, "pageStateToken": "{{?cursor}}"}'
     responseEnvelope: '{"cases": {{records}}, "pageStateToken": "{{?nextCursor}}"}'
     pagination:
       cursorParameter: pageStateToken
       pageSizeParameter: maxResults
       pageSizeMinimum: 10
       pageSizeMaximum: 500
+      pageSizeDefault: 50
   - id: cases-get
     method: GET
     path: /v2/cases/{type}/{case_id}

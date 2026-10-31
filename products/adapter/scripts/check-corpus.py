@@ -11,7 +11,10 @@ base/ control must pass with zero findings. Members are discovered from
 the corpus directory and the code vocabulary is read from the owning
 registries (the authoring codes in the core crate's diagnostics.rs and
 the platform reader codes in registry-platform-yaml's messages.rs);
-neither is listed here.
+neither is listed here. Every reachable authoring code must have a
+member. The only exception is `adapter.route.nesting-depth-exceeded`:
+the YAML reader refuses the same 128-level nesting before that semantic
+check can run.
 
 TRANSITIONAL: a member may additionally emit a partner code while the
 workspace derivation's cascade co-fires (X1 F4-3) last. A partner code is
@@ -43,23 +46,55 @@ CORPUS = REPO_ROOT / "products" / "adapter" / "fixtures" / "corpus"
 #: The owning registries of the codes a corpus refusal can carry: the
 #: authoring diagnostics catalog of the core crate and the platform YAML
 #: reader's code catalog.
-REGISTRIES = (
-    REPO_ROOT / "crates" / "registry-adapter-core" / "src" / "diagnostics.rs",
-    REPO_ROOT / "crates" / "registry-platform-yaml" / "src" / "messages.rs",
+AUTHORING_REGISTRY = (
+    REPO_ROOT / "crates" / "registry-adapter-core" / "src" / "diagnostics.rs"
 )
+READER_REGISTRY = (
+    REPO_ROOT / "crates" / "registry-platform-yaml" / "src" / "messages.rs"
+)
+REGISTRIES = (AUTHORING_REGISTRY, READER_REGISTRY)
 
 #: A registered code as a quoted literal: dot-separated lowercase kebab
 #: segments, at least two. The inner dots must be matched: a scan whose
 #: segment class lacks the dot reads nothing.
 CODE = re.compile(r'"([a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+)"')
 
+# Match only CheckCode::code() arms. A scan of every string literal in
+# diagnostics.rs also sees test-only invented codes, which are not registry
+# members and must not satisfy or create corpus obligations.
+AUTHORING_CODE = re.compile(
+    r'Self::[A-Za-z0-9_]+\s*=>\s*(?:\{\s*)?"(adapter\.[a-z0-9.-]+)"',
+    re.MULTILINE,
+)
+
+UNCORPUSABLE_AUTHORING_CODES = {
+    "adapter.route.nesting-depth-exceeded",
+}
+
+
+def authoring_codes(source: str | None = None) -> set[str]:
+    """The exact CheckCode::code() vocabulary, excluding tests and prose."""
+    if source is None:
+        source = AUTHORING_REGISTRY.read_text(encoding="utf-8")
+    start = source.find("pub const fn code")
+    end = source.find("pub const fn artifact", start)
+    if start == -1 or end == -1:
+        return set()
+    return set(AUTHORING_CODE.findall(source[start:end]))
+
 
 def registered_codes() -> set[str]:
     """The codes the owning registries register, read live."""
-    codes: set[str] = set()
-    for registry in REGISTRIES:
-        codes.update(CODE.findall(registry.read_text(encoding="utf-8")))
+    codes = authoring_codes()
+    codes.update(CODE.findall(READER_REGISTRY.read_text(encoding="utf-8")))
     return codes
+
+
+def uncovered_authoring_codes(
+    codes: set[str], member_expectations: set[str]
+) -> list[str]:
+    """Reachable authoring codes without a corresponding corpus member."""
+    return sorted(codes - member_expectations - UNCORPUSABLE_AUTHORING_CODES)
 
 
 def expectation(member: str, codes: set[str]) -> str | None:
@@ -115,6 +150,26 @@ def self_test() -> tuple[int, list[str]]:
         problems.append("FAIL: self-test: the code scan invents codes")
     checked += 1
 
+    authoring_source = '''
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Simple => "adapter.route.simple",
+            Self::Block => { "adapter.route.block" }
+        }
+    }
+    pub const fn artifact(self) -> &'static str { "AdapterPack" }
+    #[test]
+    fn rejects_unknown() {
+        assert!(CheckCode::from_code("adapter.route.invented").is_none());
+    }
+    '''
+    if authoring_codes(authoring_source) != {
+        "adapter.route.block",
+        "adapter.route.simple",
+    }:
+        problems.append("FAIL: self-test: the authoring scan is not limited to code() arms")
+    checked += 1
+
     codes = {
         "adapter.pack.script-uncompilable",
         "adapter.route.direct-cycle",
@@ -150,6 +205,18 @@ def self_test() -> tuple[int, list[str]]:
         failed = bool(member_failures("member", primary, emitted, {partner}))
         if failed == holds:
             problems.append(f"FAIL: self-test: a member emitting {emitted} must {'hold' if holds else 'fail'}")
+        checked += 1
+
+    reverse_cases = [
+        ({"adapter.route.simple"}, {"adapter.route.simple"}, []),
+        ({"adapter.route.simple"}, set(), ["adapter.route.simple"]),
+        ({"adapter.route.nesting-depth-exceeded"}, set(), []),
+    ]
+    for registry, covered, want in reverse_cases:
+        if uncovered_authoring_codes(registry, covered) != want:
+            problems.append(
+                "FAIL: self-test: reverse authoring coverage decided a synthetic case incorrectly"
+            )
         checked += 1
 
     return checked, problems
@@ -197,6 +264,12 @@ def main(argv: list[str]) -> int:
             print(f"FAIL: {member}: neither a registered code nor prefixed by one")
             return 1
         expected[member] = code
+
+    missing_members = uncovered_authoring_codes(authoring_codes(), set(expected.values()))
+    if missing_members:
+        for code in missing_members:
+            print(f"FAIL: {code}: registered authoring code has no corpus member")
+        return 1
 
     bin_path = argv[1]
     failures: list[str] = []

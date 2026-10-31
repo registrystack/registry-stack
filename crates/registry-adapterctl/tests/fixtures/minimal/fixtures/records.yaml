@@ -19,7 +19,6 @@ entries:
   - facadeRequest:
       operation: cases-get
       path: /v2/cases/case
-      query: nationalId=123
       headers:
         accept: application/json
     upstream:
@@ -34,13 +33,12 @@ entries:
             content-type: application/json
           body:
             access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
       - request:
           endpoint: case-api
           method: GET
           path: /api/cases/case
-          query: nationalId=123
-          headers:
-            accept: application/json
         response:
           status: 200
           body:
@@ -50,6 +48,7 @@ entries:
       status: 200
       headers:
         content-type: application/json
+        cache-control: no-store
       body:
         record:
           national_id: "123"
@@ -69,6 +68,8 @@ entries:
           status: 200
           body:
             access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
       - request:
           endpoint: case-api
           method: GET
@@ -80,3 +81,77 @@ entries:
       type: problem
       class: upstream
       code: cases.upstream
+  # A synchronous write executes the real idempotent-consumer and POST
+  # interpreter paths. Replay simulates the claim in memory and does not
+  # claim PostgreSQL durability.
+  - facadeRequest:
+      operation: cases-create
+      path: /v2/cases/case
+      headers:
+        content-type: application/json
+        idempotency-key: fixture-create-456
+      body:
+        record:
+          national_id: "456"
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: case-api
+          method: POST
+          path: /api/cases
+          body:
+            id: "456"
+        response:
+          status: 201
+          body:
+            id: "456"
+    expected:
+      type: response
+      status: 201
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        record:
+          national_id: "456"
+  # A successful source reply that maps to a record outside the closed
+  # project schema follows the live facade's disclosure-problem path. The
+  # source-only canary must reach neither the problem body nor diagnostics.
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: case-api
+          method: GET
+          path: /api/cases/case
+        response:
+          status: 200
+          body:
+            id: null
+            source_private_marker: MUST_NOT_LEAK_FROM_DISCLOSURE_PROBLEM
+    expected:
+      type: problem
+      class: disclosure.violation
+      code: cases.boundary

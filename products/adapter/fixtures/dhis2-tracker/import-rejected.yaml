@@ -6,8 +6,10 @@
 # body: status ERROR, the validationReport carrying the E1049 error
 # report (message, errorCode, trackerType, uid, args), and the stats. A
 # rejected reply carries no bundleReport. The request is what the pack
-# sends for the captured entity; the pack's rejection clause maps
-# exactly this report shape to the facade's refused-write problem.
+# sends for the captured entity; the pack's rejection clause maps exactly
+# this report shape to the facade's refused-write problem. The facade request
+# is reconstructed from the captured pack payload, not captured from a
+# deployed Adapter.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-import-rejected
@@ -23,6 +25,14 @@ entries:
   - facadeRequest:
       operation: records-create
       path: /v1/records/person
+      headers:
+        idempotency-key: fixture-import-rejected
+      body:
+        data:
+          recordIdentifier: glEvPQZvW6b
+          domainData:
+            tracked_entity_type: cQWYtUfH6Vx
+            org_unit: doPOgZQse0p
     upstream:
       - request:
           endpoint: tracker

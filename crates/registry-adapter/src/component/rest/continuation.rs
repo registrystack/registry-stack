@@ -114,6 +114,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+use crate::replay::ReplayCursorNonce;
+
 /// The exact length of the secret `cursorKeyRef` and
 /// `previousCursorKeyRef` resolve to, in bytes.
 pub const CURSOR_KEY_BYTES: usize = 32;
@@ -489,6 +491,30 @@ impl ContinuationCodec {
         binding: &CursorBinding<'_>,
         now: SystemTime,
     ) -> Result<Option<String>, SealError> {
+        let mut nonce = [0_u8; NONCE_BYTES];
+        getrandom::fill(&mut nonce).map_err(|_| SealError::Randomness)?;
+        self.seal_with_nonce(next, binding, now, nonce)
+    }
+
+    /// Seal with a deterministic nonce that only offline fixture replay can
+    /// construct. Production callers use [`Self::seal`] and OS randomness.
+    pub(crate) fn seal_replay(
+        &self,
+        nonce: ReplayCursorNonce,
+        next: Option<&Value>,
+        binding: &CursorBinding<'_>,
+        now: SystemTime,
+    ) -> Result<Option<String>, SealError> {
+        self.seal_with_nonce(next, binding, now, nonce.into_bytes())
+    }
+
+    fn seal_with_nonce(
+        &self,
+        next: Option<&Value>,
+        binding: &CursorBinding<'_>,
+        now: SystemTime,
+        nonce: [u8; NONCE_BYTES],
+    ) -> Result<Option<String>, SealError> {
         let Some(value) = next.filter(|value| !value.is_null()) else {
             return Ok(None);
         };
@@ -502,8 +528,6 @@ impl ContinuationCodec {
         plaintext.extend_from_slice(&issued_at.to_be_bytes());
         plaintext.extend_from_slice(&serialized);
 
-        let mut nonce = [0_u8; NONCE_BYTES];
-        getrandom::fill(&mut nonce).map_err(|_| SealError::Randomness)?;
         let cipher = self.current.cipher().ok_or(SealError::Encryption)?;
         let aad = binding.associated_data();
         let ciphertext = cipher

@@ -19,9 +19,11 @@
 //! item failure is raised after the split completes, Camel's
 //! newest-first `checkException` (`Splitter.java`).
 
-use registry_adapter_core::{AggregationStrategy, ErrorClass, SplitStep};
+use registry_adapter_core::{AggregationStrategy, ErrorClass, Expression, SplitStep};
 use serde_json::json;
 
+use crate::exchange::{ensure_value_bounded, ensure_values_bounded};
+use crate::language::{compile_selector, JsonPathResult};
 use crate::processor::aggregation;
 use crate::route::{Flow, RouteFailure, Run};
 
@@ -36,19 +38,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
     let Some(bound) = step.maximum_items else {
         return Err(RouteFailure::of(ErrorClass::Validation));
     };
-    let pieces = match run.eval(&step.expression)? {
-        serde_json::Value::Array(pieces) => pieces,
-        _ => {
-            return Err(RouteFailure {
-                class: ErrorClass::Validation,
-                message: Some("a split expression must yield a JSON array".to_owned()),
-                auth: None,
-            })
-        }
-    };
-    if pieces.len() > bound.get() as usize {
-        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
-    }
+    let pieces = bounded_pieces(run, &step.expression, bound.get() as usize)?;
     let strategy = step
         .aggregation_strategy
         .clone()
@@ -58,10 +48,14 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
     let accounting = step.error_threshold.is_some() || step.maximum_failed_records.is_some();
     let total = pieces.len() as u64;
     let mut accumulated = aggregation::initial_body(&strategy, &run.exchange.message.body);
+    run.exchange
+        .ensure_body_bounded(&accumulated)
+        .map_err(RouteFailure::of)?;
     let mut processed = 0_u64;
     let mut failures = 0_u64;
     let mut last_failure = None;
     for (index, piece) in pieces.into_iter().enumerate() {
+        yield_within_deadline(run).await?;
         // Each piece runs on its own copy of the exchange, carrying the
         // engine headers the piece's steps read.
         let mut item = run.exchange.clone();
@@ -70,6 +64,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
         item.message.set_header(SPLIT_SIZE_HEADER, json!(total));
         item.message
             .set_header(SPLIT_COMPLETE_HEADER, json!(index as u64 + 1 == total));
+        item.ensure_bounded().map_err(RouteFailure::of)?;
         std::mem::swap(&mut run.exchange, &mut item);
         let flow = run.run_steps(&step.steps).await;
         // The route exchange keeps the original until every piece has
@@ -81,15 +76,26 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
             // into the stop arm.
             Ok(Flow::Stop | Flow::Handled) => {
                 processed += 1;
-                let merged = aggregation::fold(
+                let properties = match aggregation::fold_split(
                     run.context.scripts,
                     &run.context.code_maps,
                     &strategy,
-                    &accumulated,
+                    &mut accumulated,
                     &item,
-                )?;
-                accumulated = merged.body;
-                apply_properties(run, merged.properties);
+                    run.deadline,
+                ) {
+                    Ok(properties) => properties,
+                    Err(failure) => {
+                        record_pending_consumed(run, &mut last_failure);
+                        return Err(failure);
+                    }
+                };
+                apply_properties(run, properties);
+                if let Err(class) = run.exchange.ensure_body_bounded(&accumulated) {
+                    record_pending_consumed(run, &mut last_failure);
+                    return Err(RouteFailure::of(class));
+                }
+                record_pending_consumed(run, &mut last_failure);
                 finish(run, accumulated, accounting, total, processed, failures);
                 return Ok(Flow::Stop);
             }
@@ -98,44 +104,160 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
                 // The uncatchable classes guard the engine's own bounds;
                 // no accounting may swallow them.
                 if failure.class.is_uncatchable() || step.stop_on_exception {
+                    record_pending_consumed(run, &mut last_failure);
                     return Err(failure);
                 }
                 failures += 1;
                 if let Some(maximum) = step.maximum_failed_records {
                     if failures >= maximum.get() {
+                        record_pending_consumed(run, &mut last_failure);
                         return Err(failure);
                     }
                 }
                 if let Some(threshold) = step.error_threshold {
                     let share = failures as f64 / processed as f64;
                     if share >= threshold {
+                        record_pending_consumed(run, &mut last_failure);
                         return Err(failure);
                     }
                 }
                 // A counted failure is swallowed: the accounting exists
                 // so a split can finish with pieces failed. Only without
                 // it does the last item failure surface at the end.
-                if !accounting {
-                    last_failure = Some(failure);
+                if accounting {
+                    run.record_consumed_failure("split", &failure);
+                } else {
+                    if let Some(previous) = last_failure.replace(failure) {
+                        run.record_consumed_failure("split", &previous);
+                    }
                 }
                 continue;
             }
         }
         processed += 1;
-        let merged = aggregation::fold(
+        let properties = match aggregation::fold_split(
             run.context.scripts,
             &run.context.code_maps,
             &strategy,
-            &accumulated,
+            &mut accumulated,
             &item,
-        )?;
-        accumulated = merged.body;
-        apply_properties(run, merged.properties);
+            run.deadline,
+        ) {
+            Ok(properties) => properties,
+            Err(failure) => {
+                record_pending_consumed(run, &mut last_failure);
+                return Err(failure);
+            }
+        };
+        apply_properties(run, properties);
+        if let Err(class) = run.exchange.ensure_body_bounded(&accumulated) {
+            record_pending_consumed(run, &mut last_failure);
+            return Err(RouteFailure::of(class));
+        }
     }
     finish(run, accumulated, accounting, total, processed, failures);
     match last_failure {
         Some(failure) if aggregation::propagates(&strategy) => Err(failure),
-        _ => Ok(Flow::Continue),
+        Some(failure) => {
+            run.record_consumed_failure("split", &failure);
+            Ok(Flow::Continue)
+        }
+        None => Ok(Flow::Continue),
+    }
+}
+
+/// Read an array expression only after checking `maximumItems` against
+/// the borrowed result. Rhai necessarily returns an owned value, but the
+/// constant, header, property, and JSONPath forms avoid cloning an
+/// over-limit collection first.
+fn bounded_pieces(
+    run: &Run<'_, '_>,
+    expression: &Expression,
+    maximum: usize,
+) -> Result<Vec<serde_json::Value>, RouteFailure> {
+    match expression {
+        Expression::Constant(value) => clone_array_within(value, maximum),
+        Expression::Header(name) => run.exchange.message.header(name).map_or_else(
+            || Err(not_an_array()),
+            |value| clone_array_within(value, maximum),
+        ),
+        Expression::ExchangeProperty(name) => run.exchange.property(name).map_or_else(
+            || Err(not_an_array()),
+            |value| clone_array_within(value, maximum),
+        ),
+        Expression::JsonPath(selector) => {
+            let compiled =
+                compile_selector(selector).map_err(|_| RouteFailure::of(ErrorClass::Validation))?;
+            match compiled.evaluate(&run.exchange.message.body) {
+                Ok(JsonPathResult::Singular(Some(value))) => clone_array_within(value, maximum),
+                Ok(JsonPathResult::List(nodes)) => {
+                    if nodes.len() > maximum {
+                        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+                    }
+                    ensure_values_bounded(&nodes).map_err(RouteFailure::of)?;
+                    Ok(nodes.into_iter().cloned().collect())
+                }
+                _ => Err(not_an_array()),
+            }
+        }
+        Expression::Rhai(_) => clone_owned_array_within(run.eval(expression)?, maximum),
+    }
+}
+
+fn clone_array_within(
+    value: &serde_json::Value,
+    maximum: usize,
+) -> Result<Vec<serde_json::Value>, RouteFailure> {
+    let serde_json::Value::Array(items) = value else {
+        return Err(not_an_array());
+    };
+    if items.len() > maximum {
+        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+    }
+    ensure_value_bounded(value).map_err(RouteFailure::of)?;
+    Ok(items.clone())
+}
+
+fn clone_owned_array_within(
+    value: serde_json::Value,
+    maximum: usize,
+) -> Result<Vec<serde_json::Value>, RouteFailure> {
+    let serde_json::Value::Array(items) = &value else {
+        return Err(not_an_array());
+    };
+    if items.len() > maximum {
+        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+    }
+    ensure_value_bounded(&value).map_err(RouteFailure::of)?;
+    match value {
+        serde_json::Value::Array(items) => Ok(items),
+        _ => Err(not_an_array()),
+    }
+}
+
+fn not_an_array() -> RouteFailure {
+    RouteFailure {
+        class: ErrorClass::Validation,
+        message: Some("a split expression must yield a JSON array".to_owned()),
+        auth: None,
+    }
+}
+
+/// A no-send split must still give the deadline timer a scheduling point.
+async fn yield_within_deadline(run: &Run<'_, '_>) -> Result<(), RouteFailure> {
+    if tokio::time::Instant::now() >= run.deadline {
+        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+    }
+    tokio::task::yield_now().await;
+    if tokio::time::Instant::now() >= run.deadline {
+        return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+    }
+    Ok(())
+}
+
+fn record_pending_consumed(run: &mut Run<'_, '_>, pending: &mut Option<RouteFailure>) {
+    if let Some(failure) = pending.take() {
+        run.record_consumed_failure("split", &failure);
     }
 }
 
@@ -157,7 +279,6 @@ fn finish(
                 "totalItems": total,
                 "processedItems": processed,
                 "failureCount": failures,
-                "aborted": false,
             }),
         );
     }

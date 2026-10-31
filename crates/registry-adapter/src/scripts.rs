@@ -10,6 +10,8 @@
 //! maintained runtime profile's limits and a wall-clock deadline.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -72,6 +74,9 @@ pub type CodeMaps = Arc<BTreeMap<String, CodeMap>>;
 /// the same text itself is classified the same way: the marker is the
 /// contract, and pack scripts are reviewed content.
 const UNMAPPED_MARKER: &str = "conversion.unmapped:";
+/// A marker for an undeclared map id. The id may come from the current
+/// exchange, so neither the marker nor the classified failure carries it.
+const UNDECLARED_MAP_MARKER: &str = "conversion.undeclared-code-map";
 
 /// Why a script could not be loaded. Every text is fixed and value-free
 /// apart from the script path the pack itself names.
@@ -81,6 +86,8 @@ pub enum ScriptLoadError {
     NotInventoried(String),
     #[error("script {0} could not be read")]
     Unreadable(String),
+    #[error("script {0} is over the engine's source bound")]
+    TooLarge(String),
     #[error("script {0} does not match its pinned digest")]
     DigestMismatch(String),
     #[error("script {path} entrypoint {entrypoint} does not compile as a one-parameter function named exchange")]
@@ -96,7 +103,7 @@ pub enum ScriptFailure {
     Budget,
     #[error("the script raised an error")]
     Failed,
-    #[error("code map {0} has no entry for the key")]
+    #[error("{0}")]
     Unmapped(String),
 }
 
@@ -174,8 +181,15 @@ impl ScriptSet {
             .iter()
             .find(|script| script.path == file)
             .ok_or_else(|| ScriptLoadError::NotInventoried(file.to_owned()))?;
-        let bytes = std::fs::read(pack_directory.join(file))
-            .map_err(|_| ScriptLoadError::Unreadable(file.to_owned()))?;
+        let bytes = match read_bounded_file(
+            &pack_directory.join(file),
+            SCRIPT_PROFILE.maximum_source_bytes,
+        )
+        .map_err(|_| ScriptLoadError::Unreadable(file.to_owned()))?
+        {
+            BoundedRead::Bytes(bytes) => bytes,
+            BoundedRead::TooLarge => return Err(ScriptLoadError::TooLarge(file.to_owned())),
+        };
         if sha256_uri(&bytes) != pinned.digest.as_str() {
             return Err(ScriptLoadError::DigestMismatch(file.to_owned()));
         }
@@ -210,12 +224,31 @@ impl ScriptSet {
         entrypoint: &str,
         exchange: &Value,
     ) -> Result<Value, ScriptFailure> {
+        self.call_with_deadline(
+            maps,
+            file,
+            entrypoint,
+            exchange,
+            Instant::now() + CALL_DEADLINE,
+        )
+    }
+
+    /// Run one entrypoint without exceeding either the caller's absolute
+    /// deadline or the script profile's per-call wall-clock ceiling.
+    pub fn call_with_deadline(
+        &self,
+        maps: &CodeMaps,
+        file: &str,
+        entrypoint: &str,
+        exchange: &Value,
+        deadline: Instant,
+    ) -> Result<Value, ScriptFailure> {
         let ast = self
             .compiled
             .get(&(file.to_owned(), entrypoint.to_owned()))
             .ok_or(ScriptFailure::Failed)?;
         let argument = rhai::serde::to_dynamic(exchange).map_err(|_| ScriptFailure::Failed)?;
-        self.invoke(maps, ast, entrypoint, (argument,))
+        self.invoke(maps, ast, entrypoint, (argument,), deadline)
     }
 
     /// Run one aggregation strategy entrypoint over the old and new
@@ -229,13 +262,35 @@ impl ScriptSet {
         old: &Value,
         new: &Value,
     ) -> Result<Value, ScriptFailure> {
+        self.aggregate_with_deadline(
+            maps,
+            file,
+            entrypoint,
+            old,
+            new,
+            Instant::now() + CALL_DEADLINE,
+        )
+    }
+
+    /// Run one aggregation entrypoint without exceeding the caller's
+    /// absolute deadline or the per-call script ceiling.
+    #[allow(clippy::too_many_arguments)]
+    pub fn aggregate_with_deadline(
+        &self,
+        maps: &CodeMaps,
+        file: &str,
+        entrypoint: &str,
+        old: &Value,
+        new: &Value,
+        deadline: Instant,
+    ) -> Result<Value, ScriptFailure> {
         let ast = self
             .compiled
             .get(&(file.to_owned(), entrypoint.to_owned()))
             .ok_or(ScriptFailure::Failed)?;
         let old_value = rhai::serde::to_dynamic(old).map_err(|_| ScriptFailure::Failed)?;
         let new_value = rhai::serde::to_dynamic(new).map_err(|_| ScriptFailure::Failed)?;
-        self.invoke(maps, ast, entrypoint, (old_value, new_value))
+        self.invoke(maps, ast, entrypoint, (old_value, new_value), deadline)
     }
 
     /// Call a compiled entrypoint under the profile's limits and convert
@@ -246,14 +301,12 @@ impl ScriptSet {
         ast: &rhai::AST,
         entrypoint: &str,
         args: A,
+        deadline: Instant,
     ) -> Result<Value, ScriptFailure> {
-        let engine = build_engine(
-            &SCRIPT_PROFILE,
-            Some(Instant::now() + CALL_DEADLINE),
-            |engine| {
-                register_code_map(engine, maps);
-            },
-        );
+        let deadline = deadline.min(Instant::now() + CALL_DEADLINE);
+        let engine = build_engine(&SCRIPT_PROFILE, Some(deadline), |engine| {
+            register_code_map(engine, maps);
+        });
         let result = call_with_fresh_scope(&engine, ast, entrypoint, args)
             .map_err(|error| failure(&error))?;
         rhai::serde::from_dynamic::<Value>(&result).map_err(|_| ScriptFailure::Failed)
@@ -275,6 +328,32 @@ impl ScriptSet {
     }
 }
 
+/// The result of reading a governed file without allocating from its
+/// declared filesystem length or reading past the caller's ceiling.
+pub(crate) enum BoundedRead {
+    Bytes(Vec<u8>),
+    TooLarge,
+}
+
+/// Read at most `limit + 1` bytes. Metadata refuses an already oversized
+/// regular file before reading it, while the limited reader also holds the
+/// boundary if the file grows or its reported length is not useful.
+pub(crate) fn read_bounded_file(path: &Path, limit: usize) -> io::Result<BoundedRead> {
+    let file = File::open(path)?;
+    let length = file.metadata()?.len();
+    if length > limit as u64 {
+        return Ok(BoundedRead::TooLarge);
+    }
+    let mut bytes = Vec::with_capacity(limit.min(length as usize));
+    file.take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        Ok(BoundedRead::TooLarge)
+    } else {
+        Ok(BoundedRead::Bytes(bytes))
+    }
+}
+
 /// Register `code_map(id, key)` over the declared maps: the same single
 /// lookup a conversion step takes, with the miss raised as the marker
 /// text (`CONCEPT.md` section 8.6; there is no second key lookup in v1).
@@ -286,13 +365,22 @@ fn register_code_map(engine: &mut rhai::Engine, maps: &CodeMaps) {
     engine.register_fn(
         "code_map",
         move |id: &str, key: &str| -> Result<rhai::Dynamic, Box<EvalAltResult>> {
-            let map = maps.get(id).ok_or_else(|| unmapped(id))?;
+            let map = maps.get(id).ok_or_else(undeclared_map)?;
             let value = map.lookup(key).ok_or_else(|| unmapped(id))?;
             // A JSON scalar always converts; the marker keeps the one
             // failure path if a non-scalar ever reached the table.
             rhai::serde::to_dynamic(value).map_err(|_| unmapped(id))
         },
     );
+}
+
+/// The fixed runtime error for an id no authored map declares. The id is
+/// untrusted exchange-derived input and must not cross the failure boundary.
+fn undeclared_map() -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(
+        rhai::Dynamic::from(UNDECLARED_MAP_MARKER),
+        rhai::Position::NONE,
+    ))
 }
 
 /// The runtime error a miss raises: the marker text in the payload the
@@ -305,8 +393,8 @@ fn unmapped(id: &str) -> Box<EvalAltResult> {
 }
 
 fn failure(error: &EvalAltResult) -> ScriptFailure {
-    if let Some(map_id) = unmapped_map_id(error) {
-        return ScriptFailure::Unmapped(map_id);
+    if let Some(message) = unmapped_message(error) {
+        return ScriptFailure::Unmapped(message);
     }
     if matches!(error, EvalAltResult::ErrorTerminated(..))
         || classify_failure(error) == RhaiFailureCategory::ResourceExhausted
@@ -317,16 +405,20 @@ fn failure(error: &EvalAltResult) -> ScriptFailure {
     }
 }
 
-/// The map id the marker names, if the failure carries one. Rhai wraps
+/// The safe failure message the marker names, if the failure carries one.
+/// Rhai wraps
 /// a native function's runtime error in `ErrorInFunctionCall`; the
 /// marker sits in the innermost runtime payload.
-fn unmapped_map_id(error: &EvalAltResult) -> Option<String> {
+fn unmapped_message(error: &EvalAltResult) -> Option<String> {
     let mut cursor = error;
     loop {
         if let EvalAltResult::ErrorRuntime(payload, _) = cursor {
             if let Ok(text) = payload.as_immutable_string_ref() {
+                if text.as_str() == UNDECLARED_MAP_MARKER {
+                    return Some("an undeclared code map was requested".to_owned());
+                }
                 if let Some(id) = text.as_str().strip_prefix(UNMAPPED_MARKER) {
-                    return Some(id.to_owned());
+                    return Some(format!("code map {id} has no entry for the key"));
                 }
             }
         }
@@ -334,5 +426,66 @@ fn unmapped_map_id(error: &EvalAltResult) -> Option<String> {
             EvalAltResult::ErrorInFunctionCall(_, _, err, _) => err.as_ref(),
             _ => return None,
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn pack_for_script(source: &[u8]) -> AdapterPack {
+        serde_json::from_value(json!({
+            "id": "bounded-script",
+            "version": "1",
+            "testedVersions": ["1"],
+            "scripts": [{"path": "probe.rhai", "digest": sha256_uri(source)}],
+        }))
+        .expect("the test pack parses")
+    }
+
+    #[test]
+    fn an_oversized_sparse_script_is_refused_before_compilation() {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let path = directory.path().join("probe.rhai");
+        File::create(&path)
+            .expect("the sparse file is created")
+            .set_len(SCRIPT_PROFILE.maximum_source_bytes as u64 + 1)
+            .expect("the sparse file length is set");
+        let pack = pack_for_script(b"");
+        let mut scripts = ScriptSet::default();
+
+        assert!(matches!(
+            scripts.add(&pack, directory.path(), "probe.rhai", "probe"),
+            Err(ScriptLoadError::TooLarge(path)) if path == "probe.rhai"
+        ));
+    }
+
+    #[test]
+    fn a_caller_deadline_bounds_a_synchronous_script() {
+        let source = b"fn probe(exchange) { let n = 0; for x in 0..10000 { n += x; } n }";
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        std::fs::write(directory.path().join("probe.rhai"), source).expect("the script is written");
+        let pack = pack_for_script(source);
+        let mut scripts = ScriptSet::default();
+        scripts
+            .add(&pack, directory.path(), "probe.rhai", "probe")
+            .expect("the script compiles");
+
+        let exchange = json!({"body": null, "headers": {}, "properties": {}});
+        let completed = scripts.call(&Arc::new(BTreeMap::new()), "probe.rhai", "probe", &exchange);
+        assert!(
+            completed.is_ok(),
+            "the finite script stays inside the operation budget: {completed:?}"
+        );
+
+        let expired = scripts.call_with_deadline(
+            &Arc::new(BTreeMap::new()),
+            "probe.rhai",
+            "probe",
+            &exchange,
+            Instant::now(),
+        );
+        assert!(matches!(expired, Err(ScriptFailure::Budget)), "{expired:?}");
     }
 }

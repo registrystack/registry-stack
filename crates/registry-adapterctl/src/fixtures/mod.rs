@@ -12,14 +12,9 @@
 //! that status, and an expected problem must resolve to a declared
 //! problem whose status the compiled operation declares.
 //!
-//! What this pass does not yet do is drive the routes: the send-by-send
-//! replay (every `http` and `graphql` send answered from the entry's
-//! recorded exchanges in order, through core's `intercepts_send` and
-//! `answer_send`) and the byte-for-byte facade comparison activate with
-//! the runtime engine (CONCEPT 13.3; Wave 2 wires the engine over the
-//! compiled pieces this command already holds). Until then the command
-//! proves the offline half of the replay contract: a suite it accepts is
-//! one the engine will be able to drive.
+//! After those authoring and contract checks, the command compiles the real
+//! runtime interpreter over a network-free replay transport, drives every
+//! entry's route, and compares the rendered facade result exactly.
 
 use clap::{Args, Subcommand};
 use registry_adapter_core::{
@@ -76,6 +71,7 @@ pub(crate) struct ReplayRun {
     pub fixtures: usize,
     pub entries: usize,
     pub exchanges: usize,
+    pub writes_simulated: usize,
 }
 
 /// Why the replay could not run to a verdict.
@@ -121,6 +117,9 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
     .map_err(io_failure)?;
     let pack_path = check::artifact_path(args.pack.as_deref(), &directory, "pack.yaml", "--pack")
         .map_err(io_failure)?;
+    let pack_directory = pack_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let pack = check::read::<AdapterPack>(&pack_path, &check::PACK_FORMAT, &mut report, &mut files)
         .map_err(io_failure)?;
     let fixture_paths = if args.fixtures.is_empty() {
@@ -194,6 +193,56 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
         });
     }
 
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|source| ReplayFailure::Io {
+            path: "fixture replay runtime".to_owned(),
+            source,
+        })?;
+    let mut writes_simulated = 0;
+    for (fixture_index, fixture) in fixtures.iter().enumerate() {
+        for (entry_index, entry) in fixture.entries.iter().enumerate() {
+            let actual = match runtime.block_on(registry_adapter::replay::run(
+                &project,
+                &profile,
+                &pack,
+                pack_directory,
+                fixture,
+                entry_index,
+            )) {
+                Ok(actual) => actual,
+                Err(fault) => {
+                    report.push(Diagnostic::error(
+                        "adapterctl.fixtures.drive",
+                        format!("/fixtures/{fixture_index}/entries/{entry_index}"),
+                        format!("the runtime could not replay this entry: {fault}"),
+                        "Correct the route or its recorded transcript so the actual engine completes it offline.",
+                    ));
+                    continue;
+                }
+            };
+            if actual.write_durability == registry_adapter::replay::ReplayDurability::Simulated {
+                writes_simulated += 1;
+            }
+            if let Some(member) = facade_mismatch(&actual, &entry.expected) {
+                report.push(Diagnostic::error(
+                    "adapterctl.fixtures.facade-mismatch",
+                    format!(
+                        "/fixtures/{fixture_index}/entries/{entry_index}/expected/{member}"
+                    ),
+                    "the actual facade result differs from the fixture expectation",
+                    "Record the intended facade result or correct the route, mapping, disclosure, or problem declaration.",
+                ));
+            }
+        }
+    }
+    if report.has_errors() {
+        return Err(ReplayFailure::Refused {
+            diagnostics: report.into_diagnostics(),
+        });
+    }
+
     Ok(ReplayRun {
         project: args.project.display().to_string(),
         fixtures: fixtures.len(),
@@ -203,7 +252,53 @@ pub(crate) fn run(args: &ReplayArgs) -> Result<ReplayRun, ReplayFailure> {
             .flat_map(|fixture| fixture.entries.iter())
             .map(|entry| entry.upstream.len())
             .sum(),
+        writes_simulated,
     })
+}
+
+fn facade_mismatch(
+    actual: &registry_adapter::replay::ReplayFacade,
+    expected: &ExpectedFacade,
+) -> Option<&'static str> {
+    match expected {
+        ExpectedFacade::Response {
+            status,
+            headers,
+            body,
+        } => {
+            if actual.problem_code.is_some() {
+                return Some("type");
+            }
+            if u32::from(actual.status) != status.get() {
+                return Some("status");
+            }
+            if &actual.headers != headers {
+                return Some("headers");
+            }
+            match (&actual.body, body) {
+                (None, None) => None,
+                (Some(actual), Some(expected))
+                    if serde_json::to_vec(actual).ok()
+                        == serde_json::to_vec(expected.as_value()).ok() =>
+                {
+                    None
+                }
+                _ => Some("body"),
+            }
+        }
+        ExpectedFacade::Problem { class, code } => {
+            if actual.problem_code.as_deref() != Some(code.as_str()) {
+                return Some("code");
+            }
+            if !actual
+                .problem_class
+                .is_some_and(|actual| actual.is_within(*class))
+            {
+                return Some("class");
+            }
+            None
+        }
+    }
 }
 
 /// Hold every entry's expectation against the compiled contract: the

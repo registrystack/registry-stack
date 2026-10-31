@@ -5,9 +5,11 @@
 // `response.status` ("201 Created" or "200 OK") and `response.location`
 // ("Patient/<id>/_history/<vid>")
 // (https://hl7.org/fhir/R4/bundle-definitions.html#Bundle.entry.response).
-// The engine is assumed to call `created_id` with the response body.
+// The engine calls `created_id` with the exchange map; the response body is
+// the transaction-response Bundle.
 // Pure and deterministic; no I/O.
-fn created_id(bundle) {
+fn created_id(exchange) {
+    let bundle = exchange.body;
     if bundle.type != "transaction-response" || bundle.entry == () || bundle.entry.len() != 1 {
         throw "the reply is not a one-entry transaction-response";
     }

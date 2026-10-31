@@ -54,6 +54,9 @@ entries:
     expected:
       type: response
       status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
       body:
         recordId: EeBJ3Sn9uLg
         data:

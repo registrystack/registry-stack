@@ -111,7 +111,7 @@ routeTemplates:
           parameters:
             operation: cases-query
       - setProperty:
-          name: nextCursor
+          name: AdapterNextContinuation
           value:
             rhai:
               file: scripts/next-cursor.rhai
@@ -187,7 +187,7 @@ routeTemplates:
                     entrypoint: to_case
 scripts:
   - path: scripts/find-variables.rhai
-    digest: sha256:e2199117406566aa318ee5345e0445738842b314f020802e49e8c99c6223d2c1
+    digest: sha256:e88a2d8343351c974390a2315409a9c61e8e78b4cfa5939707bb30e3c92db68a
   - path: scripts/get-variables.rhai
     digest: sha256:aa0d1c6685c58e974421107e6e077bd11551eb1f22124865ce3221c60a7daf39
   - path: scripts/next-cursor.rhai

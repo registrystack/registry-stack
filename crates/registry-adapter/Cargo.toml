@@ -47,6 +47,7 @@ tokio-postgres.workspace = true
 registry-adapter-core.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
@@ -66,12 +67,13 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
+proptest.workspace = true
 # The loopback TLS doubles of tests/egress_tls_wiring.rs: a locally
 # terminated certificate and acceptor, test-only, never a runtime
 # dependency.
 rcgen.workspace = true
 tokio-rustls.workspace = true
-registry-platform-crypto.workspace = true
 registry-platform-testing.workspace = true
 tempfile.workspace = true
 serde_norway.workspace = true

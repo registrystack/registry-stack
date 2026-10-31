@@ -20,7 +20,7 @@ use registry_adapter::route::{
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
     AdapterPack, AdapterRuntimeConfig, ComponentKind, Endpoint, EndpointAuthentication,
-    EndpointBinding, Expression, RuntimeCredential, Step,
+    EndpointBinding, EndpointOperation, Expression, GraphQlOperationKind, RuntimeCredential, Step,
 };
 use registry_platform_config::{sha256_uri, SecretProvider, SecretResolver};
 use registry_platform_yaml::{
@@ -92,6 +92,7 @@ fn graphql_endpoints(
         cursor_key_ref: None,
         previous_cursor_key_ref: None,
         cursor_ttl_seconds: None,
+        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("the binding");
     let mut runtime = EndpointRuntime::compile(binding, &endpoint, &config, resolver)
@@ -115,7 +116,12 @@ fn declared_endpoint() -> Endpoint {
         maximum_response_bytes: BoundedU64::new(65_536).expect("response bound"),
         response_headers: UniqueList::new(Vec::new()).expect("response headers"),
         request_headers: UniqueList::new(Vec::new()).expect("request headers"),
-        operations: Vec::new(),
+        operations: vec![EndpointOperation {
+            id: LocalId::new("cases-query").expect("operation id"),
+            idempotent_upstream: false,
+            safe_upstream: false,
+            graphql: Some(GraphQlOperationKind::Query),
+        }],
         tested_versions: Vec::new(),
         query_file: Some("queries/find-cases.graphql".to_owned()),
         operation_name: Some("FindCases".to_owned()),
@@ -128,6 +134,8 @@ fn pinned_query(variables: Option<Expression>) -> GraphQlQuery {
     GraphQlQuery {
         text: QUERY.to_owned(),
         operation: Some("FindCases".to_owned()),
+        kind: Some(GraphQlOperationKind::Query),
+        operations: ["cases-query".to_owned()].into_iter().collect(),
         variables,
     }
 }
@@ -385,6 +393,21 @@ async fn a_graphql_send_to_an_endpoint_without_a_query_is_refused() {
     assert_eq!(lane.requests(), 0);
 }
 
+#[tokio::test]
+async fn a_graphql_send_naming_an_operation_outside_the_pinned_endpoint_is_refused() {
+    let lane = Lane::over(
+        json!([{"to": {
+            "uri": "graphql:cases",
+            "parameters": {"operation": "different-query"}
+        }}]),
+        Some(pinned_query(None)),
+    );
+    lane.reply(r#"{"data": null}"#);
+    let outcome = lane.run().await;
+    assert_eq!(failed_class(&outcome), "egress.refused");
+    assert_eq!(lane.requests(), 0, "the operation guard runs before egress");
+}
+
 /// The graphql shape carries `operation` and `body` only: no address
 /// members, no method of its own, no status range of its own, and no
 /// resume bindings this runtime serves (section 8.8).
@@ -453,6 +476,24 @@ fn the_loader_holds_the_query_files_own_line() {
         GraphQlQuery::load(&pack, directory.path(), &endpoint).expect("the pinned query loads");
     assert_eq!(query.text, QUERY);
     assert_eq!(query.operation.as_deref(), Some("FindCases"));
+    assert_eq!(query.kind, Some(GraphQlOperationKind::Query));
+    assert!(query.accepts_operation(Some(&ExternalId::new("cases-query").expect("operation"))));
+    assert!(!query.accepts_operation(Some(
+        &ExternalId::new("different-query").expect("operation")
+    )));
+
+    let mutation_text = QUERY.replacen("query", "mutation", 1);
+    let mutation_pack = pack_pinning(
+        directory.path(),
+        &mutation_text,
+        "queries/find-cases-mutation.graphql",
+    );
+    let mut mismatched = endpoint.clone();
+    mismatched.query_file = Some("queries/find-cases-mutation.graphql".to_owned());
+    assert!(matches!(
+        GraphQlQuery::load(&mutation_pack, directory.path(), &mismatched),
+        Err(GraphQlLoadError::OperationKindMismatch)
+    ));
 
     // A digest that pins different bytes than the file holds is refused.
     let stale = AdapterPack {
@@ -498,9 +539,30 @@ fn the_loader_holds_the_query_files_own_line() {
         GraphQlQuery::load(&pack, directory.path(), &none),
         Err(GraphQlLoadError::NotInventoried(_))
     ));
-    // A file over the engine's bound is refused before any read of it.
-    let padded = format!("# {}", "=".repeat(70_000));
-    let oversized = pack_pinning(directory.path(), &padded, "queries/oversized.graphql");
+    let mut unnamed = endpoint.clone();
+    unnamed.operation_name = None;
+    assert!(matches!(
+        GraphQlQuery::load(&pack, directory.path(), &unnamed),
+        Err(GraphQlLoadError::OperationRequired)
+    ));
+    // A sparse file over the engine's bound is refused from metadata,
+    // without allocating or reading its declared length.
+    let oversized_path = directory.path().join("queries/oversized.graphql");
+    std::fs::File::create(&oversized_path)
+        .expect("the sparse query file is created")
+        .set_len(1024 * 1024 * 1024)
+        .expect("the sparse query file length is set");
+    let oversized = AdapterPack {
+        query_files: UniqueList::new(vec![registry_adapter_core::ScriptReference {
+            path: "queries/oversized.graphql".to_owned(),
+            digest: Digest::new(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect("the digest parses"),
+        }])
+        .expect("unique"),
+        ..pack.clone()
+    };
     let mut big = endpoint.clone();
     big.query_file = Some("queries/oversized.graphql".to_owned());
     match GraphQlQuery::load(&oversized, directory.path(), &big) {

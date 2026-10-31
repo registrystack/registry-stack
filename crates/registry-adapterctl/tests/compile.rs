@@ -14,6 +14,37 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+const CONTRACT_PIN_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
+
+fn assert_contract_pin(parameters: &Value) {
+    let pins = parameters
+        .as_array()
+        .expect("parameters")
+        .iter()
+        .filter(|parameter| parameter["in"] == "header")
+        .collect::<Vec<_>>();
+    assert_eq!(pins.len(), 1, "one contract pin header: {parameters}");
+    assert_eq!(
+        pins[0]["name"],
+        registry_adapter::effective_contract::PIN_HEADER
+    );
+    assert_eq!(pins[0]["required"], false);
+    assert_eq!(
+        pins[0]["schema"],
+        json!({"type": "string", "pattern": CONTRACT_PIN_PATTERN})
+    );
+}
+
+fn query_parameter_names(parameters: &Value) -> Vec<&str> {
+    parameters
+        .as_array()
+        .expect("parameters")
+        .iter()
+        .filter(|parameter| parameter["in"] == "query")
+        .map(|parameter| parameter["name"].as_str().expect("parameter name"))
+        .collect()
+}
+
 /// The repository root, from this crate's manifest directory.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -155,14 +186,16 @@ fn the_minimal_fixture_project_compiles() {
         json!({"title": "case-deployment", "version": "1"})
     );
 
-    // One concrete operation for the one bound (operation, record type)
-    // pair: the record type is substituted into the path, so no template
-    // placeholder remains (D6, CONCEPT section 7).
+    // One concrete authored operation for the one bound (operation, record
+    // type) pair, beside the protected system contract route. The record
+    // type is substituted into the authored path, so no template placeholder
+    // remains (D6, CONCEPT section 7).
     let paths = document["paths"].as_object().expect("paths");
-    assert_eq!(paths.len(), 1, "{paths:?}");
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(paths.contains_key(registry_adapter::effective_contract::WELL_KNOWN_PATH));
     let operation = &document["paths"]["/v2/cases/case"]["get"];
     assert_eq!(operation["operationId"], "cases-get.case");
-    assert_eq!(operation["parameters"], json!([]));
+    assert_contract_pin(&operation["parameters"]);
     assert_eq!(operation["security"], json!([{"bearerAuth": []}]));
     assert_eq!(
         operation["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
@@ -204,53 +237,52 @@ fn error_responses_come_from_the_profile_problems_list() {
         .keys()
         .map(String::as_str)
         .collect();
-    assert_eq!(keys, ["200", "422", "500", "502"]);
+    assert_eq!(keys, ["200", "412", "422", "500", "502", "503"]);
     assert_eq!(
         responses["200"]["description"],
         "The operation's response envelope for the bound record type."
     );
+    for (status, description) in [
+        ("422", "the request or its mapping was refused"),
+        ("500", "the facade refused the call"),
+        ("502", "the source could not be reached"),
+    ] {
+        assert_eq!(responses[status]["description"], description);
+        assert_eq!(
+            responses[status]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/Problem"
+        );
+    }
     assert_eq!(
-        responses,
-        &json!({
-            "200": responses["200"].clone(),
-            "422": {
-                "description": "the request or its mapping was refused",
-                "content": {
-                    "application/json": {
-                        "schema": {"$ref": "#/components/schemas/Problem"}
-                    }
-                }
-            },
-            "500": {
-                "description": "the facade refused the call",
-                "content": {
-                    "application/json": {
-                        "schema": {"$ref": "#/components/schemas/Problem"}
-                    }
-                }
-            },
-            "502": {
-                "description": "the source could not be reached",
-                "content": {
-                    "application/json": {
-                        "schema": {"$ref": "#/components/schemas/Problem"}
-                    }
-                }
-            }
-        }),
-        "the responses are the success response plus one per problem status"
+        responses["412"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ContractPreconditionProblem"
+    );
+    assert_eq!(
+        responses["503"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ContractUnavailableProblem"
     );
 
     // Every operation carries the error responses, not only the first.
-    for item in document["paths"].as_object().unwrap().values() {
-        for operation in item.as_object().unwrap().values() {
-            assert!(
-                operation["responses"]["502"]["content"]["application/json"]["schema"]
-                    .get("$ref")
-                    .is_some(),
-                "every operation answers the profile's problems"
-            );
-        }
+    for operation in document["paths"]["/v2/cases/case"]
+        .as_object()
+        .unwrap()
+        .values()
+    {
+        assert!(
+            operation["responses"]["502"]["content"]["application/json"]["schema"]
+                .get("$ref")
+                .is_some(),
+            "every operation answers the profile's problems"
+        );
+        assert_eq!(
+            operation["responses"]["412"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ContractPreconditionProblem"
+        );
+        assert_eq!(
+            operation["responses"]["503"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ContractUnavailableProblem"
+        );
+        assert_contract_pin(&operation["parameters"]);
     }
 }
 
@@ -351,11 +383,10 @@ fn an_unbound_profile_operation_emits_no_path() {
     let end = text.find("accessProfiles:").expect("the access profiles");
     std::fs::write(&project, format!("{}{}", &text[..start], &text[end..])).unwrap();
     let (document, _) = compile(&project, &[]);
-    assert_eq!(
-        document["paths"],
-        json!({}),
-        "an operation with no binding emits no path"
-    );
+    let paths = document["paths"].as_object().expect("paths");
+    assert_eq!(paths.len(), 1, "only the protected system route remains");
+    assert!(paths.contains_key(registry_adapter::effective_contract::WELL_KNOWN_PATH));
+    assert!(paths.get("/v2/cases/case").is_none());
     let _ = root;
 }
 
@@ -374,43 +405,43 @@ fn the_maintained_example_compiles_under_breg_records() {
     let paths = document["paths"].as_object().expect("paths");
     // `/v1/records/person` carries search (get) and create (post);
     // `/v1/records/person/{record_id}` carries get.
-    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    assert!(paths.contains_key(registry_adapter::effective_contract::WELL_KNOWN_PATH));
     let search = &document["paths"]["/v1/records/person"]["get"];
     assert_eq!(search["operationId"], "records-search.person");
-    let parameters = search["parameters"].as_array().expect("parameters");
     assert_eq!(
-        parameters,
-        &vec![
-            json!({
-                "name": "cursor",
-                "in": "query",
-                "required": false,
-                "schema": {"type": "string"},
-            }),
-            json!({
-                "name": "limit",
-                "in": "query",
-                "required": false,
-                "schema": {"type": "integer", "minimum": 1, "maximum": 1000},
-            }),
-        ],
-        "the profile's cursor and page-size names and bounds, and no others"
+        query_parameter_names(&search["parameters"]),
+        ["cursor", "limit"],
+        "the profile's cursor and page-size names are the only query parameters"
     );
+    assert_eq!(
+        search["parameters"][1]["schema"],
+        json!({"type": "integer", "minimum": 1, "maximum": 1000})
+    );
+    assert_contract_pin(&search["parameters"]);
 
     let get = &document["paths"]["/v1/records/person/{record_id}"]["get"];
     assert_eq!(get["operationId"], "records-get.person");
+    let path_parameters = get["parameters"]
+        .as_array()
+        .expect("parameters")
+        .iter()
+        .filter(|parameter| parameter["in"] == "path")
+        .collect::<Vec<_>>();
     assert_eq!(
-        get["parameters"],
-        json!([{
+        path_parameters,
+        [&json!({
             "name": "record_id",
             "in": "path",
             "required": true,
             "schema": {"type": "string"},
-        }])
+        })]
     );
+    assert_contract_pin(&get["parameters"]);
 
     let create = &document["paths"]["/v1/records/person"]["post"];
     assert_eq!(create["operationId"], "records-create.person");
+    assert_contract_pin(&create["parameters"]);
     assert_eq!(
         create["requestBody"]["content"]["application/json"]["schema"]["properties"]["data"]
             ["properties"]["org_unit"],
@@ -611,13 +642,11 @@ fn the_second_target_experiment_compiles() {
 
     let search = &document["paths"]["/fhir/household"]["get"];
     assert_eq!(search["operationId"], "fhir-search-type.household");
-    let names: Vec<&str> = search["parameters"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|parameter| parameter["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, vec!["_count", "_page_token"]);
+    assert_eq!(
+        query_parameter_names(&search["parameters"]),
+        ["_count", "_page_token"]
+    );
+    assert_contract_pin(&search["parameters"]);
     let count = &search["parameters"][0];
     assert_eq!(
         count["schema"],
@@ -630,12 +659,11 @@ fn the_second_target_experiment_compiles() {
     );
 }
 
-/// The graphql-cursor-source experiment compiles: its search binding
-/// declares `filters`, and the compiled contract offers exactly those
-/// fields as typed equality query parameters beside the profile's
-/// pagination parameters.
+/// The graphql-cursor-source experiment compiles as the profile's read-only
+/// POST. Its closed request body carries required typed filters and optional
+/// typed pagination members; the only HTTP parameter is the contract pin.
 #[test]
-fn the_graphql_experiment_exposes_its_filters_as_query_parameters() {
+fn the_graphql_experiment_exposes_its_closed_post_request_body() {
     let experiment = repo_root().join("products/adapter/experiments/graphql-cursor-source");
     let (root, project) = copied_tree(&experiment);
     // The experiment pins the shared case-api profile, which sits outside
@@ -648,35 +676,26 @@ fn the_graphql_experiment_exposes_its_filters_as_query_parameters() {
     let (document, _) = compile(&project, &["--profile", &profile]);
     let _ = root;
 
+    assert!(document["paths"]["/v2/cases/benefit_case"]
+        .get("get")
+        .is_none());
     let search = &document["paths"]["/v2/cases/benefit_case"]["post"];
     assert_eq!(search["operationId"], "cases-find.benefit_case");
-    let parameters = search["parameters"].as_array().expect("parameters");
-    // The binding filters on `status`; the cursor pagination adds
-    // `pageStateToken` and `maxResults`; name order sorts them together.
+    assert!(query_parameter_names(&search["parameters"]).is_empty());
+    assert_contract_pin(&search["parameters"]);
+    assert_eq!(search["requestBody"]["required"], true);
+    let body = &search["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(body["additionalProperties"], false);
+    assert_eq!(body["required"], json!(["query"]));
+    assert_eq!(body["properties"]["maxResults"], json!({"type": "integer"}));
     assert_eq!(
-        parameters,
-        &vec![
-            json!({
-                "name": "maxResults",
-                "in": "query",
-                "required": false,
-                "schema": {"type": "integer", "minimum": 10, "maximum": 500},
-            }),
-            json!({
-                "name": "pageStateToken",
-                "in": "query",
-                "required": false,
-                "schema": {"type": "string"},
-            }),
-            json!({
-                "name": "status",
-                "in": "query",
-                "required": true,
-                "schema": {"type": "string"},
-            }),
-        ],
-        "the declared filters join the pagination parameters in name order"
+        body["properties"]["pageStateToken"],
+        json!({"type": "string"})
     );
+    let filters = &body["properties"]["query"];
+    assert_eq!(filters["additionalProperties"], false);
+    assert_eq!(filters["required"], json!(["status"]));
+    assert_eq!(filters["properties"]["status"], json!({"type": "string"}));
 }
 
 /// Two bindings whose concrete paths collide refuse the compile with the

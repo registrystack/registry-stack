@@ -757,3 +757,9 @@ exceptions:
   class: protocol-constant
   reason: The map carries Camel templatedRoute parameter values, which Camel accepts as arbitrary objects and converts per the target parameter; the keys are typed local identifiers and the value freedom is the ported protocol shape
   resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/effective-contract
+  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/contract/properties/schemaDialect/const/https:~1~1json-schema.org~1draft~12020-12~1schema
+  class: protocol-constant
+  reason: The value is the JSON Schema 2020-12 dialect URI and is written exactly as that specification defines it
+  resolution: Permanent for the effective-contract v1alpha1 exchange model.

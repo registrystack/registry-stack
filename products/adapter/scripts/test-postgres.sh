@@ -41,7 +41,7 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 		-e POSTGRES_USER="$db_user" -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB="$db_name" \
 		-p 127.0.0.1::5432 "$image" >/dev/null
 	for attempt in {1..60}; do
-		if docker exec "$container" pg_isready -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
+		if docker exec "$container" pg_isready -h 127.0.0.1 -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
 			break
 		fi
 		if [[ "$attempt" == 60 ]]; then
@@ -50,9 +50,9 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 		fi
 		sleep 1
 	done
-	# A server that only accepts TCP is not database verification: prove it
-	# really answers a query over the connection the suites will use.
-	if ! answered=$(docker exec "$container" psql -v ON_ERROR_STOP=1 -qAt -U "$db_user" -d "$db_name" -c 'select 1'); then
+	# The image's temporary initialization server accepts Unix sockets;
+	# probe the final TCP listener and prove it really answers a query.
+	if ! answered=$(docker exec "$container" psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -qAt -U "$db_user" -d "$db_name" -c 'select 1'); then
 		printf '%s\n' "$container refused the connectivity probe; see docker logs $container." >&2
 		exit 1
 	fi

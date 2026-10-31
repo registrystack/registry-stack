@@ -153,6 +153,22 @@ impl Served {
         Self::start_with_project(upstream_url, &Self::example_project()).await
     }
 
+    /// Start with an explicit exact-response custody window.
+    pub async fn start_with_retention(upstream_url: &str, seconds: u64) -> Self {
+        let mut served = Self::spawn_config(
+            upstream_url,
+            &Self::example_project(),
+            CURSOR_KEY,
+            &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            BASIC_CREDENTIAL,
+            seconds,
+        )
+        .await;
+        served.wait_until_listening();
+        served
+    }
+
     /// Start over the project directory at `project`.
     pub async fn start_with_project(upstream_url: &str, project: &Path) -> Self {
         let mut served = Self::spawn_with_project(upstream_url, project, CURSOR_KEY).await;
@@ -175,6 +191,7 @@ impl Served {
             &[],
             "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
             credential,
+            86_400,
         )
         .await;
         served.wait_until_listening();
@@ -225,6 +242,7 @@ impl Served {
             &[],
             cursor_lines,
             BASIC_CREDENTIAL,
+            86_400,
         )
         .await;
         served.await_refusal()
@@ -247,6 +265,7 @@ impl Served {
             omitted_env,
             "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
             BASIC_CREDENTIAL,
+            86_400,
         )
         .await
     }
@@ -259,6 +278,7 @@ impl Served {
         omitted_env: &[&str],
         cursor_lines: &str,
         credential: &str,
+        response_retention_seconds: u64,
     ) -> Self {
         let database = schema_url().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
@@ -295,6 +315,8 @@ allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:
   retentionDays: 90
+idempotency:
+  responseRetentionSeconds: {response_retention_seconds}
 {cursor_lines}"#
             ),
         )

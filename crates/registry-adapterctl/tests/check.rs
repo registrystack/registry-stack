@@ -5,6 +5,7 @@
 //! `tests/fixtures/minimal`.
 
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
@@ -91,7 +92,7 @@ fn the_minimal_fixture_project_checks_green() {
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     assert_eq!(report["command"], "check");
     assert_eq!(report["status"], "complete");
-    assert_eq!(report["filesChecked"], 5);
+    assert_eq!(report["filesChecked"], 6);
     assert_eq!(report["diagnostics"], json!([]));
 }
 
@@ -252,8 +253,8 @@ fn an_uncompilable_script_refuses_with_the_compile_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("scripts/map.rhai"),
-            "fn map(exchange) {\n    exchange\n}",
-            "fn map(exchange) {\n    exchange",
+            "fn map(exchange) {\n    #{ national_id: exchange.body.id }\n}",
+            "fn map(exchange) {\n    #{ national_id: exchange.body.id }",
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);
@@ -273,8 +274,8 @@ fn a_script_without_the_declared_entrypoint_refuses_with_the_compile_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("scripts/map.rhai"),
-            "fn map(exchange) {\n    exchange\n}",
-            "fn other(input) {\n    input\n}",
+            "fn map(exchange) {\n    #{ national_id: exchange.body.id }\n}",
+            "fn other(input) {\n    #{ national_id: input.body.id }\n}",
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);
@@ -290,8 +291,8 @@ fn an_entrypoint_whose_parameter_is_not_exchange_refuses_with_the_signature_code
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("scripts/map.rhai"),
-            "fn map(exchange) {\n    exchange\n}",
-            "fn map(record) {\n    record\n}",
+            "fn map(exchange) {\n    #{ national_id: exchange.body.id }\n}",
+            "fn map(record) {\n    #{ national_id: record.body.id }\n}",
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);
@@ -466,8 +467,8 @@ fn an_entry_with_an_unbound_operation_refuses_with_the_operation_code() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("project.yaml"),
-            "bindings:\n  - id: find-cases\n    operation: cases-get\n    recordType: case\n    route: fetchCases\n    maximumUpstreamCalls: 5",
-            "bindings: []",
+            "bindings:\n  - id: find-cases\n    operation: cases-get\n    recordType: case\n    route: fetchCases\n    maximumUpstreamCalls: 5\n  - id: create-case",
+            "bindings:\n  - id: create-case",
         );
     });
     let (exit, report, _) = run_json(&["check", &project]);
@@ -599,7 +600,7 @@ fn the_human_refusal_names_the_code_on_stderr() {
         text.contains("[adapter.project.unknown-template]"),
         "{text}"
     );
-    assert!(text.contains("2 errors, 0 warnings in 5 files"), "{text}");
+    assert!(text.contains("2 errors, 0 warnings in 6 files"), "{text}");
 }
 
 /// The human format of a passing check keeps stdout for the verdict and
@@ -668,19 +669,45 @@ fn check_refuses_a_missing_explicit_fixture_path() {
     );
 }
 
-/// `schemas` writes the five generated files into any directory it is
-/// given.
+/// `schemas` writes the closed set of six generated files into any
+/// directory it is given.
 #[test]
-fn schemas_writes_five_files_into_the_given_directory() {
+fn schemas_writes_six_files_into_the_given_directory() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("schemas").to_str().unwrap().to_owned();
     let (exit, report, stderr) = run_json(&["schemas", "--output-dir", &output]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     assert_eq!(report["command"], "schemas");
-    assert_eq!(report["files"].as_array().unwrap().len(), 5);
-    let written = std::fs::read_dir(&output).unwrap().count();
-    assert_eq!(written, 5);
+    let expected = BTreeSet::from([
+        "effective-contract.v1alpha1.schema.json".to_owned(),
+        "fixture.v1alpha1.schema.json".to_owned(),
+        "pack.v1alpha1.schema.json".to_owned(),
+        "profile.v1alpha1.schema.json".to_owned(),
+        "project.v1alpha1.schema.json".to_owned(),
+        "runtime.v1alpha1.schema.json".to_owned(),
+    ]);
+    let reported = report["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file.as_str().unwrap().to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(reported, expected);
+    let written = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(written, expected, "the output directory is the closed set");
+    let effective: Value = serde_json::from_slice(
+        &std::fs::read(Path::new(&output).join("effective-contract.v1alpha1.schema.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        effective["$id"],
+        "https://id.registrystack.org/schemas/adapter/effective-contract/effective-contract.v1alpha1.schema.json"
+    );
+    assert_eq!(effective["additionalProperties"], false);
 }
 
 /// `schemas --check` refuses on a hand-edited committed file.
@@ -725,7 +752,7 @@ fn check_accepts_the_project_directory() {
     let (exit, report, stderr) = run_json(&["check", &minimal_project_directory()]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
-    assert_eq!(report["filesChecked"], 5);
+    assert_eq!(report["filesChecked"], 6);
     assert_eq!(report["diagnostics"], json!([]));
 }
 
@@ -794,7 +821,7 @@ fn project_lock_repairs_a_stale_digest_pin_and_the_project_then_checks_green() {
     );
     let (exit, report, _) = run_json(&["check", &project]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
-    assert_eq!(report["filesChecked"], 5);
+    assert_eq!(report["filesChecked"], 6);
 }
 
 /// A lock over an already pinned project reports both artifacts unchanged
@@ -1111,7 +1138,7 @@ fn project_lock_repins_an_edited_script_and_the_project_then_checks_green() {
     );
     let (exit, report, _) = run_json(&["check", &project]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
-    assert_eq!(report["filesChecked"], 5);
+    assert_eq!(report["filesChecked"], 6);
 }
 
 /// A lock whose pack pins a file that is missing refuses with the pack's
@@ -1270,7 +1297,7 @@ fn the_runtime_file_without_environment_accepts_a_deferred_expression() {
     let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert_eq!(report["diagnostics"], json!([]), "{report}");
-    assert_eq!(report["filesChecked"], 6);
+    assert_eq!(report["filesChecked"], 7);
 }
 
 /// Without `--environment` an expression in a non-text member is still
@@ -1461,6 +1488,9 @@ const CASES_QUERY: &str =
 const CASES_QUERY_DIGEST: &str =
     "sha256:47c99d9134c4cd899c5e62082c182d1e396ecde75885af5c1907887c638ce24a";
 
+const CASES_MUTATION: &str =
+    "mutation casesByType($type: String!) {\n  cases(type: $type) {\n    id\n  }\n}\n";
+
 /// A query document no parser accepts, and its sha256 digest.
 const BROKEN_QUERY: &str = "query casesByType($type: String!) {\n  cases(type: $type)\n";
 const BROKEN_QUERY_DIGEST: &str =
@@ -1487,9 +1517,9 @@ fn graphql_project(query: &str, digest: &str, operation_name: &str) -> (tempfile
     );
     edit(
         &copy.join("pack.yaml"),
-        "      - id: cases-read\n        idempotentUpstream: true\n",
+        "      - id: cases-create\n        idempotentUpstream: true\nrouteTemplates:\n",
         &format!(
-            "      - id: cases-read\n        idempotentUpstream: true\n  - id: case-graphql\n    component: graphql\n    authentication:\n      type: none\n    attemptTimeoutMilliseconds: 10000\n    maximumResponseBytes: 1048576\n    operationName: {operation_name}\n    queryFile: queries/cases-by-type.graphql\n    operations:\n      - id: cases-by-type\n        idempotentUpstream: true\n        graphql: query\n"
+            "      - id: cases-create\n        idempotentUpstream: true\n  - id: case-graphql\n    component: graphql\n    authentication:\n      type: none\n    attemptTimeoutMilliseconds: 10000\n    maximumResponseBytes: 1048576\n    operationName: {operation_name}\n    queryFile: queries/cases-by-type.graphql\n    operations:\n      - id: cases-by-type\n        idempotentUpstream: true\n        graphql: query\nrouteTemplates:\n"
         ),
     );
     edit(
@@ -1517,7 +1547,7 @@ fn a_graphql_pack_whose_operation_is_declared_checks_green() {
     let (exit, report, stderr) = run_json(&["check", &project]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
-    assert_eq!(report["filesChecked"], 6, "{report}");
+    assert_eq!(report["filesChecked"], 7, "{report}");
     assert_eq!(report["diagnostics"], json!([]));
 }
 
@@ -1535,6 +1565,29 @@ fn a_query_file_that_does_not_parse_refuses_with_the_query_code() {
     );
 }
 
+#[test]
+fn an_oversized_sparse_query_file_is_refused_without_reading_its_length() {
+    let (_root, project) = graphql_project(CASES_QUERY, CASES_QUERY_DIGEST, "casesByType");
+    let query = Path::new(&project)
+        .parent()
+        .expect("the project has a directory")
+        .join("queries/cases-by-type.graphql");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(query)
+        .expect("the query file opens")
+        .set_len(1024 * 1024 * 1024)
+        .expect("the sparse length is set");
+
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.pack.digest-pin-required");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.pack.digest-pin-required"),
+        "/queryFiles/0",
+        "{report}"
+    );
+}
+
 /// An endpoint naming an operation the pinned query file does not
 /// declare refuses at the endpoint's operationName member.
 #[test]
@@ -1545,6 +1598,37 @@ fn an_operation_the_query_file_does_not_declare_refuses_with_the_operation_code(
     assert_eq!(
         diagnostic_path(&report, "adapter.pack.graphql-operation-unknown"),
         "/endpoints/1/operationName",
+        "{report}"
+    );
+}
+
+#[test]
+fn a_graphql_endpoint_without_an_operation_name_is_refused() {
+    let (_root, project) = graphql_project(CASES_QUERY, CASES_QUERY_DIGEST, "casesByType");
+    let pack = Path::new(&project).with_file_name("pack.yaml");
+    edit(&pack, "    operationName: casesByType\n", "");
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.pack.graphql-operation-required");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.pack.graphql-operation-required"),
+        "/endpoints/1/operationName",
+        "{report}"
+    );
+}
+
+#[test]
+fn a_declared_graphql_kind_must_match_the_pinned_operation() {
+    let digest = registry_platform_config::sha256_uri(CASES_MUTATION.as_bytes());
+    let (_root, project) = graphql_project(CASES_MUTATION, &digest, "casesByType");
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(
+        exit,
+        &report,
+        "adapter.pack.graphql-operation-kind-mismatch",
+    );
+    assert_eq!(
+        diagnostic_path(&report, "adapter.pack.graphql-operation-kind-mismatch"),
+        "/endpoints/1/operations/0/graphql",
         "{report}"
     );
 }

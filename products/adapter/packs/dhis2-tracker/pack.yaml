@@ -41,9 +41,11 @@
 # refused with E1323 (a 409 import report, so `outcome.rejected`) and the
 # entity reads back 404; the fixtures pin the refused repeat. On a repeat
 # the end state is the same but updatedAt moves, so the record's
-# revisionIdentifier moves with it. The bundle carries an empty attribute
-# list, and a captured empty list updates an existing entity's stamps
-# only, changing no attribute value (scripts/to-bundle.rhai). A repeat
+# revisionIdentifier moves with it. The project-owned `attribute_fields`
+# map controls attributes in both directions: only listed record fields
+# become attribute rows, and only listed attribute UIDs reach a record. An
+# empty map preserves the earlier empty-list payload, which updates an
+# existing entity's stamps only and changes no attribute value. A repeat
 # over the UID of a soft-deleted entity is refused with E1114, which
 # arrives as a 409 import report and so raises `outcome.rejected` through
 # the clause below (captured); recreating the entity is a deployment
@@ -61,7 +63,11 @@
 # route's first exception clause matches upstream.http whose
 # body is that report and raises `outcome.rejected`; a WebMessage error,
 # which also carries status ERROR, carries no validationReport member and
-# stays upstream.http.
+# stays upstream.http. A 200 still has to prove full acceptance through its
+# status and stats. Mixed accepted and ignored counts raise
+# `outcome.conflict`; an unfinished or malformed summary fails validation.
+# Neither path returns the raw summary. The partial problem remains
+# count-free until the profile contract has declared bounded count slots.
 #
 # Error clauses: the pack raises the closed error classes of CONCEPT 8.7
 # and never names a profile's problem codes or writes a problem body
@@ -129,6 +135,12 @@ routeTemplates:
         type: string
         required: true
         description: The DHIS2 program the search narrows to.
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty exposes no attributes.
     steps:
       - onException:
           exception:
@@ -141,6 +153,10 @@ routeTemplates:
           name: dhis2Program
           value:
             constant: "{{program}}"
+      - setProperty:
+          name: dhis2AttributeMap
+          value:
+            constant: "{{attribute_fields}}"
       # The page this run fetches: the engine restores the caller's
       # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
       # the first page; scripts/seed-page.rhai turns that into the DHIS2
@@ -203,6 +219,12 @@ routeTemplates:
         type: string
         required: true
         description: The DHIS2 program the search narrows to.
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty exposes no attributes.
     steps:
       - onException:
           exception:
@@ -234,6 +256,10 @@ routeTemplates:
           name: dhis2Program
           value:
             constant: "{{program}}"
+      - setProperty:
+          name: dhis2AttributeMap
+          value:
+            constant: "{{attribute_fields}}"
       # The page this run fetches: the engine restores the caller's
       # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
       # the first page; scripts/seed-page.rhai turns that into the DHIS2
@@ -295,6 +321,12 @@ routeTemplates:
         type: string
         required: false
         description: The tracked-entity identifier the lookup resolves from the request.
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty exposes no attributes.
     steps:
       - onException:
           exception:
@@ -327,6 +359,10 @@ routeTemplates:
           redeliveryPolicy:
             maximumRedeliveries: 1
             retryDelaySeconds: 2
+      - setProperty:
+          name: dhis2AttributeMap
+          value:
+            constant: "{{attribute_fields}}"
       - to:
           uri: http:tracker
           parameters:
@@ -344,7 +380,13 @@ routeTemplates:
             file: scripts/to-record.rhai
             entrypoint: to_record
   - id: import-tracked-entity
-    parameters: []
+    parameters:
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty writes no attributes.
     steps:
       # A refused write is a 409 whose body is the import report; the
       # predicate requires the report shape (status ERROR AND a
@@ -374,6 +416,10 @@ routeTemplates:
           expression:
             header: Idempotency-Key
           steps:
+            - setProperty:
+                name: dhis2AttributeMap
+                value:
+                  constant: "{{attribute_fields}}"
             # The send replaces the body with the import report, so the
             # submitted record rides the exchange through the send in this
             # property; scripts/accepted-record.rhai returns it.
@@ -394,12 +440,31 @@ routeTemplates:
                       file: scripts/to-bundle.rhai
                       entrypoint: to_bundle
                   operation: tracker-import
-            # A 200 is OK or WARNING, both acceptance, so the accepted
-            # path is unconditional after the send.
-            - setBody:
-                rhai:
-                  file: scripts/accepted-record.rhai
-                  entrypoint: accepted_record
+            # A 200 is not enough: the synchronous import summary must show
+            # full acceptance. A mixed accepted/ignored summary is a bounded
+            # conflict. Every other non-complete summary, including an
+            # unfinished one, fails the validate step. Raw source content
+            # never enters the problem.
+            - choice:
+                when:
+                  - rhai:
+                      file: scripts/import-summary.rhai
+                      entrypoint: is_partial_import
+                    steps:
+                      - throwException:
+                          exceptionType: outcome.conflict
+                          message: The source accepted only part of the write.
+                otherwise:
+                  steps:
+                    - validate:
+                        expression:
+                          rhai:
+                            file: scripts/import-summary.rhai
+                            entrypoint: is_complete_import
+                    - setBody:
+                        rhai:
+                          file: scripts/accepted-record.rhai
+                          entrypoint: accepted_record
 scripts:
   - path: scripts/org-unit-filter.rhai
     digest: sha256:046a19140b16378433f8afe999c633ec20a68257dffd60a216fba4ebd038ccc4
@@ -414,13 +479,15 @@ scripts:
   - path: scripts/is-bad-request.rhai
     digest: sha256:ed94136005f93644620028ed7338240a2faad741145f574ba00491b43e606b4b
   - path: scripts/to-record.rhai
-    digest: sha256:4a728a56abeb6e25ea3d13868dd5a0a5fdba81bbdb20fe21269f596e7557ec9d
+    digest: sha256:b201599e891920e9263f39f5bcac51b861b6df91321b4531b01ba3630d808fbd
   - path: scripts/shape-records.rhai
-    digest: sha256:e0a6e93ba6a66d5a62b217915f588c0ad4ef0f6b07ff59930d74bd884a6355ee
+    digest: sha256:be2330179db4cec8995e54574800a7b375ef5bbc8d1d5fef96caef5630234fa2
   - path: scripts/to-bundle.rhai
-    digest: sha256:5a9aba0582ce70cb35b104a13fadba9662584ba34e46a7596b98475476c9ea01
+    digest: sha256:ca0f1a86a8dfd5b068cbd97a892a2cdf9258bfc5c273354675d5ab5e6837c05a
   - path: scripts/accepted-record.rhai
-    digest: sha256:5396a7d32709ba5d7938ef69eeb58b1689aa68f1452b229149fc95744aec15f0
+    digest: sha256:37fbf1d1454e3eb3c2112991e8a80189dae40b460188a029ae47a0354e19adea
+  - path: scripts/import-summary.rhai
+    digest: sha256:04fb7f05ce663095e5c4124255db46f618168df614bcb875753e1fd326e843d7
 capabilities:
   components:
     - http
@@ -431,9 +498,11 @@ capabilities:
     - jsonpath
     - rhai
   eips:
+    - choice
     - idempotentConsumer
     - onException
     - setBody
     - setProperty
     - throwException
     - to
+    - validate

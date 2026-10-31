@@ -23,17 +23,28 @@ use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use deadpool_postgres::Pool;
 use registry_adapter_core::{
-    AdapterProfile, AdapterProject, ErrorClass, HttpMethod, Problem, SLOT_PROBLEM_CODE,
+    decode_slot, parse_envelope_template, AdapterProfile, AdapterProject, ErrorClass, HttpMethod,
+    Problem, SLOT_PROBLEM_CODE, SLOT_RECORD,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::component::http::uri::encode_path_segment;
 use crate::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
 };
+use crate::effective_contract::{
+    EffectiveContract, RuntimeContractResponse, PIN_HEADER, PIN_PROBLEM_CODE,
+    UNAVAILABLE_PROBLEM_CODE, WELL_KNOWN_PATH,
+};
 use crate::envelope::CompiledEnvelope;
 use crate::exchange::{
-    Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
+    Exchange, WriteExecutionContext, WriteResolution, CONTINUATION_PROPERTY, FILTERS_PROPERTY,
+    NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
+};
+use crate::idempotent::{
+    PostgresIdempotencyStore, StoredResponse, TerminalOutcome, VerifiedCallerIdentity,
+    MAX_IDEMPOTENCY_KEY_BYTES, MAX_STORED_RESPONSE_BYTES,
 };
 use crate::journal::{self, JournalEvent};
 use crate::load::{Loaded, ServedOperation, ServedPagination};
@@ -41,11 +52,17 @@ use crate::read_request::{parse_filter_text, ReadRefusal};
 use crate::route::{run_route, RouteContext, RouteFailure};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
 
+const REQUEST_ID_HEADER: &str = "x-registry-request-id";
+
 /// What every handler shares.
 pub struct FacadeState {
     pub loaded: Loaded,
+    pub effective_contract: EffectiveContract,
     pub authenticator: Authenticator,
     pub journal: Pool,
+    /// Present only when this deployment explicitly configures exact write
+    /// response retention and serves at least one write operation.
+    pub idempotency: Option<PostgresIdempotencyStore>,
     /// Seals and opens pagination cursors; present when the runtime
     /// config declares `cursorKeyRef`, which a paginated operation needs.
     pub codec: Option<ContinuationCodec>,
@@ -130,6 +147,31 @@ pub fn router(state: Arc<FacadeState>) -> Router {
             }),
         );
     }
+    let contract = Arc::clone(&state);
+    let contract_method_fallback = Arc::clone(&state);
+    router = router.route(
+        WELL_KNOWN_PATH,
+        get(move |headers: HeaderMap| {
+            let shared = Arc::clone(&contract);
+            async move { runtime_contract(shared, headers).await }
+        })
+        .fallback(move || {
+            let shared = Arc::clone(&contract_method_fallback);
+            async move {
+                let mut response = facade_problem(
+                    shared.loaded.problems(),
+                    ErrorClass::FacadeMethodNotAllowed,
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "",
+                    &new_id(),
+                );
+                response
+                    .headers_mut()
+                    .insert(header::ALLOW, HeaderValue::from_static("GET"));
+                response
+            }
+        }),
+    );
     let unmatched = Arc::clone(&state);
     router.fallback(move || {
         let shared = Arc::clone(&unmatched);
@@ -177,7 +219,7 @@ async fn handle(
         )
         .await
     });
-    match task.await {
+    let response = match task.await {
         Ok(response) => response,
         Err(error) => {
             tracing::error!(%error, "a facade call ended without an answer");
@@ -188,6 +230,33 @@ async fn handle(
                 &fallback_record_type,
                 &fallback_id,
             )
+        }
+    };
+    with_request_id(response, &fallback_id)
+}
+
+/// Return the immutable startup contract only to an authenticated machine
+/// caller and only while the live journal migration set is exactly the set
+/// this binary supports. This readiness check deliberately does not touch an
+/// upstream source.
+async fn runtime_contract(state: Arc<FacadeState>, headers: HeaderMap) -> Response {
+    let request_id = new_id();
+    if let Err(refusal) = authenticate(&state, &headers).await {
+        return refusal_response(state.loaded.problems(), refusal, &request_id);
+    }
+    let journal_ready = match state.journal.get().await {
+        Ok(client) => journal::ready(&client).await.unwrap_or(false),
+        Err(_) => false,
+    };
+    if !journal_ready {
+        tracing::error!("the effective contract journal readiness check failed");
+        return contract_unavailable(&request_id);
+    }
+    match serde_json::to_value(RuntimeContractResponse::ready(&state.effective_contract)) {
+        Ok(body) => with_request_id(json_response(StatusCode::OK, &body), &request_id),
+        Err(error) => {
+            tracing::error!(%error, "the effective contract response could not be serialized");
+            contract_unavailable(&request_id)
         }
     }
 }
@@ -203,6 +272,12 @@ async fn answer(
 ) -> Response {
     let operation = &state.loaded.served[index];
     let profile = state.loaded.problems();
+    let is_write = state
+        .loaded
+        .profile
+        .operations
+        .get(operation.operation.as_str())
+        .is_some_and(|declared| !declared.is_read());
     let record_type = params
         .get(&operation.record_type_parameter)
         .cloned()
@@ -255,8 +330,12 @@ async fn answer(
         )
         .await;
     }
+    if !effective_contract_matches(headers, &state.effective_contract.digest) {
+        return refuse_contract_pin(state, operation, &caller, &request_id).await;
+    }
 
     let mut inputs = RequestInputs::default();
+    let mut write_request: Option<(Value, Vec<u8>)> = None;
     if operation.method == HttpMethod::Post {
         if !has_json_content_type(headers) {
             return refuse_call(
@@ -307,41 +386,81 @@ async fn answer(
             )
             .await;
         };
-        let Some(template) = &operation.request_template else {
-            return facade_problem(
-                profile,
-                ErrorClass::Facade,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &record_type,
-                &request_id,
-            );
-        };
-        match template.capture(&parsed, &operation.filters) {
-            Ok(captured) => {
-                if let Some(id) = captured.record_id {
-                    names_record_id = true;
-                    record_id = id;
-                }
-                inputs.cursor = captured.cursor;
-                inputs.page_size = captured.page_size;
-                inputs.filters = captured.filters.unwrap_or_default();
-            }
-            Err(refusal) => {
-                return refuse_request(
-                    state,
-                    operation,
-                    &caller,
+        if is_write {
+            let Some(declared) = state
+                .loaded
+                .profile
+                .operations
+                .get(operation.operation.as_str())
+            else {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                     &record_type,
                     &request_id,
-                    match refusal {
-                        ReadRefusal::Shape(reason) => Refusal::invalid_request(&reason),
-                        ReadRefusal::Field(reason) => Refusal::invalid_field(&reason),
-                    },
-                )
-                .await;
+                );
+            };
+            let Some(template) = &declared.request_envelope else {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            };
+            match capture_write_record(template.text(), &parsed) {
+                Ok(record) => write_request = Some((record, bytes.to_vec())),
+                Err(refusal) => {
+                    return refuse_request(
+                        state,
+                        operation,
+                        &caller,
+                        &record_type,
+                        &request_id,
+                        refusal,
+                    )
+                    .await;
+                }
+            }
+        } else {
+            let Some(template) = &operation.request_template else {
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            };
+            match template.capture(&parsed, &operation.filters) {
+                Ok(captured) => {
+                    if let Some(id) = captured.record_id {
+                        names_record_id = true;
+                        record_id = id;
+                    }
+                    inputs.cursor = captured.cursor;
+                    inputs.page_size = captured.page_size;
+                    inputs.filters = captured.filters.unwrap_or_default();
+                }
+                Err(refusal) => {
+                    return refuse_request(
+                        state,
+                        operation,
+                        &caller,
+                        &record_type,
+                        &request_id,
+                        match refusal {
+                            ReadRefusal::Shape(reason) => Refusal::invalid_request(&reason),
+                            ReadRefusal::Field(reason) => Refusal::invalid_field(&reason),
+                        },
+                    )
+                    .await;
+                }
             }
         }
-    } else if operation.pagination.is_some() {
+    } else if operation.pagination.is_some() || !operation.filters.is_empty() {
         match query_inputs(operation, query) {
             Ok(parsed) => inputs = parsed,
             Err(refusal) => {
@@ -355,6 +474,30 @@ async fn answer(
                 )
                 .await;
             }
+        }
+    } else if query.is_some_and(|text| !text.is_empty()) {
+        return refuse_request(
+            state,
+            operation,
+            &caller,
+            &record_type,
+            &request_id,
+            Refusal::invalid_request("the operation takes no query parameters"),
+        )
+        .await;
+    }
+
+    if !is_write {
+        if let Err(refusal) = require_declared_filters(operation, &inputs) {
+            return refuse_request(
+                state,
+                operation,
+                &caller,
+                &record_type,
+                &request_id,
+                refusal,
+            )
+            .await;
         }
     }
 
@@ -372,6 +515,72 @@ async fn answer(
     }
 
     let mut exchange = Exchange::new(request_id.clone());
+    let write_execution = if is_write {
+        let Some((record, raw_body)) = write_request else {
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &record_type,
+                &request_id,
+            );
+        };
+        let Some(key) = idempotency_key(headers) else {
+            return refuse_request(
+                state,
+                operation,
+                &caller,
+                &record_type,
+                &request_id,
+                Refusal::invalid_field("the Idempotency-Key header is absent or invalid"),
+            )
+            .await;
+        };
+        let Some(store) = state.idempotency.clone() else {
+            return facade_problem(
+                profile,
+                ErrorClass::Facade,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &record_type,
+                &request_id,
+            );
+        };
+        let caller_identity = match VerifiedCallerIdentity::new(
+            caller.issuer.clone(),
+            caller.reference.clone(),
+            caller.client_id.clone(),
+        ) {
+            Ok(identity) => identity,
+            Err(error) => {
+                tracing::error!(%error, "the verified caller could not enter the idempotency namespace");
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                );
+            }
+        };
+        exchange.message.body = record;
+        exchange
+            .message
+            .set_header("Idempotency-Key", Value::String(key.to_owned()));
+        let concrete_operation = format!(
+            "{}:{}:{}",
+            operation.operation, operation.binding, record_type
+        );
+        let digest = write_request_digest(&record_type, &record_id, &raw_body);
+        Some(exchange.prepare_write(
+            store,
+            caller_identity,
+            state.loaded.deployment.clone(),
+            concrete_operation,
+            digest,
+        ))
+    } else {
+        None
+    };
     let mut search_binding: Option<SearchBinding> = None;
     let mut requested_page_size: Option<u64> = None;
     if let Some(pagination) = &operation.pagination {
@@ -444,83 +653,200 @@ async fn answer(
     for event in outcome.events {
         events.push((journal_event(event.kind, Some(event.detail)), event.at));
     }
+    let write_resolution = match &write_execution {
+        Some(context) => context.resolution().await,
+        None => WriteResolution::Pending,
+    };
 
     // The response body is built before the journal commits, so the
     // journal never records `exchangeCompleted` for an exchange whose body
     // the facade then failed to seal or render.
-    let rendered = match outcome.result {
-        Ok(done) => match disclosed_slots(
-            operation,
-            &done.message.body,
-            requested_page_size,
-            &record_type,
-            &request_id,
-        ) {
-            Ok(slots) => {
-                match seal_next(
-                    state,
-                    operation,
-                    &caller,
-                    search_binding,
-                    requested_page_size.unwrap_or_default(),
-                    &done,
-                )
-                .and_then(|next_cursor| {
-                    render_success(operation, slots, next_cursor, &record_type, &request_id)
-                }) {
-                    Ok(body) => {
-                        events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
-                        Finished::Body(body)
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "the response could not be built");
-                        events.push((
-                            journal_event(
-                                "exchangeFailed",
-                                Some(json!({ "class": ErrorClass::Facade.class() })),
-                            ),
-                            SystemTime::now(),
-                        ));
-                        Finished::Internal
+    let rendered = match write_resolution.clone() {
+        WriteResolution::Replay(response) => {
+            events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
+            Finished::Replay(response)
+        }
+        WriteResolution::Conflict | WriteResolution::ResponseExpired => {
+            events.push((
+                journal_event(
+                    "exchangeFailed",
+                    Some(exchange_failure_detail(profile, ErrorClass::FacadeConflict)),
+                ),
+                SystemTime::now(),
+            ));
+            Finished::FacadeProblem(ErrorClass::FacadeConflict, StatusCode::CONFLICT)
+        }
+        WriteResolution::Mismatch => {
+            events.push((
+                journal_event(
+                    "exchangeFailed",
+                    Some(exchange_failure_detail(
+                        profile,
+                        ErrorClass::FacadeIdempotencyMismatch,
+                    )),
+                ),
+                SystemTime::now(),
+            ));
+            Finished::FacadeProblem(
+                ErrorClass::FacadeIdempotencyMismatch,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )
+        }
+        WriteResolution::Finished => Finished::Internal,
+        WriteResolution::Pending | WriteResolution::Released => match outcome.result {
+            Ok(done) => match disclosed_slots(
+                operation,
+                &done.message.body,
+                requested_page_size,
+                &record_type,
+                &request_id,
+            ) {
+                Ok(slots) => {
+                    match seal_next(
+                        state,
+                        operation,
+                        &caller,
+                        search_binding,
+                        requested_page_size.unwrap_or_default(),
+                        &done,
+                    )
+                    .and_then(|next_cursor| {
+                        render_success(operation, slots, next_cursor, &record_type, &request_id)
+                    }) {
+                        Ok(body) => {
+                            events.push((
+                                journal_event("exchangeCompleted", None),
+                                SystemTime::now(),
+                            ));
+                            Finished::Body(body)
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "the response could not be built");
+                            events.push((
+                                journal_event(
+                                    "exchangeFailed",
+                                    Some(exchange_failure_detail(profile, ErrorClass::Facade)),
+                                ),
+                                SystemTime::now(),
+                            ));
+                            Finished::Internal
+                        }
                     }
                 }
-            }
-            Err(violations) => {
-                tracing::error!(
-                    violations,
-                    "a route ended with a record its type does not declare"
-                );
-                let failure = RouteFailure {
-                    class: ErrorClass::DisclosureViolation,
-                    message: None,
-                    auth: None,
-                };
+                Err(violations) => {
+                    tracing::error!(
+                        violations,
+                        "a route ended with a record its type does not declare"
+                    );
+                    let failure = RouteFailure {
+                        class: ErrorClass::DisclosureViolation,
+                        message: None,
+                        auth: None,
+                    };
+                    events.push((
+                        journal_event(
+                            "exchangeFailed",
+                            Some(exchange_failure_detail(profile, failure.class)),
+                        ),
+                        SystemTime::now(),
+                    ));
+                    Finished::Route(failure)
+                }
+            },
+            Err(failure) => {
+                let mut detail = exchange_failure_detail(profile, failure.class);
+                if let Some(auth) = &failure.auth {
+                    detail["auth"] = auth.clone();
+                }
                 events.push((
-                    journal_event(
-                        "exchangeFailed",
-                        Some(json!({ "class": failure.class.class() })),
-                    ),
+                    journal_event("exchangeFailed", Some(detail)),
                     SystemTime::now(),
                 ));
                 Finished::Route(failure)
             }
         },
-        Err(failure) => {
-            let mut detail = json!({ "class": failure.class.class() });
-            if let Some(auth) = &failure.auth {
-                detail["auth"] = auth.clone();
-            }
-            events.push((
-                journal_event("exchangeFailed", Some(detail)),
-                SystemTime::now(),
-            ));
-            Finished::Route(failure)
+    };
+    let (mut response, mut terminal) = match rendered {
+        Finished::Body(body) => {
+            let status = state
+                .loaded
+                .profile
+                .operations
+                .get(operation.operation.as_str())
+                .and_then(|declared| {
+                    u16::try_from(declared.success_status.get())
+                        .ok()
+                        .and_then(|status| StatusCode::from_u16(status).ok())
+                })
+                .unwrap_or(StatusCode::OK);
+            (
+                json_response(status, &body),
+                Some(TerminalOutcome::Completed),
+            )
+        }
+        Finished::Internal => {
+            warn_exchange_failed(ErrorClass::Facade, StatusCode::INTERNAL_SERVER_ERROR);
+            (
+                facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &record_type,
+                    &request_id,
+                ),
+                Some(TerminalOutcome::Failed),
+            )
+        }
+        Finished::Route(failure) => {
+            let response = route_problem(profile, &failure, &record_type, &request_id);
+            warn_exchange_failed(failure.class, response.status());
+            (response, Some(TerminalOutcome::Failed))
+        }
+        Finished::Replay(response) => (replay_response(response), None),
+        Finished::FacadeProblem(class, status) => {
+            warn_exchange_failed(class, status);
+            (
+                facade_problem(profile, class, status, &record_type, &request_id),
+                None,
+            )
         }
     };
-    // Journal first: a response is never sent for an exchange the journal
-    // could not record. The rest of the exchange commits as one unit.
-    if let Err(fault) = append_all(&state.journal, events).await {
-        tracing::error!(%fault, "the audit journal could not record the exchange");
+    let pending_write = matches!(write_resolution, WriteResolution::Pending)
+        .then_some(())
+        .and(write_execution.as_ref());
+    let (response, stored) = match pending_write {
+        Some(_) => match prepare_write_response(response).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                tracing::error!(%error, "the exact write response could not be prepared");
+                events.retain(|(event, _)| {
+                    !matches!(event.event_kind, "exchangeCompleted" | "exchangeFailed")
+                });
+                events.push((
+                    journal_event(
+                        "exchangeFailed",
+                        Some(exchange_failure_detail(profile, ErrorClass::Facade)),
+                    ),
+                    SystemTime::now(),
+                ));
+                terminal = Some(TerminalOutcome::Failed);
+                response = bounded_internal_problem(&request_id);
+                prepare_write_response(response)
+                    .await
+                    .expect("the fixed internal problem fits response custody")
+            }
+        },
+        None => (response, None),
+    };
+    let pending_terminal = pending_write.zip(terminal);
+    let committed = match (pending_terminal, stored) {
+        (Some((context, terminal)), Some(stored)) => {
+            append_all_with_write(&state.journal, events, context, terminal, stored).await
+        }
+        _ => append_all(&state.journal, events).await,
+    };
+    if let Err(fault) = committed {
+        tracing::error!(%fault, "the audit journal and response custody could not commit");
         return facade_problem(
             profile,
             ErrorClass::Facade,
@@ -529,24 +855,7 @@ async fn answer(
             &request_id,
         );
     }
-    match rendered {
-        Finished::Body(body) => json_response(StatusCode::OK, &body),
-        Finished::Internal => {
-            warn_exchange_failed(ErrorClass::Facade, StatusCode::INTERNAL_SERVER_ERROR);
-            facade_problem(
-                profile,
-                ErrorClass::Facade,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &record_type,
-                &request_id,
-            )
-        }
-        Finished::Route(failure) => {
-            let response = route_problem(profile, &failure, &record_type, &request_id);
-            warn_exchange_failed(failure.class, response.status());
-            response
-        }
-    }
+    response
 }
 
 /// Log a failed exchange: the class and the status the caller got, nothing
@@ -559,12 +868,26 @@ fn warn_exchange_failed(class: ErrorClass, status: StatusCode) {
     );
 }
 
+/// The terminal failure facts the journal may retain. The selected problem
+/// code is the profile's exact closest match for the class, never one inferred
+/// from an HTTP status. Both fields are closed metadata and carry no values
+/// from the request, source, or response.
+fn exchange_failure_detail(profile: Problems<'_>, class: ErrorClass) -> Value {
+    let mut detail = json!({ "class": class.class() });
+    if let Some(problem) = select_problem(profile.profile, class) {
+        detail["problemCode"] = Value::String(problem.code.as_str().to_owned());
+    }
+    detail
+}
+
 /// How an exchange ended once the response was built, before the journal
 /// commits it.
 enum Finished {
     Body(Value),
     Internal,
     Route(RouteFailure),
+    Replay(StoredResponse),
+    FacadeProblem(ErrorClass, StatusCode),
 }
 
 /// Append `events` in one transaction, each stamped with its own instant.
@@ -579,6 +902,42 @@ async fn append_all(pool: &Pool, events: Vec<(JournalEvent, SystemTime)>) -> Res
         .transaction()
         .await
         .map_err(|error| journal_fault(&error))?;
+    for (event, occurred_at) in events {
+        journal::append(&transaction, event, occurred_at)
+            .await
+            .map_err(|error| match error {
+                journal::JournalError::Query(error) => journal_fault(&error),
+                _ => "the journal write failed".to_owned(),
+            })?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| journal_fault(&error))
+}
+
+/// Commit the exact terminal response and the route's terminal journal rows
+/// on one PostgreSQL transaction. Neither table can claim a terminal outcome
+/// while the other remains non-terminal.
+async fn append_all_with_write(
+    pool: &Pool,
+    events: Vec<(JournalEvent, SystemTime)>,
+    context: &WriteExecutionContext,
+    outcome: TerminalOutcome,
+    response: StoredResponse,
+) -> Result<(), String> {
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|_| "the journal connection pool gave no connection".to_owned())?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|error| journal_fault(&error))?;
+    context
+        .finish_with_client(&transaction, outcome, response)
+        .await
+        .map_err(|error| error.to_string())?;
     for (event, occurred_at) in events {
         journal::append(&transaction, event, occurred_at)
             .await
@@ -730,7 +1089,7 @@ fn disclosed_item(
 /// record of a page, each checked by [`disclosed_record`]. A page larger
 /// than the size the caller asked for is a disclosure violation: the
 /// caller never receives more records than it requested.
-fn disclosed_slots(
+pub(crate) fn disclosed_slots(
     operation: &ServedOperation,
     body: &Value,
     page_size: Option<u64>,
@@ -771,10 +1130,10 @@ fn is_path_segment_value(record_id: &str) -> bool {
 /// The inputs of one read as the caller supplied them, from the query
 /// string of a GET or the body of a read over POST.
 #[derive(Default)]
-struct RequestInputs {
-    cursor: Option<String>,
-    page_size: Option<u64>,
-    filters: serde_json::Map<String, Value>,
+pub(crate) struct RequestInputs {
+    pub(crate) cursor: Option<String>,
+    pub(crate) page_size: Option<u64>,
+    pub(crate) filters: serde_json::Map<String, Value>,
 }
 
 /// What a search request carries once validated.
@@ -792,7 +1151,7 @@ struct SearchBinding {
 
 /// Why a request was refused: the class and status the caller sees, and a
 /// value-free reason for the journal.
-struct Refusal {
+pub(crate) struct Refusal {
     class: ErrorClass,
     status: StatusCode,
     reason: String,
@@ -828,14 +1187,11 @@ impl Refusal {
 /// string. Any other parameter, a repeated one, or a page size that is not
 /// an integer is refused; a filter whose text is not of its declared type
 /// is a field fault.
-fn query_inputs(
+pub(crate) fn query_inputs(
     operation: &ServedOperation,
     query: Option<&str>,
 ) -> Result<RequestInputs, Refusal> {
-    let pagination = operation
-        .pagination
-        .as_ref()
-        .ok_or_else(|| Refusal::invalid_request("the operation takes no query parameters"))?;
+    let pagination = operation.pagination.as_ref();
     let mut inputs = RequestInputs::default();
     let mut seen: Vec<String> = Vec::new();
     for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
@@ -843,9 +1199,9 @@ fn query_inputs(
             return Err(Refusal::invalid_request("a repeated query parameter"));
         }
         seen.push(name.clone().into_owned());
-        if name == pagination.cursor_parameter {
+        if pagination.is_some_and(|declared| name == declared.cursor_parameter) {
             inputs.cursor = Some(value.into_owned());
-        } else if name == pagination.page_size_parameter {
+        } else if pagination.is_some_and(|declared| name == declared.page_size_parameter) {
             inputs.page_size = Some(
                 value
                     .parse::<u64>()
@@ -863,6 +1219,24 @@ fn query_inputs(
     Ok(inputs)
 }
 
+/// Every filter a binding declares is required caller input, independent of
+/// pagination and of whether the read carries its inputs in a GET query or a
+/// POST body. Missing declared input is an invalid field, refused before an
+/// exchange or source call.
+pub(crate) fn require_declared_filters(
+    operation: &ServedOperation,
+    inputs: &RequestInputs,
+) -> Result<(), Refusal> {
+    if operation
+        .filters
+        .iter()
+        .any(|filter| !inputs.filters.contains_key(&filter.name))
+    {
+        return Err(Refusal::invalid_field("a declared filter is absent"));
+    }
+    Ok(())
+}
+
 /// Validate a search's inputs against the operation's declared pagination
 /// and restore the continuation its cursor carries. A cursor carries the
 /// page size of the call that minted it: a call that names no size reuses
@@ -877,15 +1251,6 @@ fn open_search(
     record_type: &str,
     inputs: RequestInputs,
 ) -> Result<SearchInputs, Refusal> {
-    // Every filter the binding declares is required: a search that leaves
-    // one out is refused here, before any script runs or source is called.
-    if operation
-        .filters
-        .iter()
-        .any(|filter| !inputs.filters.contains_key(&filter.name))
-    {
-        return Err(Refusal::invalid_field("a declared filter is absent"));
-    }
     // The digest leaves the page size out: the cursor carries it, so a
     // call may omit it, and a supplied size is compared to the carried one.
     let filters = filter_digest(
@@ -940,11 +1305,11 @@ fn open_search(
 const CURSOR_CONTINUATION_MEMBER: &str = "c";
 const CURSOR_PAGE_SIZE_MEMBER: &str = "s";
 
-fn wrap_continuation(continuation: &Value, page_size: u64) -> Value {
+pub(crate) fn wrap_continuation(continuation: &Value, page_size: u64) -> Value {
     json!({CURSOR_CONTINUATION_MEMBER: continuation, CURSOR_PAGE_SIZE_MEMBER: page_size})
 }
 
-fn unwrap_continuation(sealed: Value) -> Option<(u64, Value)> {
+pub(crate) fn unwrap_continuation(sealed: Value) -> Option<(u64, Value)> {
     let Value::Object(mut members) = sealed else {
         return None;
     };
@@ -1002,6 +1367,133 @@ async fn read_body(headers: &HeaderMap, body: Body, limit: usize) -> Result<axum
         return Err(());
     }
     axum::body::to_bytes(body, limit).await.map_err(|_| ())
+}
+
+fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
+    headers.get("idempotency-key")?.to_str().ok().filter(|key| {
+        !key.is_empty() && key.len() <= MAX_IDEMPOTENCY_KEY_BYTES && !key.contains('\0')
+    })
+}
+
+/// Bind the key to the exact validated write request. The concrete
+/// operation already namespaces the key; the record type and identifier are
+/// repeated here so an update cannot reuse a key for another record even if
+/// a profile's body envelope omits the identifier.
+fn write_request_digest(record_type: &str, record_id: &str, body: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"registry-adapter:write-request:v1\0");
+    for part in [record_type.as_bytes(), record_id.as_bytes(), body] {
+        let length = u64::try_from(part.len()).expect("facade request bounds fit u64");
+        digest.update(length.to_be_bytes());
+        digest.update(part);
+    }
+    digest.finalize().into()
+}
+
+/// Read the one `{{record}}` slot from a write request envelope while
+/// enforcing its complete literal and structural shape. No caller member
+/// outside the declared template enters the exchange.
+fn capture_write_record(template: &str, body: &Value) -> Result<Value, Refusal> {
+    let parsed = parse_envelope_template(template)
+        .map_err(|_| Refusal::invalid_request("the write request envelope is invalid"))?;
+    let mut record = None;
+    match_write_node(&parsed, body, &mut record)?;
+    record.ok_or_else(|| Refusal::invalid_request("the write request carries no record"))
+}
+
+fn match_write_node(
+    template: &Value,
+    body: &Value,
+    record: &mut Option<Value>,
+) -> Result<(), Refusal> {
+    if let Value::String(text) = template {
+        if let Some((name, _form)) = decode_slot(text) {
+            if name != SLOT_RECORD || record.is_some() {
+                return Err(Refusal::invalid_request(
+                    "the write request envelope carries an unsupported slot",
+                ));
+            }
+            *record = Some(body.clone());
+            return Ok(());
+        }
+    }
+    match (template, body) {
+        (Value::Object(template), Value::Object(body)) => {
+            if body.len() != template.len() || body.keys().any(|key| !template.contains_key(key)) {
+                return Err(Refusal::invalid_request(
+                    "the write request object differs from the declared shape",
+                ));
+            }
+            for (key, child) in template {
+                let Some(value) = body.get(key) else {
+                    return Err(Refusal::invalid_request(
+                        "the write request is missing a declared member",
+                    ));
+                };
+                match_write_node(child, value, record)?;
+            }
+            Ok(())
+        }
+        (Value::Array(template), Value::Array(body)) if template.len() == body.len() => {
+            for (child, value) in template.iter().zip(body) {
+                match_write_node(child, value, record)?;
+            }
+            Ok(())
+        }
+        (Value::Array(_), Value::Array(_)) => Err(Refusal::invalid_request(
+            "the write request array differs from the declared shape",
+        )),
+        (Value::Object(_), _) | (Value::Array(_), _) => Err(Refusal::invalid_request(
+            "the write request member has the wrong JSON type",
+        )),
+        (literal, value) if literal == value => Ok(()),
+        (literal, value) if json_type(literal) != json_type(value) => Err(
+            Refusal::invalid_request("the write request member has the wrong JSON type"),
+        ),
+        _ => Err(Refusal::invalid_field(
+            "the write request member differs from the contract value",
+        )),
+    }
+}
+
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+async fn prepare_write_response(
+    response: Response,
+) -> Result<(Response, Option<StoredResponse>), String> {
+    let (parts, body) = response.into_parts();
+    let content_type = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .ok_or_else(|| "adapter.idempotency-response: content type absent".to_owned())?
+        .as_bytes()
+        .to_vec();
+    let body = axum::body::to_bytes(body, MAX_STORED_RESPONSE_BYTES)
+        .await
+        .map_err(|_| "adapter.idempotency-response: body exceeds custody bound".to_owned())?;
+    let stored = StoredResponse::new(parts.status.as_u16(), content_type, body.to_vec())
+        .map_err(|error| error.to_string())?;
+    Ok((Response::from_parts(parts, Body::from(body)), Some(stored)))
+}
+
+fn replay_response(stored: StoredResponse) -> Response {
+    let status = StatusCode::from_u16(stored.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut response = (status, stored.body().to_vec()).into_response();
+    if let Ok(content_type) = HeaderValue::from_bytes(stored.content_type()) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, content_type);
+    }
+    no_store(response)
 }
 
 fn cursor_binding<'a>(
@@ -1083,6 +1575,47 @@ async fn refuse_call(
     facade_problem(profile, class, status, record_type, request_id)
 }
 
+/// Refuse a verified and admitted call whose supplied whole-contract pin is
+/// wrong or ambiguous. The fixed protocol problem is released only after the
+/// value-free refusal row commits. A journal failure is itself the protocol's
+/// fixed unavailable problem, never a profile-authored problem.
+async fn refuse_contract_pin(
+    state: &FacadeState,
+    operation: &ServedOperation,
+    caller: &Caller,
+    request_id: &str,
+) -> Response {
+    tracing::warn!(
+        code = PIN_PROBLEM_CODE,
+        status = StatusCode::PRECONDITION_FAILED.as_u16(),
+        "a verified caller's effective contract pin was refused"
+    );
+    let event = JournalEvent {
+        event_kind: "callRefused",
+        exchange_id: request_id.to_owned(),
+        operation: operation.operation.clone(),
+        caller_ref: caller.reference.clone(),
+        route_id: operation.route_id.clone(),
+        detail: Some(
+            json!({
+                "code": PIN_PROBLEM_CODE,
+                "status": StatusCode::PRECONDITION_FAILED.as_u16(),
+            })
+            .to_string(),
+        ),
+    };
+    if let Err(fault) = append_all(&state.journal, vec![(event, SystemTime::now())]).await {
+        tracing::error!(%fault, "the audit journal could not record the contract refusal");
+        return contract_unavailable(request_id);
+    }
+    protocol_problem(
+        StatusCode::PRECONDITION_FAILED,
+        PIN_PROBLEM_CODE,
+        "Effective contract precondition failed",
+        request_id,
+    )
+}
+
 /// Answer a refused request as the class and status of its [`Refusal`],
 /// journaling the refusal first with its value-free reason.
 async fn refuse_request(
@@ -1107,15 +1640,11 @@ async fn refuse_request(
             SystemTime::now(),
         )
     };
+    let mut failure = exchange_failure_detail(profile, refusal.class);
+    failure["reason"] = Value::String(refusal.reason);
     let events = vec![
         event("exchangeCreated", None),
-        event(
-            "exchangeFailed",
-            Some(json!({
-                "class": refusal.class.class(),
-                "reason": refusal.reason,
-            })),
-        ),
+        event("exchangeFailed", Some(failure)),
     ];
     if let Err(fault) = append_all(&state.journal, events).await {
         tracing::error!(%fault, "the audit journal could not record the refusal");
@@ -1140,7 +1669,7 @@ async fn refuse_request(
 /// The rendered success body: the next cursor (when the route set one) and
 /// the request-scoped slots joined to the disclosed ones, filled into the
 /// operation's response envelope.
-fn render_success(
+pub(crate) fn render_success(
     operation: &ServedOperation,
     mut slots: BTreeMap<&'static str, Value>,
     next_cursor: Option<String>,
@@ -1155,7 +1684,7 @@ fn render_success(
     operation.response_envelope.render(&slots)
 }
 
-fn route_problem(
+pub(crate) fn route_problem(
     profile: Problems<'_>,
     failure: &RouteFailure,
     record_type: &str,
@@ -1183,6 +1712,22 @@ fn facade_problem(
     problem_response(profile, class, Some(status), None, record_type, request_id)
 }
 
+/// Fixed fallback when a profile-rendered terminal write response cannot fit
+/// the idempotency custody bound. It is deliberately independent of authored
+/// envelope size so the failure itself can be stored and replayed atomically
+/// with `exchangeFailed`.
+fn bounded_internal_problem(request_id: &str) -> Response {
+    let mut response = json_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &json!({ "status": 500, "requestId": request_id }),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
+}
+
 /// What a problem reply needs: the profile's declared problems and its
 /// compiled problem envelope.
 #[derive(Clone, Copy)]
@@ -1203,7 +1748,10 @@ fn problem_response(
     request_id: &str,
 ) -> Response {
     let Some(problem) = select_problem(problems.profile, class) else {
-        return no_store(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        return with_request_id(
+            no_store(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+            request_id,
+        );
     };
     let status = status_override.unwrap_or_else(|| {
         StatusCode::from_u16(u16::try_from(problem.status.get()).unwrap_or(500))
@@ -1228,16 +1776,47 @@ fn problem_response(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/problem+json"),
             );
-            response
+            with_request_id(response, request_id)
         }
         Err(error) => {
             tracing::error!(%error, "the problem envelope could not be rendered");
-            no_store(status.into_response())
+            with_request_id(no_store(status.into_response()), request_id)
         }
     }
 }
 
-fn select_problem(profile: &AdapterProfile, class: ErrorClass) -> Option<&Problem> {
+fn contract_unavailable(request_id: &str) -> Response {
+    protocol_problem(
+        StatusCode::SERVICE_UNAVAILABLE,
+        UNAVAILABLE_PROBLEM_CODE,
+        "Effective contract unavailable",
+        request_id,
+    )
+}
+
+fn protocol_problem(
+    status: StatusCode,
+    code: &'static str,
+    title: &'static str,
+    request_id: &str,
+) -> Response {
+    let mut response = json_response(
+        status,
+        &json!({
+            "code": code,
+            "status": status.as_u16(),
+            "title": title,
+            "requestId": request_id,
+        }),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    with_request_id(response, request_id)
+}
+
+pub(crate) fn select_problem(profile: &AdapterProfile, class: ErrorClass) -> Option<&Problem> {
     let mut best: Option<(usize, &Problem)> = None;
     for problem in profile.problems.iter() {
         for declared in problem.classes.iter() {
@@ -1253,7 +1832,7 @@ fn select_problem(profile: &AdapterProfile, class: ErrorClass) -> Option<&Proble
     best.map(|(_, problem)| problem)
 }
 
-fn json_response(status: StatusCode, body: &Value) -> Response {
+pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {
     let mut response = (status, body.to_string()).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -1271,11 +1850,36 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
+fn with_request_id(mut response: Response, request_id: &str) -> Response {
+    let value = HeaderValue::from_str(request_id)
+        .expect("an Adapter-generated request id is a valid response header value");
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static(REQUEST_ID_HEADER),
+        value,
+    );
+    response
+}
+
+/// A missing header preserves native-client compatibility. A present header
+/// is accepted only when it occurs once, is text, and exactly matches the
+/// immutable whole-contract digest cached at startup.
+fn effective_contract_matches(headers: &HeaderMap, expected: &str) -> bool {
+    let mut values = headers.get_all(PIN_HEADER).iter();
+    let Some(first) = values.next() else {
+        return true;
+    };
+    values.next().is_none() && first.to_str().is_ok_and(|value| value == expected)
+}
+
 fn new_id() -> String {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).expect("the operating system supplies randomness");
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+#[cfg(test)]
+#[path = "facade_generated_properties.rs"]
+mod generated_properties;
 
 #[cfg(test)]
 mod tests {
@@ -1325,6 +1929,8 @@ mod tests {
     fn an_access_profile_with_no_scopes_admits_nobody() {
         let caller = Caller {
             reference: "caller".to_owned(),
+            issuer: "https://issuer.example.invalid".to_owned(),
+            client_id: "case-portal".to_owned(),
             scopes: vec!["records.read".to_owned()],
         };
         let operation = served("records-get", "person");
@@ -1403,5 +2009,65 @@ mod tests {
         // An identifier that is not a string is never served.
         let numeric = json!({ "recordIdentifier": 7, "domainData": { "name": "A" } });
         assert!(disclosed_item(&operation, &numeric, "person", "id").is_err());
+    }
+
+    #[test]
+    fn a_write_request_envelope_releases_only_its_record_slot() {
+        let template = r#"{"kind":"person","payload":{{record}}}"#;
+        let record = json!({ "name": "A", "active": true });
+        let body = json!({ "kind": "person", "payload": record });
+        let Ok(captured) = capture_write_record(template, &body) else {
+            panic!("declared write body must be captured");
+        };
+        assert_eq!(captured, record);
+        assert!(capture_write_record(
+            template,
+            &json!({ "kind": "person", "payload": {}, "extra": true })
+        )
+        .is_err());
+        assert!(
+            capture_write_record(template, &json!({ "kind": "other", "payload": {} })).is_err()
+        );
+    }
+
+    #[test]
+    fn a_write_request_digest_binds_body_record_type_and_record_id() {
+        let first = write_request_digest("person", "p-1", br#"{"name":"A"}"#);
+        assert_ne!(
+            first,
+            write_request_digest("person", "p-2", br#"{"name":"A"}"#)
+        );
+        assert_ne!(
+            first,
+            write_request_digest("permit", "p-1", br#"{"name":"A"}"#)
+        );
+        assert_ne!(
+            first,
+            write_request_digest("person", "p-1", br#"{"name":"B"}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_terminal_response_has_a_bounded_storable_failure() {
+        let mut oversized = Response::new(Body::from(vec![b'x'; MAX_STORED_RESPONSE_BYTES + 1]));
+        *oversized.status_mut() = StatusCode::CREATED;
+        oversized.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        assert!(prepare_write_response(oversized).await.is_err());
+
+        let (response, stored) = prepare_write_response(bounded_internal_problem("request-1"))
+            .await
+            .expect("the fixed failure fits response custody");
+        let stored = stored.expect("a terminal write response is retained");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(stored.status(), StatusCode::INTERNAL_SERVER_ERROR.as_u16());
+        assert_eq!(stored.content_type(), b"application/problem+json");
+        assert_eq!(
+            serde_json::from_slice::<Value>(stored.body()).unwrap(),
+            json!({ "status": 500, "requestId": "request-1" })
+        );
+        assert!(stored.body().len() < MAX_STORED_RESPONSE_BYTES);
     }
 }

@@ -12,21 +12,21 @@
 // second create, more than one match fails (412).
 //
 // The engine is assumed to call `to_transaction` with the exchange map:
-// `record` is the validated facade record and `properties.fhirIdentifierSystem`
+// `body` is the validated facade record and `properties.fhirIdentifierSystem`
 // the template's identifier system. A record without a national_id has
 // no condition to guard the create: the script throws, because an
 // unconditioned POST is not idempotent and the endpoint operation's
 // idempotentUpstream claim would be false. Pure and deterministic; no I/O.
 fn to_transaction(exchange) {
-    let record = exchange.record;
-    let national_id = record.domainData.national_id;
+    let record = exchange.body;
+    let national_id = record.national_id;
     if national_id == () || national_id == "" {
         throw "the record carries no national_id to condition the create on";
     }
     let system = exchange.properties.fhirIdentifierSystem;
     let given = [];
-    if record.domainData.given_names != () {
-        given = record.domainData.given_names.split(" ");
+    if record.given_names != () {
+        given = record.given_names.split(" ");
     }
     #{
         resourceType: "Bundle",
@@ -36,9 +36,9 @@ fn to_transaction(exchange) {
                 resource: #{
                     resourceType: "Patient",
                     identifier: [ #{ system: system, value: national_id } ],
-                    name: [ #{ family: record.domainData.family_name, given: given } ],
-                    birthDate: record.domainData.birth_date,
-                    gender: record.domainData.gender
+                    name: [ #{ family: record.family_name, given: given } ],
+                    birthDate: record.birth_date,
+                    gender: record.gender
                 },
                 request: #{
                     method: "POST",

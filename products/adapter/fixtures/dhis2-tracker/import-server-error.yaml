@@ -10,7 +10,8 @@
 # pins is the routing: a WebMessage error carries status ERROR but no
 # validationReport member, so the import route's rejection predicate does
 # not match and the failure propagates as upstream.http instead of the
-# refused-write problem.
+# refused-write problem. The facade request is a documented reconstruction,
+# not a captured Adapter request.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-import-server-error
@@ -26,6 +27,14 @@ entries:
   - facadeRequest:
       operation: records-create
       path: /v1/records/person
+      headers:
+        idempotency-key: fixture-import-server-error
+      body:
+        data:
+          recordIdentifier: Uid00000006
+          domainData:
+            tracked_entity_type: person
+            org_unit: OqVpUaAYv2B
     upstream:
       - request:
           endpoint: tracker

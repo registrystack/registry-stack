@@ -15,10 +15,10 @@ use std::sync::Arc;
 
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, AggregationStrategy, ComponentKind, SendComponent, Step, ToParameters,
-    Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION,
-    ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
-    ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    AdapterRuntimeConfig, AggregationStrategy, ComponentKind, Endpoint, SendComponent, Step,
+    ToParameters, Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
+    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
+    ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
     sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider,
@@ -30,7 +30,7 @@ use registry_platform_yaml::{
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
-use crate::auth::{AuthPlan, StaticCredential};
+use crate::auth::{AuthPlan, PlatformAssertionSigner, StaticCredential};
 use crate::component::graphql::GraphQlQuery;
 use crate::egress::EndpointEgress;
 use crate::envelope::CompiledEnvelope;
@@ -51,21 +51,70 @@ pub(crate) const MAXIMUM_RESPONSE_BYTES: usize =
 enum BindingRefusal {
     /// The runtime does not serve the binding yet (a path it does not
     /// implement, an unbound endpoint); startup warns and goes on.
-    NotServed(String),
+    NotServed {
+        reason: UnservedReason,
+        detail: String,
+    },
     /// The binding's own files are faulty (an unreadable, uninventoried,
     /// digest-mismatched or uncompilable script); startup refuses.
     Fault(String),
 }
 
-impl From<String> for BindingRefusal {
-    fn from(reason: String) -> Self {
-        Self::NotServed(reason)
+#[derive(Clone, Copy)]
+pub(crate) enum UnservedReason {
+    ProfileOperationMissing,
+    ReservedFacadePath,
+    MethodUnsupported,
+    RequestBodyUnsupported,
+    RequestEnvelopeMissing,
+    PaginationDeclarationMissing,
+    RecordTypeMissing,
+    FilterFieldMissing,
+    RouteInstantiationRefused,
+    RouteMissing,
+    CursorKeyMissing,
+    RouteUnsupported,
+    WriteIdempotencyMissing,
+    DirectRouteMissing,
+    SourceAuthenticationUnsupported,
+    SourceComponentMismatch,
+    SourceUnbound,
+    RecordSchemaUnavailable,
+}
+
+impl UnservedReason {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::ProfileOperationMissing => "adapter.operation.profile-operation-missing",
+            Self::ReservedFacadePath => "adapter.operation.reserved-facade-path",
+            Self::MethodUnsupported => "adapter.operation.method-unsupported",
+            Self::RequestBodyUnsupported => "adapter.operation.request-body-unsupported",
+            Self::RequestEnvelopeMissing => "adapter.operation.request-envelope-missing",
+            Self::PaginationDeclarationMissing => {
+                "adapter.operation.pagination-declaration-missing"
+            }
+            Self::RecordTypeMissing => "adapter.operation.record-type-missing",
+            Self::FilterFieldMissing => "adapter.operation.filter-field-missing",
+            Self::RouteInstantiationRefused => "adapter.operation.route-instantiation-refused",
+            Self::RouteMissing => "adapter.operation.route-missing",
+            Self::CursorKeyMissing => "adapter.operation.cursor-key-missing",
+            Self::RouteUnsupported => "adapter.operation.route-unsupported",
+            Self::WriteIdempotencyMissing => "adapter.operation.write-idempotency-missing",
+            Self::DirectRouteMissing => "adapter.operation.direct-route-missing",
+            Self::SourceAuthenticationUnsupported => {
+                "adapter.operation.source-authentication-unsupported"
+            }
+            Self::SourceComponentMismatch => "adapter.operation.source-component-mismatch",
+            Self::SourceUnbound => "adapter.operation.source-unbound",
+            Self::RecordSchemaUnavailable => "adapter.operation.record-schema-unavailable",
+        }
     }
 }
 
-impl From<&str> for BindingRefusal {
-    fn from(reason: &str) -> Self {
-        Self::NotServed(reason.to_owned())
+fn not_served(reason: UnservedReason, detail: impl Into<String>) -> BindingRefusal {
+    BindingRefusal::NotServed {
+        reason,
+        detail: detail.into(),
     }
 }
 
@@ -162,11 +211,42 @@ pub struct Loaded {
     pub routes: RouteTable,
     pub served: Vec<ServedOperation>,
     /// `(binding id, why)` for every binding left unserved.
-    pub unserved: Vec<(String, String)>,
+    pub unserved: Vec<UnservedBinding>,
     pub resolver: SecretResolver,
     /// A digest of the project, profile and pack bytes, so a cursor
     /// minted under other artifacts is refused.
     pub deployment: String,
+}
+
+/// One project binding the runtime left unserved, with a stable reason code
+/// for machine consumers and a value-free operator detail.
+pub struct UnservedBinding {
+    pub binding: String,
+    pub reason_code: &'static str,
+    pub reason: String,
+}
+
+/// The source-neutral authored state shared by live serving and offline
+/// fixture replay. It contains no runtime config, resolver, listener or
+/// database handle.
+pub(crate) struct CompiledAuthoring {
+    pub(crate) problem_envelope: CompiledEnvelope,
+    pub(crate) scripts: ScriptSet,
+    pub(crate) code_maps: CodeMaps,
+    pub(crate) endpoints: BTreeMap<String, EndpointRuntime>,
+    pub(crate) routes: RouteTable,
+    pub(crate) served: Vec<ServedOperation>,
+    pub(crate) unserved: Vec<UnservedBinding>,
+}
+
+/// What an endpoint factory contributes to authored compilation.
+pub(crate) enum EndpointCompilation {
+    Served(Box<EndpointEgress>),
+    Unserved {
+        reason: UnservedReason,
+        detail: String,
+    },
+    Absent,
 }
 
 impl Loaded {
@@ -252,6 +332,28 @@ fn resolve_static_credential(
                 "endpoint {endpoint} credential reference {reference} did not resolve"
             ))
         })?;
+    }
+    Ok(())
+}
+
+/// Refuse credentials whose local material cannot support the endpoint
+/// before the deployment serves callers. Static credentials retain their
+/// existing resolution check; private-key JWT additionally resolves and
+/// proves the signing key without contacting the token endpoint.
+fn preflight_endpoint_credential(
+    endpoint: &str,
+    plan: &AuthPlan,
+    resolver: &SecretResolver,
+) -> Result<(), LoadError> {
+    resolve_static_credential(endpoint, plan, resolver)?;
+    if let Some(token) = plan.token_plan() {
+        token
+            .preflight_private_key_jwt(resolver, &PlatformAssertionSigner)
+            .map_err(|_| {
+                LoadError::Runtime(format!(
+                    "endpoint {endpoint} private-key JWT credential was refused"
+                ))
+            })?;
     }
     Ok(())
 }
@@ -349,52 +451,114 @@ pub fn load(
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .map_err(|_| LoadError::Runtime("the secret resolver could not start".to_owned()))?;
 
-    let mut scripts = ScriptSet::default();
+    let deployment = sha256_uri(
+        &[project_bytes.as_slice(), &profile_bytes, &pack_bytes]
+            .iter()
+            .flat_map(|bytes| {
+                let mut framed = (bytes.len() as u64).to_be_bytes().to_vec();
+                framed.extend_from_slice(bytes);
+                framed
+            })
+            .collect::<Vec<u8>>(),
+    );
+    let has_cursor_key = runtime.cursor_key_ref.is_some();
+    if runtime.previous_cursor_key_ref.is_some() && !has_cursor_key {
+        return Err(LoadError::Runtime(
+            "previousCursorKeyRef is set without cursorKeyRef; a previous key only opens cursors the current key sealed"
+                .to_owned(),
+        ));
+    }
 
-    // Endpoints with a served authentication kind. An endpoint whose plan
-    // needs a token endpoint stays out; a route that sends to it is unserved.
-    let mut endpoints = BTreeMap::new();
-    let mut endpoint_refusals: BTreeMap<String, String> = BTreeMap::new();
-    for binding in runtime.endpoints.iter() {
-        let id = binding.endpoint.as_str().to_owned();
-        let Some(declared) = pack.endpoints.get(&id) else {
-            continue;
-        };
-        let plan = AuthPlan::compile(&declared.authentication, binding).map_err(|fault| {
-            LoadError::Runtime(format!(
-                "endpoint {id} authentication was refused: {fault:?}"
-            ))
-        })?;
-        if !is_served_auth(plan.kind()) {
-            endpoint_refusals.insert(
-                id,
-                "its authentication needs a token endpoint, which is not served yet".to_owned(),
-            );
-            continue;
-        }
-        let egress =
-            EndpointEgress::compile(binding, declared, &runtime, &resolver).map_err(|fault| {
-                LoadError::Runtime(format!("endpoint {id} outbound state was refused: {fault}"))
+    let authored = compile_authored_with(
+        &project,
+        &profile,
+        &pack,
+        pack_directory,
+        &deployment,
+        has_cursor_key,
+        |declared| {
+            let id = declared.id.as_str();
+            let Some(binding) = runtime.endpoints.get(id) else {
+                return Ok(EndpointCompilation::Absent);
+            };
+            let plan = AuthPlan::compile(&declared.authentication, binding).map_err(|fault| {
+                LoadError::Runtime(format!(
+                    "endpoint {id} authentication was refused: {fault:?}"
+                ))
             })?;
-        resolve_static_credential(&id, egress.plan(), &resolver)?;
+            if !is_served_auth(plan.kind()) {
+                return Ok(EndpointCompilation::Unserved {
+                    reason: UnservedReason::SourceAuthenticationUnsupported,
+                    detail: "its authentication is not served by this runtime".to_owned(),
+                });
+            }
+            let egress = EndpointEgress::compile(binding, declared, &runtime, &resolver).map_err(
+                |fault| {
+                    LoadError::Runtime(format!("endpoint {id} outbound state was refused: {fault}"))
+                },
+            )?;
+            preflight_endpoint_credential(id, egress.plan(), &resolver)?;
+            Ok(EndpointCompilation::Served(Box::new(egress)))
+        },
+    )?;
+    Ok(Loaded {
+        profile,
+        problem_envelope: authored.problem_envelope,
+        project,
+        runtime,
+        scripts: authored.scripts,
+        code_maps: authored.code_maps,
+        endpoints: authored.endpoints,
+        routes: authored.routes,
+        served: authored.served,
+        unserved: authored.unserved,
+        resolver,
+        deployment,
+    })
+}
+
+/// Compile the authored runtime state over endpoint egress supplied by the
+/// caller. Live startup and offline replay share this exact route, script,
+/// GraphQL, code-map and binding compiler; only endpoint transport differs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_authored_with<F>(
+    project: &AdapterProject,
+    profile: &AdapterProfile,
+    pack: &AdapterPack,
+    pack_directory: &Path,
+    _deployment: &str,
+    has_cursor_key: bool,
+    mut endpoint_factory: F,
+) -> Result<CompiledAuthoring, LoadError>
+where
+    F: FnMut(&Endpoint) -> Result<EndpointCompilation, LoadError>,
+{
+    let mut scripts = ScriptSet::default();
+    let mut endpoints = BTreeMap::new();
+    let mut endpoint_refusals: BTreeMap<String, (UnservedReason, String)> = BTreeMap::new();
+    for declared in pack.endpoints.iter() {
+        let id = declared.id.as_str().to_owned();
+        let egress = match endpoint_factory(declared)? {
+            EndpointCompilation::Served(egress) => *egress,
+            EndpointCompilation::Unserved { reason, detail } => {
+                endpoint_refusals.insert(id, (reason, detail));
+                continue;
+            }
+            EndpointCompilation::Absent => continue,
+        };
         let base = format!(
             "{}{}",
             egress.origin().origin_url().trim_end_matches('/'),
             egress.origin().base_path()
         );
         let (attempt, maximum_response_bytes) = (egress.attempt(), egress.maximum_response_bytes());
-        // A graphql endpoint carries exactly one pinned query
-        // (section 8.8): loaded and digest-verified here, so a route's
-        // send finds it ready and no exchange reads the pack directory.
-        // Its variables expression is a script like any other when it is
-        // one, compiled into the deployment's set.
         let graphql = if declared.component == ComponentKind::GraphQl {
-            let query = GraphQlQuery::load(&pack, pack_directory, declared).map_err(|fault| {
+            let query = GraphQlQuery::load(pack, pack_directory, declared).map_err(|fault| {
                 LoadError::Runtime(format!("endpoint {id} query was refused: {fault}"))
             })?;
             if let Some(Expression::Rhai(script)) = &query.variables {
                 scripts
-                    .add(&pack, pack_directory, &script.file, &script.entrypoint)
+                    .add(pack, pack_directory, &script.file, &script.entrypoint)
                     .map_err(|error| LoadError::Runtime(error.to_string()))?;
             }
             Some(query)
@@ -407,17 +571,18 @@ pub fn load(
                 egress,
                 base,
                 graphql,
+                safe_post_operations: declared
+                    .operations
+                    .iter()
+                    .filter(|operation| operation.safe_upstream)
+                    .map(|operation| operation.id.as_str().to_owned())
+                    .collect(),
                 attempt,
                 maximum_response_bytes,
             },
         );
     }
 
-    // The deployment's route table: every pack route, then every
-    // templated instantiation shadowing a pack route of the same id, the
-    // way a binding resolves its route id. A template that fails to
-    // instantiate leaves its route undeclared; the binding that names it
-    // carries the refusal.
     let mut routes: RouteTable = BTreeMap::new();
     let mut route_refusals: BTreeMap<String, String> = BTreeMap::new();
     for route in &pack.routes {
@@ -435,19 +600,13 @@ pub fn load(
             route_refusals.insert(id.to_owned(), reason);
         }
     }
-    // A direct send to a route the deployment never declared is refused
-    // here, not at the first exchange (section 8.11.7).
     check_direct_targets(&routes).map_err(LoadError::Runtime)?;
 
-    // One resilience runtime for the whole table, so the nodes a route
-    // guards with are the same nodes a direct call into that route hits.
     let mut deployment_resilience = crate::resilience::ResilienceRuntime::empty();
     for steps in routes.values() {
         deployment_resilience.absorb(steps);
     }
 
-    // Every route's scripts compile once, whichever binding serves it
-    // and whichever direct call reaches it.
     let mut table_script_uses: Vec<(String, String)> = Vec::new();
     let mut table_strategy_uses: Vec<(String, String)> = Vec::new();
     for steps in routes.values() {
@@ -466,21 +625,15 @@ pub fn load(
     }
     for (file, entrypoint) in table_script_uses {
         scripts
-            .add(&pack, pack_directory, &file, &entrypoint)
+            .add(pack, pack_directory, &file, &entrypoint)
             .map_err(|error| LoadError::Runtime(error.to_string()))?;
     }
-    // A strategy script answers the old and new bodies, so it compiles as
-    // a two-parameter function.
     for (file, entrypoint) in table_strategy_uses {
         scripts
-            .add_aggregation(&pack, pack_directory, &file, &entrypoint)
+            .add_aggregation(pack, pack_directory, &file, &entrypoint)
             .map_err(|error| LoadError::Runtime(error.to_string()))?;
     }
 
-    // The deployment's code maps, keyed by id (section 8.6). Every
-    // conversion step's literal id resolves here, before any exchange;
-    // a Rhai `code_map` reference resolves at its call instead, because
-    // a script's references are not statically countable.
     let code_maps: CodeMaps = Arc::new(
         pack.code_maps
             .iter()
@@ -512,32 +665,14 @@ pub fn load(
         )));
     }
 
-    let deployment = sha256_uri(
-        &[project_bytes.as_slice(), &profile_bytes, &pack_bytes]
-            .iter()
-            .flat_map(|bytes| {
-                let mut framed = (bytes.len() as u64).to_be_bytes().to_vec();
-                framed.extend_from_slice(bytes);
-                framed
-            })
-            .collect::<Vec<u8>>(),
-    );
-    let has_cursor_key = runtime.cursor_key_ref.is_some();
-    if runtime.previous_cursor_key_ref.is_some() && !has_cursor_key {
-        return Err(LoadError::Runtime(
-            "previousCursorKeyRef is set without cursorKeyRef; a previous key only opens cursors the current key sealed"
-                .to_owned(),
-        ));
-    }
-
     let mut served = Vec::new();
     let mut unserved = Vec::new();
     for binding in project.bindings.iter() {
         let outcome = compile_binding(
             binding,
-            &project,
-            &pack,
-            &profile,
+            project,
+            pack,
+            profile,
             pack_directory,
             &endpoints,
             &endpoint_refusals,
@@ -558,8 +693,12 @@ pub fn load(
                 }
                 served.push(operation);
             }
-            Err(BindingRefusal::NotServed(reason)) => {
-                unserved.push((binding.id.as_str().to_owned(), reason));
+            Err(BindingRefusal::NotServed { reason, detail }) => {
+                unserved.push(UnservedBinding {
+                    binding: binding.id.as_str().to_owned(),
+                    reason_code: reason.code(),
+                    reason: detail,
+                });
             }
             Err(BindingRefusal::Fault(reason)) => {
                 return Err(LoadError::Runtime(format!(
@@ -573,19 +712,15 @@ pub fn load(
         CompiledEnvelope::compile(profile.problem_envelope.text(), &BTreeMap::new()).map_err(
             |reason| LoadError::Runtime(format!("the problem envelope is unusable: {reason}")),
         )?;
-    Ok(Loaded {
-        profile,
+
+    Ok(CompiledAuthoring {
         problem_envelope,
-        project,
-        runtime,
         scripts,
         code_maps,
         endpoints,
         routes,
         served,
         unserved,
-        resolver,
-        deployment,
     })
 }
 
@@ -597,7 +732,7 @@ fn compile_binding(
     profile: &AdapterProfile,
     pack_directory: &Path,
     endpoints: &BTreeMap<String, EndpointRuntime>,
-    endpoint_refusals: &BTreeMap<String, String>,
+    endpoint_refusals: &BTreeMap<String, (UnservedReason, String)>,
     routes: &RouteTable,
     route_refusals: &BTreeMap<String, String>,
     deployment_resilience: &crate::resilience::ResilienceRuntime,
@@ -607,79 +742,138 @@ fn compile_binding(
     let operation = profile
         .operations
         .get(binding.operation.as_str())
-        .ok_or("the binding names no profile operation")?;
+        .ok_or_else(|| {
+            not_served(
+                UnservedReason::ProfileOperationMissing,
+                "the binding names no profile operation",
+            )
+        })?;
+    let concrete_method_path = operation.path.replace(
+        &format!("{{{}}}", operation.record_type_parameter.as_str()),
+        binding.record_type.as_str(),
+    );
+    if concrete_method_path == crate::effective_contract::WELL_KNOWN_PATH {
+        return Err(not_served(
+            UnservedReason::ReservedFacadePath,
+            "the facade path is reserved for the Adapter effective-contract route",
+        ));
+    }
     let is_post_read =
         operation.method == registry_adapter_core::HttpMethod::Post && operation.read_only;
-    if operation.method != registry_adapter_core::HttpMethod::Get && !is_post_read {
-        return Err(
-            "a facade method other than GET, or a readOnly POST, is not served by this runtime yet"
-                .into(),
-        );
+    let is_read = operation.is_read();
+    if is_read && operation.method != registry_adapter_core::HttpMethod::Get && !is_post_read {
+        return Err(not_served(
+            UnservedReason::MethodUnsupported,
+            "a read facade operation is served only as GET or a readOnly POST",
+        ));
+    }
+    if !is_read && operation.method != registry_adapter_core::HttpMethod::Post {
+        return Err(not_served(
+            UnservedReason::MethodUnsupported,
+            "a write facade operation is served as POST only in this slice",
+        ));
     }
     if operation.method == registry_adapter_core::HttpMethod::Get
         && operation.request_envelope.is_some()
     {
-        return Err(
-            "a GET read carries no request body, so its request envelope is not served".into(),
-        );
+        return Err(not_served(
+            UnservedReason::RequestBodyUnsupported,
+            "a GET read carries no request body, so its request envelope is not served",
+        ));
     }
-    let request_template = operation
-        .request_envelope
-        .as_ref()
-        .map(|envelope| ReadRequestTemplate::compile(envelope.text()))
-        .transpose()
-        .map_err(|reason| {
-            BindingRefusal::Fault(format!("the request envelope is unusable: {reason}"))
-        })?;
+    // A write envelope may name `record`; the facade captures and
+    // validates it on the write path. The read template deliberately
+    // rejects that slot, so compile it only for read operations.
+    let request_template = if is_post_read {
+        operation
+            .request_envelope
+            .as_ref()
+            .map(|envelope| ReadRequestTemplate::compile(envelope.text()))
+            .transpose()
+            .map_err(|reason| {
+                BindingRefusal::Fault(format!("the request envelope is unusable: {reason}"))
+            })?
+    } else {
+        None
+    };
     if is_post_read && request_template.is_none() {
-        return Err("a read over POST declares no request envelope".into());
+        return Err(not_served(
+            UnservedReason::RequestEnvelopeMissing,
+            "a read over POST declares no request envelope",
+        ));
     }
     if request_template
         .as_ref()
         .is_some_and(|template| template.names("pageSize") || template.names("cursor"))
         && operation.pagination.is_none()
     {
-        return Err(
-            "the request envelope names a pagination slot on an operation with no pagination"
-                .into(),
-        );
+        return Err(not_served(
+            UnservedReason::PaginationDeclarationMissing,
+            "the request envelope names a pagination slot on an operation with no pagination",
+        ));
     }
     let record_type_declaration = project
         .record_types
         .get(binding.record_type.as_str())
-        .ok_or("the binding names no declared record type")?;
+        .ok_or_else(|| {
+            not_served(
+                UnservedReason::RecordTypeMissing,
+                "the binding names no declared record type",
+            )
+        })?;
     let mut filters = Vec::with_capacity(binding.filters.len());
     for name in binding.filters.iter() {
         let field = record_type_declaration
             .fields
             .iter()
             .find(|field| field.name.as_str() == name.as_str())
-            .ok_or("the binding declares a filter no record field carries")?;
+            .ok_or_else(|| {
+                not_served(
+                    UnservedReason::FilterFieldMissing,
+                    "the binding declares a filter no record field carries",
+                )
+            })?;
         filters.push(ServedFilter {
             name: name.as_str().to_owned(),
             field_type: field.r#type,
         });
     }
-    if operation.success_status.get() != 200 {
-        return Err("a served operation answers 200; a successStatus other than 200 is not served by this runtime yet".into());
-    }
     let route_id = binding.route.as_str();
     let steps = if let Some(steps) = routes.get(route_id) {
         Arc::clone(steps)
     } else if let Some(reason) = route_refusals.get(route_id) {
-        return Err(reason.clone().into());
+        return Err(not_served(
+            UnservedReason::RouteInstantiationRefused,
+            reason.clone(),
+        ));
     } else {
-        return Err("the binding names no route".into());
+        return Err(not_served(
+            UnservedReason::RouteMissing,
+            "the binding names no route",
+        ));
     };
     if operation.pagination.is_some() && !has_cursor_key {
-        return Err(
-            "a paginated operation needs cursorKeyRef in the runtime config to seal its cursors"
-                .into(),
-        );
+        return Err(not_served(
+            UnservedReason::CursorKeyMissing,
+            "a paginated operation needs cursorKeyRef in the runtime config to seal its cursors",
+        ));
     }
-    check_servable(&steps)?;
+    check_servable(&steps)
+        .map_err(|reason| not_served(UnservedReason::RouteUnsupported, reason))?;
+    if !is_read {
+        let executable: Vec<&Step> = steps
+            .iter()
+            .filter(|step| !matches!(step, Step::OnException(_) | Step::ErrorHandler(_)))
+            .collect();
+        if !matches!(executable.as_slice(), [Step::IdempotentConsumer(_)]) {
+            return Err(not_served(
+                UnservedReason::WriteIdempotencyMissing,
+                "a write operation needs one outer idempotentConsumer around its executable route",
+            ));
+        }
+    }
 
-    let mut refusal: Option<String> = None;
+    let mut refusal: Option<(UnservedReason, String)> = None;
     let mut script_uses: Vec<(String, String)> = Vec::new();
     let mut strategy_uses: Vec<(String, String)> = Vec::new();
     registry_adapter_core::walk_steps(&steps, &mut |step, _pointer| {
@@ -688,28 +882,35 @@ fn compile_binding(
             // endpoints; every other send goes to a bound endpoint.
             if to.uri.component == SendComponent::Direct {
                 if !routes.contains_key(&to.uri.id) {
-                    refusal.get_or_insert(format!(
-                        "the direct route {} is declared by no route in the deployment",
-                        to.uri.id
+                    refusal.get_or_insert((
+                        UnservedReason::DirectRouteMissing,
+                        format!(
+                            "the direct route {} is declared by no route in the deployment",
+                            to.uri.id
+                        ),
                     ));
                 }
-            } else if let Some(reason) = endpoint_refusals.get(&to.uri.id) {
-                refusal.get_or_insert(format!("endpoint {}: {reason}", to.uri.id));
+            } else if let Some((reason, detail)) = endpoint_refusals.get(&to.uri.id) {
+                refusal.get_or_insert((*reason, format!("endpoint {}: {detail}", to.uri.id)));
             } else if let Some(endpoint) = endpoints.get(&to.uri.id) {
                 // A send reaches an endpoint of its own component: a
                 // graphql send posts the endpoint's pinned query, an
                 // http send never does (section 8.8).
                 if to.uri.component == SendComponent::GraphQl && endpoint.graphql.is_none() {
-                    refusal
-                        .get_or_insert(format!("endpoint {} is not a graphql endpoint", to.uri.id));
+                    refusal.get_or_insert((
+                        UnservedReason::SourceComponentMismatch,
+                        format!("endpoint {} is not a graphql endpoint", to.uri.id),
+                    ));
                 } else if to.uri.component == SendComponent::Http && endpoint.graphql.is_some() {
-                    refusal
-                        .get_or_insert(format!("endpoint {} is not an http endpoint", to.uri.id));
+                    refusal.get_or_insert((
+                        UnservedReason::SourceComponentMismatch,
+                        format!("endpoint {} is not an http endpoint", to.uri.id),
+                    ));
                 }
             } else {
-                refusal.get_or_insert(format!(
-                    "endpoint {} is not bound by the runtime",
-                    to.uri.id
+                refusal.get_or_insert((
+                    UnservedReason::SourceUnbound,
+                    format!("endpoint {} is not bound by the runtime", to.uri.id),
                 ));
             }
         }
@@ -724,8 +925,8 @@ fn compile_binding(
             }
         }
     });
-    if let Some(reason) = refusal {
-        return Err(reason.into());
+    if let Some((reason, detail)) = refusal {
+        return Err(not_served(reason, detail));
     }
     for (file, entrypoint) in script_uses {
         scripts
@@ -783,7 +984,8 @@ fn compile_binding(
             .map_err(|reason| {
                 BindingRefusal::Fault(format!("the item envelope is unusable: {reason}"))
             })?,
-        record_schema: registry_adapter_core::binding_record_schema(project, binding)?,
+        record_schema: registry_adapter_core::binding_record_schema(project, binding)
+            .map_err(|reason| not_served(UnservedReason::RecordSchemaUnavailable, reason))?,
         pagination: operation
             .pagination
             .as_ref()
@@ -891,19 +1093,18 @@ fn step_expressions(step: &Step) -> Vec<Expression> {
     }
 }
 
-/// The path and query expressions one send carries.
+/// Every expression one send carries, including the dynamic link and
+/// request body whose Rhai files must be compiled before the route runs.
 fn send_expressions(parameters: Option<&ToParameters>) -> Vec<Expression> {
-    parameters
-        .iter()
-        .flat_map(|parameters| {
-            parameters
-                .path_parameters
-                .values()
-                .chain(parameters.query.values())
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .collect()
+    let Some(parameters) = parameters else {
+        return Vec::new();
+    };
+    let mut expressions = Vec::new();
+    expressions.extend(parameters.http_uri.iter().cloned());
+    expressions.extend(parameters.body.iter().cloned());
+    expressions.extend(parameters.path_parameters.values().cloned());
+    expressions.extend(parameters.query.values().cloned());
+    expressions
 }
 
 /// The aggregation strategies a step carries directly.
@@ -919,6 +1120,114 @@ fn step_aggregation_strategies(step: &Step) -> Vec<&AggregationStrategy> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const PREFLIGHT_KEY: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
+
+    fn private_key_plan(key_env: &str) -> AuthPlan {
+        let binding = registry_adapter_core::EndpointBinding {
+            endpoint: registry_platform_yaml::ExternalId::new("private-key-source")
+                .expect("endpoint id"),
+            base_url: registry_platform_yaml::Url::new("https://source.example.invalid")
+                .expect("base url"),
+            credential: Some(
+                registry_adapter_core::RuntimeCredential::Oauth2PrivateKeyJwt {
+                    token_endpoint: registry_platform_yaml::Url::new(
+                        "https://tokens.example.invalid/token",
+                    )
+                    .expect("token endpoint"),
+                    client_id_ref: registry_platform_yaml::SecretReference::new(
+                        "secret:env/ADAPTER_PREFLIGHT_CLIENT_ID",
+                    )
+                    .expect("client id reference"),
+                    client_assertion_key_ref: registry_platform_yaml::SecretReference::new(
+                        format!("secret:env/{key_env}"),
+                    )
+                    .expect("key reference"),
+                    client_assertion_audience: None,
+                    scope: None,
+                    audience: None,
+                    resource: None,
+                    maximum_cache_seconds: registry_platform_yaml::BoundedU64::<0, 86_400>::new(
+                        3600,
+                    )
+                    .expect("cache ceiling"),
+                    assumed_lifetime_seconds: None,
+                },
+            ),
+            tls_trust_profile: None,
+            mtls_identity: None,
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
+        };
+        AuthPlan::compile(
+            &registry_adapter_core::EndpointAuthentication::Oauth2PrivateKeyJwt {},
+            &binding,
+        )
+        .expect("plan compiles")
+    }
+
+    #[test]
+    fn startup_preflights_private_key_jwt_material_value_free() {
+        const KEY_ENV: &str = "ADAPTER_PREFLIGHT_PRIVATE_KEY";
+        std::env::set_var("ADAPTER_PREFLIGHT_CLIENT_ID", "preflight-client");
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").expect("resolver");
+        let plan = private_key_plan(KEY_ENV);
+
+        std::env::remove_var(KEY_ENV);
+        let missing = preflight_endpoint_credential("private-key-source", &plan, &resolver)
+            .expect_err("a missing key refuses startup")
+            .to_string();
+
+        let key_canary = "PREFLIGHT-KEY-CANARY-not-a-jwk";
+        std::env::set_var(KEY_ENV, key_canary);
+        let malformed = preflight_endpoint_credential("private-key-source", &plan, &resolver)
+            .expect_err("an unreadable key refuses startup")
+            .to_string();
+
+        let unpaired = PREFLIGHT_KEY.replace(
+            "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        std::env::set_var(KEY_ENV, &unpaired);
+        let invalid = preflight_endpoint_credential("private-key-source", &plan, &resolver)
+            .expect_err("a key whose halves do not pair refuses startup")
+            .to_string();
+
+        for refusal in [&missing, &malformed, &invalid] {
+            assert!(refusal.contains("private-key-source"), "{refusal}");
+            assert!(refusal.contains("credential was refused"), "{refusal}");
+            assert!(!refusal.contains(KEY_ENV), "{refusal}");
+            assert!(!refusal.contains(key_canary), "{refusal}");
+            assert!(!refusal.contains(&unpaired), "{refusal}");
+        }
+
+        std::env::set_var(KEY_ENV, PREFLIGHT_KEY);
+        preflight_endpoint_credential("private-key-source", &plan, &resolver)
+            .expect("a usable key passes startup");
+    }
+
+    #[test]
+    fn send_expression_inventory_includes_dynamic_uri_body_path_and_query() {
+        let parameters: ToParameters = serde_json::from_value(json!({
+            "httpUri": {"rhai": {"file": "uri.rhai", "entrypoint": "uri"}},
+            "body": {"rhai": {"file": "body.rhai", "entrypoint": "body"}},
+            "pathParameters": {"id": {"rhai": {"file": "path.rhai", "entrypoint": "path"}}},
+            "query": {"q": {"rhai": {"file": "query.rhai", "entrypoint": "query"}}}
+        }))
+        .expect("send parameters parse");
+
+        let files: Vec<String> = send_expressions(Some(&parameters))
+            .into_iter()
+            .filter_map(|expression| match expression {
+                Expression::Rhai(script) => Some(script.file),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(files.len(), 4, "every send expression is compiled at load");
+        for file in ["uri.rhai", "body.rhai", "path.rhai", "query.rhai"] {
+            assert!(files.iter().any(|seen| seen == file), "missing {file}");
+        }
+    }
 
     fn template() -> RouteTemplate {
         serde_json::from_value(json!({

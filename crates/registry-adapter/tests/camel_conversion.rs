@@ -163,7 +163,7 @@ async fn a_non_string_body_raises_conversion_unmapped() {
 }
 
 /// A miss raises `conversion.unmapped` under the default `mandatory`;
-/// with `mandatory: false` the target keeps what it had.
+/// with `mandatory: false` the target is absent.
 #[tokio::test]
 async fn a_miss_raises_unless_mandatory_is_false() {
     let outcome = run(
@@ -187,8 +187,8 @@ async fn a_miss_raises_unless_mandatory_is_false() {
     .await;
     assert_eq!(
         ok(&outcome).message.body,
-        json!("withdrawn"),
-        "a miss under mandatory false leaves the body as it was"
+        Value::Null,
+        "a miss under mandatory false leaves the body absent"
     );
 }
 
@@ -284,6 +284,42 @@ async fn an_absent_header_and_a_lenient_miss_write_nothing() {
         exchange.message.header("stateCode").is_none(),
         "a lenient miss leaves the target absent"
     );
+
+    let outcome = run(
+        steps(json!([
+            {"setHeader": {"name": "state", "value": {"constant": "withdrawn"}}},
+            {"setHeader": {"name": "stateCode", "value": {"constant": "stale"}}},
+            {"convertHeaderTo": {
+                "type": "codeMap:statuses",
+                "name": "state",
+                "mandatory": false,
+                "toName": "stateCode"
+            }}
+        ])),
+        json!({"id": "a"}),
+    )
+    .await;
+    assert!(
+        ok(&outcome).message.header("stateCode").is_none(),
+        "a lenient miss removes a preexisting redirected target"
+    );
+
+    let outcome = run(
+        steps(json!([
+            {"setHeader": {"name": "state", "value": {"constant": "withdrawn"}}},
+            {"convertHeaderTo": {
+                "type": "codeMap:statuses",
+                "name": "state",
+                "mandatory": false
+            }}
+        ])),
+        json!({"id": "a"}),
+    )
+    .await;
+    assert!(
+        ok(&outcome).message.header("state").is_none(),
+        "an in-place lenient miss removes its target"
+    );
 }
 
 /// A non-string header value raises `conversion.unmapped` like the
@@ -352,6 +388,42 @@ async fn the_property_conversion_follows_the_header_form() {
     let exchange = ok(&outcome);
     assert_eq!(exchange.property("state"), Some(&json!("withdrawn")));
     assert!(exchange.property("stateCode").is_none());
+
+    let outcome = run(
+        steps(json!([
+            {"setProperty": {"name": "state", "value": {"constant": "withdrawn"}}},
+            {"setProperty": {"name": "stateCode", "value": {"constant": "stale"}}},
+            {"convertPropertyTo": {
+                "type": "codeMap:statuses",
+                "name": "state",
+                "mandatory": false,
+                "toName": "stateCode"
+            }}
+        ])),
+        json!({"id": "a"}),
+    )
+    .await;
+    assert!(
+        ok(&outcome).property("stateCode").is_none(),
+        "a lenient miss removes a preexisting property target"
+    );
+
+    let outcome = run(
+        steps(json!([
+            {"setProperty": {"name": "state", "value": {"constant": "withdrawn"}}},
+            {"convertPropertyTo": {
+                "type": "codeMap:statuses",
+                "name": "state",
+                "mandatory": false
+            }}
+        ])),
+        json!({"id": "a"}),
+    )
+    .await;
+    assert!(
+        ok(&outcome).property("state").is_none(),
+        "an in-place lenient miss removes its property target"
+    );
 }
 
 /// A conversion naming a map the table does not carry fails at the
@@ -429,8 +501,8 @@ fn scripts(source: &str, entrypoint: &str) -> ScriptSet {
 }
 
 /// Rhai's `code_map(id, key)` takes the same single lookup: a hit
-/// returns the entry, a miss raises `conversion.unmapped`, and an id no
-/// declared map carries answers the same miss naming that id.
+/// returns the entry and a miss raises `conversion.unmapped`. An id no
+/// declared map carries is fixed and never echoes a caller-derived id.
 #[tokio::test]
 async fn rhai_code_map_takes_the_same_lookup() {
     let set = scripts(
@@ -463,16 +535,18 @@ async fn rhai_code_map_takes_the_same_lookup() {
         "code map statuses has no entry for the key"
     );
 
-    // An id no declared map carries: the same miss naming that id.
+    // An id no declared map carries: the caller-derived canary is absent
+    // from the fixed failure.
+    let canary = "private-caller-map-canary";
     let set = scripts(
-        "fn apply(exchange) { code_map(\"unknown\", exchange.body) }",
+        "fn apply(exchange) { code_map(exchange.body, \"active\") }",
         "apply",
     );
     let outcome = run_over(
         steps(json!([{"setBody": {
             "rhai": {"file": "probe.rhai", "entrypoint": "apply"}
         }}])),
-        json!("active"),
+        json!(canary),
         status_maps(),
         &set,
     )
@@ -480,8 +554,9 @@ async fn rhai_code_map_takes_the_same_lookup() {
     assert_eq!(failed_class(&outcome), "conversion.unmapped");
     assert_eq!(
         failed_message(&outcome),
-        "code map unknown has no entry for the key"
+        "an undeclared code map was requested"
     );
+    assert!(!failed_message(&outcome).contains(canary));
 }
 
 /// A pack's code maps parse in the platform form, and the table the

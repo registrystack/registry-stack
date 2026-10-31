@@ -8,8 +8,8 @@
 # opencrvs-event-search/, response-match.json and
 # expected-request-parts.json) and every value is a made-up stand-in. The
 # meta registry and dataset identifiers are deployment values the engine
-# writes at instantiation, so the replay expectation carries the envelope
-# template's stand-in literals.
+# writes at instantiation, so the replay expectation carries this example
+# project's configured values.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: opencrvs-events-get-found
@@ -21,11 +21,24 @@ provenance:
 intercepts:
   - type: endpoint
     endpoint: events
+  - type: token-endpoint
+    endpoint: events
 entries:
   - facadeRequest:
       operation: records-get
       path: /v1/records/birth/EVT-SYNTHETIC-001
     upstream:
+      - request:
+          endpoint: events
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
       - request:
           endpoint: events
           method: POST
@@ -60,6 +73,9 @@ entries:
     expected:
       type: response
       status: 200
+      headers:
+        content-type: application/json
+        cache-control: no-store
       body:
         data:
           recordIdentifier: EVT-SYNTHETIC-001
@@ -72,6 +88,6 @@ entries:
             mother_reference: PERSON-SYNTHETIC-A
             father_reference: PERSON-SYNTHETIC-B
         meta:
-          registryIdentifier: registryIdentifier
-          datasetIdentifier: datasetIdentifier
+          registryIdentifier: opencrvs-events-registry
+          datasetIdentifier: births
           entityTypeIdentifier: birth

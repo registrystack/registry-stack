@@ -11,7 +11,7 @@
 //! `slowCallRateThreshold` 100, `slowCallDurationThresholdSeconds` 60.
 //! A rejected call always raises `breaker.open`, diverging from Camel's
 //! `throwExceptionWhenHalfOpenOrOpenState: false` default, and
-//! `onFallback` runs on failure and on rejection with its output
+//! `onFallback` runs on a recorded failure and on rejection with its output
 //! validated like any route output.
 //!
 //! The guarded steps and the fallback run bare, the way every nested
@@ -56,22 +56,62 @@ pub(crate) async fn run(
             Ok(flow)
         }
         Err(failure) => {
+            // Boundary failures are never softened by authored filters. They
+            // count as failures and retain the fallback propagation rule.
+            if failure.class.is_uncatchable() {
+                permit.record(false, duration);
+                return fallback(run, step, Some(failure)).await;
+            }
+
+            let ignored = step.ignore_exception.as_ref().is_some_and(|classes| {
+                classes
+                    .iter()
+                    .any(|configured| failure.class.is_within(*configured))
+            });
+            if ignored {
+                permit.ignore();
+                run.record_consumed_failure("circuitBreaker", &failure);
+                return Ok(Flow::Continue);
+            }
+
+            let recorded = step.record_exception.as_ref().is_none_or(|classes| {
+                classes.is_empty()
+                    || classes
+                        .iter()
+                        .any(|configured| failure.class.is_within(*configured))
+            });
+            if !recorded {
+                permit.record(true, duration);
+                run.record_consumed_failure("circuitBreaker", &failure);
+                return Ok(Flow::Continue);
+            }
+
             permit.record(false, duration);
             fallback(run, step, Some(failure)).await
         }
     }
 }
 
-/// The fallback of a refused or failed guarded call, on failure and on
-/// rejection (section 8.7). Without one, a failure keeps its own class
-/// and a refusal is `breaker.open`.
+/// The fallback of a refused or recorded-failed guarded call. Without one,
+/// a recorded failure keeps its own class and a refusal is `breaker.open`.
 async fn fallback(
     run: &mut Run<'_, '_>,
     step: &CircuitBreakerStep,
     failure: Option<RouteFailure>,
 ) -> Result<Flow, RouteFailure> {
-    match &step.on_fallback {
-        Some(on_fallback) => run.run_steps(&on_fallback.steps).await,
-        None => Err(failure.unwrap_or_else(|| RouteFailure::of(ErrorClass::BreakerOpen))),
+    let failure = failure.unwrap_or_else(|| RouteFailure::of(ErrorClass::BreakerOpen));
+    let Some(on_fallback) = &step.on_fallback else {
+        return Err(failure);
+    };
+    let mut detail = json!({ "class": failure.class.class() });
+    if let Some(auth) = &failure.auth {
+        detail["auth"] = auth.clone();
     }
+    run.record("breakerFallback", detail);
+    // The breaker observes every guarded failure above, but a fallback is
+    // still a route handler and cannot turn a boundary failure into success.
+    if failure.class.is_uncatchable() {
+        return Err(failure);
+    }
+    run.run_steps(&on_fallback.steps).await
 }

@@ -12,6 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
+registry-adapter.workspace = true
 clap.workspace = true
 registry-adapterctl.workspace = true
 registry-coordinator.workspace = true

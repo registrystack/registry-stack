@@ -3,9 +3,11 @@
 # Derived fixture: one page of the collection read through the
 # govstack-consultation profile. The upstream exchange is the captured one in
 # fixtures/dhis2-tracker/search-page.yaml; the page is page 1 of many, so
-# the route seals the next page into `pageInfo.nextCursor`. The org-unit
-# search route takes its filter from a request body; a fixture facade
-# request can carry one, and this entry exercises the collection read
+# the route seals the next page into `pageInfo.nextCursor`. The expected value
+# is the exact opaque token produced under the replay runner's fixed synthetic
+# sealing context, not a production token. The org-unit search route takes its
+# filter from a request body; a fixture facade request can carry one, and this
+# entry exercises the collection read
 # without it, leaving the body-borne filter to the engine tests.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
@@ -22,8 +24,7 @@ entries:
   - facadeRequest:
       operation: records-list
       path: /v1/collections/persons/records
-      headers:
-        pageSize: "5"
+      query: pageSize=5
     upstream:
       - request:
           endpoint: tracker
@@ -189,6 +190,9 @@ entries:
     expected:
       type: response
       status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
       body:
         items:
           - recordId: EeBJ3Sn9uLg
@@ -222,4 +226,4 @@ entries:
               created_at: "2015-08-07T15:47:29.300"
               updated_at: "2015-08-07T15:47:29.300"
         pageInfo:
-          nextCursor: "2"
+          nextCursor: "AR-iZNpifiCYGwbA8XWnBD1HATcvY6QeFMv0_bOd6shPCQFv50lXtHVRfDJUS5U-4TkNEh04LeFioTgVJLo"

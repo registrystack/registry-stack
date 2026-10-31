@@ -43,7 +43,9 @@
 //! class, and the journal keeps only value-free auth events.
 
 pub mod auth;
+pub mod cli;
 pub mod component;
+pub mod effective_contract;
 pub mod egress;
 pub mod envelope;
 pub mod errorhandler;
@@ -56,6 +58,7 @@ pub mod load;
 pub mod notifier;
 pub mod processor;
 pub mod read_request;
+pub mod replay;
 pub mod resilience;
 pub mod route;
 pub mod scripts;

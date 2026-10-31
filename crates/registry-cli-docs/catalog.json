@@ -2,6 +2,142 @@
   "schema_version": "registry.cli-reference/v2",
   "binaries": [
     {
+      "name": "adapter",
+      "invocation": "adapter",
+      "about": "The Registry Adapter runtime",
+      "long_about": null,
+      "usage": "adapter <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "serve",
+          "invocation": "adapter serve",
+          "about": "Serve the governed facade",
+          "long_about": null,
+          "usage": "adapter serve [OPTIONS] --runtime-config <ABSOLUTE_FILE> --project <DIRECTORY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--project <DIRECTORY>",
+              "description": "The directory holding project.yaml",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <FILE>",
+              "description": "The profile file; defaults to profile.yaml beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--pack <FILE>",
+              "description": "The pack file, whose scripts/ sit beside it; defaults to pack.yaml beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "effective-contract",
+          "invocation": "adapter effective-contract",
+          "about": "Export the loaded gateway contract without binding a listener",
+          "long_about": null,
+          "usage": "adapter effective-contract [OPTIONS] --runtime-config <ABSOLUTE_FILE> --project <DIRECTORY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--project <DIRECTORY>",
+              "description": "The directory holding project.yaml",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <FILE>",
+              "description": "The profile file; defaults to profile.yaml beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--pack <FILE>",
+              "description": "The pack file, whose scripts/ sit beside it; defaults to pack.yaml beside the project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "adapterctl",
       "invocation": "adapterctl",
       "about": "Registry Stack Adapter authoring and operator tooling",

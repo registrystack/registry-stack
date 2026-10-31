@@ -548,6 +548,25 @@ impl TokenEndpointPlan {
         self.maximum_cache
     }
 
+    /// Resolve and prove a private-key JWT credential without sending a
+    /// token request. Startup uses this to refuse a missing or unusable
+    /// signing key before the deployment serves callers. Other token
+    /// authentication kinds do no work here.
+    pub(crate) fn preflight_private_key_jwt(
+        &self,
+        resolver: &SecretResolver,
+        signer: &dyn ClientAssertionSigner,
+    ) -> Result<(), AuthError> {
+        if matches!(
+            &self.client_authentication,
+            ClientAuthentication::PrivateKeyJwt { .. }
+        ) {
+            self.render(resolver, signer).map(drop)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Render one token request from resolved secrets.
     ///
     /// Every resolved secret is folded into the rendered request and
@@ -852,6 +871,24 @@ pub(crate) async fn acquire_token(
     signer: &dyn ClientAssertionSigner,
     events: &mut Vec<AuthEvent>,
 ) -> Result<(ProtectedText, Option<u64>), AuthError> {
+    acquire_token_with_render(plan, budget, || plan.render(resolver, signer), send, events).await
+}
+
+/// Run the one token acquisition algorithm with a caller-supplied request
+/// renderer. Production passes the secret-resolving renderer above; offline
+/// replay passes a sealed synthetic renderer. Cache admission, budget
+/// charging, response validation, lifetime clamping, and generation storage
+/// remain one implementation.
+pub(crate) async fn acquire_token_with_render<F>(
+    plan: &TokenEndpointPlan,
+    budget: &mut TokenBudget,
+    render: F,
+    send: &dyn TokenSend,
+    events: &mut Vec<AuthEvent>,
+) -> Result<(ProtectedText, Option<u64>), AuthError>
+where
+    F: FnOnce() -> Result<TokenRequest, AuthError>,
+{
     let cache = plan.cache.as_ref();
     let mut guard = match timeout(cache.admission_timeout, cache.state.lock()).await {
         Ok(guard) => guard,
@@ -879,7 +916,7 @@ pub(crate) async fn acquire_token(
     }
     // The allowance is spent only once the request actually renders: a
     // secret that cannot resolve never spends a send that never went out.
-    let request = plan.render(resolver, signer)?;
+    let request = render()?;
     budget
         .consume(&plan.endpoint)
         .inspect_err(|_| events.push(AuthEvent::TokenBudgetExhausted))?;

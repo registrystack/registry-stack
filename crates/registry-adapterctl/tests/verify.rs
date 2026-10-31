@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -152,11 +152,25 @@ fn workspace(base_url: &str, user_var: &str, pass_var: &str) -> (tempfile::TempD
 struct Response {
     status: u16,
     body: &'static str,
+    headers: Vec<(&'static str, String)>,
 }
 
 impl Response {
     fn json(status: u16, body: &'static str) -> Self {
-        Self { status, body }
+        Self {
+            status,
+            body,
+            headers: Vec::new(),
+        }
+    }
+
+    #[cfg(feature = "tls-test")]
+    fn redirect(location: String) -> Self {
+        Self {
+            status: 302,
+            body: "",
+            headers: vec![("Location", location)],
+        }
     }
 }
 
@@ -216,30 +230,148 @@ impl Double {
     }
 }
 
+/// A real loopback TLS server under a throwaway private CA. It uses the
+/// synchronous rustls stream so the CLI can run its own Tokio transport on
+/// the test thread without sharing an executor.
+#[cfg(feature = "tls-test")]
+struct TlsDouble {
+    port: u16,
+    ca_pem: String,
+    recorded: Arc<Mutex<Vec<RecordedRequest>>>,
+}
+
+#[cfg(feature = "tls-test")]
+impl TlsDouble {
+    fn start(answers: VecDeque<Response>) -> Self {
+        use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+        let mut authority =
+            rcgen::CertificateParams::new(Vec::<String>::new()).expect("private CA parameters");
+        authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let authority_key = rcgen::KeyPair::generate().expect("private CA key");
+        let authority_certificate = authority
+            .self_signed(&authority_key)
+            .expect("private CA certificate");
+        let server_key = rcgen::KeyPair::generate().expect("server key");
+        let server = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
+            .expect("server parameters")
+            .signed_by(
+                &server_key,
+                &rcgen::Issuer::from_params(&authority, &authority_key),
+            )
+            .expect("the private CA signs the server certificate");
+        let config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server.der().clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+            )
+            .expect("TLS server configuration");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("the TLS double binds");
+        let port = listener.local_addr().expect("the TLS address").port();
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let shared = Arc::clone(&recorded);
+        let config = Arc::new(config);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else {
+                    break;
+                };
+                let shared = Arc::clone(&shared);
+                let config = Arc::clone(&config);
+                let mut answers = answers.clone();
+                thread::spawn(move || {
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+                    let Ok(connection) = tokio_rustls::rustls::ServerConnection::new(config) else {
+                        return;
+                    };
+                    let mut stream = tokio_rustls::rustls::StreamOwned::new(connection, stream);
+                    serve(&mut stream, &shared, &mut answers);
+                });
+            }
+        });
+        Self {
+            port,
+            ca_pem: pem_certificate(authority_certificate.der().as_ref()),
+            recorded,
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("https://127.0.0.1:{}", self.port)
+    }
+
+    fn requests(&self) -> Vec<RecordedRequest> {
+        self.recorded.lock().unwrap().clone()
+    }
+}
+
+#[cfg(feature = "tls-test")]
+fn pem_certificate(der: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for chunk in encoded.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(chunk).expect("base64 is text"));
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    pem
+}
+
+#[cfg(feature = "tls-test")]
+fn tls_workspace(
+    double: &TlsDouble,
+    trusted_ca: &str,
+    suffix: &str,
+) -> (tempfile::TempDir, String) {
+    let (root, project) = workspace(&double.url(), suffix, suffix);
+    let directory = Path::new(&project).parent().expect("project directory");
+    let ca_path = directory.join("verify-ca.pem");
+    std::fs::write(&ca_path, trusted_ca).expect("the CA bundle is written");
+    let runtime_path = directory.join("runtime.yaml");
+    let runtime = std::fs::read_to_string(&runtime_path).expect("the runtime is readable");
+    let runtime = runtime.replacen(
+        "    credential:\n",
+        "    tlsTrustProfile: verify-ca\n    credential:\n",
+        1,
+    );
+    let runtime = runtime.replacen(
+        "allowedClients:\n",
+        &format!(
+            "outboundTls:\n  trustProfiles:\n    verify-ca:\n      caBundleFile: {}\nallowedClients:\n",
+            ca_path.display()
+        ),
+        1,
+    );
+    std::fs::write(runtime_path, runtime).expect("the TLS runtime is written");
+    (root, project)
+}
+
 /// Read one request, answer it with the next scripted response (a 500
 /// when the script is exhausted, a 400 when the request will not read),
 /// and record what arrived.
-fn serve(
-    stream: &mut TcpStream,
+fn serve<S: Read + Write>(
+    stream: &mut S,
     recorded: &Mutex<Vec<RecordedRequest>>,
     answers: &mut VecDeque<Response>,
 ) {
     let request = match read_request(stream) {
         Some(request) => request,
         None => {
-            write_response(stream, 400, "text/plain", "unparseable request");
+            write_response(stream, &Response::json(400, "unparseable request"));
             return;
         }
     };
     let answer = answers
         .pop_front()
         .unwrap_or_else(|| Response::json(500, "the script is exhausted"));
-    write_response(stream, answer.status, "application/json", answer.body);
+    write_response(stream, &answer);
     recorded.lock().unwrap().push(request);
 }
 
 /// Read one HTTP/1.1 request head (bounded) plus its content-length body.
-fn read_request(stream: &mut TcpStream) -> Option<RecordedRequest> {
+fn read_request(stream: &mut impl Read) -> Option<RecordedRequest> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -295,20 +427,29 @@ fn read_request(stream: &mut TcpStream) -> Option<RecordedRequest> {
     }
 }
 
-fn write_response(stream: &mut TcpStream, status: u16, media_type: &str, body: &str) {
-    let reason = match status {
+fn write_response(stream: &mut impl Write, response: &Response) {
+    let reason = match response.status {
         200 => "OK",
+        302 => "Found",
         400 => "Bad Request",
         418 => "I'm a teapot",
         500 => "Internal Server Error",
         _ => "Status",
     };
-    let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {media_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
+    let mut head = format!(
+        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        response.status,
+        response.body.len()
     );
+    for (name, value) in &response.headers {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
     let _ = stream.write_all(head.as_bytes());
-    let _ = stream.write_all(body.as_bytes());
+    let _ = stream.write_all(response.body.as_bytes());
     let _ = stream.flush();
 }
 
@@ -411,8 +552,8 @@ fn an_answer_outside_the_declared_range_refuses() {
     assert!(!stderr.contains("probe-pass"), "{stderr}");
 }
 
-/// A dial no one answers is an operational failure naming the endpoint
-/// and host, never a value.
+/// A dial no one answers is an operational failure naming the endpoint,
+/// never the destination or a credential value.
 #[test]
 fn a_transport_failure_is_an_operational_failure() {
     let port = refused_port();
@@ -435,14 +576,46 @@ fn a_transport_failure_is_an_operational_failure() {
         .expect("the transport finding");
     let message = finding["message"].as_str().expect("message");
     assert!(message.contains("verify-source"), "{message}");
-    assert!(message.contains("127.0.0.1"), "{message}");
+    assert!(!message.contains("127.0.0.1"), "{message}");
+    assert!(!message.contains(&port.to_string()), "{message}");
 }
 
-/// A TLS destination is not dialed: the binding waits for the engine's
-/// transport, the command still completes.
+/// A default build applies production HTTPS policy, which refuses a
+/// loopback origin before any connection attempt.
+#[cfg(not(feature = "tls-test"))]
 #[test]
-fn an_https_origin_waits_for_the_engine_transport() {
-    let (_root, project) = workspace("https://cases.example.invalid", "S", "S");
+fn production_https_refuses_a_loopback_origin() {
+    let port = refused_port();
+    let (_root, project) = workspace(&format!("https://127.0.0.1:{port}"), "S", "S");
+    let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
+
+    let (exit, report, _stderr) = run_json(&[
+        "verify",
+        "--live",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ]);
+
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let finding = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .find(|finding| finding["code"] == "adapterctl.verify.insecure-origin")
+        .expect("the destination policy refusal");
+    let message = finding["message"].as_str().expect("message");
+    assert!(!message.contains("127.0.0.1"), "{message}");
+    assert!(!message.contains(&port.to_string()), "{message}");
+}
+
+#[cfg(feature = "tls-test")]
+#[test]
+fn configured_private_ca_drives_a_real_https_probe() {
+    let mut answers = VecDeque::new();
+    answers.push_back(Response::json(200, r#"{"instances":[]}"#));
+    let double = TlsDouble::start(answers);
+    let (_root, project) = tls_workspace(&double, &double.ca_pem, "TLS_TRUSTED");
     let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
 
     let (exit, report, _stderr) = run_json(&[
@@ -454,21 +627,73 @@ fn an_https_origin_waits_for_the_engine_transport() {
     ]);
 
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
-    assert_eq!(report["drove"], json!(0));
-    assert_eq!(report["waited"], json!(1));
-    assert_eq!(
-        report["waits"],
-        json!([{
-            "binding": "case-find",
-            "endpoint": "verify-source",
-            "reason": "tls-transport",
-        }])
-    );
-    let stdout = report.to_string();
-    assert!(
-        stdout.contains("adapterctl.verify.wait-tls-transport"),
-        "{stdout}"
-    );
+    assert_eq!(report["drove"], json!(1), "{report}");
+    assert_eq!(report["waited"], json!(0), "{report}");
+    for _ in 0..50 {
+        if !double.requests().is_empty() {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(double.requests().len(), 1);
+}
+
+#[cfg(feature = "tls-test")]
+#[test]
+fn an_untrusted_private_ca_is_rejected_before_an_http_request() {
+    let mut answers = VecDeque::new();
+    answers.push_back(Response::json(200, r#"{"instances":[]}"#));
+    let destination = TlsDouble::start(answers);
+    let unrelated = TlsDouble::start(VecDeque::new());
+    let (_root, project) = tls_workspace(&destination, &unrelated.ca_pem, "TLS_UNTRUSTED");
+    let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
+
+    let (exit, report, _stderr) = run_json(&[
+        "verify",
+        "--live",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ]);
+
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    assert!(report["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|finding| finding["code"] == "adapterctl.verify.transport"));
+    assert!(destination.requests().is_empty());
+    let text = report.to_string();
+    assert!(!text.contains(&destination.port.to_string()), "{text}");
+    assert!(!text.contains("BEGIN CERTIFICATE"), "{text}");
+}
+
+#[cfg(feature = "tls-test")]
+#[test]
+fn an_https_redirect_is_returned_without_fallthrough() {
+    let redirect_target = Double::start(VecDeque::new());
+    let location = format!("http://127.0.0.1:{}/redirected", redirect_target.port);
+    let mut answers = VecDeque::new();
+    answers.push_back(Response::redirect(location));
+    let destination = TlsDouble::start(answers);
+    let (_root, project) = tls_workspace(&destination, &destination.ca_pem, "TLS_REDIRECT");
+    let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
+
+    let (exit, report, _stderr) = run_json(&[
+        "verify",
+        "--live",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ]);
+
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert!(report["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|finding| finding["code"] == "adapterctl.verify.status-outside-range"));
+    assert!(redirect_target.requests().is_empty());
 }
 
 /// The command refuses its own misuse through the usage exit.

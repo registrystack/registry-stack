@@ -24,6 +24,7 @@ pub mod convert;
 pub mod do_try;
 pub mod enrich;
 pub mod filter;
+pub mod idempotent_consumer;
 pub mod r#loop;
 pub mod redelivery;
 pub mod remove_header;

@@ -112,6 +112,9 @@ routeTemplates:
                   from: pages
                   into: records
                   uniqueBy: id
+                  properties:
+                    fhirPageFetched: "$.resourceType"
+                    fhirNextUrl: "$.link"
       - setBody:
           rhai:
             file: scripts/to-records.rhai
@@ -174,22 +177,18 @@ routes:
                       _format:
                         constant: json
       - setProperty:
-          name: fhirNextUrl
-          value:
-            jsonpath: "$.link[?@.relation == 'next'].url"
-      - setProperty:
           name: pages
           value:
             jsonpath: "$.entry[?@.search.mode == 'match'].resource"
 scripts:
   - path: scripts/identifier-token.rhai
-    digest: sha256:c468261a60d3c1a07b408d83648cdb37cb9b106a950a3d6f63cf5be3c77bdef5
+    digest: sha256:5ec651a3748b96153ca25f3033c5729c1b242e50cdbf355e822984871f0a0a1d
   - path: scripts/has-next-link.rhai
-    digest: sha256:4851194219a7e179bf1bc1c0b604a19a2a955a81e2bffe4258c4ab83952c9fbb
+    digest: sha256:7e5299d4d200d4b2c6e36280a3854925d9a9e79e1804d3273c1608eaae543698
   - path: scripts/is-continuation.rhai
-    digest: sha256:ee61f30102de5ac0ce051413c29ba9f1786d2c0bd404a0508f1f30dc97bb1817
+    digest: sha256:8673a304e10ed6f7494466326a917167f8f48f9f9103d3716d5e2e605d9b1da9
   - path: scripts/next-page-token.rhai
-    digest: sha256:8634cbffdb85f050f463c6b4c79a23653fe7937f38cad8e8be65119a18dd4216
+    digest: sha256:9ff70582b06293e07d6eba5cb26d7c14b50228475f660a8c6e4da62c954bcd55
   - path: scripts/to-records.rhai
     digest: sha256:66e457e9014ba7fc28584f551ffdfe4fba9a9f98351db9a6ddf7717f9d64afa4
 capabilities:

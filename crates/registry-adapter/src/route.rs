@@ -2,21 +2,20 @@
 
 //! The route model (`products/adapter/CONCEPT.md` sections 8.3 and 8.4).
 //!
-//! A route is a sequence of EIP steps read from a pack's route templates
-//! and internal routes in the platform YAML formats, in the shape of
-//! Camel's YAML DSL: an externally tagged step union keyed by the Camel
-//! EIP name. The engine's boundedness rules hold here: one route has one
-//! `from`, `from` URIs are `direct:` only, the route call graph through
-//! `direct:` is acyclic and depth bounded, every `loop` and `split`
-//! declares its maximum, and inline code is refused, so `rhai` always
-//! names a digest-pinned file.
+//! A route run interprets the ordered EIP steps compiled from pack routes
+//! and instantiated route templates. The authored YAML follows Camel's DSL:
+//! steps are an externally tagged union keyed by the Camel EIP name. The
+//! engine's boundedness rules hold here: authored routes have one `direct:`
+//! consumer, the route call graph is acyclic and depth bounded, every `loop`
+//! and `split` declares its maximum, and inline code is refused, so `rhai`
+//! always names a digest-pinned file.
 //!
-//! Route templates carry typed parameters instantiated at `check` time
-//! and at startup, never per request; a parameter carries authored values
-//! only, never environment values. A template omits `from`, and the
-//! instantiated route's `from` is `direct:<routeId>`.
+//! Route templates carry typed parameters instantiated at `check` time and
+//! startup, never per request. The runtime table stores the resulting step
+//! lists by route id; the `direct:<routeId>` consumer is represented by that
+//! table key rather than interpreted as a step.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -24,16 +23,15 @@ use std::time::{Duration, Instant, SystemTime};
 
 use registry_adapter_core::{
     is_route_unwritable_header_name, AdapterRuntimeConfig, AggregationStrategy, ConvertStep,
-    Endpoint, EndpointBinding, EnrichStep, ErrorClass, Expression, HttpMethod, OnExceptionStep,
-    RedeliveryOptions, SendComponent, SetPropertyStep, Step, ToParameters, ToStep,
+    Endpoint, EndpointBinding, EnrichStep, ErrorClass, Expression, GraphQlOperationKind,
+    HttpMethod, OnExceptionStep, RedeliveryOptions, SendComponent, SetPropertyStep, Step,
+    ToParameters, ToStep,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
 
 use crate::auth::{
-    AuthError, AuthEvent, AuthKind, AuthorizeContext, ClientAssertion, ClientAssertionSigner,
-    ProtectedText, TokenBudget, TokenRequest, TokenSend, TokenWire, TransportFailure,
-    UpstreamStatusAction,
+    AuthError, AuthEvent, AuthKind, PlatformAssertionSigner, TokenBudget, UpstreamStatusAction,
 };
 use crate::component::http::uri::{encode_path_segment, percent_encode, LinkRefusal};
 use crate::egress::{
@@ -55,37 +53,6 @@ const DEFAULT_OK_RANGE: (u16, u16) = (200, 299);
 /// pause, and script. It sits above the largest declared attempt timeout so
 /// a single attempt always finishes under its own timeout first.
 const EXCHANGE_DEADLINE: Duration = Duration::from_secs(60);
-
-/// The name a route author writes for a step kind, for refusal texts.
-fn step_name(step: &Step) -> &'static str {
-    match step {
-        Step::To(_) => "to",
-        Step::SetBody(_) => "setBody",
-        Step::Transform(_) => "transform",
-        Step::SetHeader(_) => "setHeader",
-        Step::SetProperty(_) => "setProperty",
-        Step::RemoveHeader(_) => "removeHeader",
-        Step::RemoveProperty(_) => "removeProperty",
-        Step::Script(_) => "script",
-        Step::ConvertBodyTo(_) => "convertBodyTo",
-        Step::ConvertHeaderTo(_) => "convertHeaderTo",
-        Step::ConvertPropertyTo(_) => "convertPropertyTo",
-        Step::Choice(_) => "choice",
-        Step::Filter(_) => "filter",
-        Step::Validate(_) => "validate",
-        Step::Stop(_) => "stop",
-        Step::ThrowException(_) => "throwException",
-        Step::Split(_) => "split",
-        Step::Loop(_) => "loop",
-        Step::Enrich(_) => "enrich",
-        Step::CircuitBreaker(_) => "circuitBreaker",
-        Step::Throttle(_) => "throttle",
-        Step::IdempotentConsumer(_) => "idempotentConsumer",
-        Step::ErrorHandler(_) => "errorHandler",
-        Step::OnException(_) => "onException",
-        Step::DoTry(_) => "doTry",
-    }
-}
 
 /// Refuse, by name, anything in `steps` the interpreter does not run. A
 /// route that passes runs exactly as written; a route that does not is never
@@ -227,9 +194,44 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 check_enrich(enrich)?;
                 check_strategy(enrich.aggregation_strategy.as_ref())?;
             }
+            Step::IdempotentConsumer(idempotent) => {
+                if !idempotent.eager || idempotent.completion_eager {
+                    return Err(
+                        "an idempotentConsumer is served only with eager true and completionEager false"
+                            .to_owned(),
+                    );
+                }
+                if idempotent.steps.is_empty() {
+                    return Err("an idempotentConsumer guards no steps".to_owned());
+                }
+                if !matches!(
+                    &idempotent.expression,
+                    Expression::Header(name) if name.eq_ignore_ascii_case("Idempotency-Key")
+                ) {
+                    return Err(
+                        "an idempotentConsumer key must be the Idempotency-Key header".to_owned(),
+                    );
+                }
+                check_steps(&idempotent.steps, true)?;
+            }
             Step::CircuitBreaker(breaker) => {
                 if breaker.steps.is_empty() {
                     return Err("a circuitBreaker guards no steps".to_owned());
+                }
+                for (name, classes) in [
+                    ("recordException", breaker.record_exception.as_ref()),
+                    ("ignoreException", breaker.ignore_exception.as_ref()),
+                ] {
+                    if let Some(classes) = classes {
+                        for class in classes.iter() {
+                            if class.is_uncatchable() || class.is_facade() {
+                                return Err(format!(
+                                    "a circuitBreaker {name} may not name the class {}",
+                                    class.class()
+                                ));
+                            }
+                        }
+                    }
                 }
                 // A minimum above the window can never be reached inside
                 // it, so the breaker would never judge (section 8.7).
@@ -300,12 +302,6 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 }
                 check_steps(&block.steps, true)?;
             }
-            other => {
-                return Err(format!(
-                    "the {} step is not served by this runtime yet",
-                    step_name(other)
-                ))
-            }
         }
     }
     Ok(())
@@ -365,6 +361,27 @@ fn check_convert(form: &str, convert: &ConvertStep) -> Result<(), String> {
     }
     if convert.name.is_none() && convert.to_name.is_some() {
         return Err("a conversion with toName and no name names no source".to_owned());
+    }
+    let reserved = |name: &str| match form {
+        "convertHeaderTo" => is_route_unwritable_header_name(name),
+        "convertPropertyTo" => {
+            name.starts_with(RESERVED_PROPERTY_PREFIX) && name != NEXT_CONTINUATION_PROPERTY
+        }
+        _ => false,
+    };
+    if let Some(name) = convert.name.as_deref() {
+        if reserved(name) {
+            return Err(format!(
+                "a {form} may not use the reserved source name {name}"
+            ));
+        }
+    }
+    if let Some(name) = convert.to_name.as_deref() {
+        if reserved(name) {
+            return Err(format!(
+                "a {form} may not use the reserved target name {name}"
+            ));
+        }
     }
     if convert.code_map_id().is_none() {
         return Err(format!(
@@ -486,11 +503,23 @@ fn check_to(to: &ToStep) -> Result<(), String> {
     let Some(parameters) = &to.parameters else {
         return Err("a to step without parameters is not served".into());
     };
-    if !matches!(parameters.http_method, None | Some(HttpMethod::Get)) {
-        return Err("a to step is served for GET only".into());
+    if matches!(
+        parameters.http_method,
+        Some(HttpMethod::Put | HttpMethod::Patch)
+    ) {
+        return Err("a to step is served for GET or POST only in this slice".into());
     }
-    if parameters.body.is_some() || !parameters.resume_bindings.is_empty() {
-        return Err("a to step with a body or resumeBindings is not served".into());
+    if matches!(parameters.http_method, None | Some(HttpMethod::Get)) && parameters.body.is_some() {
+        return Err("a GET to step carries no body".into());
+    }
+    if parameters.http_method == Some(HttpMethod::Post) {
+        let Some(body) = &parameters.body else {
+            return Err("a POST to step declares a body".into());
+        };
+        check_expression("body", body)?;
+    }
+    if !parameters.resume_bindings.is_empty() {
+        return Err("a to step with resumeBindings is not served".into());
     }
     if let Some(expression) = &parameters.http_uri {
         // The one dynamic form (section 8.11.5): exactly one of `path`
@@ -521,35 +550,41 @@ fn check_to(to: &ToStep) -> Result<(), String> {
     Ok(())
 }
 
-/// An `enrich` send holds to the same served surface as a `to` send:
-/// http component, GET, a declared path, no origin or body members. The
-/// strategy is checked beside it.
+/// An `enrich` resource is either a parameter-free static `direct:` route or
+/// the same served HTTP surface as a `to` send: GET, a declared path, and no
+/// origin or body members. The strategy is checked beside it.
 fn check_enrich(enrich: &EnrichStep) -> Result<(), String> {
-    if enrich.uri.component != SendComponent::Http {
-        return Err("an enrich step is served for the http component only".into());
+    if enrich.uri.component == SendComponent::Direct {
+        if enrich.parameters.is_some() {
+            return Err("a direct enrich resource carries no parameters".into());
+        }
+    } else {
+        if enrich.uri.component != SendComponent::Http {
+            return Err("an enrich step is served for the http or direct component only".into());
+        }
+        let Some(parameters) = &enrich.parameters else {
+            return Err("an enrich step without parameters is not served".into());
+        };
+        if !matches!(parameters.http_method, None | Some(HttpMethod::Get)) {
+            return Err("an enrich step is served for GET only".into());
+        }
+        if parameters.path.is_none() {
+            return Err("an enrich step without a path is not served".into());
+        }
+        if parameters.http_uri.is_some()
+            || parameters.body.is_some()
+            || !parameters.resume_bindings.is_empty()
+        {
+            return Err("an enrich step with httpUri, body or resumeBindings is not served".into());
+        }
+        for expression in parameters.query.values() {
+            check_expression("query", expression)?;
+        }
+        for expression in parameters.path_parameters.values() {
+            check_expression("pathParameters", expression)?;
+        }
+        parse_ok_range(parameters)?;
     }
-    let Some(parameters) = &enrich.parameters else {
-        return Err("an enrich step without parameters is not served".into());
-    };
-    if !matches!(parameters.http_method, None | Some(HttpMethod::Get)) {
-        return Err("an enrich step is served for GET only".into());
-    }
-    if parameters.path.is_none() {
-        return Err("an enrich step without a path is not served".into());
-    }
-    if parameters.http_uri.is_some()
-        || parameters.body.is_some()
-        || !parameters.resume_bindings.is_empty()
-    {
-        return Err("an enrich step with httpUri, body or resumeBindings is not served".into());
-    }
-    for expression in parameters.query.values() {
-        check_expression("query", expression)?;
-    }
-    for expression in parameters.path_parameters.values() {
-        check_expression("pathParameters", expression)?;
-    }
-    parse_ok_range(parameters)?;
     if matches!(
         enrich.aggregation_strategy,
         Some(AggregationStrategy::GroupedBody {})
@@ -612,6 +647,10 @@ pub struct EndpointRuntime {
     /// endpoint; `None` on every other endpoint and on a graphql
     /// endpoint a caller assembled without the loader.
     pub graphql: Option<crate::component::graphql::GraphQlQuery>,
+    /// HTTP POST operations whose endpoint declaration carries the
+    /// reviewed `safeUpstream` claim. Other POST, PUT and PATCH sends
+    /// are effects; GraphQL safety comes from the parsed query kind.
+    pub safe_post_operations: BTreeSet<String>,
     pub attempt: Duration,
     pub maximum_response_bytes: usize,
 }
@@ -636,9 +675,39 @@ impl EndpointRuntime {
             attempt: egress.attempt(),
             maximum_response_bytes: egress.maximum_response_bytes(),
             graphql: None,
+            safe_post_operations: declared
+                .operations
+                .iter()
+                .filter(|operation| operation.safe_upstream)
+                .map(|operation| operation.id.as_str().to_owned())
+                .collect(),
             egress,
             base,
         })
+    }
+
+    /// Whether one data send is safe by reviewed semantic metadata,
+    /// never by its rendered transport shape alone.
+    fn send_is_safe(&self, component: SendComponent, parameters: Option<&ToParameters>) -> bool {
+        match component {
+            SendComponent::Direct => true,
+            SendComponent::Http => {
+                let method = parameters
+                    .and_then(|parameters| parameters.http_method)
+                    .unwrap_or(HttpMethod::Post);
+                method.is_safe()
+                    || method == HttpMethod::Post
+                        && parameters
+                            .and_then(|parameters| parameters.operation.as_ref())
+                            .is_some_and(|operation| {
+                                self.safe_post_operations.contains(operation.as_str())
+                            })
+            }
+            SendComponent::GraphQl => self
+                .graphql
+                .as_ref()
+                .is_some_and(|query| query.kind == Some(GraphQlOperationKind::Query)),
+        }
     }
 }
 
@@ -679,15 +748,24 @@ pub type RouteTable = BTreeMap<String, Arc<Vec<Step>>>;
 ///
 /// The first undeclared `direct:` target, by route id.
 pub fn check_direct_targets(routes: &RouteTable) -> Result<(), String> {
+    let mut edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut missing: Vec<&str> = Vec::new();
-    for steps in routes.values() {
+    for (route, steps) in routes {
+        let targets = edges.entry(route.as_str()).or_default();
         registry_adapter_core::walk_steps(steps, &mut |step, _pointer| {
-            if let Step::To(sent) = step {
-                if sent.uri.component == SendComponent::Direct
-                    && !routes.contains_key(&sent.uri.id)
-                    && !missing.contains(&sent.uri.id.as_str())
-                {
-                    missing.push(sent.uri.id.as_str());
+            let target = match step {
+                Step::To(sent) if sent.uri.component == SendComponent::Direct => {
+                    Some(sent.uri.id.as_str())
+                }
+                Step::Enrich(enrich) if enrich.uri.component == SendComponent::Direct => {
+                    Some(enrich.uri.id.as_str())
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                targets.push(target);
+                if !routes.contains_key(target) && !missing.contains(&target) {
+                    missing.push(target);
                 }
             }
         });
@@ -696,6 +774,39 @@ pub fn check_direct_targets(routes: &RouteTable) -> Result<(), String> {
         return Err(format!(
             "the direct route {id} is declared by no route in the deployment"
         ));
+    }
+
+    fn visit<'a>(
+        route: &'a str,
+        edges: &BTreeMap<&'a str, Vec<&'a str>>,
+        visiting: &mut BTreeSet<&'a str>,
+        visited: &mut BTreeSet<&'a str>,
+    ) -> Option<&'a str> {
+        if visiting.contains(route) {
+            return Some(route);
+        }
+        if visited.contains(route) {
+            return None;
+        }
+        visiting.insert(route);
+        for target in edges.get(route).into_iter().flatten() {
+            if let Some(cycle) = visit(target, edges, visiting, visited) {
+                return Some(cycle);
+            }
+        }
+        visiting.remove(route);
+        visited.insert(route);
+        None
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for route in edges.keys() {
+        if let Some(cycle) = visit(route, &edges, &mut visiting, &mut visited) {
+            return Err(format!(
+                "the direct route graph contains a cycle at {cycle}"
+            ));
+        }
     }
     Ok(())
 }
@@ -743,6 +854,19 @@ fn auth_events_detail(events: &[AuthEvent]) -> Value {
             })
             .collect(),
     )
+}
+
+fn auth_failure(error: &AuthError, events: &[AuthEvent]) -> RouteFailure {
+    let class = if *error == AuthError::BudgetExhausted {
+        ErrorClass::BudgetExhausted
+    } else {
+        ErrorClass::from_class(error.class()).unwrap_or(ErrorClass::CredentialRejected)
+    };
+    let mut failure = RouteFailure::of(class);
+    if !events.is_empty() {
+        failure.auth = Some(auth_events_detail(events));
+    }
+    failure
 }
 
 /// How a route run failed: the class it raised and, when a
@@ -817,18 +941,31 @@ pub async fn run_route_within(
     exchange: Exchange,
     deadline: Duration,
 ) -> RouteOutcome {
+    if let Err(class) = exchange.ensure_bounded() {
+        return RouteOutcome {
+            result: Err(RouteFailure::of(class)),
+            events: Vec::new(),
+        };
+    }
     let mut run = Run {
         context,
         exchange,
         events: Vec::new(),
         sends: 0,
         direct_depth: 0,
+        exception_clause_depth: 0,
+        token_budget: TokenBudget::new_exchange(),
         deadline: tokio::time::Instant::now() + deadline,
     };
     let body = run.run_route_body(steps);
-    let result = tokio::time::timeout(deadline, body)
+    let mut result = tokio::time::timeout(deadline, body)
         .await
         .unwrap_or_else(|_| Err(RouteFailure::of(ErrorClass::BudgetExhausted)));
+    if result.is_ok() {
+        if let Err(class) = run.exchange.ensure_bounded() {
+            result = Err(RouteFailure::of(class));
+        }
+    }
     let Run {
         exchange, events, ..
     } = run;
@@ -861,6 +998,13 @@ pub(crate) struct Run<'a, 'c> {
     /// bound the call graph statically; this holds the same bound at
     /// run for a table that never saw them.
     direct_depth: u32,
+    /// Exception-clause steps are a terminal fallback scope. A `direct:`
+    /// route called from one stays in that scope and cannot recursively
+    /// activate the callee's own handler (section 8.7 divergence).
+    exception_clause_depth: u32,
+    /// Token endpoint calls are budgeted per endpoint across this whole
+    /// exchange, including direct calls and redelivery.
+    token_budget: TokenBudget,
     /// The instant the whole run must end by: a step that waits (the
     /// throttler's pause, a redelivery delay) refuses with its own class
     /// when the wait cannot finish before this, instead of letting the
@@ -871,7 +1015,7 @@ pub(crate) struct Run<'a, 'c> {
 impl Run<'_, '_> {
     /// Run one route's step list under that route's own error handling
     /// (section 8.7): the clauses and handler policy its top level
-    /// declares, with a breaker block bare. The route the facade
+    /// declares, with breaker and top-level `doTry` blocks bare. The route the facade
     /// dispatches and the route a `to: direct:` send calls run through
     /// here alike; a `stop` anywhere in the body ends that route and is
     /// carried out as the flow.
@@ -909,11 +1053,10 @@ impl Run<'_, '_> {
             Vec::new()
         };
         for step in steps.iter().filter(|s| !matches!(s, Step::OnException(_))) {
-            // A breaker and its steps run bare (section 8.7): the route
-            // error handler does not wrap them, so no clause claims
-            // their failures and no policy redelivers them.
+            // A breaker and a top-level doTry run bare (section 8.7):
+            // the route error handler does not wrap either scope.
             let attempted = match step {
-                Step::CircuitBreaker(_) => self.step(step).await,
+                Step::CircuitBreaker(_) | Step::DoTry(_) => self.step(step).await,
                 other => {
                     self.step_with_clauses(other, &clauses, handler_policy, handler_retry_while)
                         .await
@@ -923,6 +1066,22 @@ impl Run<'_, '_> {
                 Ok(Flow::Continue) => {}
                 ended @ (Ok(Flow::Stop) | Ok(Flow::Handled)) => return ended,
                 Err(failure) => return Err(failure),
+            }
+        }
+        Ok(Flow::Continue)
+    }
+
+    /// Run a route body without its error handler or exception clauses.
+    /// This is the terminal fallback scope used by a `direct:` call made
+    /// from inside an exception clause (section 8.7 divergence).
+    async fn run_route_body_bare(&mut self, steps: &[Step]) -> Result<Flow, RouteFailure> {
+        for step in steps
+            .iter()
+            .filter(|step| !matches!(step, Step::OnException(_) | Step::ErrorHandler(_)))
+        {
+            match self.step(step).await? {
+                Flow::Continue => {}
+                ended @ (Flow::Stop | Flow::Handled) => return Ok(ended),
             }
         }
         Ok(Flow::Continue)
@@ -961,7 +1120,8 @@ impl Run<'_, '_> {
             // their redelivery inside the target.
             let endpoint_send =
                 matches!(step, Step::To(sent) if sent.uri.component != SendComponent::Direct);
-            let policy = match (clause, endpoint_send) {
+            let retryable_upstream = failure.class.is_within(ErrorClass::Upstream);
+            let policy = match (clause, endpoint_send && retryable_upstream) {
                 (Some(clause), true) => clause.redelivery_policy.as_ref().or(handler_policy),
                 (None, true) => handler_policy,
                 _ => None,
@@ -1005,18 +1165,22 @@ impl Run<'_, '_> {
             let Some(clause) = clause else {
                 return Err(failure);
             };
-            self.record(
-                "exchangeFailureHandled",
-                json!({ "class": failure.class.class() }),
-            );
-            let mut stopped = false;
-            for clause_step in &clause.steps {
-                // An error inside a clause replaces the failure and is final.
-                if self.step(clause_step).await? == Flow::Stop {
-                    stopped = true;
-                    break;
+            self.record_consumed_failure("onException", &failure);
+            self.exception_clause_depth += 1;
+            let clause_outcome = async {
+                let mut stopped = false;
+                for clause_step in &clause.steps {
+                    // An error inside a clause replaces the failure and is final.
+                    if self.step(clause_step).await? == Flow::Stop {
+                        stopped = true;
+                        break;
+                    }
                 }
+                Ok::<bool, RouteFailure>(stopped)
             }
+            .await;
+            self.exception_clause_depth -= 1;
+            let stopped = clause_outcome?;
             // `handled` ends the exchange successfully with the clause's
             // result and `continued` resumes the route after the failure
             // point; with neither, the failure surfaces (section 8.7).
@@ -1051,11 +1215,35 @@ impl Run<'_, '_> {
         });
     }
 
-    /// Run a nested step body (a `choice` branch, a `filter`'s steps): no
-    /// clause of its own, the failure bubbles to the enclosing step, and
-    /// a `stop` ends the whole route. Boxed, because a nested body can
-    /// hold another `choice` or `filter`, and the interpreter's call
-    /// graph is depth-bounded at load, not statically acyclic.
+    /// Record a failure that an EIP consumed. `source` is closed here even
+    /// though the cross-processor API is a static string, so no authored or
+    /// upstream value can become a journal label.
+    pub(crate) fn record_consumed_failure(&mut self, source: &'static str, failure: &RouteFailure) {
+        let source = match source {
+            "onException" => "onException",
+            "doCatch" => "doCatch",
+            "enrich" => "enrich",
+            "split" => "split",
+            "circuitBreaker" => "circuitBreaker",
+            other => {
+                debug_assert!(false, "unknown consumed-failure source: {other}");
+                "engine"
+            }
+        };
+        let mut detail = json!({
+            "source": source,
+            "class": failure.class.class(),
+        });
+        if let Some(auth) = &failure.auth {
+            detail["auth"] = auth.clone();
+        }
+        self.record("exchangeFailureHandled", detail);
+    }
+
+    /// Run a nested step body (an EIP branch, guarded block, or fallback):
+    /// it has no route clauses of its own, failures bubble to the owning
+    /// EIP, and `stop` ends the whole route. Boxed because nested bodies
+    /// recursively dispatch through this interpreter.
     pub(crate) fn run_steps<'r>(
         &'r mut self,
         steps: &'r [Step],
@@ -1103,7 +1291,9 @@ impl Run<'_, '_> {
     }
 
     pub(crate) async fn step(&mut self, step: &Step) -> Result<Flow, RouteFailure> {
-        match step {
+        self.ensure_deadline()?;
+        self.ensure_exchange_bounded()?;
+        let outcome = match step {
             Step::SetBody(expression) => processor::set_body::assign(self, expression),
             Step::Transform(expression) => processor::transform::run(self, expression),
             Step::SetHeader(header) => processor::set_header::run(self, header),
@@ -1146,13 +1336,15 @@ impl Run<'_, '_> {
                 let key = std::ptr::from_ref(step) as usize;
                 Box::pin(processor::throttle::run(self, throttle, key)).await
             }
+            Step::IdempotentConsumer(idempotent) => {
+                Box::pin(processor::idempotent_consumer::run(self, idempotent)).await
+            }
             // Configuration the runner collected before the first step;
             // in the body it runs nothing.
-            Step::ErrorHandler(_) => Ok(Flow::Continue),
-            // The unserved kinds never reach here: check_servable refuses
-            // them by name before a route is registered.
-            _ => Err(RouteFailure::of(ErrorClass::Script)),
-        }
+            Step::ErrorHandler(_) | Step::OnException(_) => Ok(Flow::Continue),
+        };
+        self.ensure_exchange_bounded()?;
+        outcome
     }
 
     pub(crate) fn eval(&self, expression: &Expression) -> Result<Value, RouteFailure> {
@@ -1167,16 +1359,19 @@ impl Run<'_, '_> {
             Expression::ExchangeProperty(name) => {
                 Ok(self.exchange.property(name).cloned().unwrap_or(Value::Null))
             }
-            Expression::Rhai(script) => self
-                .context
-                .scripts
-                .call(
-                    &self.context.code_maps,
-                    &script.file,
-                    &script.entrypoint,
-                    &self.exchange.as_script_value(),
-                )
-                .map_err(script_failure),
+            Expression::Rhai(script) => {
+                self.ensure_deadline()?;
+                self.context
+                    .scripts
+                    .call_with_deadline(
+                        &self.context.code_maps,
+                        &script.file,
+                        &script.entrypoint,
+                        &self.exchange.as_script_value(),
+                        self.deadline.into_std(),
+                    )
+                    .map_err(script_failure)
+            }
             Expression::JsonPath(selector) => {
                 let compiled = compile_selector(selector)
                     .map_err(|_| RouteFailure::of(ErrorClass::Validation))?;
@@ -1236,6 +1431,20 @@ impl Run<'_, '_> {
         }
     }
 
+    /// Refuse work that begins at or after the route-wide deadline. The
+    /// outer timeout remains the final guard for an in-flight operation.
+    pub(crate) fn ensure_deadline(&self) -> Result<(), RouteFailure> {
+        if tokio::time::Instant::now() >= self.deadline {
+            Err(RouteFailure::of(ErrorClass::BudgetExhausted))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_exchange_bounded(&self) -> Result<(), RouteFailure> {
+        self.exchange.ensure_bounded().map_err(RouteFailure::of)
+    }
+
     async fn send(&mut self, to: &ToStep) -> Result<Flow, RouteFailure> {
         if to.uri.component == SendComponent::Direct {
             return self.direct(to).await;
@@ -1257,10 +1466,6 @@ impl Run<'_, '_> {
             .endpoints
             .get(&to.uri.id)
             .ok_or_else(|| RouteFailure::of(ErrorClass::EgressRefused))?;
-        self.sends += 1;
-        if self.sends > self.context.maximum_upstream_calls {
-            return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
-        }
         let ok_range = match parameters.map(parse_ok_range) {
             Some(Ok(range)) => range,
             // A refused range never reaches the transport: the authoring
@@ -1278,6 +1483,10 @@ impl Run<'_, '_> {
                 .graphql
                 .as_ref()
                 .ok_or_else(|| RouteFailure::of(ErrorClass::EgressRefused))?;
+            let operation = parameters.and_then(|parameters| parameters.operation.as_ref());
+            if !query.accepts_operation(operation) {
+                return Err(RouteFailure::of(ErrorClass::EgressRefused));
+            }
             let variables = match parameters
                 .and_then(|parameters| parameters.body.as_ref())
                 .or(query.variables.as_ref())
@@ -1300,6 +1509,16 @@ impl Run<'_, '_> {
             endpoint.base.clone()
         } else {
             let parameters = parameters.expect("an http send always carries parameters");
+            if parameters.http_method == Some(HttpMethod::Post) {
+                let body = parameters
+                    .body
+                    .as_ref()
+                    .ok_or_else(|| RouteFailure::of(ErrorClass::EgressRefused))?;
+                post_body = Some(
+                    serde_json::to_vec(&self.eval(body)?)
+                        .map_err(|_| RouteFailure::of(ErrorClass::Validation))?,
+                );
+            }
             if let Some(expression) = &parameters.http_uri {
                 self.pinned_link(&endpoint.egress, expression)?
             } else {
@@ -1316,83 +1535,142 @@ impl Run<'_, '_> {
             }
         };
 
-        let mut budget = TokenBudget::new_exchange();
         let mut auth_events: Vec<AuthEvent> = Vec::new();
-        let authorized = endpoint
-            .egress
-            .plan()
-            .authorize(&mut AuthorizeContext {
-                resolver: self.context.resolver,
-                budget: &mut budget,
-                send: &NoTokenSend,
-                signer: &NoSigner,
-                events: &mut auth_events,
-            })
-            .await;
-        let method = if post_body.is_some() { "POST" } else { "GET" };
-        let mut sending = json!({ "endpoint": to.uri.id, "method": method, "operation": parameters.and_then(|parameters| parameters.operation.as_ref()).map(|o| o.as_str()) });
-        if !auth_events.is_empty() {
-            sending["auth"] = auth_events_detail(&auth_events);
+        self.sends += 1;
+        if self.sends > self.context.maximum_upstream_calls {
+            return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
         }
+        self.ensure_deadline()?;
+        let authorized = tokio::time::timeout_at(
+            self.deadline,
+            endpoint.egress.authorize(
+                &mut self.token_budget,
+                self.context.resolver,
+                &PlatformAssertionSigner,
+                &mut auth_events,
+            ),
+        )
+        .await
+        .map_err(|_| RouteFailure::of(ErrorClass::BudgetExhausted))?;
+        let method = if graphql
+            || parameters.is_some_and(|parameters| parameters.http_method == Some(HttpMethod::Post))
+        {
+            "POST"
+        } else {
+            "GET"
+        };
         // The send is announced only once its credential is in hand; a
         // credential failure never reads as a send that began.
-        let credential = authorized.map_err(|error| {
-            let mut failure = RouteFailure::of(
-                ErrorClass::from_class(error.class()).unwrap_or(ErrorClass::CredentialRejected),
-            );
-            if !auth_events.is_empty() {
-                failure.auth = Some(auth_events_detail(&auth_events));
-            }
-            failure
-        })?;
-        self.events.push(RouteEvent {
-            kind: "exchangeSending",
-            at: SystemTime::now(),
-            detail: sending,
-        });
-        auth_events.clear();
+        let mut credential = authorized.map_err(|error| auth_failure(&error, &auth_events))?;
         let headers = self.exchange.message.string_headers();
-        let started = Instant::now();
-        let reply = endpoint
-            .egress
-            .send(OutboundSend {
-                link: &link,
-                exchange_headers: &headers,
-                shape: match &post_body {
-                    Some(bytes) => SendShape::Post(SendBody {
-                        format: SendBodyFormat::Json,
-                        bytes,
-                    }),
-                    None => SendShape::Get,
-                },
-                authorization: credential.as_ref().map(|c| &c.header),
-                attempt: endpoint.attempt,
-                maximum_response_bytes: endpoint.maximum_response_bytes,
-                ok_status_range: ok_range,
-                throw_exception_on_failure: parameters
-                    .map(|parameters| parameters.throw_exception_on_failure)
-                    .unwrap_or(false),
-            })
-            .await;
-        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let status = match &reply {
-            Ok(reply) => Some(reply.status),
-            Err(EgressError::Upstream(failure)) => failure.status,
-            Err(EgressError::Refused(_)) => None,
-        };
-        if let Some(status) = status {
-            let mut refreshed = true;
-            let action = endpoint
-                .egress
-                .plan()
-                .on_upstream_status(
-                    status,
-                    credential.as_ref().and_then(|c| c.generation),
-                    &mut refreshed,
-                    &mut auth_events,
+        let safe = endpoint.send_is_safe(to.uri.component, parameters);
+        let mut refresh_used = false;
+        loop {
+            let mut sending = json!({ "endpoint": to.uri.id, "method": method, "operation": parameters.and_then(|parameters| parameters.operation.as_ref()).map(|o| o.as_str()) });
+            if !auth_events.is_empty() {
+                sending["auth"] = auth_events_detail(&auth_events);
+            }
+            self.events.push(RouteEvent {
+                kind: "exchangeSending",
+                at: SystemTime::now(),
+                detail: sending,
+            });
+            auth_events.clear();
+            self.ensure_deadline()?;
+            if !safe {
+                self.exchange.before_upstream_effect().await?;
+            }
+            self.ensure_deadline()?;
+            let remaining = self
+                .deadline
+                .saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+            }
+            let started = Instant::now();
+            let reply = tokio::time::timeout_at(
+                self.deadline,
+                endpoint.egress.send(OutboundSend {
+                    link: &link,
+                    exchange_headers: &headers,
+                    shape: match &post_body {
+                        Some(bytes) => SendShape::Post(SendBody {
+                            format: SendBodyFormat::Json,
+                            bytes,
+                        }),
+                        None => SendShape::Get,
+                    },
+                    authorization: credential.as_ref().map(|c| &c.header),
+                    attempt: endpoint.attempt.min(remaining),
+                    maximum_response_bytes: endpoint.maximum_response_bytes,
+                    ok_status_range: ok_range,
+                    throw_exception_on_failure: parameters
+                        .map(|parameters| parameters.throw_exception_on_failure)
+                        .unwrap_or(graphql),
+                }),
+            )
+            .await
+            .map_err(|_| RouteFailure::of(ErrorClass::BudgetExhausted))?;
+            self.ensure_deadline()?;
+            let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let status = match &reply {
+                Ok(reply) => Some(reply.status),
+                Err(EgressError::Upstream(failure)) => failure.status,
+                Err(EgressError::Refused(_)) => None,
+            };
+            let action = match status {
+                Some(status) => {
+                    endpoint
+                        .egress
+                        .plan()
+                        .on_upstream_status(
+                            status,
+                            credential
+                                .as_ref()
+                                .and_then(|credential| credential.generation),
+                            &mut refresh_used,
+                            &mut auth_events,
+                        )
+                        .await
+                }
+                None => UpstreamStatusAction::Continue,
+            };
+            if action == UpstreamStatusAction::RetryWithFreshCredential {
+                let mut sent = json!({
+                    "endpoint": to.uri.id,
+                    "class": ErrorClass::UpstreamHttp.class(),
+                    "status": status,
+                    "durationMs": elapsed,
+                });
+                if !auth_events.is_empty() {
+                    sent["auth"] = auth_events_detail(&auth_events);
+                }
+                self.events.push(RouteEvent {
+                    kind: "exchangeSent",
+                    at: SystemTime::now(),
+                    detail: sent,
+                });
+                auth_events.clear();
+                self.sends += 1;
+                if self.sends > self.context.maximum_upstream_calls {
+                    return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+                }
+                self.ensure_deadline()?;
+                credential = tokio::time::timeout_at(
+                    self.deadline,
+                    endpoint.egress.authorize(
+                        &mut self.token_budget,
+                        self.context.resolver,
+                        &PlatformAssertionSigner,
+                        &mut auth_events,
+                    ),
                 )
-                .await;
-            if action != UpstreamStatusAction::Continue {
+                .await
+                .map_err(|_| RouteFailure::of(ErrorClass::BudgetExhausted))?
+                .map_err(|error| auth_failure(&error, &auth_events))?;
+                continue;
+            }
+            if action == UpstreamStatusAction::CredentialRejected {
                 let mut sent = json!({
                     "endpoint": to.uri.id,
                     "class": ErrorClass::CredentialRejected.class(),
@@ -1407,85 +1685,86 @@ impl Run<'_, '_> {
                     at: SystemTime::now(),
                     detail: sent,
                 });
-                return Err(RouteFailure::of(ErrorClass::CredentialRejected));
-            }
-        }
-        match reply {
-            Ok(reply) => {
-                let mut sent =
-                    json!({ "endpoint": to.uri.id, "status": reply.status, "durationMs": elapsed });
+                let mut failure = RouteFailure::of(ErrorClass::CredentialRejected);
                 if !auth_events.is_empty() {
-                    sent["auth"] = auth_events_detail(&auth_events);
+                    failure.auth = Some(auth_events_detail(&auth_events));
                 }
-                self.events.push(RouteEvent {
-                    kind: "exchangeSent",
-                    at: SystemTime::now(),
-                    detail: sent,
-                });
-                let message = &mut self.exchange.message;
-                message.body = reply.body;
-                message.set_header("CamelHttpResponseCode", json!(reply.status));
-                for (name, value) in reply.headers.iter() {
-                    message.set_header(name, Value::String(value.to_owned()));
-                }
-                // A GraphQL `errors` array fails the exchange (section
-                // 8.8), whatever the status said: the reply keeps its
-                // body and status on the exchange for a clause to read,
-                // and the failure carries the declared detail only,
-                // never the source's error text. Partial data fails with
-                // it.
-                if graphql {
-                    let failed = message
-                        .body
-                        .get("errors")
-                        .and_then(|errors| errors.as_array())
-                        .is_some_and(|errors| !errors.is_empty());
-                    if failed {
-                        return Err(RouteFailure {
-                            class: ErrorClass::UpstreamHttp,
-                            message: Some("the graphql reply carries an errors array".to_owned()),
-                            auth: None,
-                        });
-                    }
-                    // The `data` member is the body (section 8.8); a
-                    // reply without one leaves JSON null.
-                    message.body = message.body.get("data").cloned().unwrap_or(Value::Null);
-                }
-                Ok(Flow::Continue)
+                return Err(failure);
             }
-            Err(error) => {
-                let class = error.class();
-                if let EgressError::Refused(reason) = &error {
-                    tracing::warn!(endpoint = %to.uri.id, reason = %reason, "an upstream send was refused");
-                }
-                let mut sent = json!({ "endpoint": to.uri.id, "class": class.class(), "status": status, "durationMs": elapsed });
-                match &error {
-                    EgressError::Upstream(failure) => {
-                        sent["certainty"] = json!(failure.certainty_journal_name());
+            return match reply {
+                Ok(reply) => {
+                    let mut sent = json!({ "endpoint": to.uri.id, "status": reply.status, "durationMs": elapsed });
+                    if !auth_events.is_empty() {
+                        sent["auth"] = auth_events_detail(&auth_events);
                     }
-                    // A refusal happens before any byte leaves.
-                    EgressError::Refused(reason) => {
-                        sent["certainty"] = json!("not-sent");
-                        sent["refusal"] = json!(reason.journal_name());
-                    }
-                }
-                if !auth_events.is_empty() {
-                    sent["auth"] = auth_events_detail(&auth_events);
-                }
-                self.events.push(RouteEvent {
-                    kind: "exchangeSent",
-                    at: SystemTime::now(),
-                    detail: sent,
-                });
-                if let EgressError::Upstream(failure) = error {
+                    self.events.push(RouteEvent {
+                        kind: "exchangeSent",
+                        at: SystemTime::now(),
+                        detail: sent,
+                    });
                     let message = &mut self.exchange.message;
-                    message.body = failure.body.unwrap_or(Value::Null);
-                    if let Some(status) = failure.status {
-                        message.set_header("CamelHttpResponseCode", json!(status));
+                    message.body = reply.body;
+                    message.set_header("CamelHttpResponseCode", json!(reply.status));
+                    for (name, value) in reply.headers.iter() {
+                        message.set_header(name, Value::String(value.to_owned()));
                     }
+                    // A GraphQL `errors` array fails the exchange (section
+                    // 8.8), whatever the status said: the reply keeps its
+                    // body and status on the exchange for a clause to read,
+                    // and the failure carries the declared detail only,
+                    // never the source's error text. Partial data fails with
+                    // it.
+                    if graphql {
+                        match graphql_reply_body(&message.body) {
+                            Ok(body) => message.body = body,
+                            Err(mut failure) => {
+                                if !auth_events.is_empty() {
+                                    failure.auth = Some(auth_events_detail(&auth_events));
+                                }
+                                return Err(failure);
+                            }
+                        }
+                    }
+                    Ok(Flow::Continue)
                 }
-                Err(RouteFailure::of(class))
-            }
+                Err(error) => {
+                    let class = error.class();
+                    if let EgressError::Refused(reason) = &error {
+                        tracing::warn!(endpoint = %to.uri.id, reason = %reason, "an upstream send was refused");
+                    }
+                    let mut sent = json!({ "endpoint": to.uri.id, "class": class.class(), "status": status, "durationMs": elapsed });
+                    match &error {
+                        EgressError::Upstream(failure) => {
+                            sent["certainty"] = json!(failure.certainty_journal_name());
+                        }
+                        // A refusal happens before any byte leaves.
+                        EgressError::Refused(reason) => {
+                            sent["certainty"] = json!("not-sent");
+                            sent["refusal"] = json!(reason.journal_name());
+                        }
+                    }
+                    if !auth_events.is_empty() {
+                        sent["auth"] = auth_events_detail(&auth_events);
+                    }
+                    self.events.push(RouteEvent {
+                        kind: "exchangeSent",
+                        at: SystemTime::now(),
+                        detail: sent,
+                    });
+                    if let EgressError::Upstream(failure) = error {
+                        let message = &mut self.exchange.message;
+                        message.body = failure.body.unwrap_or(Value::Null);
+                        if let Some(status) = failure.status {
+                            message.set_header("CamelHttpResponseCode", json!(status));
+                        }
+                    }
+                    let mut failure = RouteFailure::of(class);
+                    if !auth_events.is_empty() {
+                        failure.auth = Some(auth_events_detail(&auth_events));
+                    }
+                    Err(failure)
+                }
+            };
         }
     }
 
@@ -1512,7 +1791,11 @@ impl Run<'_, '_> {
         // One boxed edge holds the cycle this call closes (direct to a
         // route body to a step to a send back to direct); the call graph
         // is bounded, so the box is bounded with it.
-        let outcome = Box::pin(self.run_route_body(target)).await;
+        let outcome = if self.exception_clause_depth > 0 {
+            Box::pin(self.run_route_body_bare(target)).await
+        } else {
+            Box::pin(self.run_route_body(target)).await
+        };
         self.direct_depth -= 1;
         // A `stop` in the target ends the caller's route too, the way a
         // stop in any nested body does; a failure the target's own
@@ -1592,6 +1875,35 @@ impl Run<'_, '_> {
     }
 }
 
+/// Validate the closed GraphQL response envelope and return its `data`
+/// member. A malformed `errors` member, a non-object response, or an object
+/// carrying neither `data` nor `errors` is a source protocol failure rather
+/// than a successful null result (section 8.8).
+fn graphql_reply_body(body: &Value) -> Result<Value, RouteFailure> {
+    let Some(object) = body.as_object() else {
+        return Err(RouteFailure::of(ErrorClass::UpstreamMalformed));
+    };
+    let has_data = object.contains_key("data");
+    let Some(errors) = object.get("errors") else {
+        return if has_data {
+            Ok(object.get("data").cloned().unwrap_or(Value::Null))
+        } else {
+            Err(RouteFailure::of(ErrorClass::UpstreamMalformed))
+        };
+    };
+    let Some(errors) = errors.as_array() else {
+        return Err(RouteFailure::of(ErrorClass::UpstreamMalformed));
+    };
+    if !errors.is_empty() {
+        return Err(RouteFailure {
+            class: ErrorClass::UpstreamHttp,
+            message: Some("the graphql reply carries an errors array".to_owned()),
+            auth: None,
+        });
+    }
+    Ok(object.get("data").cloned().unwrap_or(Value::Null))
+}
+
 /// Fill a path template's `{{name}}` slots from `value`. A slot is one path
 /// segment value: it must be a string or a number whose percent-encoded form
 /// is one canonical path segment (see `encode_path_segment`). The rendered
@@ -1627,44 +1939,68 @@ fn fill_path(
 /// no token endpoint.
 #[must_use]
 pub fn is_served_auth(kind: AuthKind) -> bool {
-    !kind.is_oauth2()
-}
-
-/// A token send that refuses: no served authentication kind reaches a token
-/// endpoint, so reaching it is a fault, never a request.
-struct NoTokenSend;
-
-impl TokenSend for NoTokenSend {
-    fn send<'a>(
-        &'a self,
-        _request: &'a TokenRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>> {
-        Box::pin(async {
-            Err(TransportFailure::PolicyRefused {
-                journal_name: "invalid-frozen-policy",
-            })
-        })
-    }
-}
-
-/// A client-assertion signer that refuses, for the same reason.
-struct NoSigner;
-
-impl ClientAssertionSigner for NoSigner {
-    fn sign_client_assertion(
-        &self,
-        _request: ClientAssertion<'_>,
-    ) -> Result<ProtectedText, AuthError> {
-        Err(AuthError::Credential)
-    }
+    matches!(
+        kind,
+        AuthKind::None
+            | AuthKind::Basic
+            | AuthKind::StaticAuthorization
+            | AuthKind::StaticApiKey
+            | AuthKind::Oauth2ClientCredentials
+            | AuthKind::Oauth2PrivateKeyJwt
+    )
 }
 
 #[cfg(test)]
 mod served_tests {
     use super::*;
 
+    #[test]
+    fn every_compiled_authentication_kind_is_served() {
+        for kind in [
+            AuthKind::None,
+            AuthKind::Basic,
+            AuthKind::StaticAuthorization,
+            AuthKind::StaticApiKey,
+            AuthKind::Oauth2ClientCredentials,
+            AuthKind::Oauth2PrivateKeyJwt,
+        ] {
+            assert!(is_served_auth(kind), "{} must be served", kind.tag());
+        }
+    }
+
     fn steps(value: Value) -> Vec<Step> {
         serde_json::from_value(value).expect("the steps parse")
+    }
+
+    #[test]
+    fn graphql_replies_require_the_closed_data_errors_envelope() {
+        assert_eq!(
+            graphql_reply_body(&json!({"data": {"record": 1}})).expect("data is a complete reply"),
+            json!({"record": 1})
+        );
+        assert_eq!(
+            graphql_reply_body(&json!({"errors": []}))
+                .expect("an empty errors array is a complete null reply"),
+            Value::Null
+        );
+        for malformed in [
+            json!({}),
+            json!([]),
+            json!({"errors": {"message": "not-an-array"}}),
+        ] {
+            assert_eq!(
+                graphql_reply_body(&malformed)
+                    .expect_err("the malformed reply is refused")
+                    .class,
+                ErrorClass::UpstreamMalformed
+            );
+        }
+        assert_eq!(
+            graphql_reply_body(&json!({"data": {"record": 1}, "errors": [{}]}))
+                .expect_err("partial data with errors fails")
+                .class,
+            ErrorClass::UpstreamHttp
+        );
     }
 
     #[test]
@@ -1680,12 +2016,28 @@ mod served_tests {
     }
 
     #[test]
-    fn a_step_the_runtime_does_not_run_is_refused_by_name() {
+    fn an_empty_idempotent_consumer_is_refused() {
         let steps =
             steps(json!([{"idempotentConsumer": {"expression": {"header": "x"}, "steps": []}}]));
         let refusal = check_servable(&steps).expect_err("refused");
         assert!(refusal.contains("idempotentConsumer"), "{refusal}");
-        assert!(refusal.contains("not served"), "{refusal}");
+        assert!(refusal.contains("guards no steps"), "{refusal}");
+    }
+
+    #[test]
+    fn an_idempotent_consumer_uses_the_caller_idempotency_key_header() {
+        let served = steps(json!([{"idempotentConsumer": {
+            "expression": {"header": "idempotency-key"},
+            "steps": [{"stop": {}}]
+        }}]));
+        check_servable(&served).expect("the caller header is served case-insensitively");
+
+        let refused = steps(json!([{"idempotentConsumer": {
+            "expression": {"constant": "shared-key"},
+            "steps": [{"stop": {}}]
+        }}]));
+        let refusal = check_servable(&refused).expect_err("an authored key is refused");
+        assert!(refusal.contains("Idempotency-Key"), "{refusal}");
     }
 
     #[test]
@@ -1751,7 +2103,7 @@ mod served_tests {
     }
 
     #[test]
-    fn a_post_send_is_refused() {
+    fn a_post_send_requires_a_body() {
         let steps = steps(json!([
             {"to": {"uri": "http:tracker", "parameters": {"httpMethod": "POST", "path": "/x"}}}
         ]));
@@ -1866,6 +2218,7 @@ testedVersions: []
                 egress,
                 base,
                 graphql: None,
+                safe_post_operations: BTreeSet::new(),
                 attempt: Duration::from_secs(10),
                 maximum_response_bytes: 1024,
             },

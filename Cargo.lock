@@ -5077,8 +5077,10 @@ dependencies = [
  "hmac",
  "http",
  "jsonpath-rust",
+ "jsonschema",
  "jsonwebtoken",
  "pest",
+ "proptest",
  "rcgen",
  "registry-adapter-core",
  "registry-platform-audit",
@@ -5135,9 +5137,12 @@ dependencies = [
  "clap",
  "graphql-parser",
  "jsonschema",
+ "rcgen",
+ "registry-adapter",
  "registry-adapter-core",
  "registry-platform-buildinfo",
  "registry-platform-config",
+ "registry-platform-httputil",
  "registry-platform-script",
  "registry-platform-yaml",
  "registry-record",
@@ -5145,6 +5150,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "zeroize",
 ]
 
 [[package]]
@@ -5648,6 +5656,7 @@ name = "registry-cli-docs"
 version = "0.45.0"
 dependencies = [
  "clap",
+ "registry-adapter",
  "registry-adapterctl",
  "registry-breg",
  "registry-breg-mcp",

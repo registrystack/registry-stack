@@ -4115,6 +4115,38 @@ formats:
         whenOmitted: closed
     restrictingMembers: [/allowedPrivateCidrs, /oidc/audience, /oidc/issuer]
 
+  - id: adapter/effective-contract
+    product: adapter
+    title: Registry Adapter effective operation contract
+    files: [effective-contract.json]
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/effective-contract/v1alpha1
+      kind: AdapterEffectiveContract
+      checkedBy:
+        file: crates/registry-adapter/src/effective_contract.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/effective-contract/v1alpha1
+      kind: AdapterEffectiveContract
+    schema:
+      path: products/adapter/schemas/effective-contract.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/effective-contract/effective-contract.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader: none
+    emittedBy:
+      file: crates/registry-adapter/src/effective_contract.rs
+      symbol: to_pretty_json
+    check: none
+    example: products/adapter/examples/formats/effective-contract.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
 outOfScope:
   - files: products/breg/generated/event-schemas/proposal-lifecycle.schema.json
     reason: Generated Proposal lifecycle event payload, governed by the BReg event contract rather than a configuration format.

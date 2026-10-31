@@ -10,6 +10,16 @@ operations:
       - type
     recordTypeParameter: type
     responseEnvelope: '{"record": {{record}}}'
+  - id: cases-create
+    method: POST
+    path: /v2/cases/{type}
+    pathParameters:
+      - type
+    recordTypeParameter: type
+    requestEnvelope: '{"record": {{record}}}'
+    requestMaximumBytes: 16384
+    successStatus: 201
+    responseEnvelope: '{"record": {{record}}}'
 problems:
   - code: cases.upstream
     status: 502

@@ -93,6 +93,7 @@ async fn catch(
         run.exchange
             .message
             .set_header(EXCEPTION_CAUGHT_HEADER, json!(failure.class.class()));
+        run.record_consumed_failure("doCatch", failure);
         let handled = run.run_steps(&catch.steps).await;
         run.exchange.message.remove_header(EXCEPTION_CAUGHT_HEADER);
         return Ok(Some(handled?));

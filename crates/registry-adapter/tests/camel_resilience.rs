@@ -109,6 +109,7 @@ fn resilience_endpoints(
         cursor_key_ref: None,
         previous_cursor_key_ref: None,
         cursor_ttl_seconds: None,
+        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("the binding");
     let runtime = EndpointRuntime::compile(binding, &endpoint, &config, resolver)
@@ -296,11 +297,133 @@ async fn on_fallback_answers_on_failure_and_on_rejection() {
     let first = lane.run().await;
     assert_eq!(ok(&first).property("saw"), Some(&json!("fallback")));
     assert_eq!(lane.requests(), 1);
+    assert!(first.events.iter().any(|event| {
+        event.kind == "breakerFallback" && event.detail["class"] == json!("upstream.http")
+    }));
     // The breaker opened on that failure; the next exchange is refused
     // and answered by the same fallback, with no send.
     let second = lane.run().await;
     assert_eq!(ok(&second).property("saw"), Some(&json!("fallback")));
     assert_eq!(lane.requests(), 1, "the rejected exchange sends nothing");
+    assert!(second.events.iter().any(|event| {
+        event.kind == "breakerFallback" && event.detail["class"] == json!("breaker.open")
+    }));
+}
+
+#[tokio::test]
+async fn record_exception_matches_descendants_and_only_recorded_failures_use_fallback() {
+    let fallback = json!({"steps": [
+        {"setProperty": {"name": "saw", "value": {"constant": "fallback"}}}
+    ]});
+
+    let mut matched = breaker(
+        get(),
+        json!({
+            "minimumNumberOfCalls": 1,
+            "slidingWindowCalls": 1,
+            "recordException": ["upstream"]
+        }),
+    );
+    matched["circuitBreaker"]["onFallback"] = fallback.clone();
+    let lane = Lane::over(json!([matched]));
+    lane.replies(&[500]);
+    let outcome = lane.run().await;
+    assert_eq!(ok(&outcome).property("saw"), Some(&json!("fallback")));
+    assert!(outcome.events.iter().any(|event| {
+        event.kind == "breakerFallback" && event.detail["class"] == json!("upstream.http")
+    }));
+
+    let mut missed = breaker(
+        get(),
+        json!({
+            "minimumNumberOfCalls": 1,
+            "slidingWindowCalls": 1,
+            "recordException": ["upstream.timeout"]
+        }),
+    );
+    missed["circuitBreaker"]["onFallback"] = fallback;
+    let lane = Lane::over(json!([missed]));
+    lane.replies(&[500, 200]);
+    let first = lane.run().await;
+    assert!(first.result.is_ok(), "a recordException miss continues");
+    assert_eq!(ok(&first).property("saw"), None, "fallback does not run");
+    assert!(first.events.iter().any(|event| {
+        event.kind == "exchangeFailureHandled"
+            && event.detail["source"] == json!("circuitBreaker")
+            && event.detail["class"] == json!("upstream.http")
+    }));
+    assert!(lane.run().await.result.is_ok());
+    assert_eq!(lane.requests(), 2, "the record miss counted as success");
+}
+
+#[tokio::test]
+async fn ignore_exception_wins_overlap_and_never_uses_fallback() {
+    let mut node = breaker(
+        get(),
+        json!({
+            "minimumNumberOfCalls": 1,
+            "slidingWindowCalls": 1,
+            "recordException": ["upstream"],
+            "ignoreException": ["upstream.http"]
+        }),
+    );
+    node["circuitBreaker"]["onFallback"] = json!({"steps": [
+        {"setProperty": {"name": "saw", "value": {"constant": "fallback"}}}
+    ]});
+    let lane = Lane::over(json!([node]));
+    lane.replies(&[500, 500]);
+
+    for _ in 0..2 {
+        let outcome = lane.run().await;
+        assert!(outcome.result.is_ok(), "an ignored exception continues");
+        assert_eq!(ok(&outcome).property("saw"), None, "fallback does not run");
+        assert!(outcome.events.iter().any(|event| {
+            event.kind == "exchangeFailureHandled"
+                && event.detail["source"] == json!("circuitBreaker")
+                && event.detail["class"] == json!("upstream.http")
+        }));
+    }
+    assert_eq!(
+        lane.requests(),
+        2,
+        "ignored exceptions did not open the one-call breaker"
+    );
+}
+
+#[tokio::test]
+async fn boundary_failure_is_recorded_and_propagates_past_filters_and_fallback() {
+    let mut node = breaker(
+        json!({"throwException": {
+            "exceptionType": "script.budget-exceeded",
+            "message": "bounded"
+        }}),
+        json!({
+            "minimumNumberOfCalls": 1,
+            "slidingWindowCalls": 1,
+            "recordException": ["upstream"]
+        }),
+    );
+    node["circuitBreaker"]["onFallback"] = json!({"steps": [
+        {"setProperty": {"name": "saw", "value": {"constant": "fallback"}}}
+    ]});
+    let lane = Lane::over(json!([node]));
+
+    let first = lane.run().await;
+    assert_eq!(failed_class(&first), "script.budget-exceeded");
+    assert_eq!(
+        first
+            .result
+            .as_ref()
+            .expect_err("boundary failure propagates")
+            .class
+            .class(),
+        "script.budget-exceeded"
+    );
+    let second = lane.run().await;
+    assert!(
+        has_event(&second, "breakerRefused"),
+        "the boundary failure was recorded as failure and opened the breaker"
+    );
 }
 
 #[tokio::test]

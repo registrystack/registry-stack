@@ -46,7 +46,8 @@ use registry_platform_yaml::{
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 /// The engine contract a pack's Rhai entrypoints must compile under: the
@@ -539,8 +540,18 @@ fn verify_inventory(
             .map(|directory| directory.join(&script.path))
             .unwrap_or_else(|| PathBuf::from(&script.path));
         let pointer = format!("{pointer}/{index}");
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
+        let bytes = match read_bounded_file(&path, SCRIPT_PROFILE.maximum_source_bytes) {
+            Ok(BoundedRead::Bytes(bytes)) => bytes,
+            Ok(BoundedRead::TooLarge) => {
+                report.push(pin_finding(
+                    pack_path,
+                    &pointer,
+                    "the pinned file is over the authoring bound",
+                    "Reduce the governed file to the supported source bound, then update its sha256 digest pin.",
+                    &script.path,
+                ));
+                continue;
+            }
             Err(_) => {
                 report.push(pin_finding(
                     pack_path,
@@ -567,6 +578,29 @@ fn verify_inventory(
         pinned.insert(path, bytes);
     }
     Ok(())
+}
+
+enum BoundedRead {
+    Bytes(Vec<u8>),
+    TooLarge,
+}
+
+/// Read no more than the governed source ceiling plus one sentinel byte.
+/// Metadata rejects an already oversized file before any content read.
+fn read_bounded_file(path: &Path, limit: usize) -> io::Result<BoundedRead> {
+    let file = File::open(path)?;
+    let length = file.metadata()?.len();
+    if length > limit as u64 {
+        return Ok(BoundedRead::TooLarge);
+    }
+    let mut bytes = Vec::with_capacity(limit.min(length as usize));
+    file.take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        Ok(BoundedRead::TooLarge)
+    } else {
+        Ok(BoundedRead::Bytes(bytes))
+    }
 }
 
 /// Compile every Rhai entrypoint the pack's routes and route templates
@@ -689,8 +723,10 @@ pub(crate) fn verify_query_files(
 /// Verify every graphql endpoint's named operation against the operations
 /// its pinned query file declares (CFG-ID-6). Each file parses once; a
 /// file that does not parse is already refused at its inventory entry.
-/// The kind the endpoint operation declares against the file stays with
-/// the core model checks; this command owns the file's own text.
+/// The parsed operation name and kind used to compare each endpoint's
+/// reviewed declaration with the pinned query file's actual operation.
+type ParsedGraphQlOperation<'a> = (&'a str, Option<registry_adapter_core::GraphQlOperationKind>);
+
 pub(crate) fn verify_graphql_operations(
     pack: &registry_adapter_core::AdapterPack,
     pack_path: &Path,
@@ -702,7 +738,7 @@ pub(crate) fn verify_graphql_operations(
         Some(directory) => directory.join(file),
         None => PathBuf::from(file),
     };
-    let mut declared: BTreeMap<&str, Option<Vec<&str>>> = BTreeMap::new();
+    let mut declared: BTreeMap<&str, Option<Vec<ParsedGraphQlOperation<'_>>>> = BTreeMap::new();
     for file in pack.query_files.iter().map(|file| file.path.as_str()) {
         if declared.contains_key(file) {
             continue;
@@ -723,50 +759,82 @@ pub(crate) fn verify_graphql_operations(
         else {
             continue;
         };
-        let Some(Some(names)) = declared.get(query_file.as_str()) else {
+        let Some(Some(operations)) = declared.get(query_file.as_str()) else {
             continue;
         };
-        if names.contains(&operation_name.as_str()) {
+        let Some((_, actual_kind)) = operations
+            .iter()
+            .find(|(name, _)| *name == operation_name.as_str())
+        else {
+            let mut diagnostic = finding(
+                CheckCode::PackGraphQlOperationUnknown,
+                &format!("/endpoints/{index}/operationName"),
+                "the endpoint names an operation its query file does not declare",
+                "Name an operation the endpoint's query file declares, or declare the operation in the file.",
+            );
+            diagnostic.source = Some(registry_platform_yaml::Source {
+                file: pack_path.display().to_string(),
+                line: None,
+                column: None,
+            });
+            report.push(diagnostic);
             continue;
+        };
+        for (operation_index, operation) in endpoint.operations.iter().enumerate() {
+            if operation.graphql.is_none() || operation.graphql == *actual_kind {
+                continue;
+            }
+            let mut diagnostic = finding(
+                CheckCode::PackGraphQlOperationKindMismatch,
+                &format!("/endpoints/{index}/operations/{operation_index}/graphql"),
+                "the declared GraphQL kind does not match the endpoint's pinned operation",
+                "Declare query for a pinned query operation and mutation for a pinned mutation operation.",
+            );
+            diagnostic.source = Some(registry_platform_yaml::Source {
+                file: pack_path.display().to_string(),
+                line: None,
+                column: None,
+            });
+            report.push(diagnostic);
         }
-        let mut diagnostic = finding(
-            CheckCode::PackGraphQlOperationUnknown,
-            &format!("/endpoints/{index}/operationName"),
-            "the endpoint names an operation its query file does not declare",
-            "Name an operation the endpoint's query file declares, or declare the operation in the file.",
-        );
-        diagnostic.source = Some(registry_platform_yaml::Source {
-            file: pack_path.display().to_string(),
-            line: None,
-            column: None,
-        });
-        report.push(diagnostic);
     }
 }
 
 /// The names of the named operations a parsed query document declares.
 /// Anonymous selection sets and fragment definitions name no operation
 /// and match nothing.
-fn document_operations<'a>(document: graphql_parser::query::Document<'a, &'a str>) -> Vec<&'a str> {
-    let mut names = Vec::new();
+fn document_operations<'a>(
+    document: graphql_parser::query::Document<'a, &'a str>,
+) -> Vec<ParsedGraphQlOperation<'a>> {
+    let mut operations = Vec::new();
     for definition in &document.definitions {
         match definition {
             graphql_parser::query::Definition::Operation(
                 graphql_parser::query::OperationDefinition::Query(operation),
-            ) => names.extend(operation.name),
+            ) => operations.extend(operation.name.map(|name| {
+                (
+                    name,
+                    Some(registry_adapter_core::GraphQlOperationKind::Query),
+                )
+            })),
             graphql_parser::query::Definition::Operation(
                 graphql_parser::query::OperationDefinition::Mutation(operation),
-            ) => names.extend(operation.name),
+            ) => operations.extend(operation.name.map(|name| {
+                (
+                    name,
+                    Some(registry_adapter_core::GraphQlOperationKind::Mutation),
+                )
+            })),
             graphql_parser::query::Definition::Operation(
                 graphql_parser::query::OperationDefinition::Subscription(operation),
-            ) => names.extend(operation.name),
+            ) => operations.extend(operation.name.map(|name| (name, None))),
             graphql_parser::query::Definition::Operation(
                 graphql_parser::query::OperationDefinition::SelectionSet(_),
             )
             | graphql_parser::query::Definition::Fragment(_) => {}
         }
     }
-    names
+    operations
 }
 
 /// The compile finding for one script site. The message names the rule,

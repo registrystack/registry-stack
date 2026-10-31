@@ -10,13 +10,8 @@ fn to_households(exchange) {
 
 fn household(resource) {
     let attributes = resource.attributes;
-    let version = ();
-    if resource.meta != () {
-        version = resource.meta.version;
-    }
     #{
         recordIdentifier: resource.id,
-        revisionIdentifier: version,
         domainData: #{
             household_number: attributes.householdNumber,
             region_code: attributes.regionCode,

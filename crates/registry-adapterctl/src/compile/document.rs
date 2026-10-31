@@ -10,6 +10,9 @@
 //! bytes always compile to the same document bytes and the file's diff is
 //! the contract review.
 
+use registry_adapter::effective_contract::{
+    PIN_PROBLEM_CODE, REQUEST_ID_PATTERN, UNAVAILABLE_PROBLEM_CODE,
+};
 use registry_adapter_core::{
     derive_binding_result_schema, derive_operation_request_schema, derive_problem_envelope_schema,
     AdapterProfile, AdapterProject, Binding, HttpMethod, ParameterizedPart, Problem,
@@ -90,15 +93,9 @@ pub(crate) fn assemble(
             "operationId".to_owned(),
             json!(format!("{}.{}", operation.id.as_str(), record_type)),
         );
-        members.insert(
-            "parameters".to_owned(),
-            Value::Array(operation_parameters(
-                operation,
-                binding,
-                fields,
-                substituted,
-            )),
-        );
+        let mut parameters = operation_parameters(operation, binding, fields, substituted);
+        parameters.push(contract_pin_parameter());
+        members.insert("parameters".to_owned(), Value::Array(parameters));
         if operation.request_envelope.is_some() {
             match derive_operation_request_schema(profile, project, binding) {
                 Ok(mut request) => {
@@ -128,12 +125,68 @@ pub(crate) fn assemble(
         for (status, error) in problem_responses(&profile.problems) {
             responses.entry(status).or_insert(error);
         }
+        insert_protocol_response(
+            &mut responses,
+            "412",
+            "The effective contract pin was wrong or repeated.",
+            "ContractPreconditionProblem",
+        );
+        insert_protocol_response(
+            &mut responses,
+            "503",
+            "The Adapter could not durably record or verify protocol readiness.",
+            "ContractUnavailableProblem",
+        );
         members.insert("responses".to_owned(), Value::Object(responses));
         members.insert("security".to_owned(), json!([{"bearerAuth": []}]));
         let Some(path_object) = path_item.as_object_mut() else {
             unreachable!("the path item was inserted as an object");
         };
         path_object.insert(method, Value::Object(members));
+    }
+    let well_known_path = registry_adapter::effective_contract::WELL_KNOWN_PATH;
+    if paths.contains_key(well_known_path) {
+        findings.push(assembly_refusal(
+            "adapterctl.compile.reserved-path",
+            "an authored operation collides with the Adapter effective-contract route",
+        ));
+    } else {
+        paths.insert(
+            well_known_path.to_owned(),
+            json!({
+            "get": {
+                "operationId": "adapter-effective-contract",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "description": "The loaded gateway contract and current Adapter readiness.",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/EffectiveContract"}
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "The machine caller was not authenticated.",
+                        "content": {
+                            "application/problem+json": {
+                                "schema": {"$ref": "#/components/schemas/Problem"}
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "The Adapter could not verify protocol readiness.",
+                        "content": {
+                            "application/problem+json": {
+                                "schema": {"$ref": "#/components/schemas/ContractUnavailableProblem"}
+                            }
+                        }
+                    }
+                },
+                "security": [{"bearerAuth": []}]
+            }
+            }),
+        );
     }
 
     let mut schemas = Map::new();
@@ -147,6 +200,26 @@ pub(crate) fn assemble(
             &format!("the problem envelope cannot be derived: {reason}"),
         )),
     }
+    schemas.insert(
+        "ContractPreconditionProblem".to_owned(),
+        protocol_problem_schema(
+            PIN_PROBLEM_CODE,
+            412,
+            "Effective contract precondition failed",
+        ),
+    );
+    schemas.insert(
+        "ContractUnavailableProblem".to_owned(),
+        protocol_problem_schema(
+            UNAVAILABLE_PROBLEM_CODE,
+            503,
+            "Effective contract unavailable",
+        ),
+    );
+    schemas.insert(
+        "EffectiveContract".to_owned(),
+        runtime_contract_component_schema(),
+    );
 
     if !findings.is_empty() {
         return Err(findings);
@@ -163,6 +236,87 @@ pub(crate) fn assemble(
         "openapi": OPENAPI_VERSION,
         "paths": Value::Object(paths),
     }))
+}
+
+fn runtime_contract_component_schema() -> Value {
+    let mut schema = registry_adapter::effective_contract::schema();
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("$id");
+        let required = object
+            .get_mut("required")
+            .and_then(Value::as_array_mut)
+            .expect("the effective-contract schema has a required list");
+        if !required.iter().any(|member| member == "readiness") {
+            required.push(json!("readiness"));
+        }
+    }
+    rebase_effective_contract_refs(&mut schema);
+    schema
+}
+
+fn contract_pin_parameter() -> Value {
+    json!({
+        "name": registry_adapter::effective_contract::PIN_HEADER,
+        "in": "header",
+        "required": false,
+        "description": "Optional whole effective-contract digest pin. A wrong or repeated header is refused with HTTP 412 before the request body or source is read.",
+        "schema": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+        },
+    })
+}
+
+fn rebase_effective_contract_refs(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            if let Some(Value::String(reference)) = object.get_mut("$ref") {
+                if let Some(pointer) = reference.strip_prefix("#/") {
+                    *reference = format!("#/components/schemas/EffectiveContract/{pointer}");
+                }
+            }
+            object.values_mut().for_each(rebase_effective_contract_refs);
+        }
+        Value::Array(items) => items.iter_mut().for_each(rebase_effective_contract_refs),
+        _ => {}
+    }
+}
+
+fn protocol_problem_schema(code: &str, status: u16, title: &str) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "code": {"const": code},
+            "status": {"const": status},
+            "title": {"const": title},
+            "requestId": {
+                "type": "string",
+                "minLength": 32,
+                "maxLength": 32,
+                "pattern": REQUEST_ID_PATTERN,
+            },
+        },
+        "required": ["code", "status", "title", "requestId"],
+        "additionalProperties": false,
+    })
+}
+
+fn insert_protocol_response(
+    responses: &mut Map<String, Value>,
+    status: &str,
+    description: &str,
+    schema: &str,
+) {
+    let response = responses
+        .entry(status.to_owned())
+        .or_insert_with(|| json!({"description": description, "content": {}}));
+    let Some(content) = response.get_mut("content").and_then(Value::as_object_mut) else {
+        return;
+    };
+    content.insert(
+        "application/problem+json".to_owned(),
+        json!({"schema": {"$ref": format!("#/components/schemas/{schema}")}}),
+    );
 }
 
 /// The document's bytes: pretty JSON with sorted keys and a trailing
@@ -554,14 +708,25 @@ mod tests {
         assert_eq!(get["operationId"], "cases-get.case");
         assert_eq!(
             get["parameters"],
-            json!([{
-                "name": "case_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"},
-            }])
+            json!([
+                {
+                    "name": "case_id",
+                    "in": "path",
+                    "required": true,
+                    "schema": {"type": "string"},
+                },
+                contract_pin_parameter(),
+            ])
         );
         assert_eq!(get["responses"]["200"]["description"], SUCCESS_DESCRIPTION);
+        assert_eq!(
+            get["responses"]["412"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ContractPreconditionProblem"
+        );
+        assert_eq!(
+            get["responses"]["503"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ContractUnavailableProblem"
+        );
         assert_eq!(
             get["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["case"]
                 ["properties"]["case_type"],
@@ -601,6 +766,56 @@ mod tests {
                 "additionalProperties": false,
             })
         );
+        assert_eq!(
+            document["components"]["schemas"]["ContractPreconditionProblem"]["properties"]["code"]
+                ["const"],
+            PIN_PROBLEM_CODE
+        );
+        assert_eq!(
+            document["components"]["schemas"]["ContractPreconditionProblem"]["properties"]
+                ["status"]["const"],
+            412
+        );
+        assert_eq!(
+            document["components"]["schemas"]["ContractUnavailableProblem"]["properties"]["code"]
+                ["const"],
+            UNAVAILABLE_PROBLEM_CODE
+        );
+        assert_eq!(
+            document["components"]["schemas"]["ContractUnavailableProblem"]["properties"]["status"]
+                ["const"],
+            503
+        );
+        assert_eq!(
+            document["components"]["schemas"]["ContractPreconditionProblem"]["properties"]
+                ["requestId"]["pattern"],
+            REQUEST_ID_PATTERN
+        );
+        let contract =
+            &document["paths"][registry_adapter::effective_contract::WELL_KNOWN_PATH]["get"];
+        assert_eq!(
+            contract["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/EffectiveContract"
+        );
+        assert_eq!(
+            contract["responses"]["401"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/Problem"
+        );
+        assert_eq!(
+            contract["responses"]["503"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ContractUnavailableProblem"
+        );
+        let embedded = &document["components"]["schemas"]["EffectiveContract"];
+        assert!(embedded.get("$id").is_none());
+        assert_eq!(
+            embedded["properties"]["contract"]["$ref"],
+            "#/components/schemas/EffectiveContract/$defs/contract"
+        );
+        assert!(embedded["required"]
+            .as_array()
+            .expect("required members")
+            .iter()
+            .any(|member| member == "readiness"));
     }
 
     /// The pagination parameters carry the profile's names and bounds, in
@@ -624,6 +839,7 @@ mod tests {
                     "required": false,
                     "schema": {"type": "string"},
                 },
+                contract_pin_parameter(),
             ]),
             "the query parameters sort by name"
         );
@@ -639,7 +855,7 @@ mod tests {
         let document = assemble(&profile, &project(both_bindings())).expect("the assembly runs");
         assert_eq!(
             document["paths"]["/v2/cases/case"]["post"]["parameters"],
-            json!([]),
+            json!([contract_pin_parameter()]),
             "the cursor and page size travel in the body"
         );
     }
@@ -716,6 +932,7 @@ mod tests {
                     "required": false,
                     "schema": {"type": "string"},
                 },
+                contract_pin_parameter(),
             ]),
             "the binding's filters join the pagination parameters in name order"
         );
@@ -829,12 +1046,22 @@ mod tests {
         );
     }
 
-    /// An operation no binding binds emits no path, and a project with no
-    /// bindings compiles to an empty paths object.
+    /// An operation no binding binds emits no authored path. A project with
+    /// no bindings still carries exactly the protected system contract route.
     #[test]
     fn an_unbound_operation_emits_no_path() {
         let document = assemble(&profile(), &project(json!([]))).expect("the assembly runs");
-        assert_eq!(document["paths"], json!({}));
+        let paths = document["paths"].as_object().expect("paths object");
+        assert_eq!(
+            paths.keys().map(String::as_str).collect::<Vec<_>>(),
+            [registry_adapter::effective_contract::WELL_KNOWN_PATH]
+        );
+        assert!(paths.get("/v2/cases/case/{case_id}").is_none());
+        assert!(paths.get("/v2/cases/case").is_none());
+        assert_eq!(
+            paths[registry_adapter::effective_contract::WELL_KNOWN_PATH]["get"]["operationId"],
+            "adapter-effective-contract"
+        );
     }
 
     /// Two bindings whose concrete paths collide refuse the assembly with
@@ -942,8 +1169,8 @@ mod tests {
     }
 
     /// Every compiled operation answers the profile's problems beside its
-    /// success response: one error response per distinct status, described
-    /// by the first problem carrying that status.
+    /// success response and the contract protocol's fixed 412 and 503. The
+    /// optional whole-contract pin is declared on every authored operation.
     #[test]
     fn error_responses_follow_the_problems_list() {
         let document = assemble(&profile(), &project(both_bindings())).expect("the assembly runs");
@@ -958,7 +1185,7 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect();
-            assert_eq!(keys, ["200", "404", "409"], "{path} {method}");
+            assert_eq!(keys, ["200", "404", "409", "412", "503"], "{path} {method}");
             assert_eq!(
                 responses["404"],
                 json!({
@@ -970,6 +1197,23 @@ mod tests {
                     },
                 })
             );
+            assert_eq!(
+                responses["412"]["content"]["application/problem+json"]["schema"]["$ref"],
+                "#/components/schemas/ContractPreconditionProblem"
+            );
+            assert_eq!(
+                responses["503"]["content"]["application/problem+json"]["schema"]["$ref"],
+                "#/components/schemas/ContractUnavailableProblem"
+            );
+            let pin = document["paths"][path][method]["parameters"]
+                .as_array()
+                .expect("parameters")
+                .iter()
+                .find(|parameter| {
+                    parameter["name"] == registry_adapter::effective_contract::PIN_HEADER
+                })
+                .expect("whole-contract pin header");
+            assert_eq!(pin, &contract_pin_parameter());
         }
     }
 }

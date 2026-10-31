@@ -102,6 +102,7 @@ fn direct_endpoints(
         cursor_key_ref: None,
         previous_cursor_key_ref: None,
         cursor_ttl_seconds: None,
+        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("the binding");
     let runtime = EndpointRuntime::compile(binding, &endpoint, &config, resolver)

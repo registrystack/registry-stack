@@ -2,38 +2,12 @@
 
 //! The `adapter` binary entry point.
 
-use std::path::PathBuf;
+use std::io::Write as _;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use registry_adapter::cli::{Cli, Command};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::prelude::*;
-
-#[derive(Parser)]
-#[command(name = "adapter", about = "The Registry Adapter runtime")]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Serve the governed facade.
-    Serve {
-        /// The operator runtime config.
-        #[arg(long, value_name = "ABSOLUTE_FILE")]
-        runtime_config: PathBuf,
-        /// The directory holding project.yaml.
-        #[arg(long, value_name = "DIRECTORY")]
-        project: PathBuf,
-        /// The profile file; defaults to profile.yaml beside the project.
-        #[arg(long, value_name = "FILE")]
-        profile: Option<PathBuf>,
-        /// The pack file, whose scripts/ sit beside it; defaults to pack.yaml
-        /// beside the project.
-        #[arg(long, value_name = "FILE")]
-        pack: Option<PathBuf>,
-    },
-}
 
 #[tokio::main]
 async fn main() {
@@ -49,21 +23,50 @@ async fn main() {
                 .with_writer(std::io::stderr),
         )
         .init();
-    let Command::Serve {
-        runtime_config,
-        project,
-        profile,
-        pack,
-    } = cli.command;
-    if let Err(error) = registry_adapter::serve::run(
-        &project,
-        profile.as_deref(),
-        pack.as_deref(),
-        &runtime_config,
-    )
-    .await
-    {
+    let result = match cli.command {
+        Command::Serve {
+            runtime_config,
+            project,
+            profile,
+            pack,
+        } => registry_adapter::serve::run(
+            &project,
+            profile.as_deref(),
+            pack.as_deref(),
+            &runtime_config,
+        )
+        .await
+        .map_err(|error| error.to_string()),
+        Command::EffectiveContract {
+            runtime_config,
+            project,
+            profile,
+            pack,
+        } => export_effective_contract(
+            &project,
+            profile.as_deref(),
+            pack.as_deref(),
+            &runtime_config,
+        ),
+    };
+    if let Err(error) = result {
         eprintln!("adapter: {error}");
         std::process::exit(1);
     }
+}
+
+fn export_effective_contract(
+    project: &std::path::Path,
+    profile: Option<&std::path::Path>,
+    pack: Option<&std::path::Path>,
+    runtime_config: &std::path::Path,
+) -> Result<(), String> {
+    let loaded = registry_adapter::load::load(project, profile, pack, runtime_config)
+        .map_err(|error| error.to_string())?;
+    let document = registry_adapter::effective_contract::EffectiveContract::from_loaded(&loaded)
+        .and_then(|contract| contract.to_pretty_json())
+        .map_err(|error| error.to_string())?;
+    std::io::stdout()
+        .write_all(document.as_bytes())
+        .map_err(|error| format!("the effective contract could not be written: {error}"))
 }

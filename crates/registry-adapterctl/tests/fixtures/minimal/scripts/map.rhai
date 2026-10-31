@@ -1,5 +1,4 @@
-// The minimal fixture's Rhai seam: the entrypoint `adapterctl check`
-// precompiles at authoring time. It echoes the exchange unchanged.
+// Map the actual upstream response into the project's one declared field.
 fn map(exchange) {
-    exchange
+    #{ national_id: exchange.body.id }
 }

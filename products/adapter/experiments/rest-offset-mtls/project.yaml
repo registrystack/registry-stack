@@ -24,7 +24,7 @@ profile:
 pack:
   id: jsonapi-households
   version: "1"
-  digest: sha256:bece3d1c1668904544e7a94446591e1a1769a144536132ce9040ed102a2c7c47
+  digest: sha256:fc683bce1230623fd665de6d6a96d645b188c64db268cb1320c04ba4067556cc
 recordTypes:
   - name: household
     fields:

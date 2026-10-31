@@ -18,11 +18,11 @@ project:
 profile:
   id: case-api
   version: "1"
-  digest: sha256:41c15317b8b944cd94907dde0a0a18d8e9cf0df32d65a1a857359a1b0e34ea6c
+  digest: sha256:e1ba35ee720649d6435dc2d634ad2212586a576b4bad796e587e0012418531c9
 pack:
   id: graphql-cases
   version: "1"
-  digest: sha256:0d2c05aef5488fe1ab8a5efbc6e3f67de618135aff973c8d0e909fce3e64ac62
+  digest: sha256:bb68fcbe3eacc685127a9601ff8739650edff143e0b1453bd62a5d0dd6a51212
 recordTypes:
   - name: benefit_case
     fields:

@@ -1,15 +1,16 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
 # Synthetic fixture (NOT captured, and NOT from a real OpenCRVS system):
-# last search page: cursor offset 2, one result left of total 3, so no next cursor.
+# last search page: the deterministic replay cursor opens to offset 2, one
+# result remains of total 3, so there is no next cursor.
 # No OpenCRVS server was contacted; the available credentials were
 # rejected. The upstream shapes are derived from the reviewed Evidence
 # reference (products/evidence/reference/request-adapter/
 # opencrvs-event-search/, response-match.json and
 # expected-request-parts.json) and every value is a made-up stand-in. The
 # meta registry and dataset identifiers are deployment values the engine
-# writes at instantiation, so the replay expectation carries the envelope
-# template's stand-in literals.
+# writes at instantiation, so the replay expectation carries this example
+# project's configured values.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: opencrvs-events-search-last-page
@@ -21,12 +22,25 @@ provenance:
 intercepts:
   - type: endpoint
     endpoint: events
+  - type: token-endpoint
+    endpoint: events
 entries:
   - facadeRequest:
       operation: records-search
       path: /v1/records/birth
-      query: limit=2&cursor=2
+      query: limit=2&cursor=AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjsJEkxENyrX6bQqqqmFk1ag
     upstream:
+      - request:
+          endpoint: events
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
       - request:
           endpoint: events
           method: POST
@@ -58,6 +72,9 @@ entries:
     expected:
       type: response
       status: 200
+      headers:
+        content-type: application/json
+        cache-control: no-store
       body:
         items:
           - recordIdentifier: EVT-SYNTHETIC-003
@@ -69,9 +86,8 @@ entries:
               date_of_event: "2015-04-03"
               mother_reference: PERSON-SYNTHETIC-A
               father_reference: PERSON-SYNTHETIC-B
-        pageInfo:
-          nextCursor: ""
+        pageInfo: {}
         meta:
-          registryIdentifier: registryIdentifier
-          datasetIdentifier: datasetIdentifier
+          registryIdentifier: opencrvs-events-registry
+          datasetIdentifier: births
           entityTypeIdentifier: birth

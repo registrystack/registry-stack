@@ -23,7 +23,7 @@ profile:
 pack:
   id: fhir-r4-patient
   version: "1"
-  digest: sha256:dc5c1e9e77082265157343a9953cb243e820863e21496ce2f4d4d499176794c9
+  digest: sha256:fa9e83ee111dc68e301ac8f6a07d24d91fba0c6130eae97e05d3944336635271
 recordTypes:
   - name: patient
     fields:
@@ -48,6 +48,8 @@ bindings:
     operation: records-search
     recordType: patient
     route: patient-search
+    filters:
+      - national_id
     maximumUpstreamCalls: 24
 accessProfiles:
   - id: patient-reader

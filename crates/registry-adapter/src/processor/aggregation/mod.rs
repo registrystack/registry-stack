@@ -24,7 +24,7 @@
 use registry_adapter_core::{AggregationStrategy, ErrorClass};
 use serde_json::{Map, Value};
 
-use crate::exchange::Exchange;
+use crate::exchange::{ensure_value_bounded, Exchange};
 use crate::language::{compile_selector, JsonPathResult};
 use crate::route::RouteFailure;
 use crate::scripts::ScriptSet;
@@ -66,6 +66,7 @@ pub(crate) fn propagates(strategy: &AggregationStrategy) -> bool {
 /// exchange takes and the property writes it applies. `old` is the
 /// accumulated body (the original for the first piece), `new` the piece
 /// or resource exchange whose body and properties the strategy reads.
+#[cfg(test)]
 pub(crate) fn fold(
     scripts: &ScriptSet,
     maps: &crate::scripts::CodeMaps,
@@ -73,30 +74,64 @@ pub(crate) fn fold(
     old: &Value,
     new: &Exchange,
 ) -> Result<Aggregated, RouteFailure> {
-    match strategy {
-        AggregationStrategy::UseLatest {} => Ok(Aggregated {
-            body: new.message.body.clone(),
-            properties: Vec::new(),
-        }),
-        AggregationStrategy::UseOriginal { .. } => Ok(Aggregated {
-            body: old.clone(),
-            properties: Vec::new(),
-        }),
+    let mut body = old.clone();
+    let properties = fold_into(scripts, maps, strategy, &mut body, new, None)?;
+    Ok(Aggregated { body, properties })
+}
+
+/// Fold an enrich resource into the route body under the route's absolute
+/// deadline. A custom strategy receives that same deadline at its Rhai seam.
+pub(crate) fn fold_enrich(
+    scripts: &ScriptSet,
+    maps: &crate::scripts::CodeMaps,
+    strategy: &AggregationStrategy,
+    old: &Value,
+    new: &Exchange,
+    deadline: tokio::time::Instant,
+) -> Result<Aggregated, RouteFailure> {
+    let mut body = old.clone();
+    let properties = fold_into(scripts, maps, strategy, &mut body, new, Some(deadline))?;
+    Ok(Aggregated { body, properties })
+}
+
+/// Fold a split piece into its accumulator in place. Reusing the one
+/// accumulator avoids cloning every value accumulated so far for every
+/// piece, while applying the fixed exchange bound after each fold.
+pub(crate) fn fold_split(
+    scripts: &ScriptSet,
+    maps: &crate::scripts::CodeMaps,
+    strategy: &AggregationStrategy,
+    old: &mut Value,
+    new: &Exchange,
+    deadline: tokio::time::Instant,
+) -> Result<Vec<(String, Option<Value>)>, RouteFailure> {
+    fold_into(scripts, maps, strategy, old, new, Some(deadline))
+}
+
+fn fold_into(
+    scripts: &ScriptSet,
+    maps: &crate::scripts::CodeMaps,
+    strategy: &AggregationStrategy,
+    old: &mut Value,
+    new: &Exchange,
+    deadline: Option<tokio::time::Instant>,
+) -> Result<Vec<(String, Option<Value>)>, RouteFailure> {
+    let properties = match strategy {
+        AggregationStrategy::UseLatest {} => {
+            *old = new.message.body.clone();
+            Vec::new()
+        }
+        AggregationStrategy::UseOriginal { .. } => Vec::new(),
         AggregationStrategy::GroupedBody {} => {
-            let mut items = match old {
-                Value::Array(items) => items.clone(),
-                Value::Null => Vec::new(),
-                _ => return Err(fault("the grouped-body strategy aggregates a list")),
+            let Value::Array(items) = old else {
+                return Err(fault("the grouped-body strategy aggregates a list"));
             };
             // A piece whose body ended null contributed nothing; an
             // enrich reply is one value in the list.
             if !new.message.body.is_null() {
                 items.push(new.message.body.clone());
             }
-            Ok(Aggregated {
-                body: Value::Array(items),
-                properties: Vec::new(),
-            })
+            Vec::new()
         }
         AggregationStrategy::JsonArrayAppend {
             from,
@@ -105,7 +140,7 @@ pub(crate) fn fold(
             properties,
         } => {
             let elements = named_property_array(new, from)?;
-            let mut body = object_body(old)?;
+            let body = object_body_mut(old)?;
             let target = body
                 .entry(into.clone())
                 .or_insert_with(|| Value::Array(Vec::new()));
@@ -125,10 +160,7 @@ pub(crate) fn fold(
                 }
                 list.push(element);
             }
-            Ok(Aggregated {
-                body: Value::Object(body),
-                properties: carried(properties, new)?,
-            })
+            carried(properties, new)?
         }
         AggregationStrategy::JsonMerge {
             from,
@@ -136,7 +168,7 @@ pub(crate) fn fold(
             properties,
         } => {
             let members = named_property_object(new, from)?;
-            let mut body = object_body(old)?;
+            let body = object_body_mut(old)?;
             let target = body
                 .entry(into.clone())
                 .or_insert_with(|| Value::Object(Map::new()));
@@ -146,38 +178,49 @@ pub(crate) fn fold(
             for (name, value) in members {
                 object.insert(name, value);
             }
-            Ok(Aggregated {
-                body: Value::Object(body),
-                properties: carried(properties, new)?,
-            })
+            carried(properties, new)?
         }
         AggregationStrategy::Rhai { expression } => {
-            let merged = scripts
-                .aggregate(
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+            }
+            let merged = match deadline {
+                Some(deadline) => scripts.aggregate_with_deadline(
                     maps,
                     &expression.file,
                     &expression.entrypoint,
                     old,
                     &new.message.body,
-                )
-                .map_err(crate::route::script_failure)?;
+                    deadline.into_std(),
+                ),
+                None => scripts.aggregate(
+                    maps,
+                    &expression.file,
+                    &expression.entrypoint,
+                    old,
+                    &new.message.body,
+                ),
+            }
+            .map_err(crate::route::script_failure)?;
             let Value::Object(merged) = merged else {
                 return Err(RouteFailure::of(ErrorClass::Script));
             };
             let Some(body) = merged.get("body").cloned() else {
                 return Err(RouteFailure::of(ErrorClass::Script));
             };
-            let properties = match merged.get("properties") {
+            *old = body;
+            match merged.get("properties") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(Value::Object(writes)) => writes
                     .iter()
                     .map(|(name, value)| (name.clone(), Some(value.clone())))
                     .collect(),
                 Some(_) => return Err(RouteFailure::of(ErrorClass::Script)),
-            };
-            Ok(Aggregated { body, properties })
+            }
         }
-    }
+    };
+    ensure_value_bounded(old).map_err(RouteFailure::of)?;
+    Ok(properties)
 }
 
 /// The named property of `new` as the elements to append; a property
@@ -200,11 +243,13 @@ fn named_property_object(new: &Exchange, from: &str) -> Result<Vec<(String, Valu
     }
 }
 
-/// The accumulated body as an object, an absent body starting empty.
-fn object_body(old: &Value) -> Result<Map<String, Value>, RouteFailure> {
+/// The accumulated body as an object, initialized empty when absent.
+fn object_body_mut(old: &mut Value) -> Result<&mut Map<String, Value>, RouteFailure> {
+    if old.is_null() {
+        *old = Value::Object(Map::new());
+    }
     match old {
-        Value::Object(body) => Ok(body.clone()),
-        Value::Null => Ok(Map::new()),
+        Value::Object(body) => Ok(body),
         _ => Err(fault("the accumulated body must be an object")),
     }
 }
@@ -528,5 +573,57 @@ mod tests {
         )
         .expect_err("a strategy without a body member fails");
         assert_eq!(failed.class, ErrorClass::Script);
+    }
+
+    #[test]
+    fn a_finite_custom_strategy_cannot_outlive_the_route_deadline() {
+        let source = r#"fn merge(oldExchange, newExchange) {
+    let total = 0;
+    for value in 0..10000 { total += value; }
+    #{ "body": #{ "total": total }, "properties": #{} }
+}"#;
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        std::fs::write(directory.path().join("finite.rhai"), source)
+            .expect("the script is written");
+        let pack: registry_adapter_core::AdapterPack = serde_json::from_value(json!({
+            "id": "probe",
+            "version": "1",
+            "testedVersions": ["1"],
+            "scripts": [{
+                "path": "finite.rhai",
+                "digest": registry_platform_config::sha256_uri(source.as_bytes()),
+            }],
+        }))
+        .expect("the pack parses");
+        let mut scripts = ScriptSet::default();
+        scripts
+            .add_aggregation(&pack, directory.path(), "finite.rhai", "merge")
+            .expect("the strategy compiles");
+        let strategy = strategy(json!({
+            "type": "rhai", "expression": {"file": "finite.rhai", "entrypoint": "merge"}
+        }));
+        let mut old = json!({});
+
+        let split_failed = fold_split(
+            &scripts,
+            &empty_maps(),
+            &strategy,
+            &mut old,
+            &exchange(json!({}), &[]),
+            tokio::time::Instant::now() + std::time::Duration::from_millis(1),
+        )
+        .expect_err("the finite strategy must stop at the route deadline");
+        assert_eq!(split_failed.class, ErrorClass::ScriptBudgetExceeded);
+
+        let enrich_failed = fold_enrich(
+            &scripts,
+            &empty_maps(),
+            &strategy,
+            &json!({}),
+            &exchange(json!({}), &[]),
+            tokio::time::Instant::now() + std::time::Duration::from_millis(1),
+        )
+        .expect_err("enrich aggregation must stop at the route deadline");
+        assert_eq!(enrich_failed.class, ErrorClass::ScriptBudgetExceeded);
     }
 }

@@ -9,7 +9,9 @@
 # E1323 and the entity reads back 404. This fixture pins the refused
 # repeat: the same report shape as any other refusal, so the pack's
 # rejection clause raises outcome.rejected and the caller sees the
-# refused-write problem instead of a false idempotent success.
+# refused-write problem instead of a false idempotent success. The facade
+# request is reconstructed from the captured pack payload, not captured from
+# a deployed Adapter.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-no-program-type-import-repeat
@@ -25,6 +27,14 @@ entries:
   - facadeRequest:
       operation: records-create
       path: /v1/records/person
+      headers:
+        idempotency-key: fixture-no-program-repeat
+      body:
+        data:
+          recordIdentifier: HOT1L0flPiI
+          domainData:
+            tracked_entity_type: QQ4aiky5Sm1
+            org_unit: qfg4XUDJtgS
     upstream:
       - request:
           endpoint: tracker

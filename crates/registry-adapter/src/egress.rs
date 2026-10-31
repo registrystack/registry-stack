@@ -25,12 +25,13 @@
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use registry_adapter_core::ErrorClass;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, Cidr, Endpoint, EndpointAuthentication, EndpointBinding,
-    MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS,
+    AdapterRuntimeConfig, Cidr, CredentialPlacement, Endpoint, EndpointAuthentication,
+    EndpointBinding, HttpMethod, RuntimeCredential, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::destination::json::decode_script_json;
@@ -46,20 +47,22 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_httputil::{TransportKind, MAXIMUM_TOKEN_RESPONSE_BYTES};
-use registry_platform_yaml::ExternalId;
+use registry_platform_yaml::{BoundedU64, ExternalId, SecretReference, Url};
 use serde_json::Value;
 use zeroize::Zeroizing;
 
 use crate::auth::{
     AuthError, AuthEvent, AuthHeader, AuthKind, AuthPlan, AuthPlanFault, AuthorizeContext,
-    AuthorizedCredential, ClientAssertionSigner, EndpointTls, TokenBudget,
+    AuthorizedCredential, ClientAssertionSigner, EndpointTls, ProtectedText, TokenBudget,
     TokenClientAuthentication, TokenRequest, TokenSend, TokenWire, TransportFailure,
     MAXIMUM_TOKEN_REQUEST_BYTES,
 };
 use crate::component::http::header_filter::{
-    AllowlistError, HeaderFilter, InboundHeaderError, OutboundHeaderError, ResponseHeaders,
+    AllowlistError, HeaderFilter, InboundHeaderError, OutboundHeaderError, OutboundHeaders,
+    ResponseHeaders,
 };
-use crate::component::http::uri::{LinkRefusal, OriginError, PinnedOrigin};
+use crate::component::http::uri::{LinkRefusal, OriginError, PinnedLink, PinnedOrigin};
+use crate::replay::{ReplayFailure, ReplayTranscript};
 
 /// Stands in the authorize context for a token transport when an
 /// endpoint compiled none: the load wires a real transport for every
@@ -82,6 +85,57 @@ impl TokenSend for NoTokenSend {
 }
 
 const NO_TOKEN_SEND: NoTokenSend = NoTokenSend;
+
+struct ReplayTokenSend<'a> {
+    transcript: &'a ReplayTranscript,
+    endpoint: &'a str,
+    path: &'a str,
+}
+
+impl TokenSend for ReplayTokenSend<'_> {
+    fn send<'a>(
+        &'a self,
+        _request: &'a TokenRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<TokenWire, TransportFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            let response = self
+                .transcript
+                .answer_token(self.endpoint, HttpMethod::Post, self.path)
+                .map_err(|_| TransportFailure::PolicyRefused {
+                    journal_name: "fixture-replay-mismatch",
+                })?;
+            let media_type = response
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.clone())
+                .or_else(|| {
+                    response
+                        .body
+                        .as_ref()
+                        .map(|_| "application/json".to_owned())
+                });
+            let body = response
+                .body
+                .as_ref()
+                .map(|body| serde_json::to_vec(body.as_value()))
+                .transpose()
+                .map_err(|_| TransportFailure::PolicyRefused {
+                    journal_name: "fixture-replay-response",
+                })?
+                .unwrap_or_default();
+            Ok(TokenWire {
+                status: u16::try_from(response.status.get()).map_err(|_| {
+                    TransportFailure::PolicyRefused {
+                        journal_name: "fixture-replay-response",
+                    }
+                })?,
+                media_type,
+                body: Zeroizing::new(body),
+            })
+        })
+    }
+}
 
 /// Why a deployment refuses to start, in egress terms. Every rendering
 /// is fixed text; none carries a binding value or a credential.
@@ -112,6 +166,8 @@ pub enum EgressFault {
         /// The position of the binding in the runtime config.
         position: usize,
     },
+    /// The fixture transcript cannot compile the endpoint's replay state.
+    Replay(ReplayFailure),
 }
 
 /// The fixed-destination refusal the platform reports at load.
@@ -134,6 +190,7 @@ impl fmt::Display for EgressFault {
                 formatter,
                 "the endpoint binding at position {position} names no declared endpoint"
             ),
+            Self::Replay(fault) => fault.fmt(formatter),
         }
     }
 }
@@ -204,6 +261,8 @@ pub enum EgressRefusal {
     /// platform accepts; the send refuses rather than the engine
     /// silently shortening what the operator declared.
     AttemptAboveMaximum,
+    /// The outgoing send did not match the offline fixture transcript.
+    Replay(ReplayFailure),
 }
 
 impl EgressRefusal {
@@ -235,6 +294,7 @@ impl EgressRefusal {
             Self::Destination { journal_name, .. } => journal_name,
             Self::Credential => "credential",
             Self::AttemptAboveMaximum => "attempt-above-maximum",
+            Self::Replay(_) => "fixture-replay-mismatch",
         }
     }
 }
@@ -252,6 +312,7 @@ impl fmt::Display for EgressRefusal {
             Self::AttemptAboveMaximum => formatter.write_str(
                 "the declared attempt timeout is above the maximum the platform accepts",
             ),
+            Self::Replay(fault) => fault.fmt(formatter),
         }
     }
 }
@@ -463,19 +524,28 @@ fn lowered(declared: u64, bound: Option<u64>, key: &'static str) -> Result<u64, 
 }
 
 /// One endpoint's outbound state, compiled once at startup.
+struct LiveTransport {
+    policy: DataDestinationPolicy,
+    get_template: DataDestinationRequestTemplate,
+    post_template: DataDestinationRequestTemplate,
+    token_send: Option<EndpointTokenSend>,
+}
+
+enum EndpointTransport {
+    Live(Box<LiveTransport>),
+    Replay(Arc<ReplayTranscript>),
+}
+
 pub struct EndpointEgress {
     endpoint: ExternalId,
     plan: AuthPlan,
     filter: HeaderFilter,
     origin: PinnedOrigin,
-    policy: DataDestinationPolicy,
     request_allowlist: Vec<String>,
     authorization_scheme: Option<DestinationAuthorizationScheme>,
-    get_template: DataDestinationRequestTemplate,
-    post_template: DataDestinationRequestTemplate,
     attempt: Duration,
     maximum_response_bytes: usize,
-    token_send: Option<EndpointTokenSend>,
+    transport: EndpointTransport,
 }
 
 impl EndpointEgress {
@@ -560,18 +630,127 @@ impl EndpointEgress {
             plan,
             filter,
             origin,
-            policy,
             request_allowlist,
             authorization_scheme,
-            get_template,
-            post_template,
             attempt: Duration::from_millis(attempt_milliseconds),
             maximum_response_bytes: usize::try_from(maximum_response_bytes).map_err(|_| {
                 EgressFault::LimitAboveDeclared {
                     key: "maximumResponseBytes",
                 }
             })?,
-            token_send,
+            transport: EndpointTransport::Live(Box::new(LiveTransport {
+                policy,
+                get_template,
+                post_template,
+                token_send,
+            })),
+        })
+    }
+
+    /// Compile one endpoint for offline fixture replay. The resulting state
+    /// contains no destination policy, TLS material, request template, token
+    /// transport, or credential resolver. The synthetic binding exists only
+    /// to re-run the normal declared-kind validation and is never resolved or
+    /// sent.
+    pub fn compile_replay(
+        declared: &Endpoint,
+        transcript: Arc<ReplayTranscript>,
+    ) -> Result<Self, EgressFault> {
+        Self::compile_replay_with_max_cache(declared, transcript, 300)
+    }
+
+    fn compile_replay_with_max_cache(
+        declared: &Endpoint,
+        transcript: Arc<ReplayTranscript>,
+        maximum_cache_seconds: u64,
+    ) -> Result<Self, EgressFault> {
+        let endpoint = ExternalId::new(declared.id.as_str())
+            .expect("a local endpoint id is also an external id");
+        let secret = || {
+            SecretReference::new("secret:env/REGISTRY_ADAPTER_REPLAY_NEVER_RESOLVE")
+                .expect("fixed replay secret reference")
+        };
+        let token_endpoint = || -> Result<Url, EgressFault> {
+            let path = transcript
+                .token_path(endpoint.as_str())
+                .ok_or(EgressFault::Replay(ReplayFailure::TokenMissing))?;
+            Url::new(format!("http://127.0.0.1{path}"))
+                .map_err(|_| EgressFault::Replay(ReplayFailure::TokenMissing))
+        };
+        let credential = match &declared.authentication {
+            EndpointAuthentication::None {} => RuntimeCredential::None {},
+            EndpointAuthentication::Basic {} => RuntimeCredential::Basic {
+                username_ref: secret(),
+                password_ref: secret(),
+            },
+            EndpointAuthentication::StaticAuthorization { .. } => {
+                RuntimeCredential::StaticAuthorization {
+                    token_ref: secret(),
+                }
+            }
+            EndpointAuthentication::StaticApiKey { .. } => RuntimeCredential::StaticApiKey {
+                value_ref: secret(),
+            },
+            EndpointAuthentication::Oauth2ClientCredentials {} => {
+                RuntimeCredential::Oauth2ClientCredentials {
+                    token_endpoint: token_endpoint()?,
+                    client_id_ref: secret(),
+                    client_secret_ref: secret(),
+                    scope: None,
+                    audience: None,
+                    resource: None,
+                    credential_placement: CredentialPlacement::FormBody,
+                    maximum_cache_seconds: BoundedU64::new(maximum_cache_seconds)
+                        .expect("replay cache ceiling is in the runtime bound"),
+                    assumed_lifetime_seconds: None,
+                }
+            }
+            EndpointAuthentication::Oauth2PrivateKeyJwt {} => {
+                RuntimeCredential::Oauth2PrivateKeyJwt {
+                    token_endpoint: token_endpoint()?,
+                    client_id_ref: secret(),
+                    client_assertion_key_ref: secret(),
+                    client_assertion_audience: None,
+                    scope: None,
+                    audience: None,
+                    resource: None,
+                    maximum_cache_seconds: BoundedU64::new(maximum_cache_seconds)
+                        .expect("replay cache ceiling is in the runtime bound"),
+                    assumed_lifetime_seconds: None,
+                }
+            }
+        };
+        let binding = EndpointBinding {
+            endpoint: endpoint.clone(),
+            base_url: Url::new("http://127.0.0.1").expect("fixed replay loopback URL"),
+            credential: Some(credential),
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
+            tls_trust_profile: None,
+            mtls_identity: None,
+        };
+        let plan = AuthPlan::compile(&declared.authentication, &binding)
+            .map_err(|fault| EgressFault::Auth(AuthError::Plan(fault)))?;
+        let filter = HeaderFilter::for_endpoint(declared).map_err(EgressFault::Allowlist)?;
+        let origin = PinnedOrigin::new(binding.base_url.as_str()).map_err(EgressFault::Origin)?;
+        let request_allowlist = declared
+            .request_headers
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        Ok(Self {
+            endpoint,
+            plan,
+            filter,
+            origin,
+            request_allowlist,
+            authorization_scheme: None,
+            attempt: Duration::from_millis(declared.attempt_timeout_milliseconds.get()),
+            maximum_response_bytes: usize::try_from(declared.maximum_response_bytes.get())
+                .map_err(|_| EgressFault::LimitAboveDeclared {
+                    key: "maximumResponseBytes",
+                })?,
+            transport: EndpointTransport::Replay(transcript),
         })
     }
 
@@ -664,11 +843,17 @@ impl EndpointEgress {
         signer: &dyn ClientAssertionSigner,
         events: &mut Vec<AuthEvent>,
     ) -> Result<Option<AuthorizedCredential>, AuthError> {
+        if let EndpointTransport::Replay(transcript) = &self.transport {
+            return self.authorize_replay(transcript, budget, events).await;
+        }
         // The load wires the real transport for every plan that
         // acquires a token; the refuser stands in for a plan that holds
         // none, and refuses loudly if a token acquisition ever reached
         // it.
-        let send: &dyn TokenSend = match self.token_send.as_ref() {
+        let EndpointTransport::Live(live) = &self.transport else {
+            unreachable!("replay transport returned above")
+        };
+        let send: &dyn TokenSend = match live.token_send.as_ref() {
             Some(send) => send,
             None => &NO_TOKEN_SEND,
         };
@@ -680,6 +865,48 @@ impl EndpointEgress {
             events,
         };
         self.plan.authorize(&mut context).await
+    }
+
+    async fn authorize_replay(
+        &self,
+        transcript: &ReplayTranscript,
+        budget: &mut TokenBudget,
+        events: &mut Vec<AuthEvent>,
+    ) -> Result<Option<AuthorizedCredential>, AuthError> {
+        let synthetic = || ProtectedText::from_str_value("synthetic-fixture-credential");
+        let header = match self.plan.kind() {
+            AuthKind::None => return Ok(None),
+            AuthKind::Basic | AuthKind::StaticAuthorization => {
+                AuthHeader::new("authorization", synthetic())
+            }
+            AuthKind::StaticApiKey => {
+                let Some(crate::auth::StaticCredential::ApiKey { header_name, .. }) =
+                    self.plan.static_credential()
+                else {
+                    return Err(AuthError::Credential);
+                };
+                AuthHeader::new(header_name, synthetic())
+            }
+            AuthKind::Oauth2ClientCredentials | AuthKind::Oauth2PrivateKeyJwt => {
+                let path = transcript
+                    .token_path(self.endpoint.as_str())
+                    .ok_or(AuthError::Credential)?;
+                let send = ReplayTokenSend {
+                    transcript,
+                    endpoint: self.endpoint.as_str(),
+                    path,
+                };
+                return self
+                    .plan
+                    .authorize_replay(transcript.auth_capability(), budget, &send, events)
+                    .await
+                    .map(Some);
+            }
+        };
+        Ok(Some(AuthorizedCredential {
+            header,
+            generation: None,
+        }))
     }
 
     /// Send one data request over the frozen state.
@@ -711,18 +938,25 @@ impl EndpointEgress {
             .map_err(EgressRefusal::Link)
             .map_err(EgressError::Refused)?;
 
+        if let EndpointTransport::Replay(transcript) = &self.transport {
+            return self.send_replay(transcript, &send, &outbound, &link);
+        }
+        let EndpointTransport::Live(live) = &self.transport else {
+            unreachable!("replay transport returned above")
+        };
+
         let (authorization, api_key) = self
             .credential_slots(send.authorization)
             .map_err(EgressError::Refused)?;
         let (template, body_format, body) = match &send.shape {
-            SendShape::Get => (&self.get_template, None, None),
+            SendShape::Get => (&live.get_template, None, None),
             SendShape::Post(body) => {
                 let format = match body.format {
                     SendBodyFormat::Json => ScriptRequestBodyFormat::Json,
                     SendBodyFormat::Form => ScriptRequestBodyFormat::Form,
                 };
                 (
-                    &self.post_template,
+                    &live.post_template,
                     Some(format),
                     Some(Zeroizing::new(body.bytes.to_vec())),
                 )
@@ -744,7 +978,7 @@ impl EndpointEgress {
             .map_err(EgressRefusal::Request)
             .map_err(EgressError::Refused)?;
 
-        let reply = self
+        let reply = live
             .policy
             .send(rendered, send.attempt)
             .await
@@ -836,6 +1070,119 @@ impl EndpointEgress {
         Ok(SentReply {
             status,
             body: decoded,
+            headers,
+        })
+    }
+
+    fn send_replay(
+        &self,
+        transcript: &ReplayTranscript,
+        send: &OutboundSend<'_>,
+        outbound: &OutboundHeaders,
+        link: &PinnedLink,
+    ) -> Result<SentReply, EgressError> {
+        let (method, body) = match &send.shape {
+            SendShape::Get => (HttpMethod::Get, None),
+            SendShape::Post(body) => {
+                let value = match body.format {
+                    SendBodyFormat::Json => serde_json::from_slice(body.bytes).map_err(|_| {
+                        EgressError::Refused(EgressRefusal::Replay(ReplayFailure::Send(
+                            registry_adapter_core::ReplayMismatch::BodyDigest,
+                        )))
+                    })?,
+                    SendBodyFormat::Form => {
+                        let mut object = serde_json::Map::new();
+                        for (name, value) in url::form_urlencoded::parse(body.bytes) {
+                            object.insert(name.into_owned(), Value::String(value.into_owned()));
+                        }
+                        Value::Object(object)
+                    }
+                };
+                (HttpMethod::Post, Some(value))
+            }
+        };
+        let headers: Vec<(&str, &str)> = outbound
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str(),
+                    value
+                        .to_str()
+                        .expect("the outbound filter admits visible ASCII only"),
+                )
+            })
+            .collect();
+        let response = transcript
+            .answer_data(
+                self.endpoint.as_str(),
+                method,
+                link.as_url().path(),
+                link.as_url().query(),
+                body.as_ref(),
+                &headers,
+            )
+            .map_err(EgressRefusal::Replay)
+            .map_err(EgressError::Refused)?;
+        let status = u16::try_from(response.status.get())
+            .expect("a recorded status is bounded to an HTTP status");
+        if (300..400).contains(&status) {
+            return Err(EgressError::Upstream(UpstreamFailure::new(
+                ErrorClass::UpstreamRedirect,
+                Some(status),
+                None,
+                DestinationDeliveryCertainty::NotSent,
+            )));
+        }
+        let headers = self
+            .filter
+            .inbound(
+                response
+                    .headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_bytes())),
+            )
+            .map_err(|fault| {
+                EgressError::Upstream(UpstreamFailure::new(
+                    inbound_header_outcome(&fault),
+                    Some(status),
+                    None,
+                    DestinationDeliveryCertainty::NotSent,
+                ))
+            })?;
+        let body = match response.body {
+            Some(body) => {
+                let encoded = serde_json::to_vec(body.as_value()).map_err(|_| {
+                    EgressError::Upstream(UpstreamFailure::new(
+                        ErrorClass::UpstreamMalformed,
+                        Some(status),
+                        None,
+                        DestinationDeliveryCertainty::NotSent,
+                    ))
+                })?;
+                if encoded.len() > send.maximum_response_bytes {
+                    return Err(EgressError::Upstream(UpstreamFailure::new(
+                        ErrorClass::UpstreamTooLarge,
+                        Some(status),
+                        None,
+                        DestinationDeliveryCertainty::NotSent,
+                    )));
+                }
+                body.0
+            }
+            None => Value::Null,
+        };
+        let (low, high) = send.ok_status_range;
+        if send.throw_exception_on_failure && (status < low || status > high) {
+            return Err(EgressError::Upstream(UpstreamFailure::new(
+                ErrorClass::UpstreamHttp,
+                Some(status),
+                Some(body),
+                DestinationDeliveryCertainty::NotSent,
+            )));
+        }
+        Ok(SentReply {
+            status,
+            body,
             headers,
         })
     }
@@ -1468,6 +1815,257 @@ impl Egress {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::UpstreamStatusAction;
+
+    struct ReplayTestSigner;
+
+    impl ClientAssertionSigner for ReplayTestSigner {
+        fn sign_client_assertion(
+            &self,
+            _request: crate::auth::ClientAssertion<'_>,
+        ) -> Result<ProtectedText, AuthError> {
+            panic!("replay authorization must never sign a client assertion")
+        }
+    }
+
+    fn replay_oauth_endpoint() -> Endpoint {
+        serde_json::from_value(serde_json::json!({
+            "id": "api",
+            "component": "http",
+            "authentication": {"type": "oauth2-client-credentials"},
+            "attemptTimeoutMilliseconds": 1000,
+            "maximumResponseBytes": 4096
+        }))
+        .expect("replay test endpoint")
+    }
+
+    fn replay_fixture(exchanges: serde_json::Value) -> registry_adapter_core::AdapterFixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "oauth-cache-replay",
+            "pack": "test-pack",
+            "upstreamVersion": "1",
+            "provenance": {"type": "documented", "reference": "unit test"},
+            "intercepts": [
+                {"type": "endpoint", "endpoint": "api"},
+                {"type": "token-endpoint", "endpoint": "api"}
+            ],
+            "entries": [{
+                "facadeRequest": {"operation": "read", "path": "/records"},
+                "upstream": exchanges,
+                "expected": {"type": "response", "status": 200}
+            }]
+        }))
+        .expect("replay test fixture")
+    }
+
+    fn replay_token_exchange(token: &str) -> serde_json::Value {
+        serde_json::json!({
+            "request": {
+                "endpoint": "api",
+                "tokenRequest": true,
+                "method": "POST",
+                "path": "/oauth/token"
+            },
+            "response": {
+                "status": 200,
+                "body": {
+                    "access_token": token,
+                    "token_type": "Bearer",
+                    "expires_in": 300
+                }
+            }
+        })
+    }
+
+    fn replay_data_exchange(path: &str, status: u16) -> serde_json::Value {
+        serde_json::json!({
+            "request": {"endpoint": "api", "method": "GET", "path": path},
+            "response": {"status": status, "body": {"ok": true}}
+        })
+    }
+
+    fn replay_resolver() -> SecretResolver {
+        SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            "/registry-adapter-replay-test-no-secrets",
+        )
+        .expect("inert replay resolver")
+    }
+
+    async fn replay_get(
+        egress: &EndpointEgress,
+        path: &str,
+        credential: &AuthorizedCredential,
+    ) -> Result<SentReply, EgressError> {
+        let link = format!("http://127.0.0.1{path}");
+        egress
+            .send(OutboundSend {
+                link: &link,
+                exchange_headers: &[],
+                shape: SendShape::Get,
+                authorization: Some(&credential.header),
+                attempt: Duration::from_secs(1),
+                maximum_response_bytes: 4096,
+                ok_status_range: (200, 299),
+                throw_exception_on_failure: false,
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn replay_oauth_reuses_one_cached_token_across_two_data_sends() {
+        let fixture = replay_fixture(serde_json::json!([
+            replay_token_exchange("first-token"),
+            replay_data_exchange("/one", 200),
+            replay_data_exchange("/two", 200)
+        ]));
+        let transcript =
+            Arc::new(ReplayTranscript::new(&fixture, 0).expect("ordered replay transcript"));
+        let egress =
+            EndpointEgress::compile_replay(&replay_oauth_endpoint(), Arc::clone(&transcript))
+                .expect("replay egress");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let resolver = replay_resolver();
+
+        let first = egress
+            .authorize(&mut budget, &resolver, &ReplayTestSigner, &mut events)
+            .await
+            .expect("first authorization")
+            .expect("OAuth credential");
+        replay_get(&egress, "/one", &first)
+            .await
+            .expect("first data answer");
+        let second = egress
+            .authorize(&mut budget, &resolver, &ReplayTestSigner, &mut events)
+            .await
+            .expect("second authorization")
+            .expect("cached OAuth credential");
+        replay_get(&egress, "/two", &second)
+            .await
+            .expect("second data answer");
+
+        assert!(first.generation.is_some());
+        assert_eq!(first.generation, second.generation);
+        assert_eq!(budget.remaining(egress.endpoint()), 1);
+        assert_eq!(
+            events,
+            vec![
+                AuthEvent::TokenRequested,
+                AuthEvent::TokenIssued,
+                AuthEvent::TokenCacheHit
+            ]
+        );
+        assert_eq!(transcript.finish(), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn replay_oauth_unauthorized_invalidates_and_refreshes_the_sent_generation() {
+        let fixture = replay_fixture(serde_json::json!([
+            replay_token_exchange("first-token"),
+            replay_data_exchange("/record", 401),
+            replay_token_exchange("refreshed-token"),
+            replay_data_exchange("/record", 200)
+        ]));
+        let transcript =
+            Arc::new(ReplayTranscript::new(&fixture, 0).expect("ordered replay transcript"));
+        let egress =
+            EndpointEgress::compile_replay(&replay_oauth_endpoint(), Arc::clone(&transcript))
+                .expect("replay egress");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let resolver = replay_resolver();
+        let mut refresh_used = false;
+
+        let first = egress
+            .authorize(&mut budget, &resolver, &ReplayTestSigner, &mut events)
+            .await
+            .expect("first authorization")
+            .expect("OAuth credential");
+        let unauthorized = replay_get(&egress, "/record", &first)
+            .await
+            .expect("401 answer is returned under the no-throw test send");
+        assert_eq!(unauthorized.status, 401);
+        assert_eq!(
+            egress
+                .plan()
+                .on_upstream_status(401, first.generation, &mut refresh_used, &mut events,)
+                .await,
+            UpstreamStatusAction::RetryWithFreshCredential
+        );
+        let refreshed = egress
+            .authorize(&mut budget, &resolver, &ReplayTestSigner, &mut events)
+            .await
+            .expect("refreshed authorization")
+            .expect("refreshed OAuth credential");
+        let accepted = replay_get(&egress, "/record", &refreshed)
+            .await
+            .expect("refreshed data answer");
+
+        assert_eq!(accepted.status, 200);
+        assert_ne!(first.generation, refreshed.generation);
+        assert_eq!(budget.remaining(egress.endpoint()), 0);
+        assert_eq!(
+            events,
+            vec![
+                AuthEvent::TokenRequested,
+                AuthEvent::TokenIssued,
+                AuthEvent::TokenInvalidatedAfterUnauthorized,
+                AuthEvent::TokenRequested,
+                AuthEvent::TokenIssued
+            ]
+        );
+        assert_eq!(transcript.finish(), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn replay_oauth_budget_refuses_a_third_uncached_token_before_consuming_it() {
+        let fixture = replay_fixture(serde_json::json!([
+            replay_token_exchange("first-token"),
+            replay_token_exchange("second-token"),
+            replay_token_exchange("must-not-be-consumed")
+        ]));
+        let transcript =
+            Arc::new(ReplayTranscript::new(&fixture, 0).expect("ordered replay transcript"));
+        let egress = EndpointEgress::compile_replay_with_max_cache(
+            &replay_oauth_endpoint(),
+            Arc::clone(&transcript),
+            0,
+        )
+        .expect("replay egress");
+        let mut budget = TokenBudget::new_exchange();
+        let mut events = Vec::new();
+        let resolver = replay_resolver();
+
+        for _ in 0..2 {
+            let credential = egress
+                .authorize(&mut budget, &resolver, &ReplayTestSigner, &mut events)
+                .await
+                .expect("allowance remains")
+                .expect("uncached OAuth credential");
+            assert_eq!(credential.generation, None);
+        }
+        assert_eq!(
+            egress
+                .authorize(&mut budget, &resolver, &ReplayTestSigner, &mut events)
+                .await
+                .expect_err("the third token miss exceeds the exchange allowance"),
+            AuthError::BudgetExhausted
+        );
+
+        assert_eq!(budget.remaining(egress.endpoint()), 0);
+        assert_eq!(
+            events,
+            vec![
+                AuthEvent::TokenRequested,
+                AuthEvent::TokenIssued,
+                AuthEvent::TokenRequested,
+                AuthEvent::TokenIssued,
+                AuthEvent::TokenBudgetExhausted
+            ]
+        );
+        assert_eq!(transcript.finish(), Err(ReplayFailure::Leftover));
+    }
 
     /// Every platform send fault, all unit variants, in declaration
     /// order: the partition table below is asserted over the complete

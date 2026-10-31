@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 
 use registry_adapter::exchange::Exchange;
 use registry_adapter::route::{
-    check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
+    check_direct_targets, check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome,
+    RouteTable,
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
@@ -263,6 +264,19 @@ async fn split_item_failures_raise_after_the_split_or_sooner_or_never() {
         last.result.expect_err("the last failure is raised").class,
         ErrorClass::Script
     );
+    let consumed: Vec<_> = last
+        .events
+        .iter()
+        .filter(|event| event.kind == "exchangeFailureHandled")
+        .map(|event| event.detail.clone())
+        .collect();
+    assert_eq!(
+        consumed,
+        vec![
+            json!({"source": "split", "class": "validation"}),
+            json!({"source": "split", "class": "script"}),
+        ]
+    );
 
     let first = run(
         steps(json!([
@@ -278,6 +292,10 @@ async fn split_item_failures_raise_after_the_split_or_sooner_or_never() {
             .expect_err("the first failure stops the split")
             .class,
         ErrorClass::Validation
+    );
+    assert!(
+        first.events.is_empty(),
+        "the returned failure was not consumed"
     );
 
     let swallowed = run(
@@ -299,6 +317,15 @@ async fn split_item_failures_raise_after_the_split_or_sooner_or_never() {
         json!({"records": [{"id": "a", "fail": true}, {"id": "b"}, {"id": "c"}]})
     );
     assert_eq!(exchange.message.header("CamelSplitResult"), None);
+    assert_eq!(
+        swallowed
+            .events
+            .iter()
+            .filter(|event| event.kind == "exchangeFailureHandled")
+            .count(),
+        3,
+        "every swallowed piece failure is journaled"
+    );
 }
 
 /// The failure accounting keeps the split going under its thresholds,
@@ -340,8 +367,16 @@ async fn split_failure_accounting_counts_stops_and_reports() {
             "totalItems": 3,
             "processedItems": 3,
             "failureCount": 1,
-            "aborted": false,
         }))
+    );
+    assert_eq!(
+        under
+            .events
+            .iter()
+            .filter(|event| event.kind == "exchangeFailureHandled")
+            .map(|event| event.detail.clone())
+            .collect::<Vec<_>>(),
+        vec![json!({"source": "split", "class": "validation"})]
     );
 
     let over = run(
@@ -357,6 +392,10 @@ async fn split_failure_accounting_counts_stops_and_reports() {
             .expect_err("the reached ratio stops and raises")
             .class,
         ErrorClass::Validation
+    );
+    assert!(
+        over.events.is_empty(),
+        "the returned threshold failure was not consumed"
     );
 
     let counted = run(
@@ -924,6 +963,7 @@ fn enrich_endpoints(
         cursor_key_ref: None,
         previous_cursor_key_ref: None,
         cursor_ttl_seconds: None,
+        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("the binding");
     let runtime = EndpointRuntime::compile(binding, &endpoint, &config, resolver)
@@ -959,6 +999,73 @@ async fn run_enrich(
     let mut exchange = Exchange::new("enrich".to_owned());
     exchange.message.body = json!({"q": 1});
     run_route(&context, &steps(json!([enrich])), exchange).await
+}
+
+/// A `direct:` resource route still sends over HTTP on its copied exchange;
+/// aggregation carries only the selected body and properties back, never an
+/// ordinary resource header.
+#[tokio::test]
+async fn direct_enrich_runs_the_resource_route_on_a_copy() {
+    let double = upstream::UpstreamDouble::start();
+    double.respond_with(vec![upstream::Response::json(
+        200,
+        r#"{"pieces":[{"id":"a"}],"next":"opaque"}"#,
+    )]);
+    std::env::set_var("SPLIT_LOOP_KEY", "split-loop-key");
+    let resolver = SecretResolver::new([SecretProvider::Environment], "")
+        .expect("the environment resolver builds");
+    let endpoints = enrich_endpoints(&double.url("/"), "SPLIT_LOOP_KEY", &resolver);
+    let scripts = ScriptSet::default();
+    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let routes = RouteTable::from([(
+        "fetch-page".to_owned(),
+        std::sync::Arc::new(steps(json!([
+            {"to": {"uri": "http:tracker", "parameters": {
+                "httpMethod": "GET", "path": "/thing"
+            }}},
+            {"setProperty": {"name": "pages", "value": {"jsonpath": "$.pieces"}}},
+            {"setHeader": {"name": "x-resource", "value": {"constant": "private"}}}
+        ]))),
+    )]);
+    let context = RouteContext {
+        endpoints: &endpoints,
+        scripts: &scripts,
+        resolver: &resolver,
+        resilience: &resilience,
+        routes: &routes,
+        code_maps: empty_code_maps(),
+        maximum_upstream_calls: 1,
+    };
+    let route = steps(json!([{
+        "enrich": {
+            "uri": "direct:fetch-page",
+            "aggregationStrategy": {
+                "type": "json-array-append",
+                "from": "pages",
+                "into": "records",
+                "uniqueBy": "id",
+                "properties": {"next": "$.next"}
+            }
+        }
+    }]));
+    check_servable(&route).expect("static direct enrichment is served");
+    check_direct_targets(&routes).expect("the resource target is declared and acyclic");
+    let mut exchange = Exchange::new("direct-enrich".to_owned());
+    exchange.message.body = json!({"records": []});
+    exchange
+        .message
+        .set_header("x-caller", Value::String("kept".to_owned()));
+
+    let exchange = run_route(&context, &route, exchange)
+        .await
+        .result
+        .expect("the direct resource route succeeds");
+
+    assert_eq!(exchange.message.body, json!({"records": [{"id": "a"}]}));
+    assert_eq!(exchange.property("next"), Some(&json!("opaque")));
+    assert_eq!(exchange.message.header("x-caller"), Some(&json!("kept")));
+    assert_eq!(exchange.message.header("x-resource"), None);
+    assert_eq!(double.request_count(), 1);
 }
 
 /// `enrich` sends on a copy of the exchange and merges the reply through
@@ -1079,16 +1186,21 @@ async fn enrich_failure_propagates_unless_it_aggregates_on_exception() {
     );
 }
 
-/// The load refuses the enrich shapes this runtime does not serve: the
-/// `direct:` component, a non-GET method, the split-only `grouped-body`
-/// strategy, and a missing parameter block (sections 8.6 and 8.11.7).
+/// The load admits a static `direct:` resource and refuses the enrich shapes
+/// this runtime does not serve: parameters on a direct resource, a non-GET
+/// HTTP method, the split-only `grouped-body` strategy, and a missing HTTP
+/// parameter block (sections 8.6 and 8.11.7).
 #[test]
 fn enrich_refuses_the_unserved_shapes_at_load() {
+    check_servable(&steps(json!([{"enrich": {
+        "uri": "direct:fetch-page"
+    }}])))
+    .expect("a static direct enrichment is served");
     check_servable(&steps(json!([{"enrich": {
         "uri": "direct:fetch-page",
         "parameters": {"httpMethod": "GET", "path": "/x"}
     }}])))
-    .expect_err("a direct enrichment is not served yet");
+    .expect_err("a direct enrichment carries no endpoint parameters");
     check_servable(&steps(json!([{"enrich": {
         "uri": "http:tracker",
         "parameters": {"httpMethod": "POST", "path": "/x"}
@@ -1102,4 +1214,29 @@ fn enrich_refuses_the_unserved_shapes_at_load() {
     .expect_err("the split-only grouped-body strategy is refused");
     check_servable(&steps(json!([{"enrich": {"uri": "http:tracker"}}])))
         .expect_err("an enrichment without parameters is refused");
+}
+
+#[test]
+fn direct_enrich_targets_are_resolved_and_acyclic_before_execution() {
+    let missing = RouteTable::from([(
+        "entry".to_owned(),
+        std::sync::Arc::new(steps(json!([{"enrich": {"uri": "direct:missing"}}]))),
+    )]);
+    assert!(check_direct_targets(&missing)
+        .expect_err("an unknown resource route is refused")
+        .contains("missing"));
+
+    let cyclic = RouteTable::from([
+        (
+            "first".to_owned(),
+            std::sync::Arc::new(steps(json!([{"enrich": {"uri": "direct:second"}}]))),
+        ),
+        (
+            "second".to_owned(),
+            std::sync::Arc::new(steps(json!([{"enrich": {"uri": "direct:first"}}]))),
+        ),
+    ]);
+    assert!(check_direct_targets(&cyclic)
+        .expect_err("a cyclic resource graph is refused")
+        .contains("cycle"));
 }

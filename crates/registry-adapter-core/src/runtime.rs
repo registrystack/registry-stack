@@ -161,6 +161,17 @@ pub struct AuditRetention {
     pub retention_days: registry_platform_yaml::BoundedU32<1, 3_650>,
 }
 
+/// Exact write-response custody in the idempotency store
+/// (`products/adapter/CONCEPT.md` section 9 and D12).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdempotencyRetention {
+    /// Seconds an exact facade response remains available for replay. The
+    /// spent-key tombstone remains after its response body is erased.
+    pub response_retention_seconds: BoundedU64<1, 31_536_000>,
+}
+
 /// The operator runtime configuration artifact (`AdapterRuntimeConfig`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
@@ -197,6 +208,10 @@ pub struct AdapterRuntimeConfig {
     pub allowed_clients: UniqueList<ExternalId>,
     /// The journal retention.
     pub audit: AuditRetention,
+    /// Exact write-response custody. A read-only deployment may omit this;
+    /// startup refuses a served write without an explicit operator choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency: Option<IdempotencyRetention>,
     /// The secret that seals pagination cursors: exactly 32 bytes. A
     /// deployment that binds a paginated operation declares it; one
     /// that serves only reads by identifier may omit it.
@@ -332,6 +347,11 @@ mod tests {
                 retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
                     .expect("retention"),
             },
+            idempotency: Some(IdempotencyRetention {
+                response_retention_seconds:
+                    registry_platform_yaml::BoundedU64::<1, 31_536_000>::new(86_400)
+                        .expect("retention"),
+            }),
             cursor_key_ref: None,
             previous_cursor_key_ref: None,
             cursor_ttl_seconds: None,
@@ -361,7 +381,8 @@ mod tests {
                     "audience": "case-api"
                 }},
                 "allowedClients": ["case-portal"],
-                "audit": {{ "retentionDays": 90 }}
+                "audit": {{ "retentionDays": 90 }},
+                "idempotency": {{ "responseRetentionSeconds": 86400 }}
             }}"#,
             serde_json::to_string(&binding()).expect("binding json"),
         );
@@ -374,6 +395,39 @@ mod tests {
             config.allowed_private_cidrs.len()
         );
         assert_eq!(read.audit, config.audit);
+        assert_eq!(read.idempotency, config.idempotency);
+    }
+
+    #[test]
+    fn idempotency_response_retention_is_optional_and_bounded() {
+        let base = r#"{
+            "id": "case-deployment",
+            "endpoints": [],
+            "allowedPrivateCidrs": ["10.0.0.0/8"],
+            "listener": { "bind": "127.0.0.1:8080" },
+            "database": {
+                "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                "migrationUrlRef": "secret:env/DB_MIGRATION"
+            },
+            "oidc": {
+                "issuer": "https://issuer.example.invalid",
+                "audience": "case-api"
+            },
+            "allowedClients": ["case-portal"],
+            "audit": { "retentionDays": 90 }
+        }"#;
+        let read = serde_json::from_str::<AdapterRuntimeConfig>(base).expect("read-only config");
+        assert!(read.idempotency.is_none());
+
+        for seconds in [0_u64, 31_536_001] {
+            let with_retention = base.replace(
+                r#""audit": { "retentionDays": 90 }"#,
+                &format!(
+                    r#""audit": {{ "retentionDays": 90 }}, "idempotency": {{ "responseRetentionSeconds": {seconds} }}"#
+                ),
+            );
+            assert!(serde_json::from_str::<AdapterRuntimeConfig>(&with_retention).is_err());
+        }
     }
 
     /// A trust profile is keyed by a local identifier: a key outside the

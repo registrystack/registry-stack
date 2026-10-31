@@ -25,18 +25,24 @@ fn unmapped(map_id: &str, condition: &str) -> RouteFailure {
     }
 }
 
-/// The result one conversion writes, if it writes one: `None` stands
-/// for "leave the target as it is" (a null or absent input, or a miss
-/// under `mandatory: false`).
+/// What one conversion does to its target. A null or absent input keeps
+/// the target unchanged; a lenient miss clears it so stale target state
+/// never survives as though it were a successful conversion.
+enum Lookup {
+    Keep,
+    Clear,
+    Write(serde_json::Value),
+}
+
 fn lookup(
     run: &Run<'_, '_>,
     step: &ConvertStep,
     input: Option<&serde_json::Value>,
-) -> Result<Option<serde_json::Value>, RouteFailure> {
+) -> Result<Lookup, RouteFailure> {
     // A null or absent input passes through unchanged whatever
     // `mandatory` says (Camel's `ConvertBodyTest.testConvertNullBody`).
     let key = match input {
-        None | Some(serde_json::Value::Null) => return Ok(None),
+        None | Some(serde_json::Value::Null) => return Ok(Lookup::Keep),
         Some(serde_json::Value::String(key)) => key.as_str(),
         Some(_) => {
             let map_id = declared_map_id(step)?;
@@ -50,9 +56,9 @@ fn lookup(
         unmapped(map_id, "is not declared")
     })?;
     match map.lookup(key) {
-        Some(value) => Ok(Some(value.clone())),
+        Some(value) => Ok(Lookup::Write(value.clone())),
         None if step.mandatory.unwrap_or(true) => Err(unmapped(map_id, "has no entry for the key")),
-        None => Ok(None),
+        None => Ok(Lookup::Clear),
     }
 }
 
@@ -65,8 +71,10 @@ fn declared_map_id(step: &ConvertStep) -> Result<&str, RouteFailure> {
 
 /// `convertBodyTo`: the body is both the source and the target.
 pub(crate) fn body(run: &mut Run<'_, '_>, step: &ConvertStep) -> Result<Flow, RouteFailure> {
-    if let Some(value) = lookup(run, step, Some(&run.exchange.message.body))? {
-        run.exchange.message.body = value;
+    match lookup(run, step, Some(&run.exchange.message.body))? {
+        Lookup::Keep => {}
+        Lookup::Clear => run.exchange.message.body = serde_json::Value::Null,
+        Lookup::Write(value) => run.exchange.message.body = value,
     }
     Ok(Flow::Continue)
 }
@@ -78,9 +86,11 @@ pub(crate) fn header(run: &mut Run<'_, '_>, step: &ConvertStep) -> Result<Flow, 
         return Err(RouteFailure::of(ErrorClass::Validation));
     };
     let input = run.exchange.message.header(source);
-    if let Some(value) = lookup(run, step, input)? {
-        let target = step.to_name.as_deref().unwrap_or(source);
-        run.exchange.message.set_header(target, value);
+    let target = step.to_name.as_deref().unwrap_or(source);
+    match lookup(run, step, input)? {
+        Lookup::Keep => {}
+        Lookup::Clear => run.exchange.message.remove_header(target),
+        Lookup::Write(value) => run.exchange.message.set_header(target, value),
     }
     Ok(Flow::Continue)
 }
@@ -91,9 +101,11 @@ pub(crate) fn property(run: &mut Run<'_, '_>, step: &ConvertStep) -> Result<Flow
         return Err(RouteFailure::of(ErrorClass::Validation));
     };
     let input = run.exchange.property(source);
-    if let Some(value) = lookup(run, step, input)? {
-        let target = step.to_name.as_deref().unwrap_or(source);
-        run.exchange.set_property(target, value);
+    let target = step.to_name.as_deref().unwrap_or(source);
+    match lookup(run, step, input)? {
+        Lookup::Keep => {}
+        Lookup::Clear => run.exchange.remove_property(target),
+        Lookup::Write(value) => run.exchange.set_property(target, value),
     }
     Ok(Flow::Continue)
 }

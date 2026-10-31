@@ -20,8 +20,9 @@ What it checks, in order:
    example "(component docs)") are prose, not paths, and are ignored.
 3. Delivered rows have evidence. `INCREMENT_DELIVERED` is the highest
    increment this tree delivers. A row with `Inc` at or below it must map,
-   in `EVIDENCE` below, to at least one named test function, and each
-   named function must exist in the mapped file. Core rows map into
+   in `EVIDENCE` below, to at least one named Rust function carrying a
+   `#[test]` or `#[tokio::test]` attribute, and each named test must exist
+   in the mapped file. Core rows map into
    `crates/registry-adapter-core/src/`; runtime rows map through the
    `engine:` form into the engine crate's conformance suites and unit
    tests. A row with a higher Inc is reported as pending and never fails
@@ -226,7 +227,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_error_cluster.rs:the_cluster_refuses_its_unservable_shapes_at_load",
     ],
     "Try, catch, finally": [
-        "engine:src/processor/do_try.rs:run",
         "engine:tests/camel_error_cluster.rs:do_try_catches_its_block_and_resumes_the_route",
         "engine:tests/camel_error_cluster.rs:a_do_catch_on_when_narrows_or_fails",
         "engine:tests/camel_error_cluster.rs:do_finally_runs_on_every_path_and_yields_to_a_pending_failure",
@@ -237,8 +237,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_resilience.rs:an_open_breaker_recovers_through_half_open_trials",
         "engine:tests/camel_resilience.rs:the_route_error_handler_does_not_wrap_a_breaker_block",
         "engine:tests/camel_resilience.rs:the_resilience_steps_refuse_their_unservable_shapes_at_load",
-        "platform:registry-platform-resilience/src/circuit_breaker.rs:acquire",
-        "platform:registry-platform-resilience/src/circuit_breaker.rs:record",
     ],
     "Throttler": [
         "engine:tests/camel_resilience.rs:the_throttler_paces_requests_over_the_period",
@@ -247,7 +245,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_resilience.rs:concurrent_requests_mode_bounds_in_flight_calls",
         "engine:tests/camel_resilience.rs:concurrent_requests_mode_rejects_over_the_limit",
         "engine:tests/camel_resilience.rs:a_non_integer_limit_fails_the_exchange",
-        "platform:registry-platform-ratelimit/src/rolling_window.rs:acquire",
     ],
     "direct": [
         "engine:tests/camel_direct.rs:a_direct_call_shares_the_exchange_and_its_changes",
@@ -274,7 +271,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_error_cluster.rs:the_error_handler_shapes_the_attempts_and_clause_reach",
     ],
     "graphql": [
-        "engine:src/component/graphql.rs:load",
         "engine:tests/camel_graphql.rs:a_send_posts_the_pinned_query_with_its_operation_and_variables",
         "engine:tests/camel_graphql.rs:the_endpoints_variables_expression_answers_when_the_send_carries_no_body",
         "engine:tests/camel_graphql.rs:an_errors_array_fails_the_exchange_as_upstream_http",
@@ -285,10 +281,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_graphql.rs:the_loader_holds_the_query_files_own_line",
     ],
     "Type Converter": [
-        "engine:src/processor/convert.rs:body",
-        "engine:src/processor/convert.rs:header",
-        "engine:src/processor/convert.rs:property",
-        "engine:src/scripts.rs:register_code_map",
         "engine:tests/camel_conversion.rs:the_body_conversion_writes_each_scalar_kind",
         "engine:tests/camel_conversion.rs:a_null_body_passes_through_whatever_mandatory_says",
         "engine:tests/camel_conversion.rs:a_non_string_body_raises_conversion_unmapped",
@@ -302,7 +294,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_conversion.rs:the_served_shape_is_refused_by_name",
         "engine:tests/camel_conversion.rs:rhai_code_map_takes_the_same_lookup",
         "engine:tests/camel_conversion.rs:the_declared_map_parses_from_the_pack_form",
-        "pack.rs:lookup",
         "checks.rs:routes_accept_a_well_formed_conversion",
         "checks.rs:routes_refuse_a_conversion_naming_no_declared_code_map",
         "checks.rs:routes_refuse_the_conversion_shapes",
@@ -310,19 +301,14 @@ EVIDENCE: dict[str, list[str]] = {
         "checks.rs:pack_refuses_a_code_map_no_conversion_references",
     ],
     "Exchange, MEP": [
-        "engine:src/exchange.rs:new",
-        "engine:src/exchange.rs:as_script_value",
         "engine:src/exchange.rs:headers_are_case_insensitive",
         "engine:tests/records_get_served.rs:a_found_record_comes_back_shaped_through_the_served_binary",
     ],
     "Message": [
-        "engine:src/exchange.rs:set_header",
-        "engine:src/exchange.rs:header",
         "engine:src/exchange.rs:headers_are_case_insensitive",
         "engine:src/exchange.rs:script_value_lowercases_headers_and_keeps_a_null_body",
     ],
     "REST DSL contract-first": [
-        "engine:src/component/rest/continuation.rs:filter_digest",
         "engine:tests/records_get_served.rs:a_found_record_comes_back_shaped_through_the_served_binary",
         "engine:tests/person_search_served.rs:an_undeclared_or_out_of_bounds_input_is_refused_before_any_upstream_call",
         "engine:tests/person_search_served.rs:the_first_page_comes_back_shaped_with_a_sealed_cursor",
@@ -338,8 +324,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/records_get_served.rs:an_identifier_with_a_space_or_a_non_ascii_character_is_sent_as_one_encoded_segment",
     ],
     "Simple, bean, process": [
-        "engine:src/scripts.rs:add",
-        "engine:src/scripts.rs:call",
         "engine:tests/opencrvs_scripts.rs:only_the_mapped_declaration_keys_reach_the_record_under_the_mapped_field",
         "engine:tests/script_budget.rs:a_reply_at_the_cap_is_processed",
     ],
@@ -350,7 +334,6 @@ EVIDENCE: dict[str, list[str]] = {
         "engine:tests/camel_direct.rs:the_targets_own_clauses_handle_the_target_first",
     ],
     "Event Notifier": [
-        "engine:src/journal.rs:append",
         "engine:tests/postgres_journal.rs:the_journal_refuses_unknown_kinds_and_oversized_details",
         "engine:tests/postgres_journal.rs:append_stamps_occurred_at_from_the_runtime_clock",
         "engine:tests/records_get_served.rs:a_verified_caller_refused_by_scope_or_record_type_is_journaled_without_values",
@@ -412,8 +395,22 @@ def check_references(row: int, cells: list[str]) -> list[str]:
     return problems
 
 
+def has_rust_test_function(source: str, function: str) -> bool:
+    """Whether source declares the named function as an attributed Rust test."""
+    attributed_function = re.compile(
+        rf"(?P<attributes>(?:^[ \t]*#\[[^\]]*\][ \t]*(?:\n|$))+)"
+        rf"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?"
+        rf"fn[ \t]+{re.escape(function)}\b",
+        re.MULTILINE,
+    )
+    return any(
+        re.search(r"#\[\s*(?:test|tokio::test)\b", match.group("attributes"))
+        for match in attributed_function.finditer(source)
+    )
+
+
 def function_exists(relative: str) -> bool:
-    """Whether the entry names a `fn` item that exists.
+    """Whether the entry names an attributed Rust test function.
 
     A plain `file.rs:function` resolves against the core sources; an
     `engine:file.rs:function` resolves against the engine crate's own
@@ -438,7 +435,7 @@ def function_exists(relative: str) -> bool:
         source = CORE_SRC / file
     if not source.is_file():
         return False
-    return re.search(rf"\bfn {re.escape(function)}\b", source.read_text(encoding="utf-8")) is not None
+    return has_rust_test_function(source.read_text(encoding="utf-8"), function)
 
 
 def check_evidence(row: int, concept: str, inc: int) -> list[str]:

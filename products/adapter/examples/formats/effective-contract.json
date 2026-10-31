@@ -1,0 +1,399 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
+  "kind": "AdapterEffectiveContract",
+  "digest": "sha256:c68709c13d3be0a066049e9fccdf8c5095e596816cfb04d73c9ead71318995aa",
+  "contract": {
+    "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
+    "project": {
+      "id": "dhis2-tracker-example",
+      "version": "1.0.0"
+    },
+    "profileVersion": "1",
+    "artifactDeploymentDigest": "sha256:89276e979c65d238040dee019e2f5768e58e0be40f72771196b8e5f1ee5d2734",
+    "authentication": {
+      "scheme": "bearer",
+      "audience": "adapter-example",
+      "clientAdmission": "allowlist"
+    },
+    "authority": {
+      "callerMode": "trusted-machine",
+      "representedSubject": "unsupported",
+      "personalDelegation": "unsupported",
+      "targetBinding": "unsupported",
+      "rowDisclosureAuthority": "not-granted",
+      "fieldDisclosureAuthority": "not-granted"
+    },
+    "operations": [
+      {
+        "id": "records-search.person",
+        "version": "1",
+        "bindingId": "person-search",
+        "profileOperationId": "records-search",
+        "method": "GET",
+        "path": "/v1/records/person",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "required": [
+                      "cursor"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "limit"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "properties": {
+              "cursor": {
+                "maxLength": 2796,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string",
+                "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
+              },
+              "limit": {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "domainData": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "org_unit": {
+                        "type": "string"
+                      },
+                      "tracked_entity_type": {
+                        "type": "string"
+                      },
+                      "updated_at": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "org_unit",
+                      "tracked_entity_type"
+                    ],
+                    "type": "object"
+                  },
+                  "recordIdentifier": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "domainData",
+                  "recordIdentifier"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
+            "meta": {
+              "additionalProperties": false,
+              "properties": {
+                "datasetIdentifier": {
+                  "type": "string"
+                },
+                "entityTypeIdentifier": {
+                  "type": "string"
+                },
+                "registryIdentifier": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "datasetIdentifier",
+                "entityTypeIdentifier",
+                "registryIdentifier"
+              ],
+              "type": "object"
+            },
+            "pageInfo": {
+              "additionalProperties": false,
+              "properties": {
+                "nextCursor": {
+                  "type": "string"
+                }
+              },
+              "required": [],
+              "type": "object"
+            }
+          },
+          "required": [
+            "items",
+            "meta",
+            "pageInfo"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "records-get.person",
+        "version": "1",
+        "bindingId": "person-get",
+        "profileOperationId": "records-get",
+        "method": "GET",
+        "path": "/v1/records/person/{record_id}",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {
+              "record_id": {
+                "minLength": 1,
+                "not": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        ".",
+                        ".."
+                      ]
+                    },
+                    {
+                      "pattern": "[/\\\\?;:%\\u{0000}-\\u{001f}\\u{007f}-\\u{009f}\\u{00ad}\\u{034f}\\u{061c}\\u{180e}\\u{200b}-\\u{200f}\\u{2028}-\\u{202e}\\u{2060}-\\u{206f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0001}\\u{e0020}-\\u{e007f}]"
+                    }
+                  ]
+                },
+                "type": "string"
+              }
+            },
+            "required": [
+              "record_id"
+            ],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": false,
+              "properties": {
+                "domainData": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "org_unit": {
+                      "type": "string"
+                    },
+                    "tracked_entity_type": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "org_unit",
+                    "tracked_entity_type"
+                  ],
+                  "type": "object"
+                },
+                "recordIdentifier": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "domainData",
+                "recordIdentifier"
+              ],
+              "type": "object"
+            },
+            "meta": {
+              "additionalProperties": false,
+              "properties": {
+                "datasetIdentifier": {
+                  "type": "string"
+                },
+                "entityTypeIdentifier": {
+                  "type": "string"
+                },
+                "registryIdentifier": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "datasetIdentifier",
+                "entityTypeIdentifier",
+                "registryIdentifier"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "data",
+            "meta"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "unserved": [
+      {
+        "operationId": "records-create.person",
+        "version": "1",
+        "bindingId": "person-create",
+        "profileOperationId": "records-create",
+        "support": "unserved",
+        "effect": "write",
+        "reasonCode": "adapter.operation.gateway-write-disabled",
+        "reason": "the external gateway contract does not expose write operations"
+      }
+    ],
+    "problemSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "status",
+        "title"
+      ],
+      "type": "object"
+    },
+    "protocolProblems": {
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "adapter.contract.precondition-failed"
+              },
+              "requestId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "status": {
+                "const": 412
+              },
+              "title": {
+                "const": "Effective contract precondition failed"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title",
+              "requestId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "adapter.contract.unavailable"
+              },
+              "requestId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "status": {
+                "const": 503
+              },
+              "title": {
+                "const": "Effective contract unavailable"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title",
+              "requestId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "problems": [
+        {
+          "code": "adapter.contract.precondition-failed",
+          "status": 412,
+          "title": "Effective contract precondition failed"
+        },
+        {
+          "code": "adapter.contract.unavailable",
+          "status": 503,
+          "title": "Effective contract unavailable"
+        }
+      ]
+    }
+  }
+}

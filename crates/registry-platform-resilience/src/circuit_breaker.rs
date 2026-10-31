@@ -73,6 +73,24 @@ impl BreakerPermit<'_> {
         self.breaker
             .record_outcome(success, duration, Some(self.cycle));
     }
+
+    /// Exclude a completed call from both failure and slow-call statistics.
+    /// A same-cycle half-open trial releases its slot so a replacement can
+    /// supply the outcome needed for recovery. This does not apply to an
+    /// abandoned call, which still counts as failure when its permit drops.
+    pub fn ignore(self) {
+        self.recorded.set(true);
+        let mut internals = self
+            .breaker
+            .inner
+            .lock()
+            .expect("the breaker lock is not poisoned");
+        if internals.cycle == self.cycle {
+            if let Phase::HalfOpen { permitted, .. } = &mut internals.phase {
+                *permitted -= 1;
+            }
+        }
+    }
 }
 
 impl Drop for BreakerPermit<'_> {
@@ -516,6 +534,61 @@ mod tests {
         assert!(matches!(trial, Acquired::Permitted(_)));
         // One trial is outstanding and unrecorded; a second is refused.
         assert!(matches!(breaker.acquire(), Acquired::Rejected));
+    }
+
+    #[test]
+    fn an_ignored_call_does_not_count_in_the_closed_window() {
+        let breaker = breaker();
+        breaker.record(false, Duration::from_millis(1));
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.ignore(),
+            Acquired::Rejected => panic!("the closed breaker admits the call"),
+        }
+        assert_eq!(breaker.state(), BreakerState::Closed);
+        breaker.record(false, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Open);
+    }
+
+    #[tokio::test]
+    async fn an_ignored_trial_releases_its_slot_without_counting_as_success() {
+        let mut config = config();
+        config.maximum_half_open_calls = 1;
+        let breaker = CircuitBreaker::new(config).expect("the breaker builds");
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.ignore(),
+            Acquired::Rejected => panic!("the recovery cycle admits its trial"),
+        }
+        assert_eq!(breaker.state(), BreakerState::HalfOpen);
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(true, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the ignored trial released its slot"),
+        }
+        assert_eq!(breaker.state(), BreakerState::Closed);
+    }
+
+    #[tokio::test]
+    async fn an_ignored_stale_permit_does_not_release_a_current_trial() {
+        let mut config = config();
+        config.maximum_half_open_calls = 1;
+        let breaker = CircuitBreaker::new(config).expect("the breaker builds");
+        let stale = match breaker.acquire() {
+            Acquired::Permitted(permit) => permit,
+            Acquired::Rejected => panic!("the closed breaker admits the call"),
+        };
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let trial = match breaker.acquire() {
+            Acquired::Permitted(permit) => permit,
+            Acquired::Rejected => panic!("the recovery cycle admits its trial"),
+        };
+        stale.ignore();
+        assert!(matches!(breaker.acquire(), Acquired::Rejected));
+        trial.record(true, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Closed);
     }
 
     #[tokio::test]

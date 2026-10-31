@@ -12,10 +12,13 @@
 //! the operations the file declares; the engine holds the same line at
 //! load with a bounded scan, so no runtime dependency is added for it.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
-use registry_adapter_core::{AdapterPack, Endpoint, Expression};
+use crate::scripts::{read_bounded_file, BoundedRead};
+use registry_adapter_core::{AdapterPack, Endpoint, Expression, GraphQlOperationKind};
 use registry_platform_config::sha256_uri;
+use registry_platform_yaml::ExternalId;
 use thiserror::Error;
 
 /// The largest query file the engine reads, the script profile's source
@@ -39,6 +42,10 @@ pub enum GraphQlLoadError {
     NotText(String),
     #[error("the query file {0} declares no operation named {1}")]
     UnknownOperation(String, String),
+    #[error("the named operation's GraphQL kind does not match the endpoint declaration")]
+    OperationKindMismatch,
+    #[error("the graphql endpoint names no operation")]
+    OperationRequired,
 }
 
 /// The GraphQL query one endpoint pins: the file's text, the operation
@@ -49,9 +56,13 @@ pub struct GraphQlQuery {
     /// member.
     pub text: String,
     /// The named operation, sent as the request's `operationName`
-    /// member; `None` sends no name and the document's anonymous
-    /// selection set stands.
+    /// member. Load refuses an endpoint that omits the name.
     pub operation: Option<String>,
+    /// The parsed kind of the named operation.
+    pub kind: Option<GraphQlOperationKind>,
+    /// The endpoint-operation ids a send may name. These are local
+    /// reviewed aliases for this one pinned GraphQL operationName.
+    pub operations: BTreeSet<String>,
     /// The endpoint's `variables` expression; a send's own body member
     /// overrides it for that send.
     pub variables: Option<Expression>,
@@ -70,33 +81,54 @@ impl GraphQlQuery {
         let path = endpoint.query_file.as_deref().ok_or_else(|| {
             GraphQlLoadError::NotInventoried("the endpoint names no query file".to_owned())
         })?;
+        let operation = endpoint
+            .operation_name
+            .clone()
+            .ok_or(GraphQlLoadError::OperationRequired)?;
         let pinned = pack
             .pinned_file(path)
             .ok_or_else(|| GraphQlLoadError::NotInventoried(path.to_owned()))?;
-        let bytes = std::fs::read(pack_directory.join(path))
-            .map_err(|_| GraphQlLoadError::Unreadable(path.to_owned()))?;
-        if bytes.len() > MAXIMUM_QUERY_FILE_BYTES {
-            return Err(GraphQlLoadError::TooLarge(path.to_owned()));
-        }
+        let bytes = match read_bounded_file(&pack_directory.join(path), MAXIMUM_QUERY_FILE_BYTES)
+            .map_err(|_| GraphQlLoadError::Unreadable(path.to_owned()))?
+        {
+            BoundedRead::Bytes(bytes) => bytes,
+            BoundedRead::TooLarge => return Err(GraphQlLoadError::TooLarge(path.to_owned())),
+        };
         if sha256_uri(&bytes) != pinned.as_str() {
             return Err(GraphQlLoadError::DigestMismatch(path.to_owned()));
         }
         let text =
             String::from_utf8(bytes).map_err(|_| GraphQlLoadError::NotText(path.to_owned()))?;
-        let operation = endpoint.operation_name.clone();
-        if let Some(name) = &operation {
-            if !declares_operation(&text, name) {
-                return Err(GraphQlLoadError::UnknownOperation(
-                    path.to_owned(),
-                    name.clone(),
-                ));
-            }
+        let kind = operation_kind(&text, &operation).ok_or_else(|| {
+            GraphQlLoadError::UnknownOperation(path.to_owned(), operation.clone())
+        })?;
+        if endpoint
+            .operations
+            .iter()
+            .filter_map(|operation| operation.graphql)
+            .any(|declared| declared != kind)
+        {
+            return Err(GraphQlLoadError::OperationKindMismatch);
         }
         Ok(Self {
             text,
-            operation,
+            operation: Some(operation),
+            kind: Some(kind),
+            operations: endpoint
+                .operations
+                .iter()
+                .map(|operation| operation.id.as_str().to_owned())
+                .collect(),
             variables: endpoint.variables.clone(),
         })
+    }
+
+    /// Whether a send's optional endpoint-operation alias belongs to this
+    /// endpoint. The pinned `operationName` remains the one sent on the
+    /// wire; the alias selects reviewed safety and idempotency claims.
+    #[must_use]
+    pub fn accepts_operation(&self, operation: Option<&ExternalId>) -> bool {
+        operation.is_none_or(|operation| self.operations.contains(operation.as_str()))
     }
 }
 
@@ -105,10 +137,28 @@ impl GraphQlQuery {
 /// `adapterctl verify`; this names the same operations for the load-time
 /// line, so the runtime adds no GraphQL dependency.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn declares_operation(source: &str, name: &str) -> bool {
     named_operations(source)
         .iter()
         .any(|(operation, _)| operation == name)
+}
+
+/// The kind of one exact named operation, when it is a supported query or
+/// mutation. A subscription is not a served Adapter endpoint operation.
+fn operation_kind(source: &str, name: &str) -> Option<GraphQlOperationKind> {
+    named_operations(source)
+        .into_iter()
+        .find_map(|(operation, kind)| {
+            if operation != name {
+                return None;
+            }
+            match kind.as_str() {
+                "query" => Some(GraphQlOperationKind::Query),
+                "mutation" => Some(GraphQlOperationKind::Mutation),
+                _ => None,
+            }
+        })
 }
 
 /// The named operations a document declares, with their kind: `query
@@ -121,7 +171,20 @@ fn named_operations(source: &str) -> Vec<(String, String)> {
     const KEYWORDS: [&str; 3] = ["query", "mutation", "subscription"];
     let tokens = scan(source);
     let mut declared = Vec::new();
+    let mut depth = 0usize;
     for (index, token) in tokens.iter().enumerate() {
+        match token {
+            Token::OpenBrace => {
+                depth += 1;
+                continue;
+            }
+            Token::CloseBrace => {
+                depth = depth.saturating_sub(1);
+                continue;
+            }
+            _ if depth != 0 => continue,
+            _ => {}
+        }
         let Token::Name(word) = token else {
             continue;
         };
@@ -143,6 +206,7 @@ fn named_operations(source: &str) -> Vec<(String, String)> {
 enum Token {
     Name(String),
     OpenBrace,
+    CloseBrace,
     At,
     Paren,
 }
@@ -189,6 +253,10 @@ fn scan(source: &str) -> Vec<Token> {
             }
             '{' => {
                 tokens.push(Token::OpenBrace);
+                index += 1;
+            }
+            '}' => {
+                tokens.push(Token::CloseBrace);
                 index += 1;
             }
             '@' => {
@@ -334,5 +402,15 @@ mod tests {
         assert!(declares_operation(source, "FindCases"));
         assert!(!declares_operation(source, "FindCase"));
         assert!(!declares_operation(source, "findcases"));
+    }
+
+    #[test]
+    fn operation_words_inside_a_selection_set_are_not_declarations() {
+        let source = "query FindCases { query: mutation { id } }";
+        assert_eq!(
+            kinds(source),
+            vec![("FindCases".to_owned(), "query".to_owned())],
+        );
+        assert!(!declares_operation(source, "mutation"));
     }
 }

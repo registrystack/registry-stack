@@ -1,147 +1,151 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The one network seam of `verify --live` (`crates/registry-adapterctl/
-//! src/verify`): one plain HTTP/1.1 request over `std::net`, bounded in
-//! time and in what it reads, returning only the answer's status.
-//!
-//! TLS, mTLS, token acquisition, and the graphql component are the
-//! engine data path's transports; this seam dials plain HTTP to an
-//! address the egress policy already admitted, and the command waits
-//! instead of dialing anywhere else. No response body is read: the
-//! facade mapping that validates bodies is the engine's. The request
-//! head is assembled as bytes, so a non-UTF-8 API-key value crosses to
-//! the wire unchanged.
+//! The one network seam of `verify --live`: a frozen platform destination
+//! policy and opaque request template drive one bounded HTTP or HTTPS send.
+//! Redirects are returned, never followed, and transport failures remain
+//! value-free.
 
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use registry_platform_httputil::destination::{
+    DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationScheme,
+    DestinationAuthorizationTemplate, DestinationAuthorizationValue,
+    QueryStringContentAcknowledgement, ScriptRequestBodyFormat, SideEffectingSendMethod,
+    MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_DESTINATION_REQUEST_BODY_BYTES,
+    MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
+};
 use std::time::Duration;
+use zeroize::Zeroizing;
 
-/// One rendered probe request. The authorization header value travels
-/// as bytes because a static-api-key value need not be UTF-8.
+/// Credential material retained only through one opaque platform request.
+pub(crate) enum TransportCredential {
+    None,
+    Basic(Zeroizing<Vec<u8>>),
+    StaticAuthorization {
+        scheme: String,
+        token: Zeroizing<Vec<u8>>,
+    },
+    ApiKey {
+        header_name: String,
+        value: Zeroizing<Vec<u8>>,
+    },
+}
+
+/// One rendered probe request over an already frozen destination policy.
 pub(crate) struct WireRequest {
-    /// The `Host` header value, from the binding's base URL authority.
-    pub host_header: String,
-    /// Where to connect: the admitted address and port.
-    pub address: SocketAddr,
-    /// The request method, upper case.
+    pub policy: DataDestinationPolicy,
     pub method: String,
-    /// The request target: path and query, origin-relative.
     pub target: String,
-    /// The header the credential composes, if any.
-    pub authorization: Option<(String, Vec<u8>)>,
-    /// The marshalled constant body, if any.
+    pub credential: TransportCredential,
     pub body: Option<Vec<u8>>,
 }
 
-/// Why the seam could not produce a status. The text names the failure
-/// kind; it never carries a credential value.
+/// Why the seam could not produce a status. Text is fixed and value-free.
 pub(crate) struct TransportFailure(pub String);
 
-/// One request and one answer each take at most this long.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The response head the seam reads, bounded: status line and headers,
-/// never a body.
-const HEAD_LIMIT: usize = 64 * 1024;
+/// Send one request through the platform policy and return only its status.
+pub(crate) fn send_once(request: WireRequest) -> Result<u16, TransportFailure> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| failure("the transport runtime could not start"))?;
+    runtime.block_on(send(request))
+}
 
-/// Send one request, read one response head, and return its status.
-pub(crate) fn send_once(request: &WireRequest) -> Result<u16, TransportFailure> {
-    let failure = |kind: &str, error: std::io::Error| TransportFailure(format!("{kind}: {error}"));
-    let mut stream = TcpStream::connect_timeout(&request.address, TIMEOUT)
-        .map_err(|error| failure("connect", error))?;
-    stream
-        .set_read_timeout(Some(TIMEOUT))
-        .map_err(|error| failure("set the read timeout", error))?;
-    stream
-        .set_write_timeout(Some(TIMEOUT))
-        .map_err(|error| failure("set the write timeout", error))?;
-
-    // The head is bytes throughout: a credential value crosses to the
-    // wire unchanged whatever its bytes are.
-    let mut head = Vec::new();
-    head.extend_from_slice(
-        format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n",
-            request.method, request.target, request.host_header
+async fn send(request: WireRequest) -> Result<u16, TransportFailure> {
+    let (authorization_template, authorization, api_key_header, api_key) =
+        credential_parts(request.credential)?;
+    let method = match request.method.as_str() {
+        "GET" => SideEffectingSendMethod::Get(
+            QueryStringContentAcknowledgement::acknowledge_content_in_access_logs(),
+        ),
+        "POST" => SideEffectingSendMethod::Post,
+        _ => return Err(failure("the request method is not supported")),
+    };
+    let template = DataDestinationRequestTemplate::new_script_send(
+        method,
+        "/**",
+        &[],
+        authorization_template,
+        api_key_header
+            .as_ref()
+            .map(|name| (name.as_str(), MAX_DESTINATION_HEADER_VALUE_BYTES)),
+        None,
+        MAX_DESTINATION_TARGET_BYTES
+            + MAX_DESTINATION_REQUEST_HEADER_BYTES
+            + MAX_DESTINATION_REQUEST_BODY_BYTES,
+    )
+    .map_err(|_| failure("the request template was refused"))?;
+    let body_format = request.body.as_ref().map(|_| ScriptRequestBodyFormat::Json);
+    let rendered = template
+        .render_script(
+            &request.target,
+            &[],
+            authorization,
+            api_key,
+            body_format,
+            request.body.map(Zeroizing::new),
         )
-        .as_bytes(),
-    );
-    if let Some((name, value)) = &request.authorization {
-        head.extend_from_slice(name.as_bytes());
-        head.extend_from_slice(b": ");
-        head.extend_from_slice(value);
-        head.extend_from_slice(b"\r\n");
-    }
-    let body = request.body.as_deref().unwrap_or(&[]);
-    if !body.is_empty() {
-        head.extend_from_slice(
-            format!(
-                "Content-Type: application/json\r\nContent-Length: {}\r\n",
-                body.len()
-            )
-            .as_bytes(),
-        );
-    }
-    head.extend_from_slice(b"\r\n");
-    stream
-        .write_all(&head)
-        .map_err(|error| failure("write the request", error))?;
-    if !body.is_empty() {
-        stream
-            .write_all(body)
-            .map_err(|error| failure("write the body", error))?;
-    }
-    stream
-        .flush()
-        .map_err(|error| failure("flush the request", error))?;
-
-    let mut read = Vec::new();
-    let mut chunk = [0u8; 1024];
-    loop {
-        if read.len() > HEAD_LIMIT {
-            return Err(TransportFailure(
-                "the response head exceeds the 64 KiB bound".to_owned(),
-            ));
-        }
-        let count = stream
-            .read(&mut chunk)
-            .map_err(|error| failure("read the response", error))?;
-        if count == 0 {
-            return Err(TransportFailure(
-                "the connection closed before a response head".to_owned(),
-            ));
-        }
-        read.extend_from_slice(&chunk[..count]);
-        if let Some(end) = find(&read, b"\r\n\r\n") {
-            return status_of(&read[..end]);
-        }
-    }
+        .map_err(|_| failure("the rendered request was refused"))?;
+    let response = request
+        .policy
+        .send(rendered, TIMEOUT)
+        .await
+        .map_err(|_| failure("the destination exchange failed"))?;
+    Ok(response.status().as_u16())
 }
 
-/// The status of one response head: the first line's second member,
-/// after the version.
-fn status_of(head: &[u8]) -> Result<u16, TransportFailure> {
-    let text = String::from_utf8_lossy(head);
-    let line = text.lines().next().unwrap_or_default();
-    let mut members = line.split(' ');
-    let version = members.next().unwrap_or_default();
-    if !version.starts_with("HTTP/") {
-        return Err(TransportFailure(format!(
-            "the answer's status line is not HTTP: {line}"
-        )));
-    }
-    members
-        .next()
-        .and_then(|code| code.parse().ok())
-        .ok_or_else(|| {
-            TransportFailure(format!(
-                "the answer's status line carries no status: {line}"
+type CredentialParts = (
+    DestinationAuthorizationTemplate,
+    Option<DestinationAuthorizationValue>,
+    Option<String>,
+    Option<Zeroizing<Vec<u8>>>,
+);
+
+fn credential_parts(credential: TransportCredential) -> Result<CredentialParts, TransportFailure> {
+    match credential {
+        TransportCredential::None => Ok((
+            DestinationAuthorizationTemplate::Forbidden,
+            None,
+            None,
+            None,
+        )),
+        TransportCredential::Basic(encoded) => Ok((
+            DestinationAuthorizationTemplate::Basic {
+                max_value_bytes: MAX_DESTINATION_HEADER_VALUE_BYTES,
+            },
+            Some(
+                DestinationAuthorizationValue::basic_zeroizing(encoded)
+                    .map_err(|_| failure("the authorization value was refused"))?,
+            ),
+            None,
+            None,
+        )),
+        TransportCredential::StaticAuthorization { scheme, token } => {
+            let scheme = DestinationAuthorizationScheme::new(&scheme)
+                .map_err(|_| failure("the authorization scheme was refused"))?;
+            Ok((
+                DestinationAuthorizationTemplate::Scheme {
+                    scheme,
+                    max_value_bytes: MAX_DESTINATION_HEADER_VALUE_BYTES,
+                },
+                Some(
+                    DestinationAuthorizationValue::scheme_zeroizing(scheme, token)
+                        .map_err(|_| failure("the authorization value was refused"))?,
+                ),
+                None,
+                None,
             ))
-        })
+        }
+        TransportCredential::ApiKey { header_name, value } => Ok((
+            DestinationAuthorizationTemplate::Forbidden,
+            None,
+            Some(header_name),
+            Some(value),
+        )),
+    }
 }
 
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+fn failure(message: &str) -> TransportFailure {
+    TransportFailure(message.to_owned())
 }

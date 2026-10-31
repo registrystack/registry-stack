@@ -46,6 +46,9 @@ allowedPrivateCidrs:
   - 10.0.0.0/8
 audit:
   retentionDays: 90
+idempotency:
+  # Exact write responses have separate custody from the value-free journal.
+  responseRetentionSeconds: 86400
 # Seals the pagination cursors a search returns: exactly 32 bytes. A
 # deployment that serves no search may omit it.
 cursorKeyRef: secret:env/ADAPTER_CURSOR_KEY

@@ -11,11 +11,31 @@
 // the link's origin is the bound base URL, since the base URL never
 // enters the exchange. Pure and deterministic; no I/O.
 fn next_page_token(exchange) {
-    query_value(exchange.properties.fhirNextUrl, "_getpages")
+    query_value(next_url(exchange), "_getpages")
 }
 
 fn next_page_offset(exchange) {
-    query_value(exchange.properties.fhirNextUrl, "_getpagesoffset")
+    query_value(next_url(exchange), "_getpagesoffset")
+}
+
+fn next_url(exchange) {
+    let next = exchange.properties.fhirNextUrl;
+    if next == () || type_of(next) != "array" {
+        return next;
+    }
+    let url = ();
+    for link in next {
+        if link.relation == "next" {
+            if url != () {
+                throw "the searchset carries more than one next link";
+            }
+            url = link.url;
+        }
+    }
+    if url == () {
+        throw "the searchset carries no next link";
+    }
+    url
 }
 
 fn query_value(url, name) {

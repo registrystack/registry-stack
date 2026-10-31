@@ -18,6 +18,7 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter
 # five adapter formats are held to the configuration-format convention
 # (CFG-SCHEMA-1) with the platform lint that CI also runs.
 PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapterctl -- schemas --check --output-dir products/adapter/schemas
+products/adapter/scripts/generate-effective-contract-example.sh --check
 uv run --no-project --with PyYAML==6.0.2 python products/platform/scripts/check-config-conventions.py
 
 # The Camel port table (CONCEPT.md 8.10) is held to the code: every
@@ -113,10 +114,9 @@ done
   "${fixture_flags[@]}" >/dev/null
 printf 'Example check passed\n'
 
-# The same contract replays offline (CONCEPT 13.1: fixture replay for every
-# maintained pack and example; 13.3: replay checks the fixture contracts
-# and reports `drive: not-run`, because send-by-send driving is the
-# runtime engine's, not adapterctl's).
+# The same contract executes offline through the real route engine and
+# exact intercepted transcript. Simulated writes do not claim PostgreSQL
+# durability; the database suite establishes that independently.
 "$adapterctl_bin" fixtures replay products/adapter/examples/dhis2-tracker/project.yaml \
   --profile products/adapter/profiles/breg-records/profile.yaml \
   --pack products/adapter/packs/dhis2-tracker/pack.yaml \
@@ -164,14 +164,17 @@ printf 'OpenCRVS example check passed\n'
 printf 'OpenCRVS example fixture replay passed\n'
 
 # Each committed experiment holds the concrete contract its project compiles
-# to (`generated/openapi.json` beside the project). `compile --check` refuses
-# on drift, so an experiment cannot rot behind a reader, core, or document
-# change. An experiment that carries no `profile.yaml` beside its project
-# binds the maintained profile its project pins by id, under
+# to (`generated/openapi.json` beside the project) and at least one fixture
+# that the actual runtime interpreter replays offline. `compile --check` and
+# `fixtures replay` refuse on drift or an unserved transcript, so experiments
+# cannot rot behind reader, core, document, or route-engine changes. An
+# experiment that carries no `profile.yaml` beside its project binds the
+# maintained profile its project pins by id, under
 # `products/adapter/profiles/<id>/`, the same profile its documented check
-# command names; a project that pins no id, or one with no maintained
-# profile, refuses loudly here rather than skipping the experiment.
+# command names; a project that pins no id, one with no maintained profile,
+# or one with no discovered fixture refuses loudly rather than being skipped.
 experiments=0
+experiment_fixtures=0
 for project in products/adapter/experiments/*/project.yaml; do
   directory="${project%/*}"
   if [[ -f "${directory}/profile.yaml" ]]; then
@@ -184,10 +187,24 @@ for project in products/adapter/experiments/*/project.yaml; do
     fi
     profile="products/adapter/profiles/${profile_id}/profile.yaml"
   fi
+  fixture_paths=("${directory}"/fixtures/*.yaml)
+  if [[ ! -f "${fixture_paths[0]}" ]]; then
+    printf 'check-contracts: %s has no fixture under %s/fixtures/.\n' "${project}" "${directory}" >&2
+    exit 2
+  fi
+  experiment_fixture_flags=()
+  for fixture in "${fixture_paths[@]}"; do
+    experiment_fixture_flags+=(--fixtures "${fixture}")
+    experiment_fixtures=$((experiment_fixtures + 1))
+  done
   "$adapterctl_bin" compile --check "$project" --profile "$profile" >/dev/null
+  "$adapterctl_bin" fixtures replay "$project" \
+    --profile "$profile" \
+    "${experiment_fixture_flags[@]}" >/dev/null
   experiments=$((experiments + 1))
 done
-printf 'Experiment contracts hold (%d experiments)\n' "$experiments"
+printf 'Experiment contracts and fixture replays hold (%d experiments, %d fixtures)\n' \
+  "$experiments" "$experiment_fixtures"
 
 # The bad-authoring corpus: every discovered bad/ member refuses with its
 # own code (plus, transitionally, a co-fired partner code that is another

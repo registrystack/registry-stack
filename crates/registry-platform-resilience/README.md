@@ -31,7 +31,10 @@ Two independent primitives live here:
   strand a half-open breaker. Every phase change starts a new cycle and
   the permit carries its own, so an outcome, or an abandoned permit,
   from an earlier cycle lands nowhere: a slow call of the closed window
-  can neither close nor fail a later recovery cycle.
+  can neither close nor fail a later recovery cycle. A caller may explicitly
+  ignore a completed outcome through the permit: it contributes no failure
+  or slow-call sample, and a half-open trial releases its slot for a
+  replacement without counting as a successful trial.
 
 Everything here is process-local and in-memory: state is not shared
 across replicas, and a deployment with more than one replica gets an

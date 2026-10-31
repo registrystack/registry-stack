@@ -2,16 +2,18 @@
 #
 # Captured fixture: an accepted synchronous import, from the DHIS2
 # 2.43.2.1 test server (registry test server, 2026-10-30, scrubbed). The
-# reply carries status OK, empty error and warning reports, the stats,
+# reply carries status OK, empty error and warning reports, and internally
+# consistent stats proving full acceptance, which the route now validates,
 # and a bundleReport whose typeReportMap carries all four tracker types
 # (RELATIONSHIP, EVENT, TRACKED_ENTITY, ENROLLMENT); the pack reads only
 # the status. The request is what the pack sends for the captured
 # entity: the bundle keyed by the record's identifier with an empty
-# attribute list (the capture's own request carried an attribute row;
-# scripts/to-bundle.rhai carries none). The expected facade body echoes
-# the submitted record, and the meta registry and dataset identifiers
-# are deployment values the engine writes at instantiation, so the
-# replay expectation carries the envelope template's stand-in literals.
+# attribute list because this example leaves the project-owned
+# `attribute_fields` map at its empty default (the capture's own request
+# carried an attribute row). The facade request is a synthetic reconstruction
+# from that pack payload, not a request captured from a deployed Adapter.
+# The expected facade body echoes the submitted record, and its meta members
+# carry this project's concrete registry and dataset identifiers.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: dhis2-tracker-import-accepted
@@ -27,6 +29,16 @@ entries:
   - facadeRequest:
       operation: records-create
       path: /v1/records/person
+      headers:
+        idempotency-key: fixture-import-accepted
+      body:
+        data:
+          recordIdentifier: wk4JlTuVO9o
+          domainData:
+            tracked_entity_type: cQWYtUfH6Vx
+            org_unit: qfg4XUDJtgS
+            created_at: "2026-03-01T12:00:00.000"
+            updated_at: "2026-03-01T12:00:00.000"
     upstream:
       - request:
           endpoint: tracker
@@ -96,6 +108,9 @@ entries:
     expected:
       type: response
       status: 201
+      headers:
+        cache-control: no-store
+        content-type: application/json
       body:
         data:
           tracked_entity_type: cQWYtUfH6Vx
@@ -103,6 +118,6 @@ entries:
           created_at: "2026-03-01T12:00:00.000"
           updated_at: "2026-03-01T12:00:00.000"
         meta:
-          registryIdentifier: registryIdentifier
-          datasetIdentifier: datasetIdentifier
+          registryIdentifier: dhis2-tracker-registry
+          datasetIdentifier: persons
           entityTypeIdentifier: person

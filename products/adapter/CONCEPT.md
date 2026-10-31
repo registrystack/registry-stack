@@ -460,8 +460,10 @@ otherwise. Section 8.10 is the authoritative list.
   says; any other non-string input, or a miss, raises
   `conversion.unmapped`, and with `mandatory: false` a miss leaves the
   target absent. Rhai scripts reach the same lookup through
-  `code_map(id, key)`. Every reference is a literal id that resolves, and
-  `check` refuses a declared map nothing references.
+  `code_map(id, key)`. Every typed conversion reference is a literal id that
+  resolves, and `check` refuses a declared map no typed conversion step
+  references. A `code_map` call used only inside a script does not exempt a
+  declared map from that unused-map refusal.
 - Routing: `to` (send to an endpoint; static URI, no `toD`; an `http` send
   may follow an origin-pinned link through `httpUri`, section 8.11.5),
   `choice` with `when` and `otherwise` (first matching predicate wins),
@@ -509,6 +511,11 @@ otherwise. Section 8.10 is the authoritative list.
   default 1000, `rejectExecution` default false; divergence: a waiting
   exchange waits at most until its deadline, then raises
   `throttle.rejected`).
+- Pack guidance for both resilience processors: state belongs to the EIP
+  node and is shared by every bound operation and `direct:` call that reaches
+  that node for the process lifetime. Replicas have independent state, so a
+  pack must not use either processor as a per-caller quota or assume a
+  deployment-wide shared state.
 - Idempotency: `idempotentConsumer` (section 9).
 
 Pagination is not an EIP and gets none. The facade side is the
@@ -534,8 +541,9 @@ the caller-facing cursor. Two upstream shapes cover the sources seen so far:
 
 Ported from Camel's error handler, redelivery policy, exception clauses, and
 `doTry`. Camel's Java exception hierarchy becomes a closed hierarchy of error
-classes, matched the way Camel matches exceptions: the closest class in the
-hierarchy wins, across the error and its cause; `onWhen` narrows a clause.
+classes. One failed exchange carries one `RouteFailure` class; the closest
+declared ancestor of that class wins, and `onWhen` narrows a clause. This
+single-class failure is a bounded divergence from Camel's cause-chain match.
 
 ```
 upstream
@@ -570,8 +578,7 @@ deployment's credential after the single token refresh of section 10.2; it
 sits outside `upstream` so no clause for `upstream` matches it),
 `disclosure.violation`, `egress.refused`, `script.budget-exceeded`. No
 `onException` or `doCatch` may name them, and `adapterctl check` refuses a
-clause that does; when any of them is in an error's cause chain, no clause
-fires at all, whatever the other causes are.
+clause that does. A `RouteFailure` carrying one of them fires no clause.
 
 Facade classes, raised by the `rest` consumer outside any route, so neither
 catchable nor raisable: `facade.unauthenticated`, `facade.forbidden`,
@@ -609,11 +616,16 @@ is in the profile's shape.
   by `retryWhile` and `onWhen`, and sent upstream only if listed like any
   engine header (section 8.11.4).
   `delayPattern` is not ported. Redelivery is
-  per failing endpoint send, as in Camel, but reaches only upstream
-  component sends (`http`, `graphql`; token requests sit outside it per
-  section 10.2), never a `to: direct:` send; that scope is a declared
-  divergence from Camel, which retries from the point of failure with no
-  endpoint-type restriction (camel.apache.org/manual/error-handler.html,
+  per failing top-level endpoint send. It reaches only an `http` or `graphql`
+  `to` that is a direct child of the route's step list (token requests sit
+  outside it per section 10.2), never a `to: direct:` send. An endpoint send
+  inside a nested processor body runs once and bubbles its failure to the
+  enclosing top-level step; in particular, a send inside `throttle` runs bare
+  from the route's redelivery policy. A matching clause may still handle that
+  bubbled failure, except for the wholly bare breaker rule below. This
+  top-level and endpoint-type scope is a declared
+  divergence from Camel, which retries from the point of failure without
+  either restriction (camel.apache.org/manual/error-handler.html,
   camel.apache.org/manual/exception-redelivery.html).
 - `retryWhile`, as in Camel an option of an `onException` clause
   (`OnExceptionDefinition`) and of the default error handler
@@ -628,9 +640,12 @@ is in the profile's shape.
   safe, unless that endpoint operation declares `idempotentUpstream: true`
   (a reviewed claim, for example DHIS2 creates with client-supplied UIDs).
 - `onException`: `exception` (classes), `onWhen`, `handled`, `continued`,
-  redelivery options, nested steps. Matching is Camel's: the clause whose
-  class is closest to the error or any of its causes wins, ties going to the
-  most deeply nested cause; a clause never matches a class above its own.
+  redelivery options, nested steps. Matching keeps Camel's class-specificity
+  rule inside the bounded single-class model: the clause whose
+  class is the closest ancestor of the one raised `RouteFailure` class wins;
+  equally specific clauses keep declaration order, and a subclass clause
+  never matches a superclass failure. The absence of a cause-chain walk is
+  the bounded divergence stated above.
   An `onWhen` that raises means the clause does not match, as in Camel.
   Clauses are route-scoped; Camel's global and `routeConfiguration` scopes
   are not ported.
@@ -641,8 +656,9 @@ is in the profile's shape.
   raised inside an exception clause is not handled again and becomes the
   exchange's failure, which the profile maps to a problem (section 8.11.6;
   Camel wraps clause steps in `FatalFallbackErrorHandler` to stop the
-  recursion). Camel keeps the original error as suppressed; the problem
-  carries only the clause's error, and the journal records both classes.
+  recursion). Camel keeps the original error as suppressed; the Adapter's
+  returned `RouteFailure` carries only the clause's error, while the journal
+  records the original handling event and the final class.
   Divergence: a `direct:` route called from a clause is inside the clause,
   so its errors are not handled again either, where Camel lets the callee's
   own error handler fire the clause a second time
@@ -660,8 +676,9 @@ is in the profile's shape.
   error raised in `doFinally` while another is pending is kept as
   suppressed, and the original wins (`FinallyProcessor`,
   `DoTryEdgeCasesTest.testDoFinallyThrowsKeepsOriginal`). A `doCatch`
-  `onWhen` that raises fails the exchange with that error, the original
-  kept as suppressed. A `to: direct:` inside the block calls a route that
+  `onWhen` that raises fails the exchange with that error, with the original
+  journaled separately as suppressed rather than attached as a cause. A
+  `to: direct:` inside the block calls a route that
   keeps its own error handling, as in Camel.
 - `circuitBreaker`: resilience4j semantics and defaults, per EIP node,
   process-local state (as in Camel; replicas have independent breakers):
@@ -672,24 +689,26 @@ is in the profile's shape.
   `maximumHalfOpenCalls` (resilience4j
   `permittedNumberOfCallsInHalfOpenState`, 10),
   `automaticTransitionFromOpenToHalfOpenEnabled` false,
-  `slowCallRateThreshold` 100, `slowCallDurationThresholdSeconds` 60. Each
+  `slowCallRateThreshold` 100, `slowCallDurationThresholdSeconds` 60.
+  Optional `recordException` and `ignoreException` are unique, non-empty
+  lists from the closed Adapter error-class hierarchy. A named parent covers
+  its descendants. With `recordException`, a non-matching catchable failure
+  counts as success and continues the exchange; an `ignoreException` match
+  takes precedence, counts as neither success nor failure, and continues the
+  exchange. Neither continuation runs `onFallback`; both journal the consumed
+  failure. Boundary and facade-only classes are refused in either list, so an
+  uncatchable failure always counts as failure and propagates. Each
   default is confirmed against the cited resilience4j and Camel pages when
   the conformance test is written; a default the docs contradict is
   corrected here, not in code. Divergence: a rejected call always raises
   `breaker.open` (Camel's `throwExceptionWhenHalfOpenOrOpenState: false`
   default lets the message continue unchanged, which would answer with the
-  request echoed); `onFallback` runs on failure and on rejection, and its
-  output is validated like any route output. `inheritErrorHandler` (default
-  false, `resilience4j-eip.adoc`): with true, the route error handler
-  redelivers the whole breaker block; `check` refuses true over a block
-  holding a non-safe send without `idempotentUpstream`, as for
-  `maximumRedeliveries`. As in Camel, the route error handler does not wrap
-  a breaker or its steps unless `inheritErrorHandler` is true
-  (`ProcessorDefinitionHelper.shouldWrapInErrorHandler`), so an error
-  escaping a breaker without `onFallback` reaches no `onException` clause
-  and surfaces as the profile's problem for its class; with
-  `inheritErrorHandler` true the route's clauses and redelivery apply to
-  the whole block (`ResilienceInheritErrorHandlerTest`).
+  request echoed); `onFallback` runs on a recorded failure and on rejection,
+  and its output is validated like any route output. The guarded steps and
+  fallback run bare: the route error handler does not wrap the breaker block
+  or its steps. A recorded error escaping a breaker without `onFallback`
+  therefore reaches no `onException` clause or route redelivery and surfaces
+  as the profile's problem for its class.
 
 ### 8.8 Components
 
@@ -747,7 +766,12 @@ is in the profile's shape.
   is JSON within the bound, so a clause can read a source's error detail;
   the `Location` value and the status text are not kept. An empty body is
   JSON `null`; a non-JSON body raises `upstream.malformed`, also under
-  `throwExceptionOnFailure: false`.
+  `throwExceptionOnFailure: false`. A `path` whose filled and encoded
+  destination exceeds the URL bound fails before a send as
+  `outcome.not-found`; caller-supplied record identifiers do not become an
+  internal egress problem. An evaluated `httpUri` over the same bound is
+  instead the uncatchable `egress.refused`, because it is a source-supplied
+  absolute destination.
 - `graphql`: producer, Camel's `camel-graphql` shape (`query` as a
   digest-pinned `queryFile`, `operationName`, `variables` expression) over
   the same transport, with no `httpMethod`, `path`, `pathParameters`, or
@@ -814,11 +838,11 @@ delivers the row.
 | Content Enricher | `components/next/eips/enrich-eip.html` | `enrich`, the resource send on a copy of the exchange (section 8.11.7) | Static URI only; no `pollEnrich`; strategies merge bodies and named `properties` only | 1 |
 | Aggregation strategies | `components/next/eips/aggregate-eip.html` (strategies section) | `use-latest`, `use-original`, `grouped-body`, `rhai` | Additions: `json-array-append`, `json-merge` | 1 |
 | Default error handler | `manual/defaulterrorhandler.html`, `manual/error-handler.html` | `errorHandler: defaultErrorHandler`, `noErrorHandler` | Dead letter is always the journal | 1 |
-| Redelivery policy | `manual/error-handler.html` (redelivery) | Options in 8.7 | CFG-NAME spelling; write-safety refusal | 1 |
-| Exception clause | `manual/exception-clause.html` (hub) with `exception-redelivery.html`, `exception-handling-patterns.html`, `exception-advanced.html` | `onException` | Closed class hierarchy; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile; `handled` and `continued` are booleans where Camel takes predicates | 1 |
+| Redelivery policy | `manual/error-handler.html` (redelivery) | Options in 8.7 | CFG-NAME spelling; write-safety refusal; top-level `http` and `graphql` sends only, nested sends run once | 1 |
+| Exception clause | `manual/exception-clause.html` (hub) with `exception-redelivery.html`, `exception-handling-patterns.html`, `exception-advanced.html` | `onException` | One raised class, no cause-chain walk; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile; `handled` and `continued` are booleans where Camel takes predicates | 1 |
 | Try, catch, finally | `manual/try-catch-finally.html` | `doTry`, `doCatch`, `doFinally` | Uncatchable boundary errors | 1 |
-| Circuit Breaker | `components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html`, `resilience4jConfiguration-eip.html` | `circuitBreaker`, `onFallback`, `inheritErrorHandler` | Rejection always raises; fallback on rejection; options flattened, `slidingWindowCalls` for `slidingWindowSize` (CFG-NAME-4) | 1 |
-| Throttler | `components/next/eips/throttle-eip.html` | `throttle` | Waits bounded by the deadline | 1 |
+| Circuit Breaker | `components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html`, `resilience4jConfiguration-eip.html` | `circuitBreaker`, `onFallback`, `recordException`, `ignoreException` | Rejection always raises; fallback on recorded failure and rejection; ignored and non-recorded failures continue and are journaled as consumed; guarded steps and fallback run bare; options flattened, `slidingWindowCalls` for `slidingWindowSize` (CFG-NAME-4) | 1 |
+| Throttler | `components/next/eips/throttle-eip.html` | `throttle` | Waits bounded by the deadline; its nested body runs bare from route redelivery | 1 |
 | Idempotent Consumer | `components/next/eips/idempotentConsumer-eip.html` | `idempotentConsumer` over the PostgreSQL store | Duplicates replay the recorded response | 2 |
 | Type Converter | `manual/type-converter.html`, `components/next/eips/convertBodyTo-eip.html`, `convertHeaderTo-eip.html` | `convertBodyTo`, `convertHeaderTo`, `convertPropertyTo` (addition) with `type: codeMap:<id>`; Rhai `code_map`; `conversion.unmapped` on a miss | Explicit tables of scalar values, no converter chains, no `charset` | 1 |
 | Event Notifier | `manual/event-notifier.html` | The audit journal's event kinds (section 11) | Synchronous, value-free, before the response | 1 |
@@ -1230,7 +1254,9 @@ value-free PostgreSQL journal written before the response is sent. Event
 kinds follow Camel's: `exchangeCreated`, `exchangeSending` and
 `exchangeSent` (endpoint id, method, path template, status, duration,
 response size and digest), `exchangeRedelivery`, `exchangeFailureHandled`,
-`exchangeCompleted`, `exchangeFailed` (error class, problem code). A
+`breakerRefused` (closed breaker state), `breakerFallback` (closed error
+class and fixed authentication-event metadata), `exchangeCompleted`, and
+`exchangeFailed` (error class, problem code). A
 verified caller's refused call is one `callRefused` row (the 403 of an
 access profile and the 404 of a wrong record type, D34), so probing is
 auditable; a 401 is logged and not journaled, because no verified caller
@@ -1328,9 +1354,15 @@ A token request matches by endpoint, method, and path alone, because replay
 runs without a credential. A recorded token exchange carries no credential
 header or body (`adapter.fixture.credential-recorded`), and the token in
 its reply is a synthetic value that a captured recording must replace
-before it is committed (section 10.2). Until the route engine drives sends,
-`fixtures replay` checks the fixture contracts only and reports
-`drive: not-run`; it never reports a send-by-send replay it did not run.
+before it is committed (section 10.2). `fixtures replay` executes the route
+interpreter through an offline transcript transport and shares the facade's
+disclosure and response rendering. It reports `drive: completed` only after
+the ordered sends and expected facade result match, with no unexpected or
+leftover exchanges. No live credential, source, listener, database, or
+journal is used. Writes report `writesSimulated` and
+`journalDurability: not-run`; PostgreSQL suites establish durable write
+behavior separately. Replay cursors use a fixed synthetic context with the
+production codec; live cursor sealing continues to use fresh randomness.
 
 Provenance is mandatory and honest: each fixture records `type` (`captured`
 from a running instance, or `documented`, synthesized from the source's
@@ -1400,7 +1432,7 @@ exchange header can replace an injected credential. A continuation cursor
 that is tampered with, expired, replayed by another caller, or replayed
 with other filters is refused before any route step runs. Uncatchable
 errors cannot be handled by any `onException` or `doCatch`, and an
-uncatchable anywhere in the cause chain fires no clause. Secrets never appear in the exchange, scripts, diagnostics, or
+`RouteFailure` carrying an uncatchable class fires no clause. Secrets never appear in the exchange, scripts, diagnostics, or
 audit. Every upstream authentication kind of section 10.2 is exercised over
 the double, including token caching, the single retry after a 401, token
 endpoint failure, and a marker secret proven absent from the journal,
@@ -1560,7 +1592,7 @@ one that decides a row.
 | D24 | Request headers leave only through the endpoint's `requestHeaders` allowlist; credential, cookie, host, and hop-by-hop headers are never allowlistable; credentials are injected after filtering | 2026-10-30, accepted by Jeremi (P2) |
 | D25 | `direct:` shares the exchange and its sends are not redelivered; `enrich` runs on a copy and only strategy-named `properties` come back | 2026-10-30, accepted by Jeremi (P1) |
 | D26 | A `POST` counts as safe only under a reviewed `safeUpstream: true` operation claim; a GraphQL send's safety comes from its parsed operation type | 2026-10-30, accepted by Jeremi (P2) |
-| D27 | Exception matching is Camel's closest match across the error and its causes, ties to the most nested cause, never rising the hierarchy; any uncatchable class in the chain fires no clause | 2026-10-30, accepted by Jeremi (P1) |
+| D27 | Exception matching uses the closest declared ancestor of the single `RouteFailure` class, with declaration order breaking equal-specificity ties; uncatchable classes fire no clause. The absence of Camel's cause-chain walk is a bounded divergence | 2026-10-30, corrected 2026-10-31 to the delivered single-class failure model (P1) |
 | D28 | `AdapterProject` carries a `project` block (`id`, `version`) as CFG-ENV-6 requires, rather than a top-level `id` | 2026-10-30, accepted by Jeremi (P1) |
 | D29 | Increment 1's parallel leaf streams pause once C4a and C4c land; the `records-get` route is built end to end first, then the leaves resume over it | 2026-10-30, accepted by Jeremi (P6) |
 | D30 | Increment 1's gate requires `captured` DHIS2 fixtures for get, missing, and search page, taken from a real server | 2026-10-30, accepted by Jeremi (P6) |
