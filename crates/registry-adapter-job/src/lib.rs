@@ -21,6 +21,7 @@
 //! declared projection.
 
 pub mod destination;
+pub mod pass;
 pub mod projection;
 pub mod store;
 pub mod trigger;
