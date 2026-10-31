@@ -1,0 +1,34 @@
+[package]
+name = "registry-adapter-connectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Stack Adapter native product connectors over the maintained clients."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Each product connector is compiled only when named. Every feature is off
+# by default (`products/adapter/CONCEPT.md` section 17.3): no facade binary
+# links this crate, and a build without features carries no product client.
+breg = ["dep:registry-breg-client"]
+scheduling = ["dep:registry-scheduling-client"]
+documents = ["dep:registry-documents-client"]
+
+[dependencies]
+registry-adapter-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+registry-breg-client = { workspace = true, optional = true }
+registry-scheduling-client = { workspace = true, optional = true }
+registry-documents-client = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true

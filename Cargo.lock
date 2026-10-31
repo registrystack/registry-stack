@@ -5113,6 +5113,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-adapter-connectors"
+version = "0.45.0"
+dependencies = [
+ "registry-adapter-core",
+ "registry-breg-client",
+ "registry-documents-client",
+ "registry-scheduling-client",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "registry-adapter-core"
 version = "0.45.0"
 dependencies = [
