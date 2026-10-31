@@ -415,6 +415,15 @@
                   "unknown"
                 ]
               },
+              "method": {
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH"
+                ],
+                "type": "string"
+              },
               "operationId": {
                 "$ref": "#/components/schemas/EffectiveContract/$defs/nonEmptyText"
               },
@@ -1334,22 +1343,35 @@
                   "data": {
                     "additionalProperties": false,
                     "properties": {
-                      "created_at": {
-                        "type": "string"
+                      "domainData": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "type": "string"
+                          },
+                          "org_unit": {
+                            "type": "string"
+                          },
+                          "tracked_entity_type": {
+                            "type": "string"
+                          },
+                          "updated_at": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "org_unit",
+                          "tracked_entity_type"
+                        ],
+                        "type": "object"
                       },
-                      "org_unit": {
-                        "type": "string"
-                      },
-                      "tracked_entity_type": {
-                        "type": "string"
-                      },
-                      "updated_at": {
+                      "recordIdentifier": {
                         "type": "string"
                       }
                     },
                     "required": [
-                      "org_unit",
-                      "tracked_entity_type"
+                      "domainData",
+                      "recordIdentifier"
                     ],
                     "type": "object"
                   }
@@ -1598,6 +1620,251 @@
                       "required": [
                         "domainData",
                         "recordIdentifier"
+                      ],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "datasetIdentifier": {
+                          "type": "string"
+                        },
+                        "entityTypeIdentifier": {
+                          "type": "string"
+                        },
+                        "registryIdentifier": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "datasetIdentifier",
+                        "entityTypeIdentifier",
+                        "registryIdentifier"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The operation's response envelope for the bound record type."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the facade request was not valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the record could not be found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the write was only partially accepted"
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractPreconditionProblem"
+                }
+              }
+            },
+            "description": "The effective contract pin was wrong or repeated."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the request failed validation"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the source is throttling requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the route exceeded its loop bound"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the source answered with an error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractUnavailableProblem"
+                }
+              }
+            },
+            "description": "the circuit protecting the source is open"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "the source did not answer in time"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "records-update.person",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional whole effective-contract digest pin. A wrong or repeated header is refused with HTTP 412 before the request body or source is read.",
+            "in": "header",
+            "name": "x-registry-adapter-contract",
+            "required": false,
+            "schema": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "data": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "domainData": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "type": "string"
+                          },
+                          "org_unit": {
+                            "type": "string"
+                          },
+                          "tracked_entity_type": {
+                            "type": "string"
+                          },
+                          "updated_at": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "org_unit",
+                          "tracked_entity_type"
+                        ],
+                        "type": "object"
+                      },
+                      "recordIdentifier": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "domainData",
+                      "recordIdentifier"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "created_at": {
+                          "type": "string"
+                        },
+                        "org_unit": {
+                          "type": "string"
+                        },
+                        "tracked_entity_type": {
+                          "type": "string"
+                        },
+                        "updated_at": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "org_unit",
+                        "tracked_entity_type"
                       ],
                       "type": "object"
                     },

@@ -415,6 +415,15 @@
                   "unknown"
                 ]
               },
+              "method": {
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH"
+                ],
+                "type": "string"
+              },
               "operationId": {
                 "$ref": "#/components/schemas/EffectiveContract/$defs/nonEmptyText"
               },

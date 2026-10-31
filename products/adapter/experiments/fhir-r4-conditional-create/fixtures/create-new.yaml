@@ -31,11 +31,13 @@ entries:
         idempotency-key: documented-create-pat-002
       body:
         data:
-          national_id: NID-0002
-          family_name: Okafor
-          given_names: Chidi
-          birth_date: "1990-07-01"
-          gender: male
+          recordIdentifier: patient-request-002
+          domainData:
+            national_id: NID-0002
+            family_name: Okafor
+            given_names: Chidi
+            birth_date: "1990-07-01"
+            gender: male
     upstream:
       - request:
           endpoint: fhir

@@ -24,7 +24,8 @@
 #   - person-search: 1 send x (1 + 1 redelivery) = 2; budget 4. The search
 #     answers one facade page from one upstream page (CONCEPT 8.11.2).
 #   - person-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
-#   - person-create: 1 send x (1 + 1 redelivery) = 2; budget 4.
+#   - person-create and person-update: 1 send x (1 + 1 redelivery) = 2;
+#     budget 4 each.
 #
 # This folder holds only the project. The profile and pack its pins name are
 # the maintained artifacts (products/adapter/profiles/breg-records/profile.yaml
@@ -57,6 +58,7 @@
 #     --fixtures products/adapter/fixtures/dhis2-tracker/import-accepted.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/import-rejected.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/import-server-error.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-update.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/no-program-type-import-repeat.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
@@ -66,11 +68,11 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:8d254a570c9864c0a5a9ebb3aa52a7889896d8631cf7e103a0966692c881c637
+  digest: sha256:646f901616ab6f25c2c95876dd25e44460e793a9bfdb4bc830c8d8f7d3dc19fe
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:246770f1ff8eb7b7f6d841c6e6b0ea8e828483f377248f3366a4dc661b3fff72
+  digest: sha256:2eea0866fc51101a704f90a4ab00ab8e3a842946d1eccee103c2b35fc8bc08ad
 recordTypes:
   - name: person
     fields:
@@ -113,6 +115,11 @@ bindings:
     maximumUpstreamCalls: 4
   - id: person-create
     operation: records-create
+    recordType: person
+    route: person-import
+    maximumUpstreamCalls: 4
+  - id: person-update
+    operation: records-update
     recordType: person
     route: person-import
     maximumUpstreamCalls: 4

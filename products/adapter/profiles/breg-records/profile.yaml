@@ -59,7 +59,7 @@ operations:
       - type
     recordTypeParameter: type
     successStatus: 201
-    requestEnvelope: '{"data": {{record}}}'
+    requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
   - id: records-update
     method: PUT
@@ -69,7 +69,7 @@ operations:
       - record_id
     recordTypeParameter: type
     recordIdParameter: record_id
-    requestEnvelope: '{"data": {{record}}}'
+    requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
   - id: records-patch
     method: PATCH

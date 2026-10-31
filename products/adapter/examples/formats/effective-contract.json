@@ -1,7 +1,7 @@
 {
   "apiVersion": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
   "kind": "AdapterEffectiveContract",
-  "digest": "sha256:9dffb7d8059b9920ae819aa12ffc2dffa732508a7f221f2b4b6b928aa816c484",
+  "digest": "sha256:b458066546bdeb86fce6afab0d4ffd231f5bdeca7bd5c1208be729a2c8b149cc",
   "contract": {
     "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
     "project": {
@@ -9,7 +9,7 @@
       "version": "1.0.0"
     },
     "profileVersion": "1",
-    "artifactDeploymentDigest": "sha256:0aa4bb03de778ab7e4d63cec2149a1966a701105c6ce6887c4121b3a73f1f7ce",
+    "artifactDeploymentDigest": "sha256:c3dcbb2c265628455da98ce852ed271b9ed2c67f96693c379d5514c6ed6efca9",
     "authentication": {
       "scheme": "bearer",
       "audience": "adapter-example",
@@ -293,6 +293,18 @@
         "version": "1",
         "bindingId": "person-create",
         "profileOperationId": "records-create",
+        "method": "POST",
+        "support": "unserved",
+        "effect": "write",
+        "reasonCode": "adapter.operation.gateway-write-disabled",
+        "reason": "the external gateway contract does not expose write operations"
+      },
+      {
+        "operationId": "records-update.person",
+        "version": "1",
+        "bindingId": "person-update",
+        "profileOperationId": "records-update",
+        "method": "PUT",
         "support": "unserved",
         "effect": "write",
         "reasonCode": "adapter.operation.gateway-write-disabled",

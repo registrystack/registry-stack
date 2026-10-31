@@ -54,8 +54,9 @@
 # pack never sends; the capture never observed it. Imports without
 # client-supplied UIDs are NOT idempotent (each repeat would mint new
 # UIDs), so the claim holds only for the client-supplied-UID payload this
-# pack's to-bundle mapping produces, and the script throws when a record
-# carries no recordIdentifier.
+# pack's to-bundle mapping produces. The profile captures that UID into the
+# validated recordId exchange header, and the script throws when the header is
+# absent.
 #
 # Rejection: a failed synchronous import is an HTTP 409. The import
 # controller answers CONFLICT with the import report as the body when the
@@ -493,7 +494,7 @@ scripts:
   - path: scripts/shape-records.rhai
     digest: sha256:be2330179db4cec8995e54574800a7b375ef5bbc8d1d5fef96caef5630234fa2
   - path: scripts/to-bundle.rhai
-    digest: sha256:ca0f1a86a8dfd5b068cbd97a892a2cdf9258bfc5c273354675d5ab5e6837c05a
+    digest: sha256:04a0d751f54874e4fd8b46b1360f3c1f689d1461b0a967ee6b8784e1ae37793d
   - path: scripts/accepted-record.rhai
     digest: sha256:37fbf1d1454e3eb3c2112991e8a80189dae40b460188a029ae47a0354e19adea
   - path: scripts/import-summary.rhai
