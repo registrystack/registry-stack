@@ -5152,6 +5152,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-adapter-job"
+version = "0.45.0"
+dependencies = [
+ "axum",
+ "clap",
+ "deadpool-postgres",
+ "registry-adapter",
+ "registry-adapter-core",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+]
+
+[[package]]
 name = "registry-adapterctl"
 version = "0.45.0"
 dependencies = [

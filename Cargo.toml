@@ -93,6 +93,7 @@ members = [
     "crates/registry-adapter",
     "crates/registry-adapterctl",
     "crates/registry-adapter-connectors",
+    "crates/registry-adapter-job",
 ]
 exclude = [
     "products/breg/wasm-handler-sdk",
@@ -166,6 +167,7 @@ registry-adapter = { path = "crates/registry-adapter", version = "0.45.0" }
 registry-adapter-core = { path = "crates/registry-adapter-core", version = "0.45.0" }
 registry-adapterctl = { path = "crates/registry-adapterctl", version = "0.45.0" }
 registry-adapter-connectors = { path = "crates/registry-adapter-connectors", version = "0.45.0", default-features = false }
+registry-adapter-job = { path = "crates/registry-adapter-job", version = "0.45.0", default-features = false }
 registry-breg = { path = "crates/registry-breg", version = "0.45.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.45.0" }
 registry-platform-activation = { path = "crates/registry-platform-activation", version = "0.45.0" }

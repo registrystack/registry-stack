@@ -1,0 +1,42 @@
+[package]
+name = "registry-adapter-job"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Stack Adapter ingestion-job host: item table, pass, triggers, and the adapter-job operator executable."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "adapter-job"
+path = "src/main.rs"
+
+[features]
+default = []
+# Gates the suites that need a disposable database; the product's
+# test-postgres.sh runs them the way registry-adapter gates its own.
+postgres-test = []
+
+[dependencies]
+registry-adapter-core.workspace = true
+registry-adapter.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+deadpool-postgres.workspace = true
+tokio-postgres.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+serde_norway.workspace = true
