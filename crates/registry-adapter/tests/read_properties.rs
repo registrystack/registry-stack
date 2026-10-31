@@ -21,11 +21,7 @@ use registry_adapter::route::{
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
-    check_project, check_routes, AccessProfile, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, AuditRetention, Binding, Capabilities, Cidr, ComponentKind, Endpoint,
-    EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef,
-    Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType,
-    RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace,
+    check_project, check_routes, AccessProfile, AdapterPack, AdapterProfile, AdapterProject, Binding, Capabilities, Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef, Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType, RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace, AdapterEndpointBindings,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::{
@@ -333,8 +329,8 @@ fn lowest_accepted_budget(profile: &AdapterProfile, pack: &AdapterPack, case: &R
     panic!("{} has no admitted budget in the bounded probe", case.name)
 }
 
-fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
-    AdapterRuntimeConfig {
+fn runtime_config(base_url: &str) -> AdapterEndpointBindings {
+    AdapterEndpointBindings {
         id: local("soundness-runtime"),
         endpoints: UniqueIdList::new(vec![EndpointBinding {
             endpoint: external("source"),
@@ -350,26 +346,6 @@ fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
         allowed_private_cidrs: UniqueList::new(vec![Cidr::new("192.168.0.0/16").expect("cidr")])
             .expect("one cidr"),
         outbound_tls: None,
-        listener: serde_json::from_value(json!({"bind": "127.0.0.1:8080"})).expect("listener"),
-        database: serde_json::from_value(json!({
-            "runtimeUrlRef": "secret:env/READ_PROPERTY_DB",
-            "migrationUrlRef": "secret:env/READ_PROPERTY_DB"
-        }))
-        .expect("database"),
-        oidc: serde_json::from_value(json!({
-            "issuer": "https://issuer.example.invalid",
-            "audience": "read-properties"
-        }))
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![external("read-property-client")])
-            .expect("one client"),
-        audit: AuditRetention {
-            retention_days: BoundedU32::new(90).expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 

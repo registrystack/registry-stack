@@ -258,8 +258,8 @@ fn header<'a>(request: &'a RecordedRequest, name: &str) -> Option<&'a str> {
 fn tls_config(
     binding: EndpointBinding,
     bundle_path: &std::path::Path,
-) -> registry_adapter_core::AdapterRuntimeConfig {
-    registry_adapter_core::AdapterRuntimeConfig {
+) -> registry_adapter_core::AdapterEndpointBindings {
+    registry_adapter_core::AdapterEndpointBindings {
         id: LocalId::new("tls-deployment").expect("deployment id"),
         endpoints: registry_platform_yaml::UniqueIdList::new(vec![binding]).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(Vec::new()).expect("cidrs"),
@@ -271,28 +271,6 @@ fn tls_config(
                 },
             )]),
         }),
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/TLS_C4B_DB_RUNTIME",
-                "migrationUrlRef": "secret:env/TLS_C4B_DB_MIGRATION"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "tls" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("tls-client").expect("client")])
-            .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 

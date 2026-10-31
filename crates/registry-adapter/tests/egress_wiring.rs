@@ -87,7 +87,9 @@ fn pack_endpoint(
 
 /// The runtime config for the given bindings, every origin loopback so
 /// the development profile admits it.
-fn runtime_config(bindings: Vec<EndpointBinding>) -> registry_adapter_core::AdapterRuntimeConfig {
+fn runtime_config(
+    bindings: Vec<EndpointBinding>,
+) -> registry_adapter_core::AdapterEndpointBindings {
     runtime_config_with(bindings, &["192.168.0.0/16"], None)
 }
 
@@ -98,8 +100,8 @@ fn runtime_config_with(
     bindings: Vec<EndpointBinding>,
     cidrs: &[&str],
     tls: Option<registry_adapter_core::OutboundTls>,
-) -> registry_adapter_core::AdapterRuntimeConfig {
-    registry_adapter_core::AdapterRuntimeConfig {
+) -> registry_adapter_core::AdapterEndpointBindings {
+    registry_adapter_core::AdapterEndpointBindings {
         id: LocalId::new("egress-deployment").expect("deployment id"),
         endpoints: registry_platform_yaml::UniqueIdList::new(bindings).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(
@@ -110,28 +112,6 @@ fn runtime_config_with(
         )
         .expect("cidrs"),
         outbound_tls: tls,
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/EGR_C4B_DB_RUNTIME",
-                "migrationUrlRef": "secret:env/EGR_C4B_DB_MIGRATION"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "egress" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("egress-client").expect("client")])
-            .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 

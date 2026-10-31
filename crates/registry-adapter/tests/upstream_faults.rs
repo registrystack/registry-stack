@@ -19,12 +19,11 @@ use registry_adapter::route::{
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, AuditRetention, Cidr, ComponentKind, Endpoint, EndpointAuthentication,
-    EndpointBinding, ErrorClass, RuntimeCredential, Step,
+    Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential, Step, AdapterEndpointBindings,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::{
-    BoundedU32, BoundedU64, ExternalId, LocalId, UniqueIdList, UniqueList, Url,
+    BoundedU64, ExternalId, LocalId, UniqueIdList, UniqueList, Url,
 };
 use serde_json::{json, Value};
 
@@ -59,8 +58,8 @@ fn endpoint() -> Endpoint {
     }
 }
 
-fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
-    AdapterRuntimeConfig {
+fn runtime_config(base_url: &str) -> AdapterEndpointBindings {
+    AdapterEndpointBindings {
         id: local("fault-runtime"),
         endpoints: UniqueIdList::new(vec![EndpointBinding {
             endpoint: external("source"),
@@ -78,25 +77,6 @@ fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
         ])
         .expect("one CIDR"),
         outbound_tls: None,
-        listener: serde_json::from_value(json!({"bind": "127.0.0.1:8080"})).expect("listener"),
-        database: serde_json::from_value(json!({
-            "runtimeUrlRef": "secret:env/UPSTREAM_FAULT_DB",
-            "migrationUrlRef": "secret:env/UPSTREAM_FAULT_DB"
-        }))
-        .expect("database"),
-        oidc: serde_json::from_value(json!({
-            "issuer": "https://issuer.example.invalid",
-            "audience": "upstream-faults"
-        }))
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![external("fault-client")]).expect("one client"),
-        audit: AuditRetention {
-            retention_days: BoundedU32::new(90).expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 

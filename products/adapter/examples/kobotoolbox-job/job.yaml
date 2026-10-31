@@ -29,6 +29,12 @@ source:
     version: "1"
     digest: sha256:34c7463250f0f235194c3a06cdf3ceddadc3b89f0a0ab5c3daf98741262e28b2
   route: kobo-submissions
+projection:
+  fields:
+    - id
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
 profile:
   # One route run: one send, one redelivery at most, well inside the
   # page deadline.
@@ -39,6 +45,7 @@ profile:
   # The pack's fixed page size.
   maximumPageItems: 100
   maximumPageBytes: 1048576
+  maximumUpstreamCalls: 8
   read:
     maximumFileBytes: 1073741824
     maximumRowBytes: 1048576

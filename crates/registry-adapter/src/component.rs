@@ -12,4 +12,6 @@ pub mod direct;
 pub mod file;
 pub mod graphql;
 pub mod http;
+#[cfg(feature = "job-postgres")]
+pub mod postgres;
 pub mod rest;

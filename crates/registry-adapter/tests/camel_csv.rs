@@ -93,18 +93,6 @@ sources:
       namespace: exports
 allowedPrivateCidrs:
   - 10.0.0.0/8
-listener:
-  bind: 127.0.0.1:8080
-database:
-  runtimeUrlRef: secret:env/DROP_DB_RUNTIME
-  migrationUrlRef: secret:env/DROP_DB_MIGRATION
-oidc:
-  issuer: https://issuer.example.invalid
-  audience: drop-job
-allowedClients:
-  - drop-client
-audit:
-  retentionDays: 90
 "#
     )
 }

@@ -4023,6 +4023,45 @@ formats:
     securityMembers: []
     restrictingMembers: []
 
+  - id: adapter/job
+    product: adapter
+    title: Registry Adapter ingestion job
+    files: [job.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+      kind: AdapterJob
+      checkedBy:
+        file: crates/registry-adapter-core/src/job.rs
+        symbol: ADAPTER_JOB_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+      kind: AdapterJob
+    schema:
+      path: products/adapter/schemas/job.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapter
+      file: crates/registry-adapter/src/job.rs
+      function: compile_job
+      type: AdapterJob
+    check: adapterctl job check {work}/packs/kobotoolbox/pack.yaml products/adapter/examples/kobotoolbox-job/job.yaml --runtime products/adapter/examples/kobotoolbox-job/runtime.example.yaml --profile products/adapter/examples/kobotoolbox-job/profile.yaml --project products/adapter/examples/kobotoolbox-job/project.yaml
+    example: products/adapter/examples/kobotoolbox-job/job.yaml
+    conformance:
+      requiredText: /source/route
+      optionalText: none
+      integer: /profile/pageDeadlineMilliseconds
+      boolean: none
+    securityMembers:
+      - pointer: /profile/maximumResponseBytes
+        whenOmitted: refused
+    restrictingMembers: []
+
   - id: adapter/fixture
     product: adapter
     title: Registry Adapter fixture suite

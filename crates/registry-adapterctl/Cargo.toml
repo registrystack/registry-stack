@@ -24,7 +24,10 @@ tls-test = ["registry-platform-httputil/test-support"]
 base64.workspace = true
 clap.workspace = true
 graphql-parser.workspace = true
-registry-adapter.workspace = true
+# The job sources' compile rides the same gates the runtime carries:
+# `job check` validates a file or postgres job exactly as the runtime
+# serves it.
+registry-adapter = { workspace = true, features = ["job-file", "job-postgres"] }
 registry-adapter-core = { workspace = true, features = ["schema"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true

@@ -793,7 +793,7 @@ mod oauth2_private_key_jwt {
 mod outbound_tls {
     use super::*;
     use registry_adapter::auth::{EndpointTls, TlsFault};
-    use registry_adapter_core::AdapterRuntimeConfig;
+    use registry_adapter_core::AdapterEndpointBindings;
     use registry_platform_yaml::LocalId;
 
     /// Throwaway self-signed fixtures generated for these tests only; no
@@ -812,7 +812,7 @@ mod outbound_tls {
 
     /// A runtime config declaring the one trust profile `private-ca` whose
     /// bundle file is `ca_bundle_file`; `None` declares no profiles.
-    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterRuntimeConfig {
+    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterEndpointBindings {
         let trust_profiles = ca_bundle_file.map_or_else(
             || r#"{ "trustProfiles": {} }"#.to_owned(),
             |file| {
@@ -826,21 +826,10 @@ mod outbound_tls {
                 "id": "case-deployment",
                 "endpoints": [],
                 "outboundTls": {trust_profiles},
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "listener": {{ "bind": "127.0.0.1:8080" }},
-                "database": {{
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                }},
-                "oidc": {{
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                }},
-                "allowedClients": ["case-portal"],
-                "audit": {{ "retentionDays": 90 }}
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
             }}"#
         ))
-        .expect("runtime config")
+        .expect("runtime bindings")
     }
 
     /// A binding without a trust profile resolves nothing; a declared

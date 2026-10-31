@@ -697,45 +697,15 @@ exceptions:
   class: protocol-constant
   reason: The language name is written as Apache Camel names the exchange-property language; the pack grammar preserves Camel's language vocabulary
   resolution: Permanent.
-- rule: CFG-NAME-1
-  format: adapter/pack
-  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/0/properties/use-latest
-  class: protocol-constant
-  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
-  resolution: Permanent.
-- rule: CFG-NAME-1
-  format: adapter/pack
-  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/1/properties/use-original
-  class: protocol-constant
-  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
-  resolution: Permanent.
-- rule: CFG-NAME-1
-  format: adapter/pack
-  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/2/properties/grouped-body
-  class: protocol-constant
-  reason: The member is written as Apache Camel names the aggregation strategy option; the pack grammar preserves Camel's aggregation vocabulary
-  resolution: Permanent.
-- rule: CFG-NAME-1
-  format: adapter/pack
-  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/3/properties/json-array-append
-  class: protocol-constant
-  reason: The member is one of the two JSON-body aggregation strategies this grammar adds beside Camel's own options; Apache Camel names no such strategy, so the kebab-case key is this grammar's own spelling, not a Camel option name
-  resolution: Permanent.
-- rule: CFG-NAME-1
-  format: adapter/pack
-  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/4/properties/json-merge
-  class: protocol-constant
-  reason: The member is one of the two JSON-body aggregation strategies this grammar adds beside Camel's own options; Apache Camel names no such strategy, so the kebab-case key is this grammar's own spelling, not a Camel option name
-  resolution: Permanent.
 - rule: CFG-ID-1
   format: adapter/pack
-  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/3/properties/json-array-append/properties/properties
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/3/properties/properties
   class: exchange-model
   reason: "The keys name exchange properties, the adapter exchange model's own namespace: case-sensitive names a route may also `setProperty`, with the engine's reserved names camelCase (`AdapterNextContinuation`). The `LocalId` grammar would refuse the camelCase property names the exchange model itself allows, and `ExternalId` would misname a pack-chosen name as an upstream one."
   resolution: "Permanent for the adapter pack v1alpha1 exchange-property namespace. The route registration check refuses a key under the reserved `Adapter` prefix, the same line `setProperty` holds, and the strategy carries only properties the resource route set."
 - rule: CFG-ID-1
   format: adapter/pack
-  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/4/properties/json-merge/properties/properties
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/AggregationStrategy/oneOf/4/properties/properties
   class: exchange-model
   reason: "The keys name exchange properties, the adapter exchange model's own namespace: case-sensitive names a route may also `setProperty`, with the engine's reserved names camelCase (`AdapterNextContinuation`). The `LocalId` grammar would refuse the camelCase property names the exchange model itself allows, and `ExternalId` would misname a pack-chosen name as an upstream one."
   resolution: "Permanent for the adapter pack v1alpha1 exchange-property namespace. The route registration check refuses a key under the reserved `Adapter` prefix, the same line `setProperty` holds, and the strategy carries only properties the resource route set."
@@ -756,6 +726,144 @@ exceptions:
   location: products/adapter/schemas/project.v1alpha1.schema.json#/$defs/TemplatedRoute/properties/parameters
   class: protocol-constant
   reason: The map carries Camel templatedRoute parameter values, which Camel accepts as arbitrary objects and converts per the target parameter; the keys are typed local identifiers and the value freedom is the ported protocol shape
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/pollEnrich
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names the poll enricher; the pack grammar preserves Camel's step vocabulary, and the port table (CONCEPT 8.10) carries the row
+  resolution: Permanent.
+- rule: CFG-NAME-5
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/PollEnrichStep/properties/timeoutMilliseconds
+  class: protocol-constant
+  reason: The member bounds one pollEnrich read, not an outbound attempt; Camel names the option timeout, the port respells the unit per CFG-NAME-4, and the port table carries the divergence
+  resolution: Permanent.
+- rule: CFG-SCHEMA-8
+  format: adapter/pack
+  location: crates/registry-adapter-core/src/route.rs#PollDecoder
+  class: exchange-model
+  reason: "The decoder carries either a bare name or the CSV options mapping; the shared union helper would demand a type discriminator the grammar deliberately does not have, because `decoder: csv` and `decoder: {delimiter: ;}` must read the same way"
+  resolution: "Permanent for the adapter pack v1alpha1 decoder grammar. The reader refuses a name outside the closed set under adapter.job.decoder-unknown."
+- rule: CFG-VAL-7
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/PollEnrichStep/properties/uri
+  class: exchange-model
+  reason: The member is a static job source URI in SendUri form (file:<endpointId> or sftp:<endpointId>), typed and resolved by the parser beside the pack's endpoints, never a URL
+  resolution: Permanent for the adapter pack v1alpha1 source-route model; the authoring checks refuse a scheme outside the closed set.
+- rule: CFG-QTY-2
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobTrigger/properties/delayMilliseconds
+  class: exchange-model
+  reason: The trigger carries Camel's scheduled-polling options, which the port respells with the unit word (delay, initialDelay, backoff thresholds in milliseconds); the Days stem belongs to another product's format, and this grammar keeps Camel's unit vocabulary
+  resolution: Permanent for the adapter job v1alpha1 trigger block; the port table carries the scheduler-option row.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobProfile/properties/pageDeadlineMilliseconds
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 profile; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobProfile/properties/maximumResponseBytes
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 profile; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobProfile/properties/maximumPageItems
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 profile; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobProfile/properties/maximumPageBytes
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 profile; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobProfile/properties/maximumUpstreamCalls
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 profile; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/ReadBounds/properties/maximumFileBytes
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 read bounds; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/ReadBounds/properties/maximumRowBytes
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 read bounds; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/ReadBounds/properties/maximumFieldBytes
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 read bounds; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/ReadBounds/properties/maximumRowsPerPage
+  class: exchange-model
+  reason: The job profile's bounds are whole-number ranges the job-side checks hold against named platform constants (CONCEPT 17.2), not the reader's bounded types; the engine enforces each bound again at the edge
+  resolution: Permanent for the adapter job v1alpha1 read bounds; check_job refuses a bound outside its range under adapter.job.profile-bound.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobTrigger/properties/delayMilliseconds
+  class: exchange-model
+  reason: The trigger's bounds are whole-number ranges the trigger checks hold against Camel's documented option ranges (CONCEPT 17.2 cites the scheduled-polling options), not the reader's bounded types
+  resolution: Permanent for the adapter job v1alpha1 trigger block; the trigger checks refuse a bound outside its range.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobTrigger/properties/initialDelayMilliseconds
+  class: exchange-model
+  reason: The trigger's bounds are whole-number ranges the trigger checks hold against Camel's documented option ranges (CONCEPT 17.2 cites the scheduled-polling options), not the reader's bounded types
+  resolution: Permanent for the adapter job v1alpha1 trigger block; the trigger checks refuse a bound outside its range.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobTrigger/properties/backoffIdleThreshold
+  class: exchange-model
+  reason: The trigger's bounds are whole-number ranges the trigger checks hold against Camel's documented option ranges (CONCEPT 17.2 cites the scheduled-polling options), not the reader's bounded types
+  resolution: Permanent for the adapter job v1alpha1 trigger block; the trigger checks refuse a bound outside its range.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobTrigger/properties/backoffErrorThreshold
+  class: exchange-model
+  reason: The trigger's bounds are whole-number ranges the trigger checks hold against Camel's documented option ranges (CONCEPT 17.2 cites the scheduled-polling options), not the reader's bounded types
+  resolution: Permanent for the adapter job v1alpha1 trigger block; the trigger checks refuse a bound outside its range.
+- rule: CFG-QTY-4
+  format: adapter/job
+  location: products/adapter/schemas/job.v1alpha1.schema.json#/$defs/JobTrigger/properties/backoffMultiplier
+  class: exchange-model
+  reason: The trigger's bounds are whole-number ranges the trigger checks hold against Camel's documented option ranges (CONCEPT 17.2 cites the scheduled-polling options), not the reader's bounded types
+  resolution: Permanent for the adapter job v1alpha1 trigger block; the trigger checks refuse a bound outside its range.
+- rule: CFG-NAME-2
+  format: adapter/effective-contract
+  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/GET
+  class: protocol-constant
+  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/effective-contract
+  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/PATCH
+  class: protocol-constant
+  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/effective-contract
+  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/POST
+  class: protocol-constant
+  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/effective-contract
+  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/PUT
+  class: protocol-constant
+  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: adapter/effective-contract

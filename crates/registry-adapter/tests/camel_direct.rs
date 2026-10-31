@@ -17,7 +17,7 @@ use registry_adapter::route::{
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding,
+    AdapterEndpointBindings, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding,
     RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -73,7 +73,7 @@ fn direct_endpoints(
         operation_name: None,
         variables: None,
     };
-    let config = AdapterRuntimeConfig {
+    let config = AdapterEndpointBindings {
         id: LocalId::new("direct").expect("deployment id"),
         endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(vec![registry_adapter_core::Cidr::new(
@@ -82,28 +82,6 @@ fn direct_endpoints(
         .expect("cidrs")])
         .expect("cidrs"),
         outbound_tls: None,
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/DIRECT_DB",
-                "migrationUrlRef": "secret:env/DIRECT_DB"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "direct" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("direct-client").expect("client")])
-            .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("the binding");
     let runtime = EndpointRuntime::compile(binding, &endpoint, &config, resolver)

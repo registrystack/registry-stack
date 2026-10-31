@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The engine-side sources block of the operator runtime config
-//! (`products/adapter/CONCEPT.md` sections 10.2 and 17.2): the
-//! environment state of the governed-ingestion sources, which no
-//! endpoint binding can carry. The facade reader
+//! (`products/adapter/CONCEPT.md` sections 10.2 and 17.2) over the
+//! endpoint bindings core owns
+//! (`registry_adapter_core::AdapterEndpointBindings`): the environment
+//! state of the governed-ingestion sources, which no endpoint binding
+//! can carry. The facade reader
 //! (`registry_adapter_core::AdapterRuntimeConfig`) refuses the block, so
 //! a facade deployment accepts no job source state; the job compiler
-//! reads the same document through [`JobRuntimeConfig`], whose flattened
-//! core keeps the reader's own unknown-key refusal for every other
-//! member. Numeric bounds are reader-checked through the platform's
+//! reads the same document through [`JobRuntimeConfig`], whose bindings
+//! core is the core-owned type and whose `sources` member this module
+//! parses. The bindings core keeps its own unknown-key refusal, so a
+//! facade member in a job document refuses exactly as the core reader
+//! refuses it. Numeric bounds are reader-checked through the platform's
 //! bounded types; every other shape rule is a `Deserialize` impl here,
 //! value-free, so a malformed source binding refuses at the reader and
 //! not at the first read.
@@ -16,10 +20,10 @@
 use std::collections::BTreeMap;
 
 use registry_adapter_core::{
-    AdapterRuntimeConfig, MAXIMUM_JOB_FIELD_BYTES, MAXIMUM_JOB_FILE_BYTES,
+    AdapterEndpointBindings, MAXIMUM_JOB_FIELD_BYTES, MAXIMUM_JOB_FILE_BYTES,
     MAXIMUM_JOB_ROWS_PER_PAGE, MAXIMUM_JOB_ROW_BYTES,
 };
-use registry_platform_yaml::{BoundedU64, LocalId};
+use registry_platform_yaml::{BoundedU64, LocalId, SecretReference};
 use serde::Deserialize;
 
 /// The read bounds of a route that runs no read step: the format's
@@ -47,21 +51,31 @@ pub struct JobPageState {
     #[cfg_attr(not(feature = "job-file"), allow(dead_code))]
     pub(crate) profile: Option<registry_adapter_core::JobProfile>,
     /// The compiled file sources by pack endpoint id.
+    #[cfg_attr(not(feature = "job-file"), allow(dead_code))]
     pub(crate) files: BTreeMap<String, FileSourceConfig>,
+    /// The compiled read-only postgres source plans by pack endpoint
+    /// id; a build without job-postgres carries none.
+    #[cfg(feature = "job-postgres")]
+    pub(crate) postgres: BTreeMap<String, std::sync::Arc<crate::component::postgres::PostgresPlan>>,
+    /// The source clients the host registered beside the plans; the
+    /// engine boundary carries no client of its own.
+    #[cfg(feature = "job-postgres")]
+    pub(crate) postgres_clients:
+        BTreeMap<String, std::sync::Arc<dyn crate::component::postgres::PostgresSource>>,
 }
 
 /// The runtime config as the job compiler reads it: the core document
 /// the facade reader accepts, plus the job-only `sources` block. The
 /// core member is decoded from the same document with `sources` set
-/// aside, so the core reader's own unknown-key refusal stands: a member
-/// neither the core format nor this block declares refuses, and a
-/// facade load of the same file refuses the `sources` member itself.
-/// (A `#[serde(flatten)]` wrapper would silently admit unknown
-/// members, because serde cannot hold a flattened struct's
-/// `deny_unknown_fields`; the value round trip keeps the strictness.)
+/// aside, so the bindings core's own unknown-key refusal stands: a
+/// facade member in a job document refuses exactly as the facade reader
+/// refuses it, and a facade load of the same file refuses the `sources`
+/// member itself. The bindings core is
+/// `registry_adapter_core::AdapterEndpointBindings`, the shape the
+/// facade document sets aside with `AdapterRuntimeConfig::endpoint_bindings`.
 #[derive(Debug)]
 pub(crate) struct JobRuntimeConfig {
-    pub(crate) core: AdapterRuntimeConfig,
+    pub(crate) core: AdapterEndpointBindings,
     /// The governed-ingestion source bindings. Absent, the deployment
     /// binds no job source; a pack whose source route reads one refuses
     /// at the job compile, never at the first read.
@@ -85,9 +99,9 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
         core_members.remove("sources");
         core_members.remove("apiVersion");
         core_members.remove("kind");
-        let core = AdapterRuntimeConfig::deserialize(serde_json::Value::Object(core_members))
+        let core = AdapterEndpointBindings::deserialize(serde_json::Value::Object(core_members))
             .map_err(|error| {
-                serde::de::Error::custom(format!("the core runtime config was refused: {error}"))
+                serde::de::Error::custom(format!("the runtime bindings were refused: {error}"))
             })?;
         let sources = match sources {
             None => None,
@@ -107,6 +121,12 @@ pub(crate) struct JobSources {
     /// The file sources, keyed by endpoint id.
     #[serde(default, deserialize_with = "local_id_keys")]
     pub(crate) file: BTreeMap<String, FileSourceConfig>,
+    /// The read-only postgres sources, keyed by endpoint id. The
+    /// engine's compile reads it only with job-postgres; the host client
+    /// reads the same block for its pool.
+    #[cfg_attr(not(feature = "job-postgres"), allow(dead_code))]
+    #[serde(default, deserialize_with = "local_postgres_keys")]
+    pub(crate) postgres: BTreeMap<String, PostgresSourceConfig>,
 }
 
 /// Deserialize a map whose keys are `LocalId`s into a map keyed by the
@@ -121,6 +141,80 @@ where
         .into_iter()
         .map(|(key, value)| (key.into_string(), value))
         .collect())
+}
+
+/// The same key discipline for the postgres sources.
+fn local_postgres_keys<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, PostgresSourceConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let map = BTreeMap::<LocalId, PostgresSourceConfig>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
+}
+
+/// The runtime binding of one read-only `postgres` source endpoint
+/// (`products/adapter/CONCEPT.md` sections 10.2 and 17.2): its own pool,
+/// never the journal's, with its own credential and TLS posture. The
+/// engine's compile reads only the namespace; the host client reads the
+/// connection members from this same block.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PostgresSourceConfig {
+    /// The source host.
+    pub(crate) host: String,
+    /// The source port (1 to 65535); absent, 5432.
+    #[serde(default = "default_postgres_port")]
+    pub(crate) port: BoundedU64<1, 65_535>,
+    /// The source database.
+    pub(crate) database: String,
+    /// The source user.
+    pub(crate) user: String,
+    /// The reference the source password resolves from; resolved
+    /// through the platform secret providers, never logged.
+    pub(crate) password_ref: SecretReference,
+    /// The namespace every item key of this source carries.
+    pub(crate) namespace: String,
+    /// The TLS posture of the connection; absent, the system roots and
+    /// a required TLS connection.
+    #[serde(default)]
+    pub(crate) tls: SourceTls,
+}
+
+fn default_postgres_port() -> BoundedU64<1, 65_535> {
+    BoundedU64::new(5_432).expect("5432 is inside the bound")
+}
+
+/// The TLS posture of one postgres source connection. The default is
+/// the secure one: system roots, TLS required. Plaintext exists for the
+/// loopback test database only and refuses in every other build.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub(crate) enum SourceTls {
+    /// The platform trust roots, TLS required, no client certificate.
+    #[default]
+    #[serde(rename = "system-roots")]
+    SystemRoots,
+    /// One private CA bundle file beside the platform roots, the same
+    /// shape a facade trust profile carries: a CA bundle is not a
+    /// secret, so the member names a file.
+    #[serde(rename = "ca-bundle")]
+    CaBundle {
+        /// The absolute path of the PEM file holding the bundle.
+        ca_bundle_file: String,
+    },
+    /// Plaintext, loopback test databases only; refused in any build
+    /// without the postgres-test feature, the way the facade database
+    /// block refuses it.
+    #[cfg(feature = "postgres-test")]
+    #[serde(rename = "plaintext")]
+    Plaintext,
 }
 
 /// The runtime binding of one `file` source endpoint
@@ -388,15 +482,7 @@ mod tests {
         let head = r#"{
                 "id": "job-deployment",
                 "endpoints": [],
-                "listener": { "bind": "127.0.0.1:8080" },
-                "database": {
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                },
-                "oidc": { "issuer": "https://issuer.example.invalid", "audience": "job" },
-                "allowedClients": ["job-client"],
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "audit": { "retentionDays": 90 }
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
             }"#;
         let with_sources = head.replace(
             r#""endpoints": [],"#,
@@ -470,10 +556,29 @@ mod tests {
     }
 
     /// The facade's own reader refuses the sources member: job source
-    /// state never enters a facade deployment.
+    /// state never enters a facade deployment. The job bindings reader
+    /// refuses the facade members the same way, both directions of the
+    /// one line.
     #[test]
-    fn the_facade_reader_refuses_the_sources_block() {
-        let json = r#"{
+    fn the_readers_refuse_each_others_members() {
+        let job_json = r#"{
+                "id": "job-deployment",
+                "endpoints": [],
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "listener": { "bind": "127.0.0.1:8080" },
+                "database": {
+                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                    "migrationUrlRef": "secret:env/DB_MIGRATION"
+                },
+                "oidc": { "issuer": "https://issuer.example.invalid", "audience": "job" },
+                "allowedClients": ["job-client"],
+                "audit": { "retentionDays": 90 }
+            }"#;
+        assert!(
+            serde_json::from_str::<AdapterEndpointBindings>(job_json).is_err(),
+            "a facade member refuses a job bindings document"
+        );
+        let facade_json = r#"{
                 "id": "case-deployment",
                 "endpoints": [],
                 "allowedPrivateCidrs": ["10.0.0.0/8"],
@@ -487,7 +592,11 @@ mod tests {
                 "audit": { "retentionDays": 90 },
                 "sources": { "file": {} }
             }"#;
-        assert!(serde_json::from_str::<AdapterRuntimeConfig>(json).is_err());
+        assert!(
+            serde_json::from_str::<registry_adapter_core::AdapterRuntimeConfig>(facade_json)
+                .is_err(),
+            "the sources block refuses a facade document"
+        );
     }
 
     /// The changed read lock carries camel-4.23.0's field defaults: a
@@ -547,15 +656,7 @@ mod loader_tests {
                 "kind": "AdapterRuntimeConfig",
                 "id": "job-deployment",
                 "endpoints": [],
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "listener": { "bind": "127.0.0.1:8080" },
-                "database": {
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                },
-                "oidc": { "issuer": "https://issuer.example.invalid", "audience": "job" },
-                "allowedClients": ["job-client"],
-                "audit": { "retentionDays": 90 }
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
             }"#,
             |_| None,
         );

@@ -225,18 +225,7 @@ fn runtime_yaml(base_url: &str) -> String {
                 "credential": {"type": "none"}
             }
         ],
-        "allowedPrivateCidrs": ["192.168.0.0/16"],
-        "listener": {"bind": "127.0.0.1:8080"},
-        "database": {
-            "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "migrationUrlRef": "secret:env/JOB_TEST_DB"
-        },
-        "oidc": {
-            "issuer": "https://issuer.example.invalid",
-            "audience": "job-test"
-        },
-        "allowedClients": ["job-client"],
-        "audit": {"retentionDays": 90}
+        "allowedPrivateCidrs": ["192.168.0.0/16"]
     });
     serde_json::to_string_pretty(&config).expect("the runtime config renders")
 }
@@ -250,18 +239,7 @@ fn runtime_yaml_without_bindings() -> String {
         "kind": "AdapterRuntimeConfig",
         "id": "job-deployment",
         "endpoints": [],
-        "allowedPrivateCidrs": ["192.168.0.0/16"],
-        "listener": {"bind": "127.0.0.1:8080"},
-        "database": {
-            "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "migrationUrlRef": "secret:env/JOB_TEST_DB"
-        },
-        "oidc": {
-            "issuer": "https://issuer.example.invalid",
-            "audience": "job-test"
-        },
-        "allowedClients": ["job-client"],
-        "audit": {"retentionDays": 90}
+        "allowedPrivateCidrs": ["192.168.0.0/16"]
     });
     serde_json::to_string_pretty(&config).expect("the runtime config renders")
 }

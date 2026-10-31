@@ -78,6 +78,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The live postgres-source tests iterate the driver's row stream over
+# the seam, test-only, never a runtime dependency.
+futures.workspace = true
 jsonschema.workspace = true
 proptest.workspace = true
 # The loopback TLS doubles of tests/egress_tls_wiring.rs: a locally

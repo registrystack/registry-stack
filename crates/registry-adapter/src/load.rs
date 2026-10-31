@@ -500,11 +500,13 @@ pub fn load(
                     detail: "its authentication is not served by this runtime".to_owned(),
                 });
             }
-            let egress = EndpointEgress::compile(binding, declared, &runtime, &resolver).map_err(
-                |fault| {
-                    LoadError::Runtime(format!("endpoint {id} outbound state was refused: {fault}"))
-                },
-            )?;
+            let egress =
+                EndpointEgress::compile(binding, declared, &runtime.endpoint_bindings(), &resolver)
+                    .map_err(|fault| {
+                        LoadError::Runtime(format!(
+                            "endpoint {id} outbound state was refused: {fault}"
+                        ))
+                    })?;
             preflight_endpoint_credential(id, egress.plan(), &resolver)?;
             Ok(EndpointCompilation::Served(Box::new(egress)))
         },

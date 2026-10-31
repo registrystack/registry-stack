@@ -16,7 +16,7 @@
 
 use crate::auth::token::resolve_binary;
 use crate::auth::{AuthError, ProtectedText};
-use registry_adapter_core::{AdapterRuntimeConfig, EndpointBinding, RuntimeCredential};
+use registry_adapter_core::{AdapterEndpointBindings, EndpointBinding, RuntimeCredential};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::destination::{
     DestinationTlsMaterial, MAX_DESTINATION_CA_BUNDLE_BYTES,
@@ -115,7 +115,7 @@ impl EndpointTls {
     /// the endpoint's name to its own diagnostic.
     pub fn resolve(
         binding: &EndpointBinding,
-        runtime: &AdapterRuntimeConfig,
+        runtime: &AdapterEndpointBindings,
         resolver: &SecretResolver,
     ) -> Result<Self, AuthError> {
         // Neither destination the material rides may be plain: the
@@ -209,7 +209,7 @@ impl EndpointTls {
 /// platform bound plus one byte: the bound bounds the read even when
 /// the file's own size lies.
 fn resolve_ca_bundle(
-    runtime: &AdapterRuntimeConfig,
+    runtime: &AdapterEndpointBindings,
     profile: &str,
 ) -> Result<ProtectedText, AuthError> {
     use std::io::Read;
@@ -358,9 +358,10 @@ pub(crate) mod tests {
         std::env::temp_dir().join(format!("registry-adapter-tls-{name}-{unique}.pem"))
     }
 
-    /// A runtime config declaring the one trust profile `private-ca` whose
-    /// bundle file is `ca_bundle_file`; `None` declares no profiles.
-    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterRuntimeConfig {
+    /// A runtime bindings document declaring the one trust profile
+    /// `private-ca` whose bundle file is `ca_bundle_file`; `None`
+    /// declares no profiles.
+    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterEndpointBindings {
         let trust_profiles = ca_bundle_file.map_or_else(
             || r#"{ "trustProfiles": {} }"#.to_owned(),
             |file| {
@@ -374,21 +375,10 @@ pub(crate) mod tests {
                 "id": "case-deployment",
                 "endpoints": [],
                 "outboundTls": {trust_profiles},
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "listener": {{ "bind": "127.0.0.1:8080" }},
-                "database": {{
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                }},
-                "oidc": {{
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                }},
-                "allowedClients": ["case-portal"],
-                "audit": {{ "retentionDays": 90 }}
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
             }}"#
         ))
-        .expect("runtime config")
+        .expect("runtime bindings")
     }
 
     fn private_ca() -> LocalId {

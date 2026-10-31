@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use registry_adapter_core::ErrorClass;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, Cidr, CredentialPlacement, Endpoint, EndpointAuthentication,
+    AdapterEndpointBindings, Cidr, CredentialPlacement, Endpoint, EndpointAuthentication,
     EndpointBinding, HttpMethod, RuntimeCredential, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
 use registry_platform_config::SecretResolver;
@@ -597,7 +597,7 @@ impl EndpointEgress {
     pub(crate) fn compile(
         binding: &EndpointBinding,
         declared: &Endpoint,
-        config: &AdapterRuntimeConfig,
+        config: &AdapterEndpointBindings,
         resolver: &SecretResolver,
     ) -> Result<Self, EgressFault> {
         let attempt_milliseconds = lowered(
@@ -1811,7 +1811,7 @@ impl Egress {
     /// [`EgressFault`], the first refusal met, in binding order.
     pub fn load(
         endpoints: &[Endpoint],
-        config: &AdapterRuntimeConfig,
+        config: &AdapterEndpointBindings,
         resolver: &SecretResolver,
     ) -> Result<Self, EgressFault> {
         let mut compiled = Vec::with_capacity(config.endpoints.len());

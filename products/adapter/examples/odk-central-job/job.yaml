@@ -33,6 +33,12 @@ source:
     version: "1"
     digest: sha256:d813409c8a6c3eeaa93d5f3864f7396a075e0f3bc6166027d785019b960317ad
   route: odk-submissions
+projection:
+  fields:
+    - id
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
 profile:
   # One route run: one send, one redelivery at most, well inside the
   # page deadline.
@@ -43,6 +49,7 @@ profile:
   # The pack's fixed page size.
   maximumPageItems: 100
   maximumPageBytes: 1048576
+  maximumUpstreamCalls: 8
   read:
     maximumFileBytes: 1073741824
     maximumRowBytes: 1048576

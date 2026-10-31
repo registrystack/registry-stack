@@ -25,10 +25,10 @@ use std::time::{Duration, Instant, SystemTime};
 use registry_adapter_core::{
     effective_clause_redelivery_policy, is_route_unwritable_header_name,
     is_route_unwritable_property_name, problem_data_schema, resolve_problem,
-    validate_result_schema, AdapterProfile, AdapterRuntimeConfig, AggregationStrategy, ConvertStep,
-    Endpoint, EndpointBinding, EnrichStep, ErrorClass, Expression, GraphQlOperationKind,
-    HttpMethod, OnExceptionStep, RedeliveryOptions, SendComponent, SetPropertyStep, Step,
-    ToParameters, ToStep, MAX_PROBLEM_DATA_BYTES,
+    validate_result_schema, AdapterEndpointBindings, AdapterProfile, AggregationStrategy,
+    ConvertStep, Endpoint, EndpointBinding, EnrichStep, ErrorClass, Expression,
+    GraphQlOperationKind, HttpMethod, OnExceptionStep, RedeliveryOptions, SendComponent,
+    SetPropertyStep, Step, ToParameters, ToStep, MAX_PROBLEM_DATA_BYTES,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -560,6 +560,34 @@ fn check_to(to: &ToStep) -> Result<(), String> {
         }
         return Ok(());
     }
+    if to.uri.component == SendComponent::Postgres {
+        #[cfg(feature = "job-postgres")]
+        {
+            // The postgres source send carries its named parameters and
+            // nothing else: no address, method, body, or status range of
+            // its own (section 8.10, the SQL row).
+            let Some(parameters) = &to.parameters else {
+                return Err("a postgres send declares no parameters".into());
+            };
+            if parameters.http_method.is_some()
+                || parameters.path.is_some()
+                || parameters.http_uri.is_some()
+                || !parameters.path_parameters.is_empty()
+                || !parameters.query.is_empty()
+                || parameters.ok_status_code_range.is_some()
+                || parameters.body.is_some()
+                || !parameters.resume_bindings.is_empty()
+                || parameters.operation.is_some()
+            {
+                return Err("a postgres send carries queryParameters only".into());
+            }
+            return Ok(());
+        }
+        #[cfg(not(feature = "job-postgres"))]
+        {
+            return Err("a to step is served for the http component only".into());
+        }
+    }
     if to.uri.component != SendComponent::Http {
         return Err("a to step is served for the http component only".into());
     }
@@ -730,7 +758,7 @@ impl EndpointRuntime {
     pub fn compile(
         binding: &EndpointBinding,
         declared: &Endpoint,
-        config: &AdapterRuntimeConfig,
+        config: &AdapterEndpointBindings,
         resolver: &SecretResolver,
     ) -> Result<Self, EgressFault> {
         let egress = EndpointEgress::compile(binding, declared, config, resolver)?;
@@ -1690,6 +1718,41 @@ impl Run<'_, '_> {
                 code: None,
                 });
             }
+            #[cfg(feature = "job-postgres")]
+            SendComponent::Postgres => {
+                let Some(plan) = self.context.job.postgres.get(&to.uri.id) else {
+                    return Err(RouteFailure {
+                        class: ErrorClass::EgressRefused,
+                        message: Some(
+                            "a postgres source send names an endpoint this build carries no source for"
+                                .to_owned(),
+                        ),
+                        data: None,
+                        auth: None,
+                        code: None,
+                    });
+                };
+                let Some(source) = self.context.job.postgres_clients.get(&to.uri.id) else {
+                    return Err(RouteFailure {
+                        class: ErrorClass::EgressRefused,
+                        message: Some(
+                            "a postgres source send runs with no client registered for its endpoint"
+                                .to_owned(),
+                        ),
+                        data: None,
+                        auth: None,
+                        code: None,
+                    });
+                };
+                // The read-only source send counts against the run's
+                // upstream-call budget like every other send.
+                self.sends += 1;
+                if self.sends > self.context.maximum_upstream_calls {
+                    return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+                }
+                return crate::component::postgres::send(self, plan, source.as_ref(), to).await;
+            }
+            #[cfg(not(feature = "job-postgres"))]
             SendComponent::Postgres => {
                 return Err(RouteFailure {
                     class: ErrorClass::EgressRefused,
@@ -2447,7 +2510,7 @@ mod auth_journal_tests {
 #[cfg(test)]
 mod credential_order_tests {
     use super::*;
-    use registry_adapter_core::{AdapterRuntimeConfig, Endpoint};
+    use registry_adapter_core::{AdapterEndpointBindings, Endpoint};
     use registry_platform_yaml::SecretProvider;
 
     /// The empty code-map table: the credential-order lanes convert
@@ -2460,7 +2523,7 @@ mod credential_order_tests {
         clippy::disallowed_methods,
         reason = "the test parses an inline YAML literal to build its input; it reads no operator configuration"
     )]
-    fn runtime_config(base_url: &str, key_env: &str) -> AdapterRuntimeConfig {
+    fn runtime_config(base_url: &str, key_env: &str) -> AdapterEndpointBindings {
         serde_norway::from_str(&format!(
             r#"
 id: credential-order
@@ -2470,21 +2533,10 @@ endpoints:
     credential:
       type: static-api-key
       valueRef: secret:env/{key_env}
-listener:
-  bind: 127.0.0.1:8080
-database:
-  runtimeUrlRef: secret:env/ROUTE_CREDENTIAL_ORDER_DB
-  migrationUrlRef: secret:env/ROUTE_CREDENTIAL_ORDER_DB
-oidc:
-  issuer: https://issuer.example.invalid
-  audience: credential-order
-allowedClients: [credential-order-client]
 allowedPrivateCidrs: [192.168.0.0/16]
-audit:
-  retentionDays: 90
 "#
         ))
-        .expect("the runtime config parses")
+        .expect("the runtime bindings parse")
     }
 
     #[allow(

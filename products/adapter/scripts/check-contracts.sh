@@ -19,6 +19,15 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter
 # default adapterctl binary used by the product checks remains the production
 # build; the PostgreSQL gate builds its own feature binary serially later.
 PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapterctl --locked --features tls-test --test verify
+# The governed-ingestion job sources (CONCEPT 17): each default-off
+# feature gate holds its own clippy and test lane, so a gate can never
+# rot behind the default build.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter --features job-file --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter --features job-file --locked
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter --features job-postgres --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter --features job-postgres --locked
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter --features job-file,job-postgres --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter --features job-file,job-postgres --locked
 
 # The generated schemas are held to their generator (CFG-SCHEMA-2), and the
 # five adapter formats are held to the configuration-format convention
@@ -211,6 +220,26 @@ for project in products/adapter/fixtures/source-shapes/*/project.yaml; do
 done
 printf 'Source-shape contracts and fixture replays hold (%d source shapes, %d fixtures)\n' \
   "$source_shapes" "$shape_fixtures"
+
+# The governed-ingestion example jobs compile offline over the same
+# compile the page run uses, through the exact command the
+# configuration-format conformance registers for the job format. The
+# example credentials are synthetic stand-ins for the check, and the
+# profile and project sit beside the job, the bundle layout the job
+# format's example carries.
+export KOBO_USERNAME=check-contracts KOBO_PASSWORD=check-contracts
+export ODK_EMAIL=check-contracts ODK_PASSWORD=check-contracts
+"$adapterctl_bin" job check products/adapter/packs/kobotoolbox/pack.yaml \
+  products/adapter/examples/kobotoolbox-job/job.yaml \
+  --runtime products/adapter/examples/kobotoolbox-job/runtime.example.yaml \
+  --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
+  --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
+"$adapterctl_bin" job check products/adapter/packs/odk-central/pack.yaml \
+  products/adapter/examples/odk-central-job/job.yaml \
+  --runtime products/adapter/examples/odk-central-job/runtime.example.yaml \
+  --profile products/adapter/examples/odk-central-job/profile.yaml \
+  --project products/adapter/examples/odk-central-job/project.yaml >/dev/null
+printf 'Job example checks passed\n'
 
 # The bad-authoring corpus: every discovered bad/ member refuses with its
 # own code (plus, transitionally, a co-fired partner code that is another

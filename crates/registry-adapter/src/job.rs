@@ -29,11 +29,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_adapter_core::{
-    check_job, check_project_pins, check_workspace, AdapterJob, AdapterPack, AdapterProfile,
-    AdapterProject, ComponentKind, Step, Workspace, ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND,
-    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
-    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
-    ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    check_endpoint_bindings, check_job, check_project_pins, check_workspace, AdapterJob,
+    AdapterPack, AdapterProfile, AdapterProject, ComponentKind, Step, Workspace,
+    ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
+    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
+    ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
     sha256_uri, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
@@ -218,6 +218,35 @@ pub fn compile_job(
     runtime_path: &Path,
 ) -> Result<JobProgram, JobError> {
     let pack_directory = artifact_directory(pack_path)?;
+    let profile_path = artifact_path(None, &pack_directory, "profile.yaml", "--profile")
+        .map_err(|error| artifact_error(LoadError::Runtime(error.to_string())))?;
+    let project_path = artifact_path(None, &pack_directory, "project.yaml", "--project")
+        .map_err(|error| artifact_error(LoadError::Runtime(error.to_string())))?;
+    compile_job_with(
+        pack_path,
+        job_path,
+        runtime_path,
+        &profile_path,
+        &project_path,
+    )
+}
+
+/// The same compile with the profile and project paths named: the form
+/// an offline check takes when its artifacts sit beside the job instead
+/// of beside the pack. Every refusal carries the closed code the
+/// beside-pack form carries.
+///
+/// # Errors
+///
+/// The same refusals [`compile_job`] raises.
+pub fn compile_job_with(
+    pack_path: &Path,
+    job_path: &Path,
+    runtime_path: &Path,
+    profile_path: &Path,
+    project_path: &Path,
+) -> Result<JobProgram, JobError> {
+    let pack_directory = artifact_directory(pack_path)?;
     let (pack, pack_bytes): (AdapterPack, _) = read(
         pack_path,
         &format_spec(ADAPTER_PACK_KIND, ADAPTER_PACK_API_VERSION),
@@ -228,17 +257,13 @@ pub fn compile_job(
         &format_spec(ADAPTER_JOB_KIND, ADAPTER_JOB_API_VERSION),
     )
     .map_err(artifact_error)?;
-    let profile_path = artifact_path(None, &pack_directory, "profile.yaml", "--profile")
-        .map_err(|error| artifact_error(LoadError::Runtime(error.to_string())))?;
-    let project_path = artifact_path(None, &pack_directory, "project.yaml", "--project")
-        .map_err(|error| artifact_error(LoadError::Runtime(error.to_string())))?;
     let (profile, profile_bytes): (AdapterProfile, _) = read(
-        &profile_path,
+        profile_path,
         &format_spec(ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_API_VERSION),
     )
     .map_err(artifact_error)?;
     let (project, project_bytes): (AdapterProject, _) = read(
-        &project_path,
+        project_path,
         &format_spec(ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_API_VERSION),
     )
     .map_err(artifact_error)?;
@@ -306,13 +331,23 @@ pub fn compile_job(
     ) {
         findings.push(diagnostic);
     }
-    for diagnostic in check_workspace(&Workspace {
+    // The workspace checks run with no facade runtime: the bindings
+    // check the job path runs instead is the core-owned
+    // check_endpoint_bindings over the job document's bindings core,
+    // which is check_runtime minus the OIDC block the facade alone
+    // configures.
+    let workspace = Workspace {
         profile: &profile,
         pack: &pack,
         project: &project,
-        runtime: Some(&runtime),
+        runtime: None,
         fixtures: &[],
-    }) {
+    };
+    let mut runtime_findings = check_endpoint_bindings(&workspace, &runtime);
+    for diagnostic in check_workspace(&workspace) {
+        runtime_findings.push(diagnostic);
+    }
+    for diagnostic in runtime_findings {
         if diagnostic.severity != Severity::Error {
             continue;
         }
@@ -399,7 +434,7 @@ pub fn compile_job(
     )
     .map_err(|error| runtime_error(&format!("the job's workspace could not compile: {error}")))?;
     let endpoints = authored.endpoints;
-    let job_state = compile_job_sources(&pack, sources.as_ref())?;
+    let job_state = compile_job_sources(&pack, &pack_directory, sources.as_ref())?;
 
     let Some(source) = pack.source_routes.get(job.source.route.as_str()) else {
         // The job checks refused the unknown route already; the same
@@ -451,6 +486,37 @@ pub fn compile_job(
         resolver,
         job_state,
     })
+}
+
+impl JobProgram {
+    /// Register the host's client for one compiled postgres source. The
+    /// engine boundary carries no client; the host
+    /// (`registry-adapter-job`, or a test fixture) supplies one per
+    /// source endpoint before the first page run. A source whose client
+    /// never registers refuses its send at run, uncatchably, never
+    /// silently.
+    ///
+    /// # Errors
+    ///
+    /// A source endpoint the compile never planned.
+    #[cfg(feature = "job-postgres")]
+    pub fn register_postgres_source(
+        &mut self,
+        endpoint: &str,
+        source: std::sync::Arc<dyn crate::component::postgres::PostgresSource>,
+    ) -> Result<(), JobError> {
+        let plan = self.job_state.postgres.get(endpoint).ok_or_else(|| {
+            source_unbound(
+                &format!("/endpoints/{endpoint}"),
+                "the host registers a client for a source endpoint the job does not declare",
+            )
+        })?;
+        let _ = plan;
+        self.job_state
+            .postgres_clients
+            .insert(endpoint.to_owned(), source);
+        Ok(())
+    }
 }
 
 const UNREADABLE_RUNTIME: &str =
@@ -512,6 +578,7 @@ fn digest_of(bytes: &[u8]) -> registry_platform_yaml::Digest {
 /// under `adapter.job.source-unbound`.
 fn compile_job_sources(
     pack: &AdapterPack,
+    pack_directory: &Path,
     sources: Option<&crate::job_sources::JobSources>,
 ) -> Result<crate::job_sources::JobPageState, JobError> {
     let declared_file: std::collections::BTreeSet<&str> = pack
@@ -532,6 +599,13 @@ fn compile_job_sources(
     }
     #[cfg_attr(not(feature = "job-file"), allow(unused_mut))]
     let mut files = std::collections::BTreeMap::new();
+    #[cfg(feature = "job-postgres")]
+    let mut postgres: std::collections::BTreeMap<
+        String,
+        std::sync::Arc<crate::component::postgres::PostgresPlan>,
+    > = std::collections::BTreeMap::new();
+    #[cfg(feature = "job-postgres")]
+    let postgres_clients = std::collections::BTreeMap::new();
     for declared in pack.endpoints.iter() {
         match declared.component {
             ComponentKind::File => {
@@ -562,14 +636,64 @@ fn compile_job_sources(
                 }
             }
             ComponentKind::Postgres => {
-                return Err(unavailable(
-                    declared,
-                    if cfg!(feature = "job-postgres") {
-                        "the postgres source send is not served by this build"
-                    } else {
-                        "serve the postgres source by building with the job-postgres feature"
-                    },
-                ));
+                #[cfg(feature = "job-postgres")]
+                {
+                    let id = declared.id.as_str();
+                    let Some(config) = sources.and_then(|sources| sources.postgres.get(id)) else {
+                        return Err(source_unbound(
+                            &format!("/endpoints/{id}"),
+                            "the pack declares a postgres source the runtime config binds no connection for",
+                        ));
+                    };
+                    let Some(query_file) = &declared.query_file else {
+                        return Err(unavailable(
+                            declared,
+                            "the postgres endpoint names no query file",
+                        ));
+                    };
+                    let digest = pack
+                        .pinned_file(query_file)
+                        .ok_or_else(|| {
+                            unavailable(
+                                declared,
+                                "the postgres endpoint names no pinned query file",
+                            )
+                        })?
+                        .clone();
+                    let query_path = pack_directory.join(query_file);
+                    let bytes = std::fs::read(&query_path).map_err(|_| {
+                        unavailable(declared, "the pinned query file could not be read")
+                    })?;
+                    if registry_platform_config::sha256_uri(&bytes) != digest.as_str() {
+                        return Err(unavailable(
+                            declared,
+                            "the pinned query file's bytes do not carry the pack's digest",
+                        ));
+                    }
+                    let text = String::from_utf8(bytes)
+                        .map_err(|_| unavailable(declared, "the pinned query file is not UTF-8"))?;
+                    // The engine compiles the query and holds the plan;
+                    // the credential, the pool, and the connection are
+                    // the host's, supplied beside the plan.
+                    let plan = crate::component::postgres::compile_plan(
+                        config.namespace.clone(),
+                        &text,
+                        Duration::from_millis(declared.attempt_timeout_milliseconds.get()),
+                    )
+                    .map_err(|reason| {
+                        runtime_error(&format!(
+                            "endpoint {id} postgres source was refused: {reason}"
+                        ))
+                    })?;
+                    postgres.insert(id.to_owned(), std::sync::Arc::new(plan));
+                }
+                #[cfg(not(feature = "job-postgres"))]
+                {
+                    return Err(unavailable(
+                        declared,
+                        "serve the postgres source by building with the job-postgres feature",
+                    ));
+                }
             }
             ComponentKind::Sftp => {
                 return Err(unavailable(
@@ -583,9 +707,17 @@ fn compile_job_sources(
             | ComponentKind::Rest => {}
         }
     }
+    #[cfg(not(feature = "job-postgres"))]
+    {
+        let _ = pack_directory;
+    }
     Ok(crate::job_sources::JobPageState {
         profile: None,
         files,
+        #[cfg(feature = "job-postgres")]
+        postgres,
+        #[cfg(feature = "job-postgres")]
+        postgres_clients,
     })
 }
 
@@ -751,6 +883,13 @@ fn ensure_sends_resolve(
                 _ => None,
             };
             if let Some(uri) = destination {
+                // A postgres source send resolves through the job's own
+                // source table, which the source compile has validated;
+                // an http or graphql send resolves through the loader's
+                // endpoint bindings.
+                if uri.component == registry_adapter_core::SendComponent::Postgres {
+                    return;
+                }
                 if !endpoints.contains_key(&uri.id) && !missing.contains(&uri.id) {
                     missing.push(uri.id.clone());
                 }
@@ -805,6 +944,10 @@ pub async fn run_job_page(
         job: crate::job_sources::JobPageState {
             profile: Some(profile.clone()),
             files: program.job_state.files.clone(),
+            #[cfg(feature = "job-postgres")]
+            postgres: program.job_state.postgres.clone(),
+            #[cfg(feature = "job-postgres")]
+            postgres_clients: program.job_state.postgres_clients.clone(),
         },
     };
     // The exchange bound follows the profile: the page and every

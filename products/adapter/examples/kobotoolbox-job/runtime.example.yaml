@@ -23,17 +23,14 @@ id: kobotoolbox-job-example
 endpoints:
   - endpoint: kobo-api
     baseUrl: https://kobo.example.invalid/api/v2/assets/aFixtureUid0000000000000000000001/data
-    tlsTrustProfile: kobo-private-ca
     credential:
       type: basic
       usernameRef: secret:env/KOBO_USERNAME
       passwordRef: secret:env/KOBO_PASSWORD
-outboundTls:
-  trustProfiles:
-    kobo-private-ca:
-      # The absolute path of the bundle file on the deployment's own
-      # host; a CA bundle is not a secret, so the profile names a file.
-      caBundleFile: /etc/registry-adapter/trust/kobo-private-ca.pem
+# A deployment whose source presents a private CA declares it under
+# outboundTls.trustProfiles and names the profile on the endpoint
+# binding; the example trusts the system roots, so the file resolves
+# wherever the example is checked.
 listener:
   bind: 127.0.0.1:8080
 database:

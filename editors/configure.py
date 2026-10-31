@@ -196,6 +196,7 @@ SCHEMAS = {
     ),
     "adapter": (
         ("products/adapter/schemas/project.v1alpha1.schema.json", "project.yaml"),
+        ("products/adapter/schemas/job.v1alpha1.schema.json", "job.yaml"),
         ("products/adapter/schemas/profile.v1alpha1.schema.json", "profile.yaml"),
         ("products/adapter/schemas/pack.v1alpha1.schema.json", "pack.yaml"),
         ("products/adapter/schemas/fixture.v1alpha1.schema.json", "fixtures/**/*.yaml"),

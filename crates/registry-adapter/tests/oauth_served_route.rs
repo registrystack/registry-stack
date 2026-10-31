@@ -15,7 +15,7 @@ use registry_adapter::route::{
 };
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication,
+    AdapterEndpointBindings, ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication,
     EndpointBinding, ErrorClass, RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -61,17 +61,12 @@ fn binding(double: &UpstreamDouble, credential: Option<RuntimeCredential>) -> En
     }
 }
 
-fn config(binding: EndpointBinding) -> AdapterRuntimeConfig {
-    AdapterRuntimeConfig {
-        id: LocalId::new("oauth-route").expect("id"), endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
-        allowed_private_cidrs: UniqueList::new(Vec::new()).expect("cidrs"), outbound_tls: None,
-        listener: serde_json::from_str(r#"{"bind":"127.0.0.1:8080"}"#).expect("listener"),
-        database: serde_json::from_str(r#"{"runtimeUrlRef":"secret:env/OAUTH_ROUTE_DB","migrationUrlRef":"secret:env/OAUTH_ROUTE_DB"}"#).expect("database"),
-        oidc: serde_json::from_str(r#"{"issuer":"https://issuer.example.invalid","audience":"oauth-route"}"#).expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("oauth-route-client").expect("client")]).expect("clients"),
-        idempotency: None,
-        audit: registry_adapter_core::AuditRetention { retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90).expect("retention") },
-        cursor_key_ref: None, previous_cursor_key_ref: None, cursor_ttl_seconds: None,
+fn config(binding: EndpointBinding) -> AdapterEndpointBindings {
+    AdapterEndpointBindings {
+        id: LocalId::new("oauth-route").expect("id"),
+        endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
+        allowed_private_cidrs: UniqueList::new(Vec::new()).expect("cidrs"),
+        outbound_tls: None,
     }
 }
 

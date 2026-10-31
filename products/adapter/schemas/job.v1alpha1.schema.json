@@ -1,0 +1,293 @@
+{
+  "$defs": {
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "JobIdentity": {
+      "additionalProperties": false,
+      "description": "The job identity block: the job's own name and version, the same\nidentity shape the project carries (CFG-ENV-6).",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The job identifier."
+        },
+        "version": {
+          "description": "The job version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "JobProfile": {
+      "additionalProperties": false,
+      "description": "The explicit, bounded profile of one job (`products/adapter/CONCEPT.md`\nsection 17.2). Every member is mandatory and checked; the engine\nenforces each bound again at the edge. The facade ceilings of section\n8.8 are unchanged: the per-attempt timeout stays at the platform-frozen\nceiling, and only a source-route-only endpoint's response bound may\nrise, to the platform cap (D39).",
+      "properties": {
+        "maximumPageBytes": {
+          "description": "The largest serialized item page, in bytes (1 to 16777216).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumPageItems": {
+          "description": "The most items one produced page may carry (1 to 10000).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumResponseBytes": {
+          "description": "The largest response body one send of the job may take in, in\nbytes (1 to 16777216). Where an endpoint declares a tighter bound,\nthe lower of the two applies; the checks refuse a profile tighter\nthan an endpoint the source route reaches.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumUpstreamCalls": {
+          "description": "The job's own upstream-call budget: the largest static worst-case\nnumber of upstream calls one pass may make (1 to 1000). The checks\nrefuse a budget below the source route's worst-case call count\nunder `adapter.job.call-budget`, reusing the same walk the facade\nbinding's `maximumUpstreamCalls` stands on, so one budget shape\ncovers both modes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pageDeadlineMilliseconds": {
+          "description": "The longest one source-route run may take, in milliseconds\n(1 to 600000).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read": {
+          "$ref": "#/$defs/ReadBounds",
+          "description": "The bounds of the reads the decoders produce."
+        }
+      },
+      "required": [
+        "pageDeadlineMilliseconds",
+        "maximumResponseBytes",
+        "maximumPageItems",
+        "maximumPageBytes",
+        "maximumUpstreamCalls",
+        "read"
+      ],
+      "type": "object"
+    },
+    "JobSource": {
+      "additionalProperties": false,
+      "description": "The pack and source route a job runs: the pack pinned by version and\ndigest exactly as a project pins it (CFG-ID-4), and the\n`sourceRoutes` id of the route that acquires.",
+      "properties": {
+        "pack": {
+          "$ref": "#/$defs/PinnedRef",
+          "description": "The pinned adapter pack."
+        },
+        "route": {
+          "description": "The source route the job runs, a `sourceRoutes` id of the pinned\npack.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "route"
+      ],
+      "type": "object"
+    },
+    "JobTrigger": {
+      "additionalProperties": false,
+      "description": "One trigger of the job: the declaration of when a pass starts. A\ntrigger carries no data into the pass; a hook only starts a pass,\nwhich then re-reads the source from the saved position, and a hook\nbody is never trusted or stored (the governed-ingestion concept\nsections 3 and 5).\n\nThe interval options port the scheduled polling consumer options of\nCamel's scheduler component\n(camel-4.23.0:components/camel-scheduler/src/main/docs/scheduler-component.adoc);\nthe option names and their Camel defaults are read from the shared\n`ScheduledPollEndpoint` base the scheduler endpoint extends\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java),\nnot invented. Recorded divergences: Camel's `delay` default is that\nfile's `DEFAULT_DELAY` of 500 milliseconds and its `initialDelay`\ndefault is `DEFAULT_INITIAL_DELAY` of 1000 milliseconds, where the\njob pins 60000 and 0; and Camel's `backoffMultiplier` field defaults\nto 0, which turns backoff off, where the job's default of 1 skips no\npass and the checks bound the value. The skip semantics (once an idle\nor error threshold is met, that many polls are skipped before the\nnext attempt) are the consumer's own\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollConsumer.java#doRun).",
+      "properties": {
+        "backoffErrorThreshold": {
+          "description": "The consecutive failed passes that put the trigger into backoff.\nPorts `backoffErrorThreshold`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#backoffErrorThreshold,\n\"The number of subsequent error polls (failed due some error)\nthat should happen before the backoffMultipler should kick-in\").\nDefault 0, off; the checks bound the value to\n[`MAXIMUM_TRIGGER_BACKOFF_THRESHOLD`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "backoffIdleThreshold": {
+          "description": "The consecutive idle passes that put the trigger into backoff.\nPorts `backoffIdleThreshold`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#backoffIdleThreshold,\n\"The number of subsequent idle polls that should happen before\nthe backoffMultipler should kick-in\"). Default 0, off; the checks\nbound the value to [`MAXIMUM_TRIGGER_BACKOFF_THRESHOLD`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "backoffMultiplier": {
+          "description": "The passes backoff skips once an idle or error threshold is met.\nPorts `backoffMultiplier`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#backoffMultiplier,\n\"The multiplier is then the number of polls that will be skipped\nbefore the next actual attempt is happening again\"); Camel\nrequires an idle or error threshold beside it, and its field\ndefault of 0 turns backoff off. The job default of 1 skips no\npass, and the checks bound the value from\n[`MINIMUM_TRIGGER_BACKOFF_MULTIPLIER`] to\n[`MAXIMUM_TRIGGER_BACKOFF_MULTIPLIER`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "delayMilliseconds": {
+          "description": "The milliseconds between two interval passes, from\n[`MINIMUM_TRIGGER_DELAY_MILLISECONDS`] to\n[`MAXIMUM_TRIGGER_DELAY_MILLISECONDS`]. Ports `delay`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#delay,\n\"Milliseconds before the next poll\"; Camel's default is that\nfile's 500-millisecond `DEFAULT_DELAY`). The job default is\n[`DEFAULT_TRIGGER_DELAY_MILLISECONDS`], one minute.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "greedy": {
+          "description": "Whether a pass starts again immediately when the previous one\nread at least one item. Ports `greedy`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#greedy,\n\"If greedy is enabled, then the ScheduledPollConsumer will run\nimmediately again, if the previous run polled 1 or more\nmessages\"; the scheduler component doc\ncamel-4.23.0:components/camel-scheduler/src/main/docs/scheduler-component.adoc\nwarns that a greedy scheduler keeps firing). Default false,\nCamel's.",
+          "type": "boolean"
+        },
+        "initialDelayMilliseconds": {
+          "description": "The milliseconds before the first interval pass starts, from 0 to\n[`MAXIMUM_TRIGGER_INITIAL_DELAY_MILLISECONDS`]. Ports\n`initialDelay`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#initialDelay,\n\"Milliseconds before the first poll starts\"; Camel's default is\nthat file's 1000-millisecond `DEFAULT_INITIAL_DELAY`). The job\ndefault of 0 starts the first pass immediately.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "The trigger kind, one of [`TRIGGER_KIND_VALUES`]: `interval`, the\nserved kind, or `hook`, the declared seam. Mandatory in effect:\nthe checks refuse a trigger that names no kind, or a kind outside\nthe closed set, under `adapter.job.trigger-kind`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The listener path a `hook` trigger waits on. Contract-only: the\nchecks refuse every hook trigger under\n`adapter.job.trigger-hook-unserved` until the hook seam is built,\nso no pack or job can silently rely on one; the hook body is\nnever trusted or stored, and no listener is built here.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PinnedRef": {
+      "additionalProperties": false,
+      "description": "A pinned reference to a profile or pack: plain identifier plus the\nversion and digest `adapterctl check` verifies (CFG-ID-4,\n`products/adapter/CONCEPT.md` section 6).",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "The digest the artifact's bytes must hash to."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The referenced artifact's identifier."
+        },
+        "version": {
+          "description": "The referenced artifact's version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ProjectionDecl": {
+      "additionalProperties": false,
+      "description": "The projection of one source item the workflow needs (the\ngoverned-ingestion concept sections 3 and 8): the dotted paths the job\nreads from each item's captured value, and what the item row's Last\ndigest covers.\n\nThe projection is the job's data-minimization declaration: the field\nlist of the concept's custody control, so a whole source form never\nreaches the destination or its operators because the workflow needed\ntwo fields. The projection names what the workflow needs; the route\ndoes the projecting. `check` cannot statically determine what a\nroute's final `setBody` targets, so the declaration is advisory to the\nroute and digest-relevant only: the pass stores\n[`AdapterJob::projection_digest`] beside the item rows and reports\nwhen it changes, and the route is held to the declared fields by\nreview, not by route analysis.",
+      "properties": {
+        "digestOf": {
+          "$ref": "#/$defs/ProjectionDigestOf",
+          "description": "What the item row's Last digest covers: `projection`, the\nserialized projected fields (the default), or `value`, the whole\ncaptured item. A `value` digest means the workflow compares whole\nitems, and the projection then names only what the mapping reads."
+        },
+        "fields": {
+          "description": "The projected paths, each a dotted identifier path whose segments\ncarry ASCII letters, digits, underscores, and dashes, at most\n[`MAXIMUM_PROJECTION_SEGMENTS`] segments and\n[`MAXIMUM_PROJECTION_FIELD_CHARACTERS`] characters; at most\n[`MAXIMUM_PROJECTION_FIELDS`] paths and at most\n[`MAXIMUM_PROJECTION_BYTES`] bytes serialized. The checks refuse a\njob that declares no fields under\n`adapter.job.projection-shape` and any other fault of the list\nunder `adapter.job.projection-shape` or\n`adapter.job.projection-bound`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ProjectionDigestOf": {
+      "description": "What the item row's Last digest covers, the closed set the projection\nblock pins.",
+      "oneOf": [
+        {
+          "const": "projection",
+          "description": "The serialized projected fields, the default: an item counts as\nchanged when what the workflow needs changed.",
+          "type": "string"
+        },
+        {
+          "const": "value",
+          "description": "The whole captured item value.",
+          "type": "string"
+        }
+      ]
+    },
+    "ReadBounds": {
+      "additionalProperties": false,
+      "description": "The read bounds of one job profile: what one poll may take in and what\none decoded row may carry (`products/adapter/CONCEPT.md` section\n17.2). Every read has a count, byte, and deadline bound.",
+      "properties": {
+        "maximumFieldBytes": {
+          "description": "The largest one decoded field may take, in bytes (1 to 65536).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumFileBytes": {
+          "description": "The largest file one read may take in, in bytes (1 to 1073741824).\nA bigger file is refused, never partially read.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumRowBytes": {
+          "description": "The largest one decoded row or line may take, in bytes\n(1 to 1048576).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumRowsPerPage": {
+          "description": "The most decoded rows one page may carry (1 to 10000); never more\nthan the page's own `maximumPageItems`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumFileBytes",
+        "maximumRowBytes",
+        "maximumFieldBytes",
+        "maximumRowsPerPage"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The ingestion job definition (`AdapterJob`): an identity, the pinned\npack and its source route, the item projection and the pass triggers,\nand the bounded job profile (`products/adapter/CONCEPT.md` sections\n17.1 and 17.2). The `apiVersion` and `kind` envelope members are\ncarried and validated like every other Adapter artifact's, through the\nloader's format constants [`ADAPTER_JOB_API_VERSION`] and\n[`ADAPTER_JOB_KIND`].",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/job/v1alpha1",
+      "description": "The format envelope version.",
+      "type": "string"
+    },
+    "job": {
+      "$ref": "#/$defs/JobIdentity",
+      "description": "The job's identity."
+    },
+    "kind": {
+      "const": "AdapterJob",
+      "description": "The format kind: `AdapterJob`.",
+      "type": "string"
+    },
+    "profile": {
+      "$ref": "#/$defs/JobProfile",
+      "description": "The bounded job profile."
+    },
+    "projection": {
+      "$ref": "#/$defs/ProjectionDecl",
+      "default": {},
+      "description": "The projection of each source item the workflow needs; the checks\nrefuse a job that declares none, so every job's data minimization\nis explicit."
+    },
+    "source": {
+      "$ref": "#/$defs/JobSource",
+      "description": "The pinned pack and the source route the job runs."
+    },
+    "triggers": {
+      "description": "The triggers that decide when a pass starts; the checks refuse an\nempty list, so every job names at least one.",
+      "items": {
+        "$ref": "#/$defs/JobTrigger"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "job",
+    "source",
+    "profile"
+  ],
+  "title": "Registry Adapter ingestion job",
+  "type": "object"
+}

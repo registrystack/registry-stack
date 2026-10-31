@@ -25,17 +25,14 @@ id: odk-central-job-example
 endpoints:
   - endpoint: odk-odata
     baseUrl: https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/Submissions
-    tlsTrustProfile: odk-private-ca
     credential:
       type: basic
       usernameRef: secret:env/ODK_EMAIL
       passwordRef: secret:env/ODK_PASSWORD
-outboundTls:
-  trustProfiles:
-    odk-private-ca:
-      # The absolute path of the bundle file on the deployment's own
-      # host; a CA bundle is not a secret, so the profile names a file.
-      caBundleFile: /etc/registry-adapter/trust/odk-private-ca.pem
+# A deployment whose source presents a private CA declares it under
+# outboundTls.trustProfiles and names the profile on the endpoint
+# binding; the example trusts the system roots, so the file resolves
+# wherever the example is checked.
 listener:
   bind: 127.0.0.1:8080
 database:
