@@ -2628,13 +2628,13 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(
             !rendered.contains(MARKER),
-            "the plan renders references, never the resolved secret: {rendered}"
+            "the plan renders references, never the resolved secret"
         );
         let request = plan.render(&resolver(), &FixedSigner).expect("renders");
         let rendered = format!("{request:?}");
         assert!(
             !rendered.contains(MARKER),
-            "the request's rendering never carries the body or header values: {rendered}"
+            "the request's rendering never carries the body or header values"
         );
 
         // The issued token is the marker itself, stored in the cache the
@@ -2667,10 +2667,7 @@ mod tests {
             (format!("{plan:?}"), "the plan"),
             (format!("{:?}", plan.cache()), "the cache"),
         ] {
-            assert!(
-                !rendered.contains(MARKER),
-                "the marker leaked into {what}: {rendered}"
-            );
+            assert!(!rendered.contains(MARKER), "the marker leaked into {what}");
         }
     }
 
