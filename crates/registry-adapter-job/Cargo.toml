@@ -18,25 +18,30 @@ path = "src/main.rs"
 [features]
 default = []
 # Gates the suites that need a disposable database; the product's
-# test-postgres.sh runs them the way registry-adapter gates its own.
+# test-job-postgres.sh runs them the way registry-adapter gates its own.
+# The same feature allows the plaintext test-database connection, exactly
+# as registry-adapter's own pool does.
 postgres-test = []
 
 [dependencies]
-registry-adapter-core.workspace = true
 registry-adapter.workspace = true
+registry-adapter-core.workspace = true
 registry-platform-config.workspace = true
-registry-platform-crypto.workspace = true
+registry-platform-yaml.workspace = true
+chrono = { workspace = true, features = ["clock", "std"] }
 clap.workspace = true
+deadpool-postgres.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tracing.workspace = true
-deadpool-postgres.workspace = true
 tokio-postgres.workspace = true
-sha2.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
 tempfile.workspace = true
-serde_norway.workspace = true
