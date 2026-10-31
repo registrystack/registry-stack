@@ -568,3 +568,139 @@ async fn configured_adapter_requires_preparation_and_never_reconciles_by_sending
     assert_eq!(server.received_requests().await.unwrap().len(), count);
     issuer.stop().await;
 }
+
+fn bounded_client(server: &MockServer, token: Arc<CountingToken>) -> BaseRegistryClient {
+    BaseRegistryClient::new(
+        BaseRegistryClientConfig::new(format!("{}/tenant/base/", server.uri()).parse().unwrap())
+            .with_token_provider(token)
+            .with_maximum_response_bytes(65_536)
+            .with_maximum_mutation_retries(0),
+    )
+    .unwrap()
+}
+
+fn expanded_metadata() -> Value {
+    let mut document = metadata();
+    document["additionalDescriptions"] = json!(["m".repeat(40_000), "n".repeat(40_000)]);
+    assert!(serde_json::to_vec(&document).unwrap().len() > 65_536);
+    document
+}
+
+#[tokio::test]
+async fn metadata_has_a_separate_finite_budget_without_changing_frozen_action_authority() {
+    let server = MockServer::start().await;
+    let current = authority(&server).await;
+    *current.lock().unwrap() = expanded_metadata();
+    Mock::given(method("POST"))
+        .and(path("/tenant/base/v1/actions/update-item"))
+        .and(query_param("accessProfile", "writer"))
+        .respond_with(response(receipt()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tokens = Arc::new(CountingToken::default());
+    let client = bounded_client(&server, tokens.clone());
+    let command = request();
+    let prepared = prepare(&client, "writer", &command)
+        .await
+        .unwrap_or_else(|_| panic!("valid metadata above the business-response bound prepares"));
+    let saved = prepared.clone();
+    match execute(&client, "writer", &command, &prepared).await {
+        CallOutcome::Success(value) => assert_eq!(value, receipt()),
+        _ => panic!("the same source-bound Action executes with the business response limit"),
+    }
+    assert_eq!(prepared, saved);
+    assert_eq!(tokens.0.load(Ordering::SeqCst), 4);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 4);
+    for request in &requests {
+        assert_eq!(
+            request.headers["authorization"],
+            "Bearer synthetic-action-token"
+        );
+        assert!(request
+            .url
+            .query_pairs()
+            .any(|(key, value)| key == "accessProfile" && value == "writer"));
+    }
+    let sent = requests.last().unwrap();
+    assert_eq!(sent.headers["idempotency-key"], "durable-action-key");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&sent.body).unwrap(),
+        json!({
+            "input":{"targetId":RECORD,"label":"Original"},
+            "preconditions":{"targetId":{"ifMatch":CONDITION}}
+        })
+    );
+    assert_eq!(
+        command.operation_contract.unwrap().action_revision,
+        FINGERPRINT
+    );
+}
+
+#[tokio::test]
+async fn metadata_above_the_native_metadata_ceiling_is_a_terminal_preparation_refusal() {
+    let server = MockServer::start().await;
+    let mut document = metadata();
+    document["additionalDescriptions"] = json!(vec!["m".repeat(65_536); 129]);
+    assert!(
+        serde_json::to_vec(&document).unwrap().len()
+            > registry_breg_client::MAX_BREG_METADATA_BYTES
+    );
+    Mock::given(method("GET"))
+        .and(path("/tenant/base/v1/registry"))
+        .respond_with(response(document))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = bounded_client(&server, Arc::new(CountingToken::default()));
+    match prepare(&client, "writer", &request()).await {
+        Err(outcome) => refusal(outcome, "invalid-response"),
+        Ok(_) => panic!("overlarge metadata cannot prepare an Action"),
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn metadata_budget_never_widens_target_condition_response_bodies() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/tenant/base/v1/registry"))
+        .respond_with(response(expanded_metadata()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/tenant/base/v1/actions/update-item/target-conditions",
+        ))
+        .respond_with(response(json!({"oversized-condition": "x".repeat(65_536)})))
+        .mount(&server)
+        .await;
+    let client = bounded_client(&server, Arc::new(CountingToken::default()));
+    match prepare(&client, "writer", &request()).await {
+        Err(outcome) => refusal(outcome, "invalid-response"),
+        Ok(_) => panic!("business responses retain the 64 KiB limit"),
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn overlarge_mutation_responses_remain_uncertain_after_dispatch() {
+    let server = MockServer::start().await;
+    authority(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/tenant/base/v1/actions/update-item"))
+        .respond_with(response(json!({"oversized-result": "x".repeat(65_536)})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = bounded_client(&server, Arc::new(CountingToken::default()));
+    let command = request();
+    let prepared = prepare(&client, "writer", &command)
+        .await
+        .unwrap_or_else(|_| panic!("valid preparation"));
+    match execute(&client, "writer", &command, &prepared).await {
+        CallOutcome::Uncertain { code } => assert_eq!(code, "transport-uncertain"),
+        _ => panic!("an oversized mutation answer cannot prove no effect"),
+    }
+}

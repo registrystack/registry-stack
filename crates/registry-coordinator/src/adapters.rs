@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use registry_breg_client::{
     BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    TransportKind, MAX_BREG_METADATA_BYTES,
 };
 use registry_casework_client::{CaseworkClient, CaseworkClientConfig, CaseworkTaskAssertionSource};
 use registry_messaging_client::{
@@ -139,6 +140,14 @@ fn breg_client(
             ))
             .with_maximum_response_bytes(FILE_BOUND),
     )
+}
+
+// Caller-filtered control metadata may describe many unrelated operations.
+// Keep its native finite ceiling separate from business response payloads.
+pub(crate) fn breg_metadata_client(
+    client: &BaseRegistryClient,
+) -> std::result::Result<BaseRegistryClient, BaseRegistryClientError> {
+    client.with_maximum_response_bytes(MAX_BREG_METADATA_BYTES as u64)
 }
 
 impl HttpAdapters {
@@ -496,6 +505,9 @@ async fn read_record_v2(
 pub(crate) fn read_failure(error: BaseRegistryClientError) -> CallOutcome {
     match error {
         BaseRegistryClientError::Token(error) => token_failure(&error),
+        BaseRegistryClientError::Transport {
+            kind: TransportKind::ResponseTooLarge,
+        } => refused("invalid-response"),
         BaseRegistryClientError::Transport { .. } => retryable("transport-unavailable"),
         error if error.status() == Some(429) => retryable("rate-limited"),
         BaseRegistryClientError::Problem {

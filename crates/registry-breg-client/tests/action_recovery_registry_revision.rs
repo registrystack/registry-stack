@@ -96,6 +96,80 @@ async fn handler(State(state): State<MockState>, _request: Request<Body>) -> Res
 }
 
 #[tokio::test]
+async fn caller_metadata_vocabulary_codes_prepare_and_recover_exactly() {
+    let mut metadata = action_metadata(REVISION_A);
+    metadata["actions"][0]["inputs"][0]["fieldType"] = json!({
+        "type": "vocabulary-code", "vocabulary": "report-type",
+        "values": ["A-report", "B-report", "C-report"]
+    });
+    metadata["actions"][0]["inputs"][0]["schema"] = json!({
+        "type": "string", "enum": ["A-report", "B-report", "C-report"]
+    });
+    let served = Arc::new(AtomicUsize::new(0));
+    let state = MockState {
+        responses: Arc::new(Mutex::new(VecDeque::from([metadata]))),
+        served: served.clone(),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().fallback(any(handler)).with_state(state),
+        )
+        .await
+        .unwrap();
+    });
+    let tokens = Arc::new(StaticToken(AtomicUsize::new(0)));
+    let client = BaseRegistryClient::new(
+        BaseRegistryClientConfig::new(
+            Url::parse(&format!("http://{address}/tenant/base")).unwrap(),
+        )
+        .with_token_provider(tokens.clone()),
+    )
+    .unwrap();
+    let metadata = client
+        .registry_contract(Some("preparer"))
+        .await
+        .unwrap()
+        .value;
+    assert!(metadata
+        .select_action("incorporate-company", "other-profile")
+        .is_err());
+    let action = metadata
+        .select_action("incorporate-company", "preparer")
+        .unwrap();
+    let key = BRegIdempotencyKey::parse("report-1").unwrap();
+    for code in ["A-report", "B-report", "C-report"] {
+        let inputs = Map::from_iter([("reference".to_owned(), json!(code))]);
+        let request = BRegActionInvocationRequest::new(&action, inputs.clone(), None).unwrap();
+        let prepared = client.prepare_action(&action, &request, &key).unwrap();
+        let saved: Value = serde_json::from_slice(prepared.as_bytes()).unwrap();
+        let body: Value = serde_json::from_str(saved["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["input"]["reference"], code);
+        let recovered = client
+            .recover_action(&action, &prepared, &inputs, &key)
+            .unwrap();
+        assert_eq!(
+            client
+                .prepare_action(&action, &recovered, &key)
+                .unwrap()
+                .as_bytes(),
+            prepared.as_bytes()
+        );
+    }
+    assert!(BRegActionInvocationRequest::new(
+        &action,
+        Map::from_iter([("reference".to_owned(), json!("a-report"))]),
+        None,
+    )
+    .is_err());
+    assert_eq!(served.load(Ordering::SeqCst), 1);
+    assert_eq!(tokens.0.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
 async fn saved_command_refuses_after_registry_revision_change() {
     let served = Arc::new(AtomicUsize::new(0));
     let state = MockState {

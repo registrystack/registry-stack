@@ -887,6 +887,8 @@ export declare class BaseRegistryClient {
   /** Read one retained submission version under the access profile of the Proposal's self link. */
   readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome<BRegProposalSubmission>>
   listProposals(collection: BRegProposalCollection, query: JsonObject): Promise<BRegProposalPage>
+  /** Exact JSON query; retains the metadata-selected collection and bounded pagination. */
+  listProposalsJson(collection: BRegProposalCollection, queryJson: string): Promise<BRegProposalPage>
   /**
    * Bind an available transition without I/O. Throws locally when the operation
    * is not a legal transition from the Proposal's observed state; `cancel` is
@@ -895,6 +897,8 @@ export declare class BaseRegistryClient {
    * exercise the server's terminal-state refusal.
    */
   prepareProposal(proposal: BRegProposal, operation: BRegProposalTransition, body: JsonObject, key: string): BRegPreparedProposal
+  /** Exact JSON body; preserves integer values and the same lifecycle authority and recovery contract. */
+  prepareProposalJson(proposal: BRegProposal, operation: BRegProposalTransition, bodyJson: string, key: string): BRegPreparedProposal
   recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
   executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   constructor(config: BaseRegistryClientConfig)

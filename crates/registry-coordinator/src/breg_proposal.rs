@@ -153,7 +153,8 @@ async fn current(
     expected: &ActionContract,
     proposal_id: Uuid,
 ) -> Result<BRegProposal, Reading> {
-    let metadata = client
+    let metadata = crate::adapters::breg_metadata_client(client)
+        .map_err(Reading::Failed)?
         .registry_contract(Some(profile))
         .await
         .map_err(Reading::Failed)?;

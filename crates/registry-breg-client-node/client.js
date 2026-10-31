@@ -232,7 +232,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['invokeAction', [1], [1]],
   ['executeRecoveredAction'], ['executeRecoveredProposalStart'], ['executeRecoveredCreate'],
   ['patchRecord', [3], [3]], ['batchRecords', [1], [1]], ['tombstoneRecord'],
-  ['startProposal', [1], [1]], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals', [1], [1]], ['executeProposal'],
+  ['startProposal', [1], [1]], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals', [1], [1]], ['executeProposal'], ['listProposalsJson'],
   ['downloadProposalAttachment'], ['uploadProposalAttachment'], ['deleteProposalAttachment'],
   ['readProposalReviewStatus'], ['readProposalReviewContext'],
   ['readProposalReviewContextBatch', [1], [1]],
@@ -256,7 +256,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['prepareAction', [1], [1]], ['prepareActionJson'],
   ['recoverAction', [2], [2]], ['recoverActionJson'],
   ['prepareCreate', [1], [1]], ['prepareCreateJson'], ['recoverCreate'],
-  ['prepareProposal', [2], [2]], ['recoverProposal'],
+  ['prepareProposal', [2], [2]], ['prepareProposalJson'], ['recoverProposal'],
 ]) {
   const original = native.BaseRegistryClient.prototype[method];
   native.BaseRegistryClient.prototype[method] = function (...args) {

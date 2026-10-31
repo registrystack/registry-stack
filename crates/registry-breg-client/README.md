@@ -56,6 +56,11 @@ client's configured credential unchanged. Each derived value owns its token, so
 different callers can use the same base client concurrently without a mutable
 credential slot. Keep it within the inbound request that supplied the token.
 
+Use `client.with_maximum_response_bytes(limit)?` to derive a client with a
+separate response-body budget for a particular exchange. It reuses the same
+credential provider, connection pool and source binding, and leaves the original
+client's response limit unchanged. The limit must be greater than zero.
+
 ## Read records
 
 ```rust,no_run

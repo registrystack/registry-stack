@@ -328,3 +328,16 @@ async fn unknown_input_members_are_refused() {
     assert_eq!(refusal_code(&outcome), "invalid-command");
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn an_oversized_record_response_is_terminal_instead_of_retryable() {
+    let (outcome, count) = run(
+        ResponseTemplate::new(200)
+            .insert_header("traceparent", TRACE)
+            .set_body_raw("x".repeat(65_537), "application/json"),
+        command(district(), "2026-06-05"),
+    )
+    .await;
+    assert_eq!(count, 1);
+    assert_eq!(refusal_code(&outcome), "invalid-response");
+}

@@ -152,10 +152,14 @@ struct Fixture {
 
 impl Fixture {
     async fn start() -> Self {
+        Self::with_metadata(metadata()).await
+    }
+
+    async fn with_metadata(metadata: Value) -> Self {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/tenant/base/v1/registry"))
-            .respond_with(response(200, metadata()))
+            .respond_with(response(200, metadata))
             .mount(&server)
             .await;
         let current = Arc::new(Mutex::new(Current::Proposal(proposal("draft", 1, 1))));
@@ -671,5 +675,32 @@ async fn each_answered_follow_read_records_what_the_proposal_showed() {
         json!({"state":"submitted", "turn":"official", "submissionVersion":1,
             "handoffRefusal":"review.refused"})
     );
+    fixture.issuer.stop().await;
+}
+
+#[tokio::test]
+async fn proposal_get_uses_the_separate_metadata_budget_and_retains_its_business_body_limit() {
+    let mut document = metadata();
+    document["additionalDescriptions"] = json!(["m".repeat(40_000), "n".repeat(40_000)]);
+    let fixture = Fixture::with_metadata(document).await;
+    let read = command(Operation::ReadProposal, json!({"proposalId":ID}), None);
+    assert_eq!(
+        success(fixture.adapters.call(&read).await),
+        receipt("draft", 1)
+    );
+    let mut oversized = proposal("draft", 1, 1);
+    oversized["input"]["label"] = json!("x".repeat(65_536));
+    fixture.answer(Current::Proposal(oversized));
+    match fixture.adapters.call(&read).await {
+        CallOutcome::Refused { code } => assert_eq!(code, "invalid-response"),
+        _ => panic!("an oversized Proposal read is terminal and never enlarges its budget"),
+    }
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method == "GET"));
     fixture.issuer.stop().await;
 }
