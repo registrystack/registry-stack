@@ -14,18 +14,18 @@ use std::sync::Arc;
 
 use proptest::prelude::*;
 use proptest::test_runner::{FileFailurePersistence, RngSeed, TestCaseError, TestRunner};
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
     check_project, check_routes, AccessProfile, AdapterPack, AdapterProfile, AdapterProject, Binding, Capabilities, Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef, Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType, RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace, AdapterEndpointBindings,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
-use registry_platform_yaml::{BoundedU32,
-    BoundedU64, Digest, ExternalId, LocalId, UniqueIdList, UniqueList, Url,
+use registry_platform_yaml::{
+    BoundedU32, BoundedU64, Digest, ExternalId, LocalId, UniqueIdList, UniqueList, Url,
 };
 use serde_json::{json, Value};
 
@@ -406,7 +406,7 @@ async fn run_once(case: &GeneratedRoute, accepted: u64) -> Result<(usize, Vec<u8
         routes: &routes,
         code_maps,
         maximum_upstream_calls: accepted,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let outcome = run_route(&context, &root.steps, Exchange::new("generated".to_owned())).await;
     let exchange = outcome.result.map_err(|failure| {
@@ -468,7 +468,7 @@ async fn run_pages(pages: &[Value]) -> Result<(usize, Result<Value, ErrorClass>)
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: pages.len() as u64,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("generated-pagination".to_owned());
     exchange.message.body = json!({"records": []});
@@ -552,7 +552,7 @@ async fn run_local_route(route: &[Step]) -> RouteOutcome {
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 1,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     run_route(&context, route, Exchange::new("generated-split".to_owned())).await
 }

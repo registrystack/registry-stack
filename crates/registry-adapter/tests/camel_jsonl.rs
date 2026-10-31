@@ -7,7 +7,7 @@
 //! same row bound as CSV, and the same paging contract.
 #![cfg(feature = "job-file")]
 
-use registry_adapter::job::{compile_job, run_job_page};
+use registry_adapter::engine::job::{compile_job, run_job_page};
 use registry_platform_config::sha256_uri;
 use serde_json::json;
 use std::path::PathBuf;

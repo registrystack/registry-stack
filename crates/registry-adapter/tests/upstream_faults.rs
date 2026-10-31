@@ -12,19 +12,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     run_route_within, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
     Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential, Step, AdapterEndpointBindings,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
-use registry_platform_yaml::{
-    BoundedU64, ExternalId, LocalId, UniqueIdList, UniqueList, Url,
-};
+use registry_platform_yaml::{BoundedU64, ExternalId, LocalId, UniqueIdList, UniqueList, Url};
 use serde_json::{json, Value};
 
 const PRIVATE_MARKER: &str = "partial-record-must-not-escape";
@@ -117,7 +115,7 @@ async fn run_timed(
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("upstream-fault".to_owned());
     exchange.message.body = body;

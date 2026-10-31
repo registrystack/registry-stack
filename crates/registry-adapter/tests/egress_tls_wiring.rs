@@ -15,10 +15,10 @@
 
 #![cfg(feature = "postgres-test")]
 
-use registry_adapter::auth::{
+use registry_adapter::engine::auth::{
     AuthError, ClientAssertion, ClientAssertionSigner, ProtectedText, TokenBudget,
 };
-use registry_adapter::egress::{Egress, EgressError, OkStatusCodeRanges, SendShape};
+use registry_adapter::engine::egress::{Egress, EgressError, OkStatusCodeRanges, SendShape};
 use registry_adapter_core::{
     AnonymousHttpsAcknowledgement, ComponentKind, CredentialPlacement, Endpoint,
     EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential,
@@ -460,7 +460,7 @@ async fn the_right_ca_completes_the_token_and_data_sends_over_tls() {
     let credential = credential.expect("an oauth2 kind produces a header").header;
 
     let reply = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -535,7 +535,7 @@ async fn the_wrong_ca_completes_neither_handshake() {
         .expect("a basic kind resolves its pair");
     let credential = credential.expect("a basic kind produces a header").header;
     let error = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -592,7 +592,7 @@ async fn the_wrong_ca_completes_neither_handshake() {
         .await
         .expect_err("the acquisition fails inside the handshake");
     match &error {
-        AuthError::Token(registry_adapter::auth::TokenFault::Transport { kind }) => {
+        AuthError::Token(registry_adapter::engine::auth::TokenFault::Transport { kind }) => {
             assert_eq!(
                 kind.kind(),
                 "connect",

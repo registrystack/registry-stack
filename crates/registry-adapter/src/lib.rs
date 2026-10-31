@@ -42,28 +42,12 @@
 //! issuance the refused send carried. Every fault maps to a section 8.7
 //! class, and the journal keeps only value-free auth events.
 
-pub mod auth;
 pub mod cli;
-pub mod component;
-#[cfg(feature = "job-file")]
-pub mod decoder;
-pub mod effective_contract;
-pub mod egress;
-pub mod envelope;
-pub mod errorhandler;
-pub mod exchange;
+pub mod custody;
+pub mod engine;
 pub mod facade;
 pub mod idempotent;
-pub mod job;
-pub mod job_sources;
 pub mod journal;
-pub mod language;
-pub mod load;
 pub mod notifier;
-pub mod processor;
 pub mod read_request;
-pub mod replay;
-pub mod resilience;
-pub mod route;
-pub mod scripts;
 pub mod serve;

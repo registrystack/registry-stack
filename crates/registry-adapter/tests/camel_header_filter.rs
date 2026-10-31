@@ -11,7 +11,7 @@
 //! allowlist first and by Camel only where Camel's rule still applies.
 
 use http::{HeaderName, HeaderValue};
-use registry_adapter::component::http::header_filter::{
+use registry_adapter::engine::component::http::header_filter::{
     AllowlistError, HeaderFilter, HeaderSide, InboundHeaderError, OutboundHeaderError,
 };
 use registry_adapter_core::{

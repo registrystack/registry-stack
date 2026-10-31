@@ -5,11 +5,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use registry_adapter::component::graphql::GraphQlQuery;
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable};
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::component::graphql::GraphQlQuery;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
+    run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
+};
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
     AdapterEndpointBindings, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding,
     GraphQlOperationKind, RuntimeCredential, Step,
@@ -101,7 +103,7 @@ async fn run_reply(status: u16, body: &str) -> RouteOutcome {
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 2,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     run_route(&context, &steps, Exchange::new("graphql-reply".to_owned())).await
 }

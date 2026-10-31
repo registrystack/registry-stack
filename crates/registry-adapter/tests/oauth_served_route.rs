@@ -9,11 +9,11 @@ mod upstream;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::route::{
     run_route_within, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
     AdapterEndpointBindings, ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication,
     EndpointBinding, ErrorClass, RuntimeCredential, Step,
@@ -116,7 +116,7 @@ async fn run(
     .expect("endpoint compiles");
     let endpoints = BTreeMap::from([("source".to_owned(), runtime)]);
     let scripts = ScriptSet::default();
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -126,7 +126,7 @@ async fn run(
         routes: &routes,
         code_maps: std::sync::Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 12,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let send: Step = serde_json::from_value(
         json!({"to":{"uri":"http:source","parameters":{"httpMethod":"GET","path":"/data"}}}),

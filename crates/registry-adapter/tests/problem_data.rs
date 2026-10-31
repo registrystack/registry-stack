@@ -9,14 +9,14 @@ use std::collections::BTreeMap;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Response, StatusCode};
-use registry_adapter::envelope::CompiledEnvelope;
-use registry_adapter::exchange::Exchange;
-use registry_adapter::facade::{route_problem, Problems};
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::envelope::CompiledEnvelope;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     run_route, run_route_with_profile, RouteContext, RouteFailure, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::{CodeMaps, ScriptSet};
+use registry_adapter::engine::scripts::{CodeMaps, ScriptSet};
+use registry_adapter::facade::{route_problem, Problems};
 use registry_adapter_core::{
     AdapterProfile, EnvelopeTemplate, ErrorClass, Expression, Problem, RecordField,
     RecordFieldType, Step, ThrowExceptionStep, MAX_PROBLEM_DATA_BYTES,
@@ -129,7 +129,7 @@ async fn run(profile: Option<&AdapterProfile>, steps: &[Step]) -> RouteOutcome {
         routes: &routes,
         code_maps,
         maximum_upstream_calls: 1,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     match profile {
         Some(profile) => {

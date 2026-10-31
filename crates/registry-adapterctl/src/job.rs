@@ -109,10 +109,10 @@ pub(crate) fn run(args: &JobCheckArgs) -> Result<JobCheckRun, JobCheckFailure> {
         });
     }
     let outcome = match (&args.profile, &args.project) {
-        (Some(profile), Some(project)) => registry_adapter::job::compile_job_with(
+        (Some(profile), Some(project)) => registry_adapter::engine::job::compile_job_with(
             &args.pack, &args.job, &runtime, profile, project,
         ),
-        (None, None) => registry_adapter::job::compile_job(&args.pack, &args.job, &runtime),
+        (None, None) => registry_adapter::engine::job::compile_job(&args.pack, &args.job, &runtime),
         _ => {
             return Err(JobCheckFailure::Io {
                 path: "--profile --project".to_owned(),

@@ -14,12 +14,12 @@ mod upstream;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     check_servable, run_route, EndpointRuntime, RouteContext, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
     check_project, check_routes, AccessProfile, AdapterPack, AdapterProfile, AdapterProject, Binding, Capabilities, Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef, Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType, RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace, AdapterEndpointBindings,
 };
@@ -349,7 +349,7 @@ fn runtime_config(base_url: &str) -> AdapterEndpointBindings {
     }
 }
 
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     Arc::new(BTreeMap::new())
 }
 
@@ -389,7 +389,7 @@ async fn checker_accepted_read_budgets_bound_actual_interpreter_sends() {
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: accepted,
-            job: registry_adapter::job_sources::JobPageState::default(),
+            job: registry_adapter::engine::job_sources::JobPageState::default(),
         };
         let outcome = run_route(
             &context,
@@ -450,7 +450,7 @@ async fn an_oversized_http_body_is_a_too_large_failure_with_no_partial_result() 
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let route = steps(json!([get()]));
     let outcome = run_route(&context, &route, Exchange::new("oversized-body".to_owned())).await;

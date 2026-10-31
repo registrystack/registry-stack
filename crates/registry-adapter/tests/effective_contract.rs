@@ -6,7 +6,7 @@
 use std::fs;
 use std::process::Command;
 
-use registry_adapter::effective_contract::{
+use registry_adapter::engine::effective_contract::{
     schema as effective_contract_schema, DIGEST_DOMAIN, PIN_PROBLEM_CODE, UNAVAILABLE_PROBLEM_CODE,
 };
 use registry_adapter_core::{

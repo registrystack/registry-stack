@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use registry_adapter::effective_contract::WELL_KNOWN_PATH;
+use registry_adapter::engine::effective_contract::WELL_KNOWN_PATH;
 use serde_json::{json, Value};
 use served_harness::upstream::{Response, UpstreamDouble};
 use served_harness::{capture, Served};

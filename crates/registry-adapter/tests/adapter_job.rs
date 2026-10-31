@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use registry_adapter::job::{compile_job, run_job_page, ADAPTER_JOB_CURSOR_PROPERTY};
+use registry_adapter::engine::job::{compile_job, run_job_page, ADAPTER_JOB_CURSOR_PROPERTY};
 use registry_platform_config::sha256_uri;
 use serde_json::{json, Value};
 
@@ -233,6 +233,7 @@ fn runtime_yaml(base_url: &str) -> String {
 /// The runtime config of a source-only job: no endpoint bindings, because
 /// the file and postgres sources bind through the runtime's sources
 /// block, not an endpoint binding.
+#[cfg_attr(all(feature = "job-file", feature = "job-postgres"), allow(dead_code))]
 fn runtime_yaml_without_bindings() -> String {
     let config = json!({
         "apiVersion": "id.registrystack.org/formats/adapter/runtime/v1alpha1",
@@ -567,6 +568,7 @@ capabilities: {{}}
 /// A fixture workspace around a caller-supplied pack text and the source
 /// route the job runs: profile and project beside it, the job, and the
 /// operator runtime config.
+#[cfg_attr(all(feature = "job-file", feature = "job-postgres"), allow(dead_code))]
 fn write_pack_fixture(pack_text: &str, route: &str) -> Fixture {
     write_pack_fixture_with_runtime(pack_text, route, &runtime_yaml_without_bindings())
 }

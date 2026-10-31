@@ -152,7 +152,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
     }
     documents.insert(
         "effective-contract.v1alpha1.schema.json",
-        render(&registry_adapter::effective_contract::schema())?,
+        render(&registry_adapter::engine::effective_contract::schema())?,
     );
     Ok(documents)
 }
@@ -545,7 +545,7 @@ mod tests {
                 .expect("the effective contract schema is JSON");
         assert_eq!(
             effective,
-            registry_adapter::effective_contract::schema(),
+            registry_adapter::engine::effective_contract::schema(),
             "the generated file is the runtime's exact projection"
         );
         for (file, contents) in &first {

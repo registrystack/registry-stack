@@ -14,13 +14,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     check_servable, run_route, run_route_within, EndpointRuntime, RouteContext, RouteFailure,
     RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
     AdapterEndpointBindings, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding,
     RuntimeCredential, Step,
@@ -32,7 +32,7 @@ use registry_platform_yaml::{
 use serde_json::{json, Value};
 
 /// The empty code-map table: no test lane here converts.
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     std::sync::Arc::new(std::collections::BTreeMap::new())
 }
 
@@ -191,7 +191,7 @@ impl Lane {
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
-            job: registry_adapter::job_sources::JobPageState::default(),
+            job: registry_adapter::engine::job_sources::JobPageState::default(),
         };
         run_route(&context, &self.steps, exchange).await
     }
@@ -208,7 +208,7 @@ impl Lane {
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
-            job: registry_adapter::job_sources::JobPageState::default(),
+            job: registry_adapter::engine::job_sources::JobPageState::default(),
         };
         run_route_within(
             &context,
@@ -245,7 +245,7 @@ fn failed_class(outcome: &RouteOutcome) -> &'static str {
     failed(outcome).class.class()
 }
 
-fn ok(outcome: &RouteOutcome) -> &registry_adapter::exchange::Exchange {
+fn ok(outcome: &RouteOutcome) -> &registry_adapter::engine::exchange::Exchange {
     outcome.result.as_ref().expect("the exchange completes")
 }
 

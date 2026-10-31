@@ -13,9 +13,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::route::{check_servable, run_route, RouteContext, RouteTable};
-use registry_adapter::scripts::{CodeMaps, ScriptSet};
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::route::{check_servable, run_route, RouteContext, RouteTable};
+use registry_adapter::engine::scripts::{CodeMaps, ScriptSet};
 use registry_adapter_core::{AdapterPack, Step};
 use registry_platform_config::{sha256_uri, SecretProvider, SecretResolver};
 use registry_platform_yaml::{ExternalId, LocalId};
@@ -46,7 +46,7 @@ fn status_maps() -> CodeMaps {
 
 /// One route run over the given body and maps: a conversion needs no
 /// upstream.
-async fn run(step_list: Vec<Step>, body: Value) -> registry_adapter::route::RouteOutcome {
+async fn run(step_list: Vec<Step>, body: Value) -> registry_adapter::engine::route::RouteOutcome {
     run_over(step_list, body, status_maps(), &ScriptSet::default()).await
 }
 
@@ -56,11 +56,11 @@ async fn run_over(
     body: Value,
     maps: CodeMaps,
     scripts: &ScriptSet,
-) -> registry_adapter::route::RouteOutcome {
+) -> registry_adapter::engine::route::RouteOutcome {
     let endpoints = BTreeMap::new();
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -70,14 +70,14 @@ async fn run_over(
         routes: &routes,
         code_maps: maps,
         maximum_upstream_calls: 4,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("test".to_owned());
     exchange.message.body = body;
     run_route(&context, &step_list, exchange).await
 }
 
-fn failed_class(outcome: &registry_adapter::route::RouteOutcome) -> &'static str {
+fn failed_class(outcome: &registry_adapter::engine::route::RouteOutcome) -> &'static str {
     outcome
         .result
         .as_ref()
@@ -86,7 +86,7 @@ fn failed_class(outcome: &registry_adapter::route::RouteOutcome) -> &'static str
         .class()
 }
 
-fn failed_message(outcome: &registry_adapter::route::RouteOutcome) -> &str {
+fn failed_message(outcome: &registry_adapter::engine::route::RouteOutcome) -> &str {
     outcome
         .result
         .as_ref()
@@ -96,7 +96,7 @@ fn failed_message(outcome: &registry_adapter::route::RouteOutcome) -> &str {
         .expect("the failure names its map")
 }
 
-fn ok(outcome: &registry_adapter::route::RouteOutcome) -> &Exchange {
+fn ok(outcome: &registry_adapter::engine::route::RouteOutcome) -> &Exchange {
     outcome.result.as_ref().expect("the exchange completes")
 }
 

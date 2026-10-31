@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use registry_adapter::job::{compile_job, run_job_page};
+use registry_adapter::engine::job::{compile_job, run_job_page};
 use registry_platform_config::sha256_uri;
 use serde_json::json;
 

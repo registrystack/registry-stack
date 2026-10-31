@@ -9,10 +9,12 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 #[path = "support/served/mod.rs"]
 mod served_harness;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{run_route_within, EndpointRuntime, RouteContext, RouteTable};
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
+    run_route_within, EndpointRuntime, RouteContext, RouteTable,
+};
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
     AdapterRuntimeConfig, AuditRetention, Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential, Step, AdapterEndpointBindings,
 };
@@ -169,7 +171,7 @@ async fn the_kernel_stops_before_a_send_over_the_call_budget() {
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 1,
-        job: registry_adapter::job_sources::JobPageState::default(),
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
 
     let outcome = run_route_within(

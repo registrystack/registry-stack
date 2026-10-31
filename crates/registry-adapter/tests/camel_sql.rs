@@ -15,11 +15,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_adapter::component::postgres::{
+use registry_adapter::engine::component::postgres::{
     compile_plan, compile_query, PostgresRead, PostgresReadFault, PostgresRows, PostgresSource,
     SourceRow, SourceScalar,
 };
-use registry_adapter::job::{compile_job, run_job_page};
+use registry_adapter::engine::job::{compile_job, run_job_page};
 use registry_platform_config::sha256_uri;
 use serde_json::json;
 
