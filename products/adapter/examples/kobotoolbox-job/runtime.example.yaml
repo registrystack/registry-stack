@@ -26,8 +26,8 @@ endpoints:
     tlsTrustProfile: kobo-private-ca
     credential:
       type: basic
-      usernameRef: secret:ref/kobo-username
-      passwordRef: secret:ref/kobo-password
+      usernameRef: secret:env/KOBO_USERNAME
+      passwordRef: secret:env/KOBO_PASSWORD
 outboundTls:
   trustProfiles:
     kobo-private-ca:

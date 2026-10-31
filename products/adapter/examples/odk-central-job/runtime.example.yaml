@@ -28,8 +28,8 @@ endpoints:
     tlsTrustProfile: odk-private-ca
     credential:
       type: basic
-      usernameRef: secret:ref/odk-email
-      passwordRef: secret:ref/odk-password
+      usernameRef: secret:env/ODK_EMAIL
+      passwordRef: secret:env/ODK_PASSWORD
 outboundTls:
   trustProfiles:
     odk-private-ca:
