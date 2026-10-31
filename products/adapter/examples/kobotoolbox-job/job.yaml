@@ -27,7 +27,7 @@ source:
   pack:
     id: kobotoolbox
     version: "1"
-    digest: sha256:c99837947cc84c06ca4cee6dc26c9aadd8c14848b8196cb6e5c2c1eb1a8b9e56
+    digest: sha256:77026d1f9d836378cf8982b3e6b1a193d811a469c14b47ea1896af64c4ea4277
   route: kobo-submissions
 profile:
   # One route run: one send, one redelivery at most, well inside the

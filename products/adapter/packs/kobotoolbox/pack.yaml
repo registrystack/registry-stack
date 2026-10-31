@@ -123,9 +123,9 @@ sourceRoutes:
             entrypoint: shape_page
 scripts:
   - path: scripts/seed-offset.rhai
-    digest: sha256:ffc496cd191480e2171f4322df8b09b5c9acbe7d46fe3965981e0f4ed4bc7de8
+    digest: sha256:bbfca7e32def9f4bc6f152e8d99febbeb090930a1afd104f751ebb5e997d266f
   - path: scripts/shape-page.rhai
-    digest: sha256:1ffd46bf897bd76b76ee928487231b435e7121af32ecf4ebca230c6d59674f4f
+    digest: sha256:53d5ec547d9cdb6e3426777712c9046ce87aa2bde055bc02f5fbdff27265856e
 capabilities:
   components:
     - http

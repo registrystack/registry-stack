@@ -1,14 +1,14 @@
-# The position the odk-submissions and odk-repeats routes fetch in
-# this run.
-#
-# The engine evaluates the route's setProperty expressions on the
-# exchange (CONCEPT 8.11.3). In job mode the exchange starts with the
-# job cursor under the closed property `AdapterJobCursor`, absent on
-# the first run (CONCEPT 17.2). The odk-submissions cursor is
-# `{nextLink: <url>}` when a continuation follows and absent on the
-# first run; the odk-repeats cursor is `{offset: <n>}` or absent. One
-# file, two seeds, one reader: a cursor of the wrong shape throws
-# rather than silently restarting. Pure and deterministic; no I/O.
+// The position the odk-submissions and odk-repeats routes fetch in
+// this run.
+//
+// The engine evaluates the route's setProperty expressions on the
+// exchange (CONCEPT 8.11.3). In job mode the exchange starts with the
+// job cursor under the closed property `AdapterJobCursor`, absent on
+// the first run (CONCEPT 17.2). The odk-submissions cursor is
+// `{nextLink: <url>}` when a continuation follows and absent on the
+// first run; the odk-repeats cursor is `{offset: <n>}` or absent. One
+// file, two seeds, one reader: a cursor of the wrong shape throws
+// rather than silently restarting. Pure and deterministic; no I/O.
 fn cursor_member(exchange, member, expected_type) {
     let cursor = exchange.properties.AdapterJobCursor;
     if cursor == () {

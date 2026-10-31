@@ -110,9 +110,29 @@ may move the suites there when the job replay runner lands.
 ## Validation performed
 
 - `cargo test -p registry-adapter-core` stays green (no code changed).
-- Every authored YAML parses (python3 yaml).
-- Script digest pins computed with `shasum -a 256` over the file bytes,
-  spelled exactly as the dhis2 pack spells them.
+- `adapterctl check` (the existing facade-path reader, via the minimal
+  harness project in `scratch/packs/check-harness/`, which binds no
+  facade routes) passes with 0 errors, 0 warnings for both packs: the
+  pack documents, the script digest pins, the Rhai compilation of all
+  six scripts, the `$top`/`$count` query keys, the `httpUri` and
+  `choice` constructs, and the source-route declarations all load
+  clean. The harness caught two real defects, both fixed: the scripts
+  originally carried `#` comment headers (Rhai reads `//` only), and
+  the first runtime examples spelled `secret:ref/...`, outside the
+  closed `secret:env/NAME | secret:file/name` reference grammar.
+- Checked-in JSON schemas: the pack documents validate against
+  `schemas/pack.v1alpha1.schema.json` on the members that schema
+  governs (it predates `sourceRoutes`; the steps were validated
+  against its Step definitions individually), the runtime examples
+  validate against `schemas/runtime.v1alpha1.schema.json`, and the
+  fixture envelopes validate against `schemas/fixture.v1alpha1.schema.json`.
+- Every authored YAML parses (python3 yaml); script digest pins
+  recomputed with `shasum -a 256` and match the inventory.
 - What could not be executed: `adapterctl job check` does not exist
-  yet (parallel engine stream). The exact files it should check are
-  listed in the stream report and in each example's header comment.
+  yet (parallel engine stream; its in-flight `run_job_route` edit also
+  briefly blocked building `adapterctl`, which resolved). The exact
+  files it should check are listed in the stream report and in each
+  example's header comment. The fixture suites cannot replay until the
+  job-mode fixture format lands: their entries are the documented
+  provisional shape, and the facade-shaped reader refuses them by
+  design.

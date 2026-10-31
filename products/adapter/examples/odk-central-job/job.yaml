@@ -31,7 +31,7 @@ source:
   pack:
     id: odk-central
     version: "1"
-    digest: sha256:40cc4e61d214efc8a3629f27f97a2bfaa08eb5ce1c730d67d549a38536ab3716
+    digest: sha256:2a0c9d0d0d154aeeb7a6f1d8052185ae6e495b23bc07b324105f35a3eb0e870d
   route: odk-submissions
 profile:
   # One route run: one send, one redelivery at most, well inside the

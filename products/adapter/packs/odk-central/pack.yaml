@@ -212,13 +212,13 @@ sourceRoutes:
             entrypoint: shape_repeats
 scripts:
   - path: scripts/cursor.rhai
-    digest: sha256:5add14fb55beef24b724de332ec45abaaa86205e5c465751bc29405aeda44128
+    digest: sha256:c8794920082507483048c07978fa0f5556cb35d2d1f2c2665b69996a1b388575
   - path: scripts/has-next-link.rhai
-    digest: sha256:1bedb630c60fd90f489eec0e7ccbd37c2ca0a02766f8ba75c58175032568568f
+    digest: sha256:af29393f0c194d0178298192f9225d877cf5f8298ff819ed891bd82e3ecb9042
   - path: scripts/shape-page.rhai
-    digest: sha256:e45772c32731f3ad56ac291fab9d6607821442c55857d3bb41ef4885345cbbeb
+    digest: sha256:ce18d6dad2ad154bc8e14e963dfa73ad8b82c127e26d8e9e2feec9e8b8a52aa7
   - path: scripts/shape-repeats.rhai
-    digest: sha256:2a202eb5f2caf5be7f5390f05c169891806de8a88b16561efe4ca13e5073aca7
+    digest: sha256:a625d8e06f877d73e577013ff51b3a2213ca86b93631304162778ada32397c4a
 capabilities:
   components:
     - http
