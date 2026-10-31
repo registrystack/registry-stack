@@ -365,13 +365,17 @@ async fn token_acquisition_obeys_the_route_deadline_before_any_data_send() {
         200,
         r#"{"access_token":"late","token_type":"Bearer","expires_in":600}"#,
     )]);
-    double.delay_answers(Duration::from_millis(100));
+    // The margins carry the invariant, not the absolute numbers: the
+    // token answer sits four deadlines out, so the deadline expires
+    // while the token request is in flight under the parallel matrix's
+    // own scheduling jitter, and the acquisition is still charged.
+    double.delay_answers(Duration::from_millis(1_000));
     let outcome = run(
         &double,
         EndpointAuthentication::Oauth2ClientCredentials {},
         Some(oauth(&double)),
         1,
-        Duration::from_millis(10),
+        Duration::from_millis(250),
     )
     .await;
     assert_eq!(
