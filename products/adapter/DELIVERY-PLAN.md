@@ -615,8 +615,15 @@ Increment 1:
     test methods to actual Rust assertions and record exclusions; the
     boundary inventory also records the bounded mock/intercept replay
     proof. A citation by itself is not conformance evidence.
-12. Every normal dependency of `registry-adapter` is referenced by its code
-    (no dependency added ahead of use survives the increment).
+12. Every normal library dependency of `registry-adapter` is referenced by
+    its code; no dependency added ahead of use survives the increment.
+    A documented resolution-steering pin may constrain an already-used
+    transitive dependency without a direct Rust reference. The current
+    `pest =2.8.5` pin holds the parser used by `jsonpath-rust`: pest 2.9's
+    `pest_stack_guard` would force a workspace-wide `psm` downgrade. The
+    workspace dependency comment records the revisit trigger. The integration
+    review verifies this relationship with `cargo tree`, rather than treating
+    an unused future library as a steering pin.
 
 Increment 2:
 
@@ -644,7 +651,7 @@ contradiction rule 11 surfaced, and the decisions still pending.
 
 ## Increment checklist
 
-- [ ] Increment 0
-- [ ] Increment 1
+- [x] Increment 0
+- [x] Increment 1
 - [ ] Increment 2
 - [ ] Increment 3

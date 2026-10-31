@@ -15,13 +15,18 @@ remaining read-engine definition of done.
   on one effective exception-policy helper; direct conformance cases now
   cover the three missing resilience behaviors; the experiment execution
   record is current; and the stale attribution narrative is corrected.
-- **Aggregate verification: HOLD.** Focused and PostgreSQL results reported by
-  the integration stream are strong supporting evidence, but the final
-  contract, full-workspace, configuration-conformance, and dependency gates
-  have not yet run on the final integrated tree.
-- **Increment 1 acceptance: HOLD.** The source findings are closed, but do not
-  describe this increment as delivered until the final gates pass on the same
-  candidate.
+- **Owning aggregate verification: PASS.** The complete Adapter contract and
+  PostgreSQL gates, workspace check and Clippy, CLI catalog, CI classifier,
+  port-table milestone, generated contracts, exact-artifact source proof, and
+  matching MCP read proof are green. The three retained property-test seeds
+  were exercised by both owning gates.
+- **Increment 1 acceptance: PASS with explicit workspace exceptions.** Strict
+  workspace configuration conformance still has two unchanged failures owned
+  by Evidence and Coordinator. `cargo deny` still reports three unchanged
+  Wasmtime advisories. Neither is an Adapter failure, and neither is described
+  as green or fixed below.
+- **Wider delivery: HOLD.** Later Adapter increments, real OpenCRVS proof,
+  workspace conformance debt, merge, release, and deployment remain separate.
 
 ## Findings
 
@@ -164,70 +169,101 @@ these changes.
 
 ### Independently inspected
 
-- The candidate tree was based on the expected checkout state and was dirty
-  with the integrated source and test changes. This review does not bind its
-  verdict to a commit identifier.
+- The frozen runtime source was at the expected integration checkpoint. The
+  remaining prepared changes are documentation, milestone, CLI catalog test,
+  and retained property-test evidence only; they change no Adapter runtime
+  behavior.
 - The product guide, `CONCEPT.md`, `DELIVERY-PLAN.md`, platform configuration
-  conventions, and all three new Camel attribution reports were read.
+  conventions, three Camel attribution reports, and integration review were
+  read.
 - Source paths for core checks, serving checks, route execution, problem-data
   validation and release, collection metadata, HTTP status handling,
   resilience wiring, the DHIS2 script, and the native experiment harness were
   inspected.
-- `git diff --check` was clean.
-- The target-API source scan matched only test modules. The pack scan found no
-  `CamelHttpResponseCode` write and no profile problem code. Every required
-  source-bound conformance module contained a `camel-4.23.0:` citation.
-- The five experiment directories and five native experiment test cases match
-  one for one.
+- The complete owning logs contain 943 contract tests and 633 PostgreSQL tests,
+  with zero failures and zero ignored tests. The PostgreSQL gate includes a
+  nonempty eight-test journal suite, both served profiles, persisted security
+  negatives, problem data, idempotency, and response-identity migration.
+- The CLI catalog correction has 24 unit and 3 snapshot tests green. Focused
+  all-target Clippy is green after that test-only correction; the earlier
+  workspace-wide check and all-target Clippy are also green.
+- The CI change-classifier suite passed 183 tests. Final format and Adapter
+  configuration-conventions checks are green: 114 recorded findings, zero
+  unrecorded, stale, or erroneous findings.
+- The port-table gate now reports 37 rows, 35 delivered with evidence and only
+  the Increment 2 Idempotent Consumer and Increment 3 GraphQL rows pending.
+  Its eight unit tests and the PostgreSQL wrapper self-test pass.
+- The target-API source scan matched only inspected `#[cfg(test)]` modules.
+  The pack scan found no response-status-header write and no profile problem
+  code. Every required source-bound conformance module contains a pinned Camel
+  source citation.
+- Read-only `cargo tree` inspection found no normal `registry-record` reach.
+  It confirmed that `jsonpath-rust` uses `pest 2.8.5` and that the direct
+  declaration is the documented resolution-steering pin, not an unused future
+  library. The Adapter normal tree contains no Wasmtime dependency.
+- Local history inspection found conventional subjects, exactly one DCO
+  sign-off per commit, and no agent-attribution trailer.
+- The five experiment directories and five native experiment cases match one
+  for one. Their report distinguishes `verify --live` caller-sourced waits
+  from the separate native facade transport proof.
 
-No Cargo command, build, private harness, credential, or private execution log
-was accessed in this review.
+This reviewer ran no build or test command and accessed no private credential
+or harness. Read-only inspection included source, named gate logs, Git history,
+and Cargo dependency metadata.
 
-### Reported by the integration stream, not independently rerun here
+### Exact-artifact source and integration proof
 
-- Adapter core: 308 unit tests plus one documentation test, with focused
-  Clippy green.
-- Adapter runtime: 190 library tests, 9 problem-data tests, 15 error-cluster
-  tests, and 7 lifecycle tests.
-- Platform resilience: 22 tests and focused Clippy green.
-- Camel attribution targets: 31 collection tests; the focused boundary
-  targets reported 28 header-filter, 19 resilience, and 28 egress tests.
-- Conformance corpus: 125 cases plus 17 harness self-tests.
-- Eight project pins and OpenAPI outputs regenerated through the actual CLI,
-  with the double-generation comparison byte-identical; six schemas reported
-  fresh.
-- An earlier post-checkpoint PostgreSQL gate was reported green and included
-  five native experiment identity/authentication/TLS cases and four served
-  security cases. Subsequent source fixes mean this is not the final-tree
-  gate. This review did not inspect the private log or re-derive its totals.
+The lead reports the following against one frozen feature-enabled Adapter
+executable, its matching CLI and runtime library:
 
-These results support the candidate, but they do not substitute for final
-acceptance gates.
+- the real DHIS2 read journey passed 264 of 264 checks;
+- the synchronous tagged write journey passed 16 of 16 checks, including one
+  source effect, readback, exact response bytes and original response ID on
+  replay, changed-body mismatch without a send, and ownership-verified cleanup;
+- real `verify --live` executed one request with zero waits and zero
+  diagnostics;
+- sensitive-output scans returned zero hits; and
+- the matching MCP/gateway native read integration passed 6 of 6, with all
+  copied artifact hashes stable.
 
-### Evidence that must not be attributed to this candidate
+Exact local artifact identities and the private execution details remain in
+the lead's checkpoint. This report relies only on the supplied counts and
+identity readback. It does not expose credentials or private harness content.
+The matching MCP proof is integration evidence, not permission to claim MCP
+writes or broader product authority.
 
-- The earlier captured DHIS2 get, missing, search, and live records-get run was
-  performed against an earlier checkpoint. It remains useful historical
-  evidence, but it is not proof of the current post-checkpoint artifact.
-- The earlier MCP Adapter/gateway run used a frozen Adapter binary from an
-  earlier checkpoint. It must not be reported as a paired execution of the
-  current candidate.
+Three generated property-test seeds, stored in two files, were present in both
+owning runs and are retained unchanged in the final delivery set. Committing
+those exact bytes makes the 943-test and 633-test results reproducible without
+changing the test behavior the gates already exercised.
 
-If either proof is needed as final-candidate evidence, rerun it against the
-final artifact. Otherwise, describe it explicitly as earlier-checkpoint
-evidence.
+### Explicit workspace exceptions
 
-### Still required on the final integrated tree
+Strict configuration conformance is **not green**. Of 5,552 cells, 4,132 pass,
+2 fail, none are stale or blocked, and 1,418 are not applicable. The failures
+are unchanged `evidence/bundle` and `coordinator/runtime` unique-list sweeps:
+their owning readers wrap the expected duplicate-item diagnostic in a domain
+diagnostic. Fresh prerequisite binaries were used, no Adapter cell failed, and
+the owning reader and harness paths are unchanged by this increment. This is
+the written exception allowed by inherited Increment 0 acceptance item 6, not
+a workspace-wide pass or a fix to either product.
 
-At minimum:
+`cargo deny check` is also **not green**. It reports three unchanged Wasmtime
+48.0.7 advisories: RUSTSEC-2026-0422, RUSTSEC-2026-0423, and
+RUSTSEC-2026-0424. No package version or checksum changed in the lockfile
+cleanup, the Adapter normal dependency tree does not reach Wasmtime, and bans,
+licenses, and sources checks pass. These advisories remain workspace dependency
+debt; this review adds no ignore and does not claim they are fixed.
 
-1. run the Adapter contract gate;
-2. run the full workspace check and all-target Clippy gate;
-3. run strict configuration conformance and the CI change test;
-4. run `cargo deny check`, because Cargo manifests and the lockfile changed;
-5. run the final PostgreSQL gate after all source fixes;
-6. preserve the generated OpenAPI and schema freshness proof on that same
-   final tree.
+### Wider delivery limits
 
-Only then is there a revision-consistent basis for changing aggregate
-verification and Increment 1 acceptance from HOLD to PASS.
+- Passing Increment 1 marks the 30 read-engine port-table rows delivered. It
+  does not deliver GraphQL, Idempotent Consumer, or the later increment
+  checklist.
+- Real OpenCRVS acceptance still needs the client supplied by Jeremi. The
+  maintained OpenCRVS fixtures are documented evidence, not a live run.
+- The controlled FHIR experiments prove the bounded engine paths, not a live
+  HAPI integration. Public-source authentication remains a separate decision.
+- Personal delegation, record and field disclosure authority, MCP writes, and
+  typed non-record commands retain their own gates.
+- No push, merge, tag, release, or production deployment is claimed.

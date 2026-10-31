@@ -39,11 +39,10 @@ What it checks, in order:
    covers.
 
 Increment 0 evidence mapping (row concept -> the core tests that hold the
-row to the code). Extend this map when an increment lands. The 2026-10-31
-port walk additionally recorded the engine conformance suites for the
-runtime rows the code already delivers (HeaderFilterStrategy, HTTP
-authentication, Languages); they stay pending until increment 1 lands as
-a whole.
+row to the code). Extend this map when an increment lands. The engine
+conformance mappings also cover runtime rows such as HeaderFilterStrategy,
+HTTP authentication and Languages. The gate requires a row only after its
+whole increment is accepted.
 
 - "Route, YAML DSL": the route form, its `direct:`-only `from`, the acyclic
   graph, and the bounded depth
@@ -90,7 +89,7 @@ ENGINE_ROOT = REPO_ROOT / "crates" / "registry-adapter"
 PACK_SCHEMA = SCHEMAS / "pack.v1alpha1.schema.json"
 
 #: The highest increment this tree delivers. Rows above it are pending.
-INCREMENT_DELIVERED = 0
+INCREMENT_DELIVERED = 1
 
 #: Delivered row concept -> the test functions that evidence it. An entry
 #: "file.rs:function_name" resolves against crates/registry-adapter-core/src/;

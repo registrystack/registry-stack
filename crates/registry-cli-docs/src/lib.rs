@@ -153,6 +153,7 @@ mod tests {
                 .map(|command| command.name.as_str())
                 .collect::<Vec<_>>(),
             [
+                "adapter",
                 "adapterctl",
                 "breg",
                 "breg-mcp",
