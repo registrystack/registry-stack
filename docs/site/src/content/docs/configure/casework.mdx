@@ -283,7 +283,7 @@ next call. Leave it running.
 
 A separately operated assistant can list its represented staff member's assigned
 ReviewTasks and read context through the default-off delegated-reader routes.
-Enable a named `authentication.delegatedStaffReaders` policy in the Casework
+Enable a named `authentication.oidc.delegatedStaffReaders` policy in the Casework
 runtime, admitting the exact gateway, represented Staff profile, read scope,
 assertion issuer and short token lifetime. The source-built `registry-mcp`
 service selects that policy through `readerPolicy`.
