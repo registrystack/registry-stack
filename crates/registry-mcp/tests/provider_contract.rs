@@ -70,3 +70,26 @@ fn context_profile_retry_is_limited_to_the_exact_product_problem() {
         );
     }
 }
+
+#[test]
+fn staff_policy_and_source_ids_use_the_shared_local_identifier_contract() {
+    let base = url::Url::parse("https://casework.example.invalid/").unwrap();
+    assert!(CaseworkOptions::new(
+        base.clone(),
+        "assistant_reader".into(),
+        "source_reader".into(),
+        20
+    )
+    .is_ok());
+    let oversized = "a".repeat(65);
+    for id in ["-", "0reader", "Upper", "bad space", oversized.as_str()] {
+        assert!(
+            CaseworkOptions::new(base.clone(), id.into(), "source".into(), 20).is_err(),
+            "accepted reader policy {id}"
+        );
+        assert!(
+            CaseworkOptions::new(base.clone(), "reader".into(), id.into(), 20).is_err(),
+            "accepted source profile {id}"
+        );
+    }
+}

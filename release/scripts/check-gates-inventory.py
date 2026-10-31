@@ -30,6 +30,8 @@ DOCUMENTS_CHECKPOINT_RUNNER = (
 )
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
+    ("Native delegated staff authority journey", "- name: Native delegated staff MCP authority journey"),
+    ("Native delegated staff proof executes", "cargo test --locked -p registry-mcp --test native_casework"),
     (
         "Pull request concurrency group",
         "group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",

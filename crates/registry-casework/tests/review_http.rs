@@ -16,11 +16,12 @@ use axum::{
 };
 use registry_casework::{
     operational_log_level, router, CaseworkAuthenticator, CaseworkService, DatabaseConfig,
-    HttpState, HumanIdentityConfig, PostgresStore, ReviewTaskDecisionRequest,
+    DelegatedStaffReaderConfig, HttpState, HumanIdentityConfig, PostgresStore,
+    ReviewTaskDecisionRequest,
 };
 use registry_casework_client::{
     BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError,
-    ReviewStaffingQuery, ReviewTaskOwnership, SupervisoryReviewTaskQuery,
+    DelegatedStaffReadAuth, ReviewStaffingQuery, ReviewTaskOwnership, SupervisoryReviewTaskQuery,
 };
 use registry_casework_core::*;
 
@@ -34,6 +35,12 @@ use tower::ServiceExt;
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
+
+#[derive(Default)]
+struct DelegatedSourceBarrier {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
 
 const AUDIENCE: &str = "urn:test:casework-review";
 
@@ -70,6 +77,7 @@ struct ReviewSource {
     changed: Arc<AtomicBool>,
     failure: Arc<AtomicU8>,
     source_state: Arc<Mutex<SourceReviewability>>,
+    delegated_barrier: Option<Arc<DelegatedSourceBarrier>>,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +127,52 @@ impl ReviewContextProvider for ReviewSource {
             display_reference: None,
             fields: BTreeMap::from([("summary".to_owned(), json!("Authorized source view"))]),
         })
+    }
+    async fn delegated_display(
+        &self,
+        request: DelegatedDisplayRequest<'_>,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
+        let barrier = self
+            .delegated_barrier
+            .as_ref()
+            .ok_or(ReviewContextError::Denied)?;
+        barrier.entered.notify_one();
+        barrier.release.notified().await;
+        self.human_display(HumanDisplayRequest {
+            identity: request.identity,
+            source_profile_id: request.source_profile_id,
+            credential: request.credential,
+        })
+        .await
+    }
+    async fn delegated_display_batch(
+        &self,
+        identities: &[ReviewContextIdentity],
+        source_profile_id: &str,
+        credential: EphemeralCredential<'_>,
+        _credential_context: &DelegatedCredentialContext,
+    ) -> Vec<Result<HumanDisplayObservation, ReviewContextError>> {
+        if identities.len() > 100 {
+            return vec![Err(ReviewContextError::Invalid); identities.len()];
+        }
+        let Some(barrier) = self.delegated_barrier.as_ref() else {
+            return vec![Err(ReviewContextError::Denied); identities.len()];
+        };
+        barrier.entered.notify_one();
+        barrier.release.notified().await;
+        let credential = credential.expose();
+        let mut observations = Vec::with_capacity(identities.len());
+        for identity in identities {
+            observations.push(
+                self.human_display(HumanDisplayRequest {
+                    identity,
+                    source_profile_id,
+                    credential: EphemeralCredential::new(credential),
+                })
+                .await,
+            );
+        }
+        observations
     }
     async fn service_status(
         &self,
@@ -370,6 +424,39 @@ async fn app_with_project(
     Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
+    app_with_project_options(idp, project, None, false).await
+}
+
+async fn app_with_project_and_delegated_barrier(
+    idp: &MockIdp,
+    project: CaseworkProject,
+    delegated_barrier: Option<Arc<DelegatedSourceBarrier>>,
+) -> (
+    axum::Router,
+    CaseworkService,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU8>,
+    Arc<Mutex<SourceReviewability>>,
+    tokio_postgres::Client,
+) {
+    app_with_project_options(idp, project, delegated_barrier, true).await
+}
+
+async fn app_with_project_options(
+    idp: &MockIdp,
+    project: CaseworkProject,
+    delegated_barrier: Option<Arc<DelegatedSourceBarrier>>,
+    strict_delegation_client: bool,
+) -> (
+    axum::Router,
+    CaseworkService,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU8>,
+    Arc<Mutex<SourceReviewability>>,
+    tokio_postgres::Client,
+) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review HTTP tests");
     let schema = format!("review_http_{}", Uuid::new_v4().simple());
@@ -429,16 +516,40 @@ async fn app_with_project(
         .expect("runtime store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     project.check().expect("review HTTP project");
+    let verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
+    let verifier = if strict_delegation_client {
+        verifier
+            .with_allowed_clients(vec!["registry-mcp".to_owned()])
+            .with_assertion_issuers(BTreeMap::from([(
+                "registry-mcp".to_owned(),
+                vec![idp.issuer().to_owned()],
+            )]))
+    } else {
+        verifier
+    };
     let authenticator = CaseworkAuthenticator::new(
         &project,
-        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
+        verifier,
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
             FetchUrlPolicy::dev(),
         )),
         HumanIdentityConfig::default(),
-    );
+    )
+    .with_delegated_staff_readers(BTreeMap::from([(
+        "assistant-reader".to_owned(),
+        DelegatedStaffReaderConfig {
+            profile: "staff".to_owned(),
+            client: "registry-mcp".to_owned(),
+            actor_issuer: idp.issuer().to_owned(),
+            actor_subject: "registry-mcp".to_owned(),
+            assertion_issuer: idp.issuer().to_owned(),
+            required_scope: "casework:staff:delegated-read".to_owned(),
+            maximum_token_lifetime_seconds: 300,
+            source_profiles: vec!["reviewer-source".to_owned()],
+        },
+    )]));
     let revoked = Arc::new(AtomicBool::new(false));
     let changed = Arc::new(AtomicBool::new(false));
     let failure = Arc::new(AtomicU8::new(0));
@@ -451,6 +562,7 @@ async fn app_with_project(
             changed: Arc::clone(&changed),
             failure: Arc::clone(&failure),
             source_state: Arc::clone(&source_state),
+            delegated_barrier,
         }) as Arc<dyn ReviewContextProvider>],
     )
     .expect("review HTTP service");
@@ -486,9 +598,11 @@ async fn app(
 fn token(idp: &MockIdp) -> String {
     idp.mint_token(json!({
         "aud": AUDIENCE,
+        "azp": "registry-mcp",
         "registry_principal": "registry-service",
         "scope": "casework:producer",
-        "registry_actor_kind": "service"
+        "registry_actor_kind": "service",
+        "registry_assertion_issuer": idp.issuer()
     }))
 }
 
@@ -522,11 +636,47 @@ fn colleague_token(idp: &MockIdp) -> String {
 fn human_token(idp: &MockIdp, principal: &str, profile: &str) -> BearerToken {
     BearerToken::new(idp.mint_token(json!({
         "aud": AUDIENCE,
+        "azp": "registry-mcp",
         "registry_principal": principal,
         "scope": format!("casework:{profile}"),
-        "registry_actor_kind": "human"
+        "registry_actor_kind": "human",
+        "registry_assertion_issuer": idp.issuer()
     })))
     .expect("synthetic human bearer")
+}
+
+fn delegated_staff_read_token(idp: &MockIdp, principal: &str) -> BearerToken {
+    BearerToken::new(delegated_staff_read_token_value(idp, principal))
+        .expect("synthetic delegated staff read bearer")
+}
+
+fn delegated_staff_read_token_value(idp: &MockIdp, principal: &str) -> String {
+    delegated_staff_read_token_value_with_scopes(
+        idp,
+        principal,
+        "casework:staff casework:staff:delegated-read",
+    )
+}
+
+fn delegated_staff_read_token_value_with_scopes(
+    idp: &MockIdp,
+    principal: &str,
+    scopes: &str,
+) -> String {
+    let issued_at = chrono::Utc::now().timestamp();
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "azp": "registry-mcp",
+        "sub": principal,
+        "iat": issued_at,
+        "nbf": issued_at,
+        "exp": issued_at + 300,
+        "registry_principal": principal,
+        "scope": scopes,
+        "registry_actor_kind": "human",
+        "registry_assertion_issuer": idp.issuer(),
+        "act": {"iss": idp.issuer(), "sub": "registry-mcp"}
+    }))
 }
 
 async fn native_review_client(app: axum::Router) -> (CaseworkClient, tokio::task::JoinHandle<()>) {
@@ -666,6 +816,247 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
             serde_json::to_vec(body).expect("serialize review request"),
         ))
         .expect("review HTTP request")
+}
+
+#[tokio::test]
+async fn delegated_reader_credential_cannot_enter_producer_create_or_cancel_routes() {
+    let idp = MockIdp::start().await;
+    let mut overlap = project(&idp.issuer());
+    overlap
+        .access_profiles
+        .iter_mut()
+        .find(|profile| profile.id == "staff")
+        .expect("staff profile")
+        .required_scopes = vec![
+        "casework:staff".to_owned(),
+        "casework:staff:institution".to_owned(),
+    ];
+    overlap
+        .access_profiles
+        .iter_mut()
+        .find(|profile| profile.id == "producer")
+        .expect("producer profile")
+        .required_scopes = vec!["casework:staff".to_owned()];
+    let (app, _, _, _, _, _, database) =
+        app_with_project_and_delegated_barrier(&idp, overlap, None).await;
+    let delegated = delegated_staff_read_token_value_with_scopes(
+        &idp,
+        "registry-service",
+        "casework:staff casework:staff:institution casework:staff:delegated-read",
+    );
+    let request = review_request("delegated-producer-bypass", &idp.issuer());
+    let created = app
+        .clone()
+        .oneshot(create_http_request(&request, Some(&delegated)))
+        .await
+        .expect("delegated create response");
+    assert_eq!(created.status(), StatusCode::UNAUTHORIZED);
+
+    let cancelled = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-requests/{}/cancel", Uuid::new_v4()))
+                .header(CONTENT_TYPE, "application/json")
+                .header(REVIEW_PROFILE_HEADER, "producer")
+                .header("authorization", format!("Bearer {delegated}"))
+                .header("idempotency-key", "delegated-cancel-bypass")
+                .body(Body::from(
+                    serde_json::to_vec(&ReviewCancelRequest {
+                        subject: request.subject,
+                        reason: "withdrawn".to_owned(),
+                    })
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("delegated cancel response");
+    assert_eq!(cancelled.status(), StatusCode::UNAUTHORIZED);
+    let count: i64 = database
+        .query_one("SELECT count(*) FROM casework_review_requests", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0, "delegated producer attempts created no work");
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn delegated_reads_withhold_rows_and_context_when_assignment_changes_during_source_io() {
+    let idp = MockIdp::start().await;
+    let barrier = Arc::new(DelegatedSourceBarrier::default());
+    let (app, _, _, _, _, _, database) = app_with_project_and_delegated_barrier(
+        &idp,
+        project(&idp.issuer()),
+        Some(Arc::clone(&barrier)),
+    )
+    .await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let client = Arc::new(client);
+    let supervisor = human_token(&idp, "supervisor", "supervisor");
+    let list_delegated = delegated_staff_read_token(&idp, "reviewer");
+    let context_delegated = delegated_staff_read_token(&idp, "reviewer");
+
+    let (_, list_task) = create_task(
+        &app,
+        &database,
+        &idp,
+        &review_request_for_subject(
+            "delegated-list-race",
+            "delegated-list-source-canary",
+            &idp.issuer(),
+        ),
+    )
+    .await;
+    let assigned = client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor").with_source_profile("reviewer-source"),
+            list_task,
+            1,
+            "assign-delegated-list-race",
+            &AssignmentRequest {
+                assignee: IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "reviewer".to_owned(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .expect("assign list-race task to represented staff")
+        .value;
+    let list_client = Arc::clone(&client);
+    let list_read = tokio::spawn(async move {
+        list_client
+            .delegated_review_tasks(
+                DelegatedStaffReadAuth::new(&list_delegated, "assistant-reader")
+                    .with_source_profile("reviewer-source"),
+                None,
+                25,
+            )
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        barrier.entered.notified(),
+    )
+    .await
+    .expect("delegated list reached source disclosure");
+    client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor").with_source_profile("reviewer-source"),
+            list_task,
+            assigned.revision,
+            "reassign-delegated-list-race",
+            &AssignmentRequest {
+                assignee: IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "colleague".to_owned(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .expect("reassign list-race task while source disclosure is blocked");
+    barrier.release.notify_one();
+    let list_result = tokio::time::timeout(std::time::Duration::from_secs(5), list_read)
+        .await
+        .expect("delegated list completed after source release")
+        .expect("delegated list task joined");
+    let list_rendered = match list_result {
+        Ok(page) => {
+            assert!(
+                page.value.items.is_empty(),
+                "reassigned work must leave the delegated list"
+            );
+            assert!(page.value.next_cursor.is_none());
+            format!("{page:?}")
+        }
+        Err(error) => {
+            let rendered = format!("{error:?}");
+            assert_client_status(error, 404);
+            rendered
+        }
+    };
+    assert!(!list_rendered.contains(&list_task.to_string()));
+    assert!(!list_rendered.contains("Authorized source view"));
+    assert!(!list_rendered.contains("delegated-list-source-canary"));
+
+    let (_, context_task) = create_task(
+        &app,
+        &database,
+        &idp,
+        &review_request_for_subject(
+            "delegated-context-race",
+            "delegated-context-source-canary",
+            &idp.issuer(),
+        ),
+    )
+    .await;
+    let assigned = client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor").with_source_profile("reviewer-source"),
+            context_task,
+            1,
+            "assign-delegated-context-race",
+            &AssignmentRequest {
+                assignee: IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "reviewer".to_owned(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .expect("assign context-race task to represented staff")
+        .value;
+    let context_client = Arc::clone(&client);
+    let context_read = tokio::spawn(async move {
+        context_client
+            .delegated_review_task_context(
+                DelegatedStaffReadAuth::new(&context_delegated, "assistant-reader")
+                    .with_source_profile("reviewer-source"),
+                context_task,
+            )
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        barrier.entered.notified(),
+    )
+    .await
+    .expect("delegated context reached source disclosure");
+    client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor").with_source_profile("reviewer-source"),
+            context_task,
+            assigned.revision,
+            "reassign-delegated-context-race",
+            &AssignmentRequest {
+                assignee: IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "colleague".to_owned(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .expect("reassign context-race task while source disclosure is blocked");
+    barrier.release.notify_one();
+    let context_error = tokio::time::timeout(std::time::Duration::from_secs(5), context_read)
+        .await
+        .expect("delegated context completed after source release")
+        .expect("delegated context task joined")
+        .expect_err("stale delegated context must be withheld");
+    let context_rendered = format!("{context_error:?}");
+    assert_client_status(context_error, 404);
+    assert!(!context_rendered.contains("Authorized source view"));
+    assert!(!context_rendered.contains("delegated-context-source-canary"));
+
+    server.abort();
+    idp.stop().await;
 }
 
 fn review_note_http_request(

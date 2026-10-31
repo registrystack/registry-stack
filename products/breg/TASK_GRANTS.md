@@ -54,11 +54,17 @@ names, when needed for an existing issuer, are configured together in the
 closed `contextual` object.
 
 A standing agent without a task grant may read, Start an authorized Proposal,
-and edit its own draft. It cannot commit immediate effects or acquire submitted
-lifecycle authority. A separately authorized human confirms the draft. Start,
-Proposal draft management, and committed transitions remain separate grants;
-`permissions.actions` and `permissions.proposals` never confer direct record CRUD.
-Modules remain subject to the same ceiling.
+edit its own draft, and use `get-review-context` when an explicit agent profile
+independently grants that bounded disclosure. This is agent disclosure, not
+human viewing or approval. It requires the profile's exact client, purpose,
+scope, Record rows, readable Record fields, Proposal targets, and readable
+context fields. The token must carry a verified trusted actor, and BReg does
+not attach a human identity to it. The agent still cannot commit immediate
+effects or acquire submitted lifecycle authority. A separately authorized
+human confirms the draft. Start, Proposal draft management, disclosure, and
+committed transitions remain separate grants; `permissions.actions` and
+`permissions.proposals` never confer direct record CRUD. Modules remain subject
+to the same ceiling.
 
 Publishing or withdrawing a statistical release commits at once in the same
 way, so the compiler refuses a standing agent profile that holds `publish` on

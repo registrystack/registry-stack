@@ -1550,11 +1550,12 @@ def classify(
                 }
             )
 
-    # The PostgreSQL lane starts real Evidence and the native citizen journey.
+    # The PostgreSQL lane starts real Evidence and the native citizen/staff journeys.
     # Their test-only edges are not production runtime Cargo dependencies.
     breg_contracts = (
         registry_record_cross_product
         or bool(affected & BREG_PACKAGES)
+        or bool(affected & (CASEWORK_PACKAGES | {"registry-mcp", "registry-mcp-edge"}))
         or "registry-evidence" in affected
         or any(
             matches(

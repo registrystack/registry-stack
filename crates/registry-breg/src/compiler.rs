@@ -3848,11 +3848,27 @@ pub(crate) fn expand_project_access(
             ));
         }
         if profile.actor_kind.is_some() == profile.requester_clients.is_empty() {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.actor-client-binding-required",
-                "project.accessProfiles[]",
-                "actorKind and requesterClients must be declared together",
-            ));
+            let standing_agent_review = profile.actor_kind
+                == Some(crate::contract::ActorKindSource::Agent)
+                && profile.task_grant.is_none()
+                && profile.permissions.proposals.iter().any(|permission| {
+                    permission
+                        .operations
+                        .contains(&crate::contract::ProposalOperation::GetReviewContext)
+                });
+            if standing_agent_review {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.standing-agent-review-client-required",
+                    "project.accessProfiles[].requesterClients",
+                    "standing-agent get-review-context disclosure requires at least one exact requesterClients client",
+                ));
+            } else {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.actor-client-binding-required",
+                    "project.accessProfiles[]",
+                    "actorKind and requesterClients must be declared together",
+                ));
+            }
         }
         if profile.task_grant.is_some()
             && (profile.actor_kind != Some(crate::contract::ActorKindSource::Agent)

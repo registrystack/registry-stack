@@ -37,6 +37,7 @@ registry-breg-mcp.workspace = true
 registry-casework-client.workspace = true
 registry-mcp-edge.workspace = true
 registry-platform-audit.workspace = true
+registry-platform-buildinfo.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
@@ -58,6 +59,7 @@ zeroize.workspace = true
 jsonschema.workspace = true
 
 [dev-dependencies]
+registry-breg-client.workspace = true
 registry-mcp-edge = { workspace = true, features = ["test-support"] }
 registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }

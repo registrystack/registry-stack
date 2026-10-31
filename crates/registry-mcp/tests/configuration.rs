@@ -53,20 +53,39 @@ fn audience_reuse_exchange_client_reuse_and_invalid_review_origins_are_refused()
         );
     }
 }
-#[test]
-fn casework_staff_activation_reports_the_actual_authority_dependency() {
+fn staff() -> Value {
     let mut config = citizen();
-    config["bindings"][0]["tools"] = json!(["list_my_review_tasks"]);
-    config["bindings"][0]["provider"] = json!({"type":"casework","baseUrl":"http://127.0.0.1:8120/","reviewProfile":"reviewer","sourceProfile":"reviewer-source","pageSize":20,"authorization":{"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"staff-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY"},"audience":"urn:fixture:casework","scopes":["casework:staff"]}});
-    let report = check(&config);
-    assert!(
-        report
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "casework.mcp.delegation-unsupported"),
-        "{}",
-        report.render_human()
-    );
+    config["bindings"][0]["tools"] = json!(["list_my_review_tasks", "get_review_task_context"]);
+    config["bindings"][0]["provider"] = json!({"type":"casework","authority":"delegated-staff-read","baseUrl":"http://127.0.0.1:8120/","readerPolicy":"assistant-reader","sourceProfile":"assistant-source","pageSize":20,"authorization":{"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"staff-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY"},"audience":"urn:fixture:casework","scopes":["casework:staff","casework:assistant-read"]}});
+    config
+}
+#[test]
+fn explicit_casework_delegated_read_configuration_passes_offline_without_credentials() {
+    let report = check(&staff());
+    assert!(!report.has_errors(), "{}", report.render_human());
+}
+#[test]
+fn casework_requires_an_explicit_delegated_read_contract_and_refuses_human_modes() {
+    let mut absent = staff();
+    absent["bindings"][0]["provider"]
+        .as_object_mut()
+        .unwrap()
+        .remove("authority");
+    assert!(check(&absent).has_errors());
+    for mode in ["human", "service", "delegated-staff-write"] {
+        let mut config = staff();
+        config["bindings"][0]["provider"]["authority"] = json!(mode);
+        assert!(check(&config).has_errors(), "accepted {mode}");
+    }
+    for tool in [
+        "decide_review_task",
+        "claim_review_task",
+        "assign_review_task",
+    ] {
+        let mut config = staff();
+        config["bindings"][0]["tools"] = json!([tool]);
+        assert!(check(&config).has_errors(), "accepted {tool}");
+    }
 }
 #[test]
 fn duplicate_public_tool_names_and_unconfigured_native_operations_are_refused() {

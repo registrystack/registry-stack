@@ -17,7 +17,7 @@
 //! the server.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -48,6 +48,36 @@ const CODE_LIFETIME_SECONDS: i64 = 60;
 /// The longest client assertion lifetime this server accepts.
 const MAXIMUM_ASSERTION_LIFETIME_SECONDS: i64 = 300;
 const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_secs(300);
+const SERVER_OWNED_ACCESS_CLAIMS: &[&str] = &[
+    "iss",
+    "sub",
+    "aud",
+    "exp",
+    "iat",
+    "nbf",
+    "jti",
+    "client_id",
+    "azp",
+    "scope",
+    "act",
+    "registry_actor_kind",
+    "registry_assertion_issuer",
+];
+const MAXIMUM_EXCHANGE_OBSERVATIONS: usize = 256;
+
+/// One completed synthetic token exchange, without any credential bytes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TestExchangeObservation {
+    pub client_id: String,
+    pub resource: String,
+    pub scopes: Vec<String>,
+    pub subject_issuer: String,
+    pub subject_resource: Option<String>,
+    pub subject: String,
+    pub actor_subject: Option<String>,
+    pub actor_issuer: Option<String>,
+    pub propagated_claims: BTreeMap<String, Value>,
+}
 
 /// The `registry_actor_kind` claim a client's tokens carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -93,6 +123,10 @@ pub struct TestClient {
     actor_kind: TestActorKind,
     token_lifetime: Duration,
     service_subject: String,
+    client_credentials_claims: BTreeMap<String, Value>,
+    exchange_subject_claims: BTreeSet<String>,
+    exchange_subject_resources: BTreeSet<String>,
+    exchange_scope_grants: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl TestClient {
@@ -108,6 +142,10 @@ impl TestClient {
             actor_kind: TestActorKind::default(),
             token_lifetime: DEFAULT_TOKEN_LIFETIME,
             service_subject: uuid::Uuid::new_v4().to_string(),
+            client_credentials_claims: BTreeMap::new(),
+            exchange_subject_claims: BTreeSet::new(),
+            exchange_subject_resources: BTreeSet::new(),
+            exchange_scope_grants: BTreeMap::new(),
         }
     }
 
@@ -151,6 +189,95 @@ impl TestClient {
     #[must_use]
     pub fn with_service_subject(mut self, subject: impl Into<String>) -> Self {
         self.service_subject = subject.into();
+        self
+    }
+
+    /// Add one bounded custom claim to this client's own
+    /// `client_credentials` tokens. Registered JWT and server-owned
+    /// authorization claims cannot be configured by a test fixture.
+    #[must_use]
+    pub fn with_client_credentials_claim(mut self, claim: impl Into<String>, value: Value) -> Self {
+        let claim = claim.into();
+        assert!(
+            valid_custom_access_claim(&claim),
+            "a client credentials claim must be a custom claim"
+        );
+        assert!(
+            serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= 4096),
+            "a client credentials claim value must be bounded JSON"
+        );
+        assert!(
+            self.client_credentials_claims
+                .insert(claim, value)
+                .is_none(),
+            "client credentials claims are unique"
+        );
+        assert!(
+            self.client_credentials_claims.len() <= 32,
+            "client credentials claims are bounded"
+        );
+        self
+    }
+
+    /// Copy this exact custom claim from a verified subject token into tokens
+    /// exchanged by this client. Server-owned JWT and authorization claims can
+    /// never be selected; the test fixture must name every authority claim it
+    /// expects the authorization server to preserve.
+    #[must_use]
+    pub fn with_exchange_subject_claim(mut self, claim: impl Into<String>) -> Self {
+        let claim = claim.into();
+        assert!(
+            valid_custom_access_claim(&claim),
+            "an exchange subject claim must be a custom claim"
+        );
+        assert!(
+            self.exchange_subject_claims.insert(claim),
+            "exchange subject claims are unique"
+        );
+        self
+    }
+
+    /// Accept subject tokens for this one exact resource in exchanges by this
+    /// client. Once any resource is listed, an absent or other audience is
+    /// refused. A scalar or a one-element array names one audience; duplicate
+    /// or multiple audiences are refused. This keeps a chained exchange bound
+    /// to its owning upstream resource rather than accepting a broad token.
+    #[must_use]
+    pub fn with_exchange_subject_resource(mut self, resource: impl Into<String>) -> Self {
+        let resource = resource.into();
+        assert!(
+            valid_resource(&resource),
+            "an exchange subject resource must be an exact resource identifier"
+        );
+        assert!(
+            self.exchange_subject_resources.insert(resource),
+            "exchange subject resources are unique"
+        );
+        self
+    }
+
+    /// Permit this exchange client to translate one exact scope on the
+    /// verified subject token into one exact requested downstream scope.
+    /// Scopes not already held or explicitly mapped remain refused.
+    #[must_use]
+    pub fn with_exchange_scope_grant(
+        mut self,
+        subject_scope: impl Into<String>,
+        issued_scope: impl Into<String>,
+    ) -> Self {
+        let subject_scope = subject_scope.into();
+        let issued_scope = issued_scope.into();
+        assert!(
+            valid_scope(&subject_scope) && valid_scope(&issued_scope),
+            "exchange scope grants require valid scopes"
+        );
+        assert!(
+            self.exchange_scope_grants
+                .entry(issued_scope)
+                .or_default()
+                .insert(subject_scope),
+            "exchange scope grants are unique"
+        );
         self
     }
 
@@ -251,6 +378,7 @@ impl TestAuthorizationServerBuilder {
             logged_in_subject: self.logged_in_subject,
             codes: Mutex::new(HashMap::new()),
             used_assertions: Mutex::new(HashSet::new()),
+            exchange_observations: Mutex::new(Vec::new()),
         });
         let app = Router::new()
             .route("/.well-known/openid-configuration", get(metadata))
@@ -323,6 +451,17 @@ impl TestAuthorizationServer {
         self.state.token_endpoint()
     }
 
+    /// Completed token exchanges in arrival order. The bounded observation
+    /// contains no subject token, actor token, client assertion or issued token.
+    #[must_use]
+    pub fn exchange_observations(&self) -> Vec<TestExchangeObservation> {
+        self.state
+            .exchange_observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// A `registry-platform-oidc` verifier configuration that accepts this
     /// server's access tokens for `audiences`. Set `allowed_clients` on it to
     /// the clients the resource server admits.
@@ -359,11 +498,41 @@ impl TestAuthorizationServer {
         scope: &str,
         expires_at: i64,
     ) -> String {
+        self.issue_access_token_with_claims(
+            client_id,
+            subject,
+            resource,
+            scope,
+            expires_at,
+            BTreeMap::new(),
+        )
+    }
+
+    /// Sign a test access token with an explicit bounded set of custom claims.
+    /// The server continues to own every registered, client, scope, actor and
+    /// token-lifecycle claim.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `client_id` is not registered or a custom claim is invalid,
+    /// server-owned, duplicated, or too large for this fixture.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_access_token_with_claims(
+        &self,
+        client_id: &str,
+        subject: &str,
+        resource: &str,
+        scope: &str,
+        expires_at: i64,
+        custom_claims: BTreeMap<String, Value>,
+    ) -> String {
         let client = self
             .state
             .clients
             .get(client_id)
             .expect("the token is issued to a registered test client");
+        assert_custom_access_claims(&custom_claims);
         let mut claims = self
             .state
             .access_claims(client, subject, resource, expires_at);
@@ -372,6 +541,66 @@ impl TestAuthorizationServer {
             "registry_actor_kind".to_owned(),
             json!(client.actor_kind.as_str()),
         );
+        claims.extend(custom_claims);
+        self.state.sign(ACCESS_TOKEN_TYP, claims)
+    }
+
+    /// Sign a setup-only human access token for an explicit bounded audience
+    /// set. Every audience must be registered to the client. Exchange clients
+    /// that declare an exact subject resource still refuse a multi-audience
+    /// token, so this helper cannot broaden a delegated source exchange.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the client is unknown, the audience set is empty, contains
+    /// more than eight members, contains duplicates or unregistered resources,
+    /// or a custom claim is invalid or too large.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_access_token_for_audiences_with_claims(
+        &self,
+        client_id: &str,
+        subject: &str,
+        audiences: Vec<String>,
+        scope: &str,
+        expires_at: i64,
+        custom_claims: BTreeMap<String, Value>,
+    ) -> String {
+        let client = self
+            .state
+            .clients
+            .get(client_id)
+            .expect("the token is issued to a registered test client");
+        assert_eq!(
+            client.actor_kind,
+            TestActorKind::Human,
+            "multi-audience setup tokens are human credentials"
+        );
+        assert!(
+            !audiences.is_empty() && audiences.len() <= 8,
+            "test token audiences are nonempty and bounded"
+        );
+        assert!(
+            valid_scope_set(scope),
+            "a test token scope set must be valid"
+        );
+        assert!(
+            audiences.iter().all(|audience| {
+                valid_resource(audience) && client.resources.contains(audience)
+            }) && audiences.iter().collect::<BTreeSet<_>>().len() == audiences.len(),
+            "test token audiences are unique registered resources"
+        );
+        assert_custom_access_claims(&custom_claims);
+        let mut claims = self
+            .state
+            .access_claims(client, subject, &audiences[0], expires_at);
+        claims.insert("aud".to_owned(), json!(audiences));
+        claims.insert("scope".to_owned(), json!(scope));
+        claims.insert(
+            "registry_actor_kind".to_owned(),
+            json!(client.actor_kind.as_str()),
+        );
+        claims.extend(custom_claims);
         self.state.sign(ACCESS_TOKEN_TYP, claims)
     }
 
@@ -382,6 +611,61 @@ impl TestAuthorizationServer {
         if let Some(server) = self.server.take() {
             let _ = server.await;
         }
+    }
+}
+
+fn valid_custom_access_claim(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name.is_ascii()
+        && !name
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        && !SERVER_OWNED_ACCESS_CLAIMS.contains(&name)
+}
+
+fn assert_custom_access_claims(custom_claims: &BTreeMap<String, Value>) {
+    assert!(custom_claims.len() <= 32, "custom test claims are bounded");
+    assert!(
+        custom_claims.iter().all(|(name, value)| {
+            valid_custom_access_claim(name)
+                && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 4096)
+        }),
+        "custom test claims must be bounded custom claims"
+    );
+}
+
+fn valid_scope(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope.len() <= 512
+        && !scope
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+}
+
+fn valid_scope_set(scope: &str) -> bool {
+    let values = scopes(scope);
+    !scope.is_empty()
+        && scope.len() <= 4096
+        && !values.is_empty()
+        && values.len() <= 128
+        && values.iter().all(|value| valid_scope(value))
+        && values.iter().collect::<BTreeSet<_>>().len() == values.len()
+}
+
+fn valid_resource(resource: &str) -> bool {
+    !resource.is_empty()
+        && resource.len() <= 2048
+        && !resource
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+}
+
+fn exact_single_audience(value: Option<&Value>) -> Option<&str> {
+    match value? {
+        Value::String(audience) => Some(audience),
+        Value::Array(audiences) if audiences.len() == 1 => audiences[0].as_str(),
+        _ => None,
     }
 }
 
@@ -406,6 +690,7 @@ struct ServerState {
     codes: Mutex<HashMap<String, PendingCode>>,
     /// `client_id` and `jti` of every client assertion accepted so far.
     used_assertions: Mutex<HashSet<(String, String)>>,
+    exchange_observations: Mutex<Vec<TestExchangeObservation>>,
 }
 
 struct PendingCode {
@@ -922,6 +1207,7 @@ fn client_credentials(
     if let Some(scope) = scope {
         claims.insert("scope".to_owned(), json!(scope));
     }
+    claims.extend(client.client_credentials_claims.clone());
     claims.insert(
         "registry_actor_kind".to_owned(),
         json!(client.actor_kind.as_str()),
@@ -969,6 +1255,13 @@ fn token_exchange(
     let subject = state
         .verified_access_token(subject_token)
         .ok_or(Refusal::bad("invalid_grant"))?;
+    let subject_resource = exact_single_audience(subject.get("aud"));
+    if !client.exchange_subject_resources.is_empty()
+        && !subject_resource
+            .is_some_and(|audience| client.exchange_subject_resources.contains(audience))
+    {
+        return Err(Refusal::bad("invalid_grant"));
+    }
     // The actor token must be the exchanging client's own `client_credentials`
     // token: issued to it, naming its service subject.
     let actor_subject = match actor {
@@ -994,10 +1287,17 @@ fn token_exchange(
     let scope = match form.get("scope") {
         Some(requested) => {
             let granted = scopes(subject_scope);
-            if !scopes(requested)
-                .iter()
-                .all(|scope| granted.contains(scope))
-            {
+            if !scopes(requested).iter().all(|scope| {
+                granted.contains(scope)
+                    || client
+                        .exchange_scope_grants
+                        .get(*scope)
+                        .is_some_and(|required| {
+                            required
+                                .iter()
+                                .any(|source| granted.contains(&source.as_str()))
+                        })
+            }) {
                 return Err(Refusal::bad("invalid_scope"));
             }
             requested.as_str()
@@ -1014,9 +1314,25 @@ fn token_exchange(
         .get("sub")
         .and_then(Value::as_str)
         .ok_or(Refusal::bad("invalid_grant"))?;
+    let subject_issuer = subject
+        .get("iss")
+        .and_then(Value::as_str)
+        .expect("a verified subject token has an issuer");
+    let subject_resource = subject_resource.map(str::to_owned);
     let mut claims = state.access_claims(client, subject_sub, &audience, expires_at);
+    claims.insert(
+        "registry_assertion_issuer".to_owned(),
+        json!(subject_issuer),
+    );
     if let Some(scope) = scope {
         claims.insert("scope".to_owned(), json!(scope));
+    }
+    let mut propagated_claims = BTreeMap::new();
+    for name in &client.exchange_subject_claims {
+        if let Some(value) = subject.get(name) {
+            claims.insert(name.clone(), value.clone());
+            propagated_claims.insert(name.clone(), value.clone());
+        }
     }
     match state.profile {
         ExchangeProfile::Conformant => {
@@ -1024,7 +1340,7 @@ fn token_exchange(
                 "registry_actor_kind".to_owned(),
                 json!(client.actor_kind.as_str()),
             );
-            if let Some(actor) = actor_subject {
+            if let Some(actor) = actor_subject.as_deref() {
                 claims.insert("act".to_owned(), json!({ "sub": actor }));
             }
         }
@@ -1032,7 +1348,7 @@ fn token_exchange(
             if let Some(kind) = subject.get("registry_actor_kind") {
                 claims.insert("registry_actor_kind".to_owned(), kind.clone());
             }
-            if let Some(actor) = actor_subject {
+            if let Some(actor) = actor_subject.as_deref() {
                 claims.insert(
                     "act".to_owned(),
                     json!({ "sub": actor, "iss": state.issuer }),
@@ -1040,6 +1356,36 @@ fn token_exchange(
             }
         }
     }
+    let mut observations = state
+        .exchange_observations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if observations.len() == MAXIMUM_EXCHANGE_OBSERVATIONS {
+        observations.remove(0);
+    }
+    let actor_issuer = match state.profile {
+        ExchangeProfile::Conformant => None,
+        ExchangeProfile::IssuerQualifiedActor => {
+            actor_subject.as_ref().map(|_| state.issuer.clone())
+        }
+    };
+    observations.push(TestExchangeObservation {
+        client_id: client.id.clone(),
+        resource: resource.clone(),
+        scopes: scope
+            .map(scopes)
+            .unwrap_or_default()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        subject: subject_sub.to_owned(),
+        subject_issuer: subject_issuer.to_owned(),
+        subject_resource,
+        actor_subject,
+        actor_issuer,
+        propagated_claims,
+    });
+    drop(observations);
     let mut body = issued(
         state.sign(ACCESS_TOKEN_TYP, claims),
         Some(expires_at),

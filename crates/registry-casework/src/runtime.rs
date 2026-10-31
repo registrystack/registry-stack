@@ -561,12 +561,22 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     }
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
-    let authenticator = Arc::new(CaseworkAuthenticator::new(
-        project,
-        verifier,
-        keys,
-        config.authentication.oidc.human_identity.clone(),
-    ));
+    let authenticator = Arc::new(
+        CaseworkAuthenticator::new(
+            project,
+            verifier,
+            keys,
+            config.authentication.oidc.human_identity.clone(),
+        )
+        .with_delegated_staff_readers(
+            config
+                .authentication
+                .oidc
+                .delegated_staff_readers
+                .clone()
+                .unwrap_or_default(),
+        ),
+    );
     let task_authority = config
         .task_authority
         .as_ref()

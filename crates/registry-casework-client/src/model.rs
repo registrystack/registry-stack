@@ -42,6 +42,52 @@ impl fmt::Debug for CaseworkAuth<'_> {
     }
 }
 
+/// Authentication for the dedicated delegated staff read surface.
+///
+/// This type is accepted only by the two delegated read methods. It cannot
+/// be supplied to any Casework mutation or ordinary human-profile method.
+///
+/// ```compile_fail
+/// use registry_casework_client::{BearerToken, CaseworkAuth, DelegatedStaffReadAuth};
+///
+/// let token = BearerToken::new("verified-token").unwrap();
+/// let delegated = DelegatedStaffReadAuth::new(&token, "assistant-reader");
+/// let _: CaseworkAuth<'_> = delegated;
+/// ```
+pub struct DelegatedStaffReadAuth<'a> {
+    pub(crate) token: &'a BearerToken,
+    pub(crate) reader_policy: &'a str,
+    pub(crate) source_profile: Option<&'a str>,
+}
+
+impl<'a> DelegatedStaffReadAuth<'a> {
+    #[must_use]
+    pub fn new(token: &'a BearerToken, reader_policy: &'a str) -> Self {
+        Self {
+            token,
+            reader_policy,
+            source_profile: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_source_profile(mut self, source_profile: &'a str) -> Self {
+        self.source_profile = Some(source_profile);
+        self
+    }
+}
+
+impl fmt::Debug for DelegatedStaffReadAuth<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DelegatedStaffReadAuth")
+            .field("token", &"<redacted>")
+            .field("reader_policy", &"<selected>")
+            .field("source_profile", &self.source_profile.map(|_| "<selected>"))
+            .finish()
+    }
+}
+
 /// Metadata for a single authenticated result read; no automatic retry occurs.
 pub struct ReviewResultObservation {
     pub outcome: Result<ReviewResultResponse, crate::CaseworkClientError>,

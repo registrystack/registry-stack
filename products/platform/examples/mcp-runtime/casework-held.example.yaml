@@ -1,7 +1,6 @@
-# Expected check result: casework.mcp.delegation-unsupported.
-# Current Casework human profiles reject delegated actor tokens.
-# This file demonstrates the separate staff configuration and its activation
-# diagnostic; it is not a deployable staff-authority workaround.
+# Migration refusal fixture: this historical template lacks the required
+# authority: delegated-staff-read selector. Offline check must refuse it.
+# Use casework.example.yaml with a matching backend delegated-reader policy.
 apiVersion: id.registrystack.org/formats/platform/mcp-runtime/v1alpha1
 kind: PlatformMcpRuntimeConfig
 name: Staff review assistant
@@ -36,8 +35,8 @@ bindings:
     provider:
       type: casework
       baseUrl: https://casework.example.invalid/
-      reviewProfile: reviewer
-      sourceProfile: reviewer-source
+      readerPolicy: assistant-reader
+      sourceProfile: assistant-source
       pageSize: 20
       authorization:
         exchange:

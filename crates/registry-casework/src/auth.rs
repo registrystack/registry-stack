@@ -11,13 +11,17 @@ use thiserror::Error;
 
 use crate::HumanIdentityConfig;
 
+pub(crate) mod delegated;
+
 pub struct CaseworkAuthenticator {
     verifier: TokenVerifier,
+    audience: String,
     profiles: BTreeMap<String, AccessProfile>,
     /// Requester profiles through which a person reads their own review
     /// requests; they authenticate a person as strictly as reviewer profiles.
     initiator_profiles: BTreeSet<String>,
     human_identity: HumanIdentityConfig,
+    delegated_staff_readers: BTreeMap<String, crate::DelegatedStaffReaderConfig>,
 }
 
 impl CaseworkAuthenticator {
@@ -38,8 +42,10 @@ impl CaseworkAuthenticator {
         keys: Arc<JwksFetcher>,
         human_identity: HumanIdentityConfig,
     ) -> Self {
+        let audience = verifier.audiences.first().cloned().unwrap_or_default();
         Self {
             verifier: TokenVerifier::new(verifier, keys),
+            audience,
             profiles: project
                 .access_profiles
                 .iter()
@@ -52,7 +58,17 @@ impl CaseworkAuthenticator {
                 .filter_map(|producer| producer.initiator_profile.clone())
                 .collect(),
             human_identity,
+            delegated_staff_readers: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_delegated_staff_readers(
+        mut self,
+        readers: BTreeMap<String, crate::DelegatedStaffReaderConfig>,
+    ) -> Self {
+        self.delegated_staff_readers = readers;
+        self
     }
 
     pub(crate) async fn authenticate_task_client(
@@ -114,6 +130,18 @@ impl CaseworkAuthenticator {
             );
             AuthenticationError::Refused
         })?;
+        let matched_client = verified
+            .matched_client_id()
+            .map_err(|_| AuthenticationError::Refused)?;
+        if self.delegated_staff_readers.values().any(|reader| {
+            matched_client == Some(reader.client.as_str())
+                && verified
+                    .scopes
+                    .iter()
+                    .any(|scope| scope == &reader.required_scope)
+        }) {
+            return Err(AuthenticationError::Refused);
+        }
         let profile = self.profiles.get(selected_profile).ok_or_else(|| {
             self.profile_diagnostic();
             AuthenticationError::Profile
@@ -202,6 +230,10 @@ impl std::fmt::Debug for CaseworkAuthenticator {
             .debug_struct("CaseworkAuthenticator")
             .field("verifier", &"<redacted>")
             .field("profiles", &self.profiles.keys())
+            .field(
+                "delegated_staff_readers",
+                &self.delegated_staff_readers.keys(),
+            )
             .field("human_identity_claim", &self.human_identity.claim)
             .finish()
     }
@@ -423,6 +455,170 @@ mod tests {
             .authenticate_task_client(&allowed, "task-grant", ActorKind::Service)
             .await
             .expect("the listed assertion authority is accepted");
+    }
+
+    fn delegated_authenticator() -> CaseworkAuthenticator {
+        let assertion_issuer = "https://people.example.test";
+        let mut project = project();
+        project.access_profiles.push(AccessProfile {
+            id: "staff".into(),
+            principal_claim: "sub".into(),
+            required_scopes: vec!["casework:staff".into()],
+            role: CaseworkRole::Staff,
+        });
+        project.access_profiles.push(AccessProfile {
+            id: "requester-overlap".into(),
+            principal_claim: "sub".into(),
+            required_scopes: vec!["casework:staff".into()],
+            role: CaseworkRole::Requester,
+        });
+        let verifier = TokenVerifierConfig::access_token_profile(
+            ISSUER,
+            vec![AUDIENCE.to_owned()],
+            vec![Algorithm::HS256],
+            vec!["at+jwt".to_owned()],
+        )
+        .with_scope_claim("scope")
+        .with_allowed_clients(vec![CLIENT.to_owned()])
+        .with_assertion_issuers(BTreeMap::from([(
+            CLIENT.to_owned(),
+            vec![assertion_issuer.to_owned()],
+        )]));
+        CaseworkAuthenticator::new(&project, verifier, keys(), HumanIdentityConfig::default())
+            .with_delegated_staff_readers(BTreeMap::from([
+                (
+                    "staff-mcp".to_owned(),
+                    crate::DelegatedStaffReaderConfig {
+                        profile: "staff".to_owned(),
+                        client: CLIENT.to_owned(),
+                        actor_issuer: ISSUER.to_owned(),
+                        actor_subject: "registry-mcp".to_owned(),
+                        assertion_issuer: assertion_issuer.to_owned(),
+                        required_scope: "casework:staff:delegated-read".to_owned(),
+                        maximum_token_lifetime_seconds: 300,
+                        source_profiles: vec!["review-agent".to_owned()],
+                    },
+                ),
+                (
+                    "other-reader".to_owned(),
+                    crate::DelegatedStaffReaderConfig {
+                        profile: "staff".to_owned(),
+                        client: CLIENT.to_owned(),
+                        actor_issuer: ISSUER.to_owned(),
+                        actor_subject: "registry-mcp".to_owned(),
+                        assertion_issuer: assertion_issuer.to_owned(),
+                        required_scope: "casework:other-delegated-read".to_owned(),
+                        maximum_token_lifetime_seconds: 300,
+                        source_profiles: vec!["review-agent".to_owned()],
+                    },
+                ),
+            ]))
+    }
+
+    fn delegated_token(mut claims: Value) -> String {
+        let object = claims.as_object_mut().unwrap();
+        object.entry("azp").or_insert(json!(CLIENT));
+        object.entry("sub").or_insert(json!("officer-7"));
+        object
+            .entry("scope")
+            .or_insert(json!("casework:staff casework:staff:delegated-read"));
+        object
+            .entry("registry_actor_kind")
+            .or_insert(json!("human"));
+        object
+            .entry("registry_assertion_issuer")
+            .or_insert(json!("https://people.example.test"));
+        object.entry("act").or_insert(json!({
+            "iss": ISSUER,
+            "sub": "registry-mcp"
+        }));
+        token(claims)
+    }
+
+    #[tokio::test]
+    async fn delegated_staff_read_is_separate_from_human_authentication() {
+        let auth = delegated_authenticator();
+        let credential = delegated_token(json!({}));
+        let reader = auth
+            .authenticate_staff_read(&credential, "staff-mcp", Some("review-agent"))
+            .await
+            .expect("the exact delegated reader is accepted");
+        assert_eq!(reader.principal_for_test().subject, "officer-7");
+        assert!(matches!(
+            auth.authenticate(&credential, "staff").await,
+            Err(AuthenticationError::Refused)
+        ));
+        assert!(matches!(
+            auth.authenticate(&credential, "requester-overlap").await,
+            Err(AuthenticationError::Refused)
+        ));
+        let second_policy = delegated_token(json!({
+            "scope": "casework:staff casework:other-delegated-read"
+        }));
+        assert!(matches!(
+            auth.authenticate(&second_policy, "requester-overlap").await,
+            Err(AuthenticationError::Refused)
+        ));
+        let stripped = token(json!({
+            "azp": CLIENT,
+            "sub": "officer-7",
+            "scope": "casework:staff casework:staff:delegated-read",
+            "registry_actor_kind": "service"
+        }));
+        assert!(matches!(
+            auth.authenticate(&stripped, "requester-overlap").await,
+            Err(AuthenticationError::Refused)
+        ));
+        let credential = delegated_token(json!({"aud": [AUDIENCE]}));
+        auth.authenticate_staff_read(&credential, "staff-mcp", Some("review-agent"))
+            .await
+            .expect("one exact audience in the JWT array form is accepted");
+    }
+
+    #[tokio::test]
+    async fn delegated_staff_read_refuses_changed_actor_scope_lifetime_and_source_profile() {
+        let auth = delegated_authenticator();
+        let now = Utc::now().timestamp();
+        for (claims, expected) in [
+            (
+                json!({"act":{"iss":ISSUER,"sub":"other"}}),
+                AuthenticationError::Refused,
+            ),
+            (
+                json!({"act":{"iss":ISSUER,"sub":"registry-mcp","act":{"sub":"nested"}}}),
+                AuthenticationError::Refused,
+            ),
+            (
+                json!({"scope":"casework:staff casework:staff:delegated-read casework:write"}),
+                AuthenticationError::Profile,
+            ),
+            (
+                json!({"iat":now,"exp":now+301}),
+                AuthenticationError::Refused,
+            ),
+            (
+                json!({"registry_grant_id":"not-allowed"}),
+                AuthenticationError::Refused,
+            ),
+            (
+                json!({"aud":[AUDIENCE, AUDIENCE]}),
+                AuthenticationError::Refused,
+            ),
+        ] {
+            let credential = delegated_token(claims);
+            assert_eq!(
+                auth.authenticate_staff_read(&credential, "staff-mcp", Some("review-agent"))
+                    .await
+                    .unwrap_err(),
+                expected
+            );
+        }
+        let credential = delegated_token(json!({}));
+        assert!(matches!(
+            auth.authenticate_staff_read(&credential, "staff-mcp", Some("other-source"))
+                .await,
+            Err(AuthenticationError::Profile)
+        ));
     }
     #[tokio::test]
     async fn compact_token_admission_logs_one_value_free_header_diagnostic() {

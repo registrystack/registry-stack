@@ -156,6 +156,36 @@ revoke them at the issuer. `maximumTokenLifetimeSeconds` optionally limits the
 interval from `iat` to `exp` to 1 through 7200 seconds. Omitting either setting preserves
 the existing acceptance rule.
 
+`delegatedStaffReaders` is absent by default. When present, it is a non-empty
+map keyed by an operator-owned reader policy identifier, such as
+`assistant-reader`. Each entry names one existing `Staff` access profile, one
+explicitly allowed OAuth client, the exact trusted `act.iss` and `act.sub`, the
+exact subject-token issuer recorded by the exchange, one scope used only for
+delegated staff reads, and a token lifetime ceiling of 1 through 300 seconds.
+The delegated token must carry exactly the Staff profile scopes plus that one
+read scope, one Casework audience, the configured human assertion, no grant
+claims and no nested actor. The ordinary authentication path continues to
+refuse every token with `act`.
+
+The dedicated routes are `GET /v1/delegated-staff/review-tasks` and
+`GET /v1/delegated-staff/review-tasks/{taskId}/context`. A client selects the
+map entry with `registry-casework-delegated-reader`; it does not send
+`registry-casework-profile`. The list is always due-ordered work assigned to
+the represented Staff principal. The context route checks the current holder
+and revision before source I/O and again before release. Neither route offers
+a mutation, unclaimed-work, supervisor, administrator, or general human
+operation. An optional `sourceProfiles` list is the complete set accepted from
+`registry-source-profile`; source authorization remains separate.
+
+For a current-source BReg provider, `delegatedDisplayExchange` is an optional
+provider binding dedicated to these reads. It names the token endpoint,
+separate client and assertion-key secret references, optional assertion
+audience, exact downstream resource, non-empty scopes, and credential
+generation. Casework passes only verified subject-token metadata and the
+invocation credential to this provider boundary. The provider performs a
+fresh per-call exchange and sends only the exchanged bearer to BReg; it never
+forwards the Casework bearer or falls back to the human-display credential.
+
 During key rotation, publish the replacement key first and confirm that Casework accepts a
 test token signed by it. Add the retiring key identifier to `revokedKeyIds` when it must stop
 authorizing immediately, apply the runtime configuration, and confirm that a token signed by

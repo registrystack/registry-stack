@@ -16,6 +16,7 @@ OUTPUT = ROOT / "products/casework/generated/registry-casework.openapi.json"
 PROFILE = "registry-casework-profile"
 REVIEW_PROFILE = "registry-review-profile"
 SOURCE_PROFILE = "registry-source-profile"
+DELEGATED_READER = "registry-casework-delegated-reader"
 
 @dataclass(frozen=True)
 class Endpoint:
@@ -31,6 +32,7 @@ class Endpoint:
     public: bool = False
     service: bool = False
     review: bool = False
+    delegated: bool = False
 
 # Transport metadata only. DTO shapes and all statuses/problems come from Rust.
 ENDPOINTS = [
@@ -49,6 +51,8 @@ ENDPOINTS = [
     Endpoint("POST","/v1/review-requests/{request_id}/notes","addReviewNote","ReviewHistoryEntry","ReviewNoteRequest",source=True,idempotency=True),
     Endpoint("GET","/v1/review-results","listReviewResults","ReviewResultFeedPage",query="page",review=True),
     Endpoint("GET","/v1/review-tasks","listReviewTasks","ReviewTaskPage",query="ReviewStaffingQuery",source=True),
+    Endpoint("GET","/v1/delegated-staff/review-tasks","listDelegatedStaffReviewTasks","ReviewTaskPage",query="page",source=True,delegated=True),
+    Endpoint("GET","/v1/delegated-staff/review-tasks/{task_id}/context","getDelegatedStaffReviewTaskContext","ReviewTaskContext",source=True,delegated=True),
     Endpoint("GET","/v1/review-tasks/next","getNextReviewTask","OptionalReviewTask",query="ReviewStaffingQuery",source=True),
     Endpoint("GET","/v1/review-tasks/holdings","getReviewTaskHoldings","ReviewTaskPage",query="ReviewStaffingQuery",source=True),
     Endpoint("GET","/v1/review-tasks/supervision","listSupervisoryReviewTasks","SupervisoryReviewTaskPage",query="supervision",source=True),
@@ -203,8 +207,18 @@ def document(contract: dict, wire: dict) -> dict:
         op=rust[key]
         if bool(endpoint.body)!=op["acceptsJson"] or bool(endpoint.query)!=op["extractsQuery"] or bool(re.search(r"\{",endpoint.path))!=op["extractsPath"]:raise ValueError(f"Rust/OpenAPI extraction drifted for {key}")
         parameters=[parameter("traceparent","header",{"type":"string"})]
-        if not endpoint.public and not endpoint.service:parameters.append(parameter(REVIEW_PROFILE if endpoint.review else PROFILE,"header",bounded_identifier(),True,"The caller's exact governed access profile for this protocol."))
-        if endpoint.source:parameters.append(parameter(SOURCE_PROFILE,"header",bounded_identifier(),False,"Current-source lists, open work, source context, task mutations and new notes require the human caller's source-valid profile and credential. Retained terminal task and history reads use Casework authority. Submitted context requires no provider."))
+        if not endpoint.public and not endpoint.service:
+            if endpoint.delegated:
+                parameters.append(parameter(DELEGATED_READER,"header",bounded_identifier(),True,"The exact operator-configured delegated staff reader policy."))
+            else:
+                parameters.append(parameter(REVIEW_PROFILE if endpoint.review else PROFILE,"header",bounded_identifier(),True,"The caller's exact governed access profile for this protocol."))
+        if endpoint.source:
+            source_description = (
+                "The source profile admitted by the selected delegated reader policy. The source provider acquires separate per-call downstream authority."
+                if endpoint.delegated
+                else "Current-source lists, open work, source context, task mutations and new notes require the human caller's source-valid profile and credential. Retained terminal task and history reads use Casework authority. Submitted context requires no provider."
+            )
+            parameters.append(parameter(SOURCE_PROFILE,"header",bounded_identifier(),False,source_description))
         for name in re.findall(r"\{([^}]+)\}",endpoint.path):
             schema={"type":"string","format":"uuid"}
             if name in ("policy_id","team_id","id"):schema=bounded_identifier()

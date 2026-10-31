@@ -135,8 +135,9 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             )
             .map_err(|_| StartupError("bindings.breg"))?,
             ProviderConfig::Casework {
+                authority: crate::config::CaseworkAuthority::DelegatedStaffRead,
                 base_url,
-                review_profile,
+                reader_policy,
                 source_profile,
                 page_size,
                 authorization,
@@ -144,7 +145,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                 let provider = CaseworkProvider::new(
                     CaseworkOptions::new(
                         base_url.to_url(),
-                        review_profile.to_string(),
+                        reader_policy.to_string(),
                         source_profile.to_string(),
                         *page_size,
                     )

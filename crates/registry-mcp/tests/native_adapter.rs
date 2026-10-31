@@ -25,6 +25,40 @@ const ORG_UNIT: &str = "slSrf7H9lMf";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires matching native Adapter candidate, maintained fixtures and owned PostgreSQL"]
+async fn breg_records_profile_reconfigures_the_same_provider_from_artifacts() {
+    let stack = NativeStack::start(
+        Project::BregRecords,
+        Project::BregRecords,
+        GatewayMode::Direct,
+    )
+    .await;
+    stack.source.respond_with([Reply::Json(fixture_response(
+        &stack.adapter_root,
+        "get-found",
+    ))]);
+    assert_eq!(stack.exported["digest"], stack.runtime_contract["digest"]);
+
+    let client = stack.client().await;
+    let get = call(&client, GET_TOOL, get_arguments(RECORD)).await;
+
+    assert_eq!(get.is_error, Some(false), "{get:?}");
+    let get = structured(&get);
+    assert_eq!(get["adapterData"]["data"]["recordIdentifier"], RECORD);
+    assert_eq!(
+        get["adapterData"]["data"]["domainData"]["org_unit"],
+        ORG_UNIT
+    );
+    let requests = stack.source.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, axum::http::Method::GET);
+    assert!(requests[0]
+        .uri
+        .path()
+        .ends_with(&format!("/trackedEntities/{RECORD}")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires matching native Adapter candidate, maintained fixtures and owned PostgreSQL"]
 async fn native_get_and_read_only_post_use_the_live_effective_contract() {
     let mut stack =
         NativeStack::start(Project::GovStack, Project::GovStack, GatewayMode::Direct).await;

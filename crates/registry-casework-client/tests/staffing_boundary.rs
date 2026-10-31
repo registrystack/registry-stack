@@ -222,6 +222,45 @@ async fn staffing_selectors_and_preview_ids_cross_the_exact_public_routes() {
     assert_eq!(calls[6].1["idempotency-key"], "clock-7");
     server.abort();
 }
+
+#[tokio::test]
+async fn delegated_staff_read_uses_only_its_dedicated_route_and_policy_header() {
+    let seen = Seen::default();
+    let app = Router::new()
+        .route("/tenant/v1/delegated-staff/review-tasks", get(read))
+        .with_state(seen.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/tenant")).unwrap(),
+    ))
+    .unwrap();
+    let token = BearerToken::new("delegated-token").unwrap();
+    let page = client
+        .delegated_review_tasks(
+            DelegatedStaffReadAuth::new(&token, "assistant-reader")
+                .with_source_profile("review-agent"),
+            None,
+            25,
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.value.items.len(), 1);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        seen[0].0,
+        "/tenant/v1/delegated-staff/review-tasks?limit=25"
+    );
+    assert_eq!(
+        seen[0].1["registry-casework-delegated-reader"],
+        "assistant-reader"
+    );
+    assert!(seen[0].1.get("registry-casework-profile").is_none());
+    assert_eq!(seen[0].1["registry-source-profile"], "review-agent");
+    server.abort();
+}
 #[tokio::test]
 async fn invalid_staffing_inputs_fail_before_io() {
     let client = CaseworkClient::new(CaseworkClientConfig::new(

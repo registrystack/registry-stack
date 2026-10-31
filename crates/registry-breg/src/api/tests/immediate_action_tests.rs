@@ -451,6 +451,203 @@ async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_o
     }
 }
 
+#[test]
+fn delegated_standing_agent_reads_only_its_bounded_review_context() {
+    use crate::{model::ProposalOperation, postgres::ProposalAuthorityOperation};
+
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    let mut proposed = project.actions[0].clone();
+    proposed.id = "propose-rename".into();
+    proposed.execution = serde_json::from_value(json!({
+        "mode":"proposal",
+        "proposal":{
+            "review":{"type":"none"},
+            "application":{"mode":"manual"},
+            "retention":{"mode":"retain"},
+            "reviewContext":{
+                "id":"rename-context",
+                "fields":{
+                    "currentLabel":{"type":"record","input":"case-ref","field":"label"},
+                    "proposedLabel":{"type":"input","input":"case-label"}
+                }
+            }
+        }
+    }))
+    .unwrap();
+    project.actions.push(proposed);
+    project.access_profiles[0].permissions.actions.push(
+        serde_json::from_value(json!({
+            "action":"propose-rename",
+            "operations":["start"],
+            "targets":[{
+                "recordType":"case",
+                "rowBoundaries":[{"field":"region","claim":"regions","operator":"in"}]
+            }]
+        }))
+        .unwrap(),
+    );
+    project.access_profiles.push(
+        serde_json::from_value(json!({
+            "id":"casework-source-reader",
+            "principalClaim":"registry_principal",
+            "actorKind":"agent",
+            "requesterClients":["casework-source-reader"],
+            "requiredScopes":["case.review"],
+            "requiredPurposes":["case-management"],
+            "permissions":{
+                "records":[{
+                    "recordType":"case",
+                    "operations":["get"],
+                    "readableFields":["label"],
+                    "rowBoundaries":[{"field":"region","claim":"regions","operator":"in"}]
+                }],
+                "proposals":[{
+                    "action":"propose-rename",
+                    "operations":["get-review-context"],
+                    "readableContextFields":["currentLabel","proposedLabel"],
+                    "targets":[{
+                        "recordType":"case",
+                        "rowBoundaries":[{"field":"region","claim":"regions","operator":"in"}]
+                    }]
+                }]
+            }
+        }))
+        .unwrap(),
+    );
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "propose-rename")
+        .unwrap();
+    let delegated = claims(
+        "registry_principal",
+        ["case.review"],
+        Some("case-management"),
+        true,
+    )
+    .with_contextual_authority(
+        Some(registry_platform_oidc::ActorKind::Agent),
+        Some("casework-source-reader".into()),
+        Some("00000000-0000-4000-8000-0000000000c7".into()),
+        None,
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let admit = |claims: &VerifiedRequestClaims, operation| {
+        super::super::proposals::authorize(
+            &registry,
+            action,
+            claims,
+            Some("casework-source-reader"),
+            ProposalAuthorityOperation::Lifecycle(operation),
+            Some(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap()),
+        )
+    };
+    let authority = admit(&delegated, ProposalOperation::GetReviewContext)
+        .expect("verified delegated actor receives bounded context authority");
+    assert!(
+        delegated.human_identity().is_none(),
+        "agent disclosure is not evidence of human viewing or approval"
+    );
+    assert_eq!(
+        authority.operation,
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
+    );
+    for operation in [
+        ProposalOperation::Get,
+        ProposalOperation::List,
+        ProposalOperation::Edit,
+        ProposalOperation::Submit,
+        ProposalOperation::Apply,
+    ] {
+        assert!(admit(&delegated, operation).is_none(), "{operation:?}");
+    }
+
+    let direct_agent = claims(
+        "registry_principal",
+        ["case.review"],
+        Some("case-management"),
+        true,
+    )
+    .with_contextual_authority(
+        Some(registry_platform_oidc::ActorKind::Agent),
+        Some("casework-source-reader".into()),
+        None,
+        None,
+        BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(admit(&direct_agent, ProposalOperation::GetReviewContext).is_none());
+
+    for (label, scopes, purpose, client, boundary) in [
+        (
+            "purpose missing",
+            vec!["case.review"],
+            None,
+            "casework-source-reader",
+            true,
+        ),
+        (
+            "purpose mismatched",
+            vec!["case.review"],
+            Some("other-purpose"),
+            "casework-source-reader",
+            true,
+        ),
+        (
+            "scope missing",
+            vec![],
+            Some("case-management"),
+            "casework-source-reader",
+            true,
+        ),
+        (
+            "foreign trusted actor client",
+            vec!["case.review"],
+            Some("case-management"),
+            "other-source-reader",
+            true,
+        ),
+        (
+            "row claim missing",
+            vec!["case.review"],
+            Some("case-management"),
+            "casework-source-reader",
+            false,
+        ),
+    ] {
+        let claims = VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            "synthetic-registrar",
+            scopes.into_iter().map(str::to_owned).collect(),
+            purpose.map(str::to_owned),
+            if boundary {
+                BTreeMap::from([(
+                    "regions".to_owned(),
+                    VerifiedClaimValue::direct_string_set(["north"]).unwrap(),
+                )])
+            } else {
+                BTreeMap::new()
+            },
+        )
+        .unwrap()
+        .with_contextual_authority(
+            Some(registry_platform_oidc::ActorKind::Agent),
+            Some(client.into()),
+            Some("00000000-0000-4000-8000-0000000000c7".into()),
+            None,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            admit(&claims, ProposalOperation::GetReviewContext).is_none(),
+            "{label}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn signed_task_token_cannot_discover_or_invoke_an_ordinary_immediate_action() {
     let registry = compiled();

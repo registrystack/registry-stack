@@ -3,8 +3,8 @@
 
 use async_trait::async_trait;
 use registry_casework_client::{
-    CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError, CaseworkProblemCode,
-    ReviewStaffingQuery, ReviewTaskOwnership, ReviewTaskSort,
+    CaseworkClient, CaseworkClientConfig, CaseworkClientError, CaseworkProblemCode,
+    DelegatedStaffReadAuth,
 };
 use registry_mcp_edge::{
     EffectCertainty, Invocation, Provider, ProviderAuthorization, ProviderFailure, ProviderOutcome,
@@ -24,7 +24,7 @@ pub const TOOL_NAMES: [&str; 2] = [LIST_TASKS, TASK_CONTEXT];
 #[derive(Clone, Debug)]
 pub struct CaseworkOptions {
     base_url: Url,
-    review_profile: String,
+    reader_policy: String,
     source_profile: String,
     page_size: usize,
 }
@@ -36,17 +36,12 @@ pub struct InvalidCaseworkBinding;
 impl CaseworkOptions {
     pub fn new(
         base_url: Url,
-        review_profile: String,
+        reader_policy: String,
         source_profile: String,
         page_size: usize,
     ) -> Result<Self, InvalidCaseworkBinding> {
-        let local = |s: &str| {
-            !s.is_empty()
-                && s.len() <= 128
-                && s.bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        };
-        if !local(&review_profile) || !local(&source_profile) || !(1..=100).contains(&page_size) {
+        let local = |value: &str| value.parse::<registry_platform_yaml::LocalId>().is_ok();
+        if !local(&reader_policy) || !local(&source_profile) || !(1..=100).contains(&page_size) {
             return Err(InvalidCaseworkBinding);
         }
         // Client construction validates the service origin before any credential acquisition.
@@ -56,7 +51,7 @@ impl CaseworkOptions {
         .map_err(|_| InvalidCaseworkBinding)?;
         Ok(Self {
             base_url,
-            review_profile,
+            reader_policy,
             source_profile,
             page_size,
         })
@@ -96,22 +91,13 @@ impl CaseworkProvider {
             .bearer_token()
             .await
             .map_err(|_| unavailable())?;
-        let auth = CaseworkAuth::new(&token, &self.options.review_profile)
+        let auth = DelegatedStaffReadAuth::new(&token, &self.options.reader_policy)
             .with_source_profile(&self.options.source_profile);
         match selected {
             Selection::List(cursor) => {
                 let response = self
                     .client
-                    .review_tasks(
-                        auth,
-                        &ReviewStaffingQuery {
-                            ownership: Some(ReviewTaskOwnership::AssignedToMe),
-                            sort: ReviewTaskSort::Due,
-                            cursor,
-                            limit: Some(self.options.page_size),
-                            ..ReviewStaffingQuery::default()
-                        },
-                    )
+                    .delegated_review_tasks(auth, cursor, self.options.page_size)
                     .await
                     .map_err(|_| unavailable())?;
                 serde_json::to_value(response).map_err(|_| unavailable())
@@ -119,14 +105,16 @@ impl CaseworkProvider {
             Selection::Context(task_id) => {
                 let first = self
                     .client
-                    .review_task_context(
-                        CaseworkAuth::new(&token, &self.options.review_profile),
+                    .delegated_review_task_context(
+                        DelegatedStaffReadAuth::new(&token, &self.options.reader_policy),
                         task_id,
                     )
                     .await;
                 let response = match first {
                     Err(error) if requires_source_profile(&error) => {
-                        self.client.review_task_context(auth, task_id).await
+                        self.client
+                            .delegated_review_task_context(auth, task_id)
+                            .await
                     }
                     other => other,
                 }

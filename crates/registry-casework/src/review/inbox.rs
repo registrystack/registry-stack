@@ -10,6 +10,18 @@ pub(super) struct InboxObservations {
     status: BTreeMap<Uuid, Result<ServiceStatusObservation, ReviewContextError>>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct InboxDisplayCredential<'a> {
+    token: &'a str,
+    delegated: Option<&'a DelegatedCredentialContext>,
+}
+
+impl<'a> InboxDisplayCredential<'a> {
+    pub(super) fn new(token: &'a str, delegated: Option<&'a DelegatedCredentialContext>) -> Self {
+        Self { token, delegated }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct InboxRefusalSummary {
     concealed: bool,
@@ -85,7 +97,7 @@ impl InboxObservations {
         service: &CaseworkService,
         records: &BTreeMap<Uuid, ReviewRequestRecord>,
         profile: Option<&str>,
-        token: &str,
+        credential: InboxDisplayCredential<'_>,
         deadline: tokio::time::Instant,
         with_status: bool,
     ) -> Result<(), ReviewRuntimeError> {
@@ -135,14 +147,29 @@ impl InboxObservations {
                         .iter()
                         .map(|(_, identity)| identity.clone())
                         .collect::<Vec<_>>();
-                    let observations = tokio::time::timeout_at(
-                        deadline,
-                        provider.human_display_batch(
-                            &identities,
-                            profile,
-                            EphemeralCredential::new(token),
-                        ),
-                    )
+                    let observations = tokio::time::timeout_at(deadline, async {
+                        match credential.delegated {
+                            Some(context) => {
+                                provider
+                                    .delegated_display_batch(
+                                        &identities,
+                                        profile,
+                                        EphemeralCredential::new(credential.token),
+                                        context,
+                                    )
+                                    .await
+                            }
+                            None => {
+                                provider
+                                    .human_display_batch(
+                                        &identities,
+                                        profile,
+                                        EphemeralCredential::new(credential.token),
+                                    )
+                                    .await
+                            }
+                        }
+                    })
                     .await
                     .map_err(|_| ReviewRuntimeError::SourceUnavailable)?;
                     if observations.len() != entries.len() {

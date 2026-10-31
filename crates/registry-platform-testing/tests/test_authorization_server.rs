@@ -746,6 +746,40 @@ async fn client_credentials_names_the_service_subject() {
 }
 
 #[tokio::test]
+async fn client_credentials_include_only_configured_custom_authority_claims() {
+    let key = client_key();
+    let server = TestAuthorizationServer::builder()
+        .client(
+            TestClient::new(GATEWAY)
+                .with_public_jwk(key.public())
+                .with_resource(REGISTRY_AUDIENCE)
+                .with_client_credentials_claim("registry_principal", json!("casework-service"))
+                .with_client_credentials_claim("registry_purpose", json!("facility-review")),
+        )
+        .start()
+        .await;
+    let scoped = provider(
+        &server,
+        GATEWAY,
+        &key,
+        Some(REGISTRY_AUDIENCE),
+        &["records:read"],
+    );
+    let token = bearer_text(&scoped.bearer_token().await.unwrap());
+    let claims = claims_of(&token);
+    assert_eq!(claims["registry_principal"], "casework-service");
+    assert_eq!(claims["registry_purpose"], "facility-review");
+    assert_eq!(claims["registry_actor_kind"], "human");
+}
+
+#[test]
+#[should_panic(expected = "a client credentials claim must be a custom claim")]
+fn client_credentials_custom_claims_refuse_server_owned_claims() {
+    let _ = TestClient::new(GATEWAY)
+        .with_client_credentials_claim("registry_actor_kind", json!("service"));
+}
+
+#[tokio::test]
 async fn a_resource_the_client_may_not_address_is_refused() {
     let fixture = fixture().await;
     let server = &fixture.server;
@@ -844,6 +878,317 @@ async fn token_exchange_issues_the_standing_agent_shape() {
     assert_eq!(claims["aud"], REGISTRY_AUDIENCE);
     assert_eq!(claims["registry_actor_kind"], "agent");
     assert!(claims["exp"].as_i64().unwrap() <= claims_of(&citizen)["exp"].as_i64().unwrap());
+}
+
+#[tokio::test]
+async fn token_exchange_copies_only_the_clients_explicit_subject_claim_allowlist() {
+    let gateway_key = client_key();
+    let server = TestAuthorizationServer::builder()
+        .client(
+            TestClient::new(CHAT_HOST)
+                .with_resource(GATEWAY_AUDIENCE)
+                .with_actor_kind(TestActorKind::Human),
+        )
+        .client(
+            TestClient::new(GATEWAY)
+                .with_public_jwk(gateway_key.public())
+                .with_resource(REGISTRY_AUDIENCE)
+                .with_actor_kind(TestActorKind::Agent)
+                .with_service_subject(GATEWAY_ACTOR)
+                .with_exchange_subject_claim("registry_principal")
+                .with_exchange_subject_claim("registry_purpose")
+                .with_exchange_subject_claim("jurisdiction")
+                .with_exchange_subject_resource(GATEWAY_AUDIENCE)
+                .with_exchange_scope_grant("casework:staff:delegated-read", "records:read"),
+        )
+        .start()
+        .await;
+    let expires_at = now_unix_seconds() + 60;
+    let subject = server.issue_access_token_with_claims(
+        CHAT_HOST,
+        CITIZEN,
+        GATEWAY_AUDIENCE,
+        "casework:staff:delegated-read",
+        expires_at,
+        BTreeMap::from([
+            ("registry_principal".to_owned(), json!(CITIZEN)),
+            ("registry_purpose".to_owned(), json!("facility-review")),
+            ("jurisdiction".to_owned(), json!("zone-a")),
+            ("not_allowlisted".to_owned(), json!("must-not-propagate")),
+        ]),
+    );
+    let exchange = ExchangeAuthorization::upstream(
+        provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            Some(REGISTRY_AUDIENCE),
+            &["records:read"],
+        ),
+        ExchangeContext::first_party(
+            server.issuer(),
+            CITIZEN,
+            GATEWAY_AUDIENCE,
+            "allowlisted-subject-claims",
+            expires_at,
+        )
+        .unwrap(),
+        UpstreamSubjectToken::new(&subject, SubjectTokenType::AccessToken, expires_at).unwrap(),
+        Some(Arc::new(provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            None,
+            &[],
+        ))),
+    )
+    .unwrap();
+    let token = bearer_text(&exchange.bearer_token().await.unwrap());
+    let claims = claims_of(&token);
+    assert_eq!(claims["registry_principal"], CITIZEN);
+    assert_eq!(claims["registry_purpose"], "facility-review");
+    assert_eq!(claims["jurisdiction"], "zone-a");
+    assert_eq!(claims["registry_assertion_issuer"], server.issuer());
+    assert!(claims.get("not_allowlisted").is_none());
+    assert_eq!(claims["aud"], REGISTRY_AUDIENCE);
+    assert_eq!(claims["azp"], GATEWAY);
+    assert_eq!(claims["act"], json!({"sub": GATEWAY_ACTOR}));
+    let observations = server.exchange_observations();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].client_id, GATEWAY);
+    assert_eq!(observations[0].resource, REGISTRY_AUDIENCE);
+    assert_eq!(observations[0].scopes, ["records:read"]);
+    assert_eq!(observations[0].subject_issuer, server.issuer());
+    assert_eq!(
+        observations[0].subject_resource.as_deref(),
+        Some(GATEWAY_AUDIENCE)
+    );
+    assert_eq!(observations[0].subject, CITIZEN);
+    assert_eq!(
+        observations[0].actor_subject.as_deref(),
+        Some(GATEWAY_ACTOR)
+    );
+    assert_eq!(observations[0].actor_issuer, None);
+    assert_eq!(
+        observations[0].propagated_claims,
+        BTreeMap::from([
+            ("jurisdiction".to_owned(), json!("zone-a")),
+            ("registry_principal".to_owned(), json!(CITIZEN)),
+            ("registry_purpose".to_owned(), json!("facility-review")),
+        ])
+    );
+
+    let unmapped = ExchangeAuthorization::upstream(
+        provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            Some(REGISTRY_AUDIENCE),
+            &["records:write"],
+        ),
+        ExchangeContext::first_party(
+            server.issuer(),
+            CITIZEN,
+            GATEWAY_AUDIENCE,
+            "unmapped-subject-scope",
+            expires_at,
+        )
+        .unwrap(),
+        UpstreamSubjectToken::new(&subject, SubjectTokenType::AccessToken, expires_at).unwrap(),
+        Some(Arc::new(provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            None,
+            &[],
+        ))),
+    )
+    .unwrap()
+    .bearer_token()
+    .await;
+    assert!(
+        unmapped.is_err(),
+        "an undeclared scope translation is refused"
+    );
+    assert_eq!(
+        server.exchange_observations().len(),
+        1,
+        "a refused exchange is not recorded as completed"
+    );
+
+    let wrong_audience = server.issue_access_token_with_claims(
+        CHAT_HOST,
+        CITIZEN,
+        OTHER_AUDIENCE,
+        "casework:staff:delegated-read",
+        expires_at,
+        BTreeMap::from([
+            ("registry_principal".to_owned(), json!(CITIZEN)),
+            ("registry_purpose".to_owned(), json!("facility-review")),
+            ("jurisdiction".to_owned(), json!("zone-a")),
+        ]),
+    );
+    let refused_audience = ExchangeAuthorization::upstream(
+        provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            Some(REGISTRY_AUDIENCE),
+            &["records:read"],
+        ),
+        ExchangeContext::first_party(
+            server.issuer(),
+            CITIZEN,
+            OTHER_AUDIENCE,
+            "wrong-subject-audience",
+            expires_at,
+        )
+        .unwrap(),
+        UpstreamSubjectToken::new(&wrong_audience, SubjectTokenType::AccessToken, expires_at)
+            .unwrap(),
+        Some(Arc::new(provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            None,
+            &[],
+        ))),
+    )
+    .unwrap()
+    .bearer_token()
+    .await;
+    assert!(
+        refused_audience.is_err(),
+        "the exchange client refuses a subject token for another resource"
+    );
+    assert_eq!(server.exchange_observations().len(), 1);
+}
+
+#[tokio::test]
+async fn exact_exchange_subject_resource_accepts_one_audience_array_and_refuses_multiple() {
+    let gateway_key = client_key();
+    let server = TestAuthorizationServer::builder()
+        .client(
+            TestClient::new(CHAT_HOST)
+                .with_resource(GATEWAY_AUDIENCE)
+                .with_resource(OTHER_AUDIENCE)
+                .with_actor_kind(TestActorKind::Human),
+        )
+        .client(
+            TestClient::new(GATEWAY)
+                .with_public_jwk(gateway_key.public())
+                .with_resource(REGISTRY_AUDIENCE)
+                .with_exchange_subject_resource(GATEWAY_AUDIENCE),
+        )
+        .start()
+        .await;
+    let expires_at = now_unix_seconds() + 60;
+    let single = server.issue_access_token_for_audiences_with_claims(
+        CHAT_HOST,
+        CITIZEN,
+        vec![GATEWAY_AUDIENCE.to_owned()],
+        "records:read",
+        expires_at,
+        BTreeMap::new(),
+    );
+    ExchangeAuthorization::upstream(
+        provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            Some(REGISTRY_AUDIENCE),
+            &["records:read"],
+        ),
+        ExchangeContext::first_party(
+            server.issuer(),
+            CITIZEN,
+            GATEWAY_AUDIENCE,
+            "single-array-audience",
+            expires_at,
+        )
+        .unwrap(),
+        UpstreamSubjectToken::new(&single, SubjectTokenType::AccessToken, expires_at).unwrap(),
+        None,
+    )
+    .unwrap()
+    .bearer_token()
+    .await
+    .expect("one exact audience may use the JWT array representation");
+    assert_eq!(
+        server.exchange_observations()[0]
+            .subject_resource
+            .as_deref(),
+        Some(GATEWAY_AUDIENCE)
+    );
+
+    let multiple = server.issue_access_token_for_audiences_with_claims(
+        CHAT_HOST,
+        CITIZEN,
+        vec![GATEWAY_AUDIENCE.to_owned(), OTHER_AUDIENCE.to_owned()],
+        "records:read",
+        expires_at,
+        BTreeMap::new(),
+    );
+    let refused = ExchangeAuthorization::upstream(
+        provider(
+            &server,
+            GATEWAY,
+            &gateway_key,
+            Some(REGISTRY_AUDIENCE),
+            &["records:read"],
+        ),
+        ExchangeContext::first_party(
+            server.issuer(),
+            CITIZEN,
+            GATEWAY_AUDIENCE,
+            "multiple-audiences",
+            expires_at,
+        )
+        .unwrap(),
+        UpstreamSubjectToken::new(&multiple, SubjectTokenType::AccessToken, expires_at).unwrap(),
+        None,
+    )
+    .unwrap()
+    .bearer_token()
+    .await;
+    assert!(refused.is_err(), "a multi-audience subject is refused");
+    assert_eq!(server.exchange_observations().len(), 1);
+}
+
+#[tokio::test]
+async fn multi_audience_setup_tokens_accept_a_bounded_scope_set() {
+    let server = TestAuthorizationServer::builder()
+        .client(
+            TestClient::new(CHAT_HOST)
+                .with_resource(GATEWAY_AUDIENCE)
+                .with_resource(OTHER_AUDIENCE),
+        )
+        .start()
+        .await;
+    let token = server.issue_access_token_for_audiences_with_claims(
+        CHAT_HOST,
+        CITIZEN,
+        vec![GATEWAY_AUDIENCE.to_owned(), OTHER_AUDIENCE.to_owned()],
+        "casework:staff registry:proposal:review",
+        now_unix_seconds() + 60,
+        BTreeMap::new(),
+    );
+    assert_eq!(
+        claims_of(&token)["scope"],
+        "casework:staff registry:proposal:review"
+    );
+}
+
+#[test]
+#[should_panic(expected = "an exchange subject claim must be a custom claim")]
+fn exchange_subject_claim_allowlist_refuses_registered_claims() {
+    let _ = TestClient::new(GATEWAY).with_exchange_subject_claim("sub");
+}
+
+#[test]
+#[should_panic(expected = "an exchange subject claim must be a custom claim")]
+fn exchange_subject_claim_allowlist_refuses_server_owned_authority_claims() {
+    let _ = TestClient::new(GATEWAY).with_exchange_subject_claim("registry_assertion_issuer");
 }
 
 #[tokio::test]

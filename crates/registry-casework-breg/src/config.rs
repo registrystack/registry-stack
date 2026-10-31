@@ -96,10 +96,51 @@ pub struct BregBinding {
     pub resource: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_display_exchange: Option<DelegatedDisplayExchangeBinding>,
 }
 impl std::fmt::Debug for BregBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("BregBinding(<operator transport and secret references>)")
+    }
+}
+
+/// Dedicated per-call delegation for staff-subject source disclosure. This is
+/// separate from the provider's status and task-context service credential.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DelegatedDisplayExchangeBinding {
+    #[serde(deserialize_with = "registry_casework_core::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub token_endpoint: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_config::SecretReference")
+    )]
+    pub client_id_ref: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_config::SecretReference")
+    )]
+    pub client_assertion_key_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_assertion_audience: Option<String>,
+    pub resource: String,
+    pub scopes: Vec<String>,
+    pub generation: String,
+}
+
+impl std::fmt::Debug for DelegatedDisplayExchangeBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DelegatedDisplayExchangeBinding")
+            .field("resource", &"<configured>")
+            .field("scopes", &self.scopes.len())
+            .field("generation", &"<configured>")
+            .finish_non_exhaustive()
     }
 }
 
@@ -188,12 +229,43 @@ pub fn build_provider(
     .with_attempt_timeout(Duration::from_secs(30))
     .with_connect_timeout(Duration::from_secs(10));
     let client = BaseRegistryClient::new(config).map_err(|_| ReviewContextError::Invalid)?;
-    let provider = crate::BregContextProvider::new(
+    let mut provider = crate::BregContextProvider::new(
         policy.id.clone(),
         export,
         client,
         binding.status_profile.clone(),
     )?;
+    if let Some(delegated) = &binding.delegated_display_exchange {
+        let delegated_client_id = secrets
+            .resolve(&delegated.client_id_ref)
+            .map_err(|_| ReviewContextError::Unavailable)?;
+        let delegated_client_id = std::str::from_utf8(delegated_client_id.expose_secret())
+            .map_err(|_| ReviewContextError::Invalid)?;
+        if delegated_client_id.is_empty()
+            || delegated_client_id.len() > 512
+            || delegated_client_id == client_id
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        let delegated_key = secrets
+            .resolve(&delegated.client_assertion_key_ref)
+            .map_err(|_| ReviewContextError::Unavailable)?;
+        let delegated_key = PrivateJwk::parse(
+            std::str::from_utf8(delegated_key.expose_secret())
+                .map_err(|_| ReviewContextError::Invalid)?,
+        )
+        .map_err(|_| ReviewContextError::Invalid)?;
+        let exchange = crate::DelegatedDisplayExchange::new(
+            url::Url::parse(&delegated.token_endpoint).map_err(|_| ReviewContextError::Invalid)?,
+            delegated_client_id.to_owned(),
+            delegated_key,
+            delegated.client_assertion_audience.clone(),
+            delegated.resource.clone(),
+            delegated.scopes.clone(),
+            delegated.generation.clone(),
+        )?;
+        provider = provider.with_delegated_display_exchange(exchange);
+    }
     match &binding.task_grant_profile {
         Some(profile) => provider.with_task_grant_profile(profile.clone()),
         None => Ok(provider),
@@ -203,4 +275,48 @@ pub fn build_provider(
 fn secret_reference<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     registry_platform_config::SecretReference::deserialize(deserializer)
         .map(|reference| reference.as_str().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn delegated_display_exchange_is_explicit_and_redacted() {
+        let binding: BregBinding = serde_json::from_value(json!({
+            "baseUrl": "https://breg.example.test",
+            "statusProfile": "casework-review-status",
+            "tokenEndpoint": "https://idp.example.test/token",
+            "clientIdRef": "secret:file/status-client-id",
+            "clientAssertionKeyRef": "secret:file/status-client-key",
+            "delegatedDisplayExchange": {
+                "tokenEndpoint": "https://idp.example.test/token",
+                "clientIdRef": "secret:file/source-client-id",
+                "clientAssertionKeyRef": "secret:file/source-client-key",
+                "clientAssertionAudience": "https://idp.example.test",
+                "resource": "urn:casework:facility-breg",
+                "scopes": ["registry:proposal:review"],
+                "generation": "casework-source-v1"
+            }
+        }))
+        .expect("the dedicated source exchange binding parses");
+        let delegated = binding
+            .delegated_display_exchange
+            .as_ref()
+            .expect("delegated exchange is opt in");
+        assert_eq!(delegated.client_id_ref, "secret:file/source-client-id");
+        assert_eq!(delegated.resource, "urn:casework:facility-breg");
+        assert_eq!(delegated.scopes, ["registry:proposal:review"]);
+        let debug = format!("{binding:?} {delegated:?}");
+        for hidden in [
+            "source-client-id",
+            "source-client-key",
+            "idp.example.test",
+            "urn:casework:facility-breg",
+            "casework-source-v1",
+        ] {
+            assert!(!debug.contains(hidden), "Debug exposed {hidden}");
+        }
+    }
 }
