@@ -6,6 +6,10 @@
 # generator emits `draft: true`.
 # New binary trees listed in unreviewed_binaries stay draft and out of the
 # published index until human review.
+# Binaries listed in source_build_only_binaries have no numbered-release asset,
+# installer component, rstack component, or container image.
 status: current
 last_reviewed: 2026-10-28
-unreviewed_binaries: [coordinator, coordinatorctl, documents, documentsctl, manifest, rstack]
+unreviewed_binaries:
+  [coordinator, coordinatorctl, documents, documentsctl, manifest, registry-mcp, rstack]
+source_build_only_binaries: [registry-mcp]

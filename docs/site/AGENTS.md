@@ -35,10 +35,12 @@ production hostnames. Follow the repository's `SECURITY.md` for suspected vulner
   `registry-cli-docs` snapshot test until
   `cargo run --locked -p registry-cli-docs -- --write` regenerates the catalog;
   review that diff as the reference change. `src/data/cli-reference.yaml` holds
-  only the publication `status` and `last_reviewed` date; set the date when you
-  review a catalog diff, and leave it alone for a version-only bump. Optional
-  `unreviewed_binaries` keeps new binary trees draft and out of the published
-  index until a human reviews them; unknown or duplicate names are refused.
+  publication status, review date, and binary availability metadata; set the
+  date when you review a catalog diff, and leave it alone for a version-only
+  bump. Optional `unreviewed_binaries` keeps new binary trees draft and out of
+  the published index until a human reviews them. Optional
+  `source_build_only_binaries` marks binaries that have no numbered-release
+  asset or installer path. Unknown or duplicate names are refused.
   Setting the record back to `draft` hides every CLI page from the site; do
   that only deliberately.
 - For `src/content/docs/products/**`, edit the owning source and metadata listed

@@ -159,6 +159,38 @@ test('wraps the Base Registry Engine citizen gateway group of the index in a Doc
   assert.doesNotMatch(rest, /breg-mcp|breg-review|citizen gateway/iu);
 });
 
+test('labels the configurable MCP gateway as source-build-only', () => {
+  const catalog = fixtureCatalog();
+  assert.ok(
+    catalog.binaries.some((binary) => binary.name === 'registry-mcp'),
+    'registry-mcp must be part of the reviewed CLI catalog inventory',
+  );
+  const metadata = fixtureReviewMetadata({
+    status: 'current',
+    last_reviewed: '2026-10-31',
+    source_build_only_binaries: ['registry-mcp'],
+  });
+
+  const pages = renderCatalog(catalog, metadata);
+  const index = pages.get('index.mdx');
+  const page = pages.get('registry-mcp.mdx');
+
+  assert.match(index, /^## Configurable MCP gateway$/mu);
+  assert.match(
+    index,
+    /`registry-mcp`[^\n]*Source build only; no numbered-release asset, installer component, `rstack` component, or container image\./u,
+  );
+  assert.match(page, /^## Availability$/mu);
+  assert.match(
+    page,
+    /Build `registry-mcp` from the exact Registry Stack source revision you intend to operate\./u,
+  );
+  assert.match(
+    page,
+    /It has no numbered-release asset, installer component, `rstack` component, or container image\./u,
+  );
+});
+
 test('renders required groups and conditional requirements', () => {
   const catalog = fixtureCatalog();
   const evidencectl = catalog.binaries.find((binary) => binary.name === 'evidencectl');
@@ -384,4 +416,27 @@ test('new unreviewed binaries stay draft while reviewed pages stay current', () 
   assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: null }, catalog), /array of strings/u);
   assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['unknown'] }, catalog), /unknown binary/u);
   assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['coordinator', 'coordinator'] }, catalog), /duplicates/u);
+});
+
+test('source-build-only metadata names known binaries once', () => {
+  const catalog = fixtureCatalog();
+  const metadata = fixtureReviewMetadata({
+    status: 'current',
+    last_reviewed: '2026-10-31',
+    source_build_only_binaries: ['registry-mcp'],
+  });
+
+  assert.equal(validateReviewMetadata(metadata, catalog), metadata);
+  assert.throws(
+    () => validateReviewMetadata({ ...metadata, source_build_only_binaries: null }, catalog),
+    /array of strings/u,
+  );
+  assert.throws(
+    () => validateReviewMetadata({ ...metadata, source_build_only_binaries: ['unknown'] }, catalog),
+    /unknown binary/u,
+  );
+  assert.throws(
+    () => validateReviewMetadata({ ...metadata, source_build_only_binaries: ['registry-mcp', 'registry-mcp'] }, catalog),
+    /duplicates/u,
+  );
 });

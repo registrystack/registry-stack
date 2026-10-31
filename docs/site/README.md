@@ -154,11 +154,13 @@ state, not the catalog. The `registry-cli-docs` snapshot test holds the catalog
 to the public Clap trees. When a command, its help, defaults, environment
 bindings, or constraints change, that test fails until
 `cargo run --locked -p registry-cli-docs -- --write` regenerates the catalog,
-and its diff is what review reads. `src/data/cli-reference.yaml` records only
-the publication `status` and the `last_reviewed` date; use the actual review
-date, never the release date merely because it changed. A `draft` record keeps
-the CLI pages out of the site. Historical release source trees and published
-archives retain their own records and generators.
+and its diff is what review reads. `src/data/cli-reference.yaml` records the
+publication status, review date, and binary availability metadata; use the
+actual review date, never the release date merely because it changed. A
+`draft` record keeps the CLI pages out of the site. A source-build-only binary
+is labelled separately from the numbered release assets and installer.
+Historical release source trees and published archives retain their own records
+and generators.
 
 When updating an older branch, resolve authored source conflicts first. If Git
 reports modify/delete conflicts under either generated directory, accept the

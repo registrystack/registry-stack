@@ -38,6 +38,7 @@ export const expectedBinaries = [
   'manifest',
   'messaging',
   'messagingctl',
+  'registry-mcp',
   'registry-render',
   'rstack',
   'scheduling',
@@ -67,6 +68,7 @@ const groups = [
     binaries: ['breg-mcp', 'breg-review'],
     product: 'registry-breg-services',
   },
+  { title: 'Configurable MCP gateway', binaries: ['registry-mcp'] },
   { title: 'Registry Coordinator', binaries: ['coordinator', 'coordinatorctl'], product: 'registry-coordinator' },
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
@@ -271,28 +273,29 @@ function validCalendarDate(value) {
     && date.getUTCDate() === day;
 }
 
-// New binary trees named here stay draft and out of the published index until
-// a human reviews their catalog diff. The catalog, when given, refuses names it
-// does not carry.
-function validateUnreviewedBinaries(excluded, catalog) {
-  stringArray(excluded, 'CLI reference review metadata.unreviewed_binaries');
-  if (new Set(excluded).size !== excluded.length) {
-    throw new Error('CLI reference review metadata.unreviewed_binaries contains duplicates');
+// Binary metadata lists are closed over the catalog, so publication and
+// availability records cannot silently retain a removed or misspelled binary.
+function validateBinaryMetadata(values, field, catalog) {
+  const label = `CLI reference review metadata.${field}`;
+  stringArray(values, label);
+  if (new Set(values).size !== values.length) {
+    throw new Error(`${label} contains duplicates`);
   }
   if (catalog) {
     const known = new Set(catalog.binaries.map((binary) => binary.name));
-    if (excluded.some((name) => !known.has(name))) {
-      throw new Error('CLI reference review metadata.unreviewed_binaries contains an unknown binary');
+    if (values.some((name) => !known.has(name))) {
+      throw new Error(`${label} contains an unknown binary`);
     }
   }
 }
 
 export function validateReviewMetadata(metadata, catalog = null) {
-  const optional = metadata && typeof metadata === 'object' && Object.hasOwn(metadata, 'unreviewed_binaries')
-    ? ['unreviewed_binaries']
+  const optionalFields = ['unreviewed_binaries', 'source_build_only_binaries'];
+  const optional = metadata && typeof metadata === 'object'
+    ? optionalFields.filter((field) => Object.hasOwn(metadata, field))
     : [];
   exactKeys(metadata, new Set(['status', 'last_reviewed', ...optional]), 'CLI reference review metadata');
-  if (optional.length > 0) validateUnreviewedBinaries(metadata.unreviewed_binaries, catalog);
+  for (const field of optional) validateBinaryMetadata(metadata[field], field, catalog);
   if (!['draft', 'current'].includes(metadata.status)) {
     throw new Error('CLI reference review metadata.status must be draft or current');
   }
@@ -490,7 +493,7 @@ ${rows.join('\n')}
 `;
 }
 
-function renderCommand(command, catalog, reviewMetadata, sourceDigest) {
+function renderCommand(command, catalog, reviewMetadata, sourceDigest, sourceBuildOnly) {
   const path = commandPath(command);
   const lines = [
     frontmatter(
@@ -507,6 +510,14 @@ function renderCommand(command, catalog, reviewMetadata, sourceDigest) {
     '',
     `This page is generated from the public Clap command tree for Registry Stack source version ${inlineCode(catalog.source_version)} and catalog SHA-256 ${inlineCode(sourceDigest)}. Hidden implementation commands are omitted.`,
   ];
+  if (sourceBuildOnly) {
+    lines.push(
+      '',
+      '## Availability',
+      '',
+      `Build ${inlineCode(command.invocation.split(' ')[0])} from the exact Registry Stack source revision you intend to operate. It has no numbered-release asset, installer component, ${inlineCode('rstack')} component, or container image.`,
+    );
+  }
   if (command.long_about !== null) {
     lines.push('', '## Description', '', proseText(command.long_about));
   }
@@ -543,6 +554,7 @@ function renderCommand(command, catalog, reviewMetadata, sourceDigest) {
 
 function renderIndex(catalog, reviewMetadata, sourceDigest) {
   const binaries = new Map(catalog.binaries.map((binary) => [binary.name, binary]));
+  const sourceBuildOnly = new Set(reviewMetadata.source_build_only_binaries ?? []);
   const lines = [
     frontmatter(
       'Command-line interfaces',
@@ -565,7 +577,10 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
     lines.push('', `## ${group.title}`, '', '| Binary | Description |', '| --- | --- |');
     for (const name of published) {
       const binary = binaries.get(name);
-      lines.push(`| [${inlineCode(name)}](./${name}/) | ${tableText(binary.about)} |`);
+      const availability = sourceBuildOnly.has(name)
+        ? ' Source build only; no numbered-release asset, installer component, `rstack` component, or container image.'
+        : '';
+      lines.push(`| [${inlineCode(name)}](./${name}/) | ${tableText(binary.about)}${availability} |`);
     }
     if (group.product) lines.push('', '</DocsetProduct>');
   }
@@ -583,13 +598,23 @@ export function renderCatalog(catalog, reviewMetadata) {
   validateCatalog(catalog);
   const sourceDigest = catalogDigest(catalog);
   validateReviewMetadata(reviewMetadata, catalog);
+  const sourceBuildOnly = new Set(reviewMetadata.source_build_only_binaries ?? []);
   const files = new Map([['index.mdx', renderIndex(catalog, reviewMetadata, sourceDigest)]]);
   for (const binary of catalog.binaries) {
     const metadata = (reviewMetadata.unreviewed_binaries ?? []).includes(binary.name)
       ? { ...reviewMetadata, status: 'draft', last_reviewed: 'unreviewed' }
       : reviewMetadata;
     const addBinary = (command) => {
-      files.set(commandPath(command), renderCommand(command, catalog, metadata, sourceDigest));
+      files.set(
+        commandPath(command),
+        renderCommand(
+          command,
+          catalog,
+          metadata,
+          sourceDigest,
+          sourceBuildOnly.has(binary.name),
+        ),
+      );
       command.subcommands.forEach(addBinary);
     };
     addBinary(binary);

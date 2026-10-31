@@ -12,6 +12,7 @@ const binaries = [
   'bregctl',
   'breg-mcp',
   'breg-review',
+  'registry-mcp',
   'coordinator',
   'coordinatorctl',
   'casework',
