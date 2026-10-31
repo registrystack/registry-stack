@@ -281,7 +281,7 @@ fn serves_path(
         .any(|operation| operation.method == method && operation.method_path == path)
 }
 
-fn format_spec(kind: &'static str, api_version: &'static str) -> FormatSpec<'static> {
+pub(crate) fn format_spec(kind: &'static str, api_version: &'static str) -> FormatSpec<'static> {
     FormatSpec {
         kind,
         envelope: EnvelopeRule::ApiVersionKind {
@@ -292,7 +292,7 @@ fn format_spec(kind: &'static str, api_version: &'static str) -> FormatSpec<'sta
     }
 }
 
-fn read<T: DeserializeOwned>(
+pub(crate) fn read<T: DeserializeOwned>(
     path: &Path,
     format: &FormatSpec<'static>,
 ) -> Result<(T, Vec<u8>), LoadError> {
@@ -348,7 +348,7 @@ fn resolve_static_credential(
 /// before the deployment serves callers. Static credentials retain their
 /// existing resolution check; private-key JWT additionally resolves and
 /// proves the signing key without contacting the token endpoint.
-fn preflight_endpoint_credential(
+pub(crate) fn preflight_endpoint_credential(
     endpoint: &str,
     plan: &AuthPlan,
     resolver: &SecretResolver,
@@ -373,7 +373,7 @@ fn digest_of(bytes: &[u8]) -> Digest {
 /// The profile or pack a deployment loads: the file the flag names, else
 /// the file beside the project. A project does not say where its pack
 /// lives, so a missing default refuses with the file and the flag to pass.
-fn artifact_path(
+pub(crate) fn artifact_path(
     given: Option<&Path>,
     project_directory: &Path,
     file: &'static str,
@@ -1085,7 +1085,7 @@ fn substitute(node: &mut Value, values: &BTreeMap<&str, &Value>) {
 /// The expressions one step carries directly (the walker visits nested
 /// steps itself). Owned, because the inline predicates of `choice` and
 /// `filter` decode to a value rather than sitting in a field.
-fn step_expressions(step: &Step) -> Vec<Expression> {
+pub(crate) fn step_expressions(step: &Step) -> Vec<Expression> {
     match step {
         Step::SetBody(expression) | Step::Transform(expression) | Step::Script(expression) => {
             vec![expression.clone()]
@@ -1142,7 +1142,7 @@ fn send_expressions(parameters: Option<&ToParameters>) -> Vec<Expression> {
 }
 
 /// The aggregation strategies a step carries directly.
-fn step_aggregation_strategies(step: &Step) -> Vec<&AggregationStrategy> {
+pub(crate) fn step_aggregation_strategies(step: &Step) -> Vec<&AggregationStrategy> {
     match step {
         Step::Split(split) => split.aggregation_strategy.as_ref().into_iter().collect(),
         Step::Enrich(enrich) => enrich.aggregation_strategy.as_ref().into_iter().collect(),

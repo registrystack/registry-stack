@@ -34,11 +34,14 @@ use crate::idempotent::{
 };
 use crate::route::RouteFailure;
 
-/// The total JSON-encoded state one live exchange may retain. The body,
-/// headers, and properties share the same conservative ceiling as one
+/// The total JSON-encoded state one live facade exchange may retain. The
+/// body, headers, and properties share the same conservative ceiling as one
 /// maximum upstream response; a route cannot multiply that response bound
-/// by moving values into other exchange slots.
-const MAXIMUM_EXCHANGE_BYTES: usize = registry_adapter_core::MAXIMUM_RESPONSE_BYTES as usize;
+/// by moving values into other exchange slots. A job page run raises the
+/// ceiling to its profile's response bound through
+/// [`Exchange::ensure_bounded_within`].
+pub(crate) const MAXIMUM_EXCHANGE_BYTES: usize =
+    registry_adapter_core::MAXIMUM_RESPONSE_BYTES as usize;
 
 /// The prefix of the exchange properties the engine owns.
 pub const RESERVED_PROPERTY_PREFIX: &str = "Adapter";
@@ -254,13 +257,36 @@ impl Exchange {
     /// not route-controlled, so this counts the message body, header names
     /// and values, and property names and values.
     pub fn ensure_bounded(&self) -> Result<(), ErrorClass> {
-        self.ensure_body_bounded(&self.message.body)
+        self.ensure_bounded_within(MAXIMUM_EXCHANGE_BYTES)
+    }
+
+    /// Apply the retained-JSON ceiling the caller names: the facade's own
+    /// budget for a served exchange, or the job profile's response bound
+    /// for a job page run, which a source-route-only endpoint's raised
+    /// bound may exceed (section 17.2). The bound is never raised above
+    /// what the caller passes, and a served exchange keeps the fixed
+    /// budget.
+    pub fn ensure_bounded_within(&self, maximum_bytes: usize) -> Result<(), ErrorClass> {
+        self.ensure_body_bounded_within(&self.message.body, maximum_bytes)
     }
 
     /// Check an accumulator as though it were this exchange's body,
     /// without cloning or installing it first.
     pub(crate) fn ensure_body_bounded(&self, body: &Value) -> Result<(), ErrorClass> {
-        ensure_serialized_bounded(&(body, &self.message.headers, &self.properties))
+        self.ensure_body_bounded_within(body, MAXIMUM_EXCHANGE_BYTES)
+    }
+
+    /// The bounded-size check over one candidate body under an explicit
+    /// ceiling.
+    fn ensure_body_bounded_within(
+        &self,
+        body: &Value,
+        maximum_bytes: usize,
+    ) -> Result<(), ErrorClass> {
+        ensure_serialized_bounded(
+            &(body, &self.message.headers, &self.properties),
+            maximum_bytes,
+        )
     }
 
     /// The `exchange` argument of a Rhai entrypoint (section 8.11.3):
@@ -504,18 +530,21 @@ fn idempotency_failure(error: IdempotencyError) -> RouteFailure {
 /// Apply the exchange's retained-JSON ceiling to a body or accumulator
 /// before it is installed on an exchange.
 pub(crate) fn ensure_value_bounded(value: &Value) -> Result<(), ErrorClass> {
-    ensure_serialized_bounded(value)
+    ensure_serialized_bounded(value, MAXIMUM_EXCHANGE_BYTES)
 }
 
 /// Apply the same ceiling to a borrowed list before a split clones it.
 pub(crate) fn ensure_values_bounded(values: &[&Value]) -> Result<(), ErrorClass> {
-    ensure_serialized_bounded(&values)
+    ensure_serialized_bounded(&values, MAXIMUM_EXCHANGE_BYTES)
 }
 
 /// Count JSON bytes without building a second serialized copy in memory.
-fn ensure_serialized_bounded(value: &impl serde::Serialize) -> Result<(), ErrorClass> {
+fn ensure_serialized_bounded(
+    value: &impl serde::Serialize,
+    maximum_bytes: usize,
+) -> Result<(), ErrorClass> {
     let mut counter = BoundedWriter {
-        remaining: MAXIMUM_EXCHANGE_BYTES,
+        remaining: maximum_bytes,
     };
     serde_json::to_writer(&mut counter, value).map_err(|_| ErrorClass::BudgetExhausted)
 }

@@ -52,6 +52,7 @@ pub mod errorhandler;
 pub mod exchange;
 pub mod facade;
 pub mod idempotent;
+pub mod job;
 pub mod journal;
 pub mod language;
 pub mod load;

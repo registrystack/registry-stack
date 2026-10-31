@@ -70,10 +70,57 @@ pub fn check_servable(steps: &[Step]) -> Result<(), String> {
     {
         return Err("a route carries more than one errorHandler step".to_owned());
     }
-    check_steps(steps, false)
+    check_steps(steps, false, false)
 }
 
-fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
+/// The same served-shape walk for a job source route
+/// (`products/adapter/CONCEPT.md` section 17.2): the one difference is
+/// the pollEnrich read step, which the job compiler serves and the
+/// facade never does.
+pub(crate) fn check_job_servable(steps: &[Step]) -> Result<(), String> {
+    if steps
+        .iter()
+        .filter(|step| matches!(step, Step::ErrorHandler(_)))
+        .count()
+        > 1
+    {
+        return Err("a route carries more than one errorHandler step".to_owned());
+    }
+    check_steps(steps, false, true)
+}
+
+/// The served shape of a `pollEnrich` read: a static `file:` or `sftp:`
+/// uri and a mandatory timeout (`products/adapter/CONCEPT.md` sections
+/// 17.1 and 17.2). The authoring checks hold the endpoint and the
+/// decoder; the engine holds the step shape again so a source route
+/// assembled without them is refused by name.
+fn check_poll(poll: &registry_adapter_core::PollEnrichStep) -> Result<(), String> {
+    match registry_adapter_core::SendUri::parse(&poll.uri) {
+        Some(uri) if matches!(uri.component, SendComponent::File | SendComponent::Sftp) => {}
+        _ => {
+            return Err(
+                "a pollEnrich step is served over a file: or sftp: endpoint only".to_owned(),
+            )
+        }
+    }
+    if poll.timeout_milliseconds.is_none() {
+        return Err("a pollEnrich step declares no timeoutMilliseconds".to_owned());
+    }
+    if let Some(decoder) = &poll.decoder {
+        if !registry_adapter_core::POLL_DECODER_NAMES.contains(&decoder.name()) {
+            return Err("the pollEnrich names no decoder the engine carries".to_owned());
+        }
+    }
+    if matches!(
+        poll.aggregation_strategy,
+        Some(AggregationStrategy::GroupedBody {})
+    ) {
+        return Err("the grouped-body strategy is served for split only".to_owned());
+    }
+    Ok(())
+}
+
+fn check_steps(steps: &[Step], in_clause: bool, job_polls: bool) -> Result<(), String> {
     // The redeliveries behind a clause's retryWhile are its own policy's,
     // or the route handler's when the clause declares none (section 8.7).
     // Nested bodies serve no errorHandler, so their clauses find none.
@@ -89,8 +136,9 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
             Step::To(to) => check_to(to)?,
             // The poll is a job-only read step (section 17.2): the facade
             // never serves it, so a bound route carrying one is left
-            // unserved by name. The job compiler holds the same line in
-            // reverse, refusing a facade-only step a source route names.
+            // unserved by name, while a job source route is held to the
+            // poll's own served shape.
+            Step::PollEnrich(poll) if job_polls => check_poll(poll)?,
             Step::PollEnrich(_) => {
                 return Err("a pollEnrich step is served in a job source route only".to_owned())
             }
@@ -127,10 +175,10 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
             Step::Choice(choice) => {
                 for clause in &choice.when {
                     check_predicate("choice", &clause.predicate())?;
-                    check_steps(&clause.steps, true)?;
+                    check_steps(&clause.steps, true, job_polls)?;
                 }
                 if let Some(otherwise) = &choice.otherwise {
-                    check_steps(&otherwise.steps, true)?;
+                    check_steps(&otherwise.steps, true, job_polls)?;
                 }
             }
             Step::Filter(filter) => {
@@ -143,7 +191,7 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                         ));
                     }
                 }
-                check_steps(&filter.steps, true)?;
+                check_steps(&filter.steps, true, job_polls)?;
             }
             Step::Validate(validate) => {
                 check_predicate_expression("validate", &validate.expression)?
@@ -172,7 +220,7 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                 }
                 check_expression("split", &split.expression)?;
                 check_strategy(split.aggregation_strategy.as_ref())?;
-                check_steps(&split.steps, true)?;
+                check_steps(&split.steps, true, job_polls)?;
             }
             Step::Loop(looped) => {
                 match looped.language_members() {
@@ -201,7 +249,7 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                         check_expression("loop", &expression)?;
                     }
                 }
-                check_steps(&looped.steps, true)?;
+                check_steps(&looped.steps, true, job_polls)?;
             }
             Step::Enrich(enrich) => {
                 check_enrich(enrich)?;
@@ -225,7 +273,7 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                         "an idempotentConsumer key must be the Idempotency-Key header".to_owned(),
                     );
                 }
-                check_steps(&idempotent.steps, true)?;
+                check_steps(&idempotent.steps, true, job_polls)?;
             }
             Step::CircuitBreaker(breaker) => {
                 if breaker.steps.is_empty() {
@@ -257,9 +305,9 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                     if fallback.steps.is_empty() {
                         return Err("an onFallback declares no steps".to_owned());
                     }
-                    check_steps(&fallback.steps, true)?;
+                    check_steps(&fallback.steps, true, job_polls)?;
                 }
-                check_steps(&breaker.steps, true)?;
+                check_steps(&breaker.steps, true, job_polls)?;
             }
             Step::Throttle(throttle) => {
                 if throttle.steps.is_empty() {
@@ -274,9 +322,11 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                     }
                 }
                 check_expression("throttle", &throttle.limit)?;
-                check_steps(&throttle.steps, true)?;
+                check_steps(&throttle.steps, true, job_polls)?;
             }
-            Step::OnException(clause) if !in_clause => check_clause(clause, handler_policy)?,
+            Step::OnException(clause) if !in_clause => {
+                check_clause(clause, handler_policy, job_polls)?
+            }
             Step::OnException(_) => {
                 return Err("an onException clause is served at route top level only".to_owned())
             }
@@ -311,12 +361,12 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
                     if let Some(expression) = &catch.on_when {
                         check_predicate_expression("doCatch onWhen", expression)?;
                     }
-                    check_steps(&catch.steps, true)?;
+                    check_steps(&catch.steps, true, job_polls)?;
                 }
                 if let Some(finally) = &block.do_finally {
-                    check_steps(&finally.steps, true)?;
+                    check_steps(&finally.steps, true, job_polls)?;
                 }
-                check_steps(&block.steps, true)?;
+                check_steps(&block.steps, true, job_polls)?;
             }
         }
     }
@@ -418,6 +468,7 @@ fn check_set_property(property: &SetPropertyStep) -> Result<(), String> {
 fn check_clause(
     clause: &OnExceptionStep,
     handler_policy: Option<&RedeliveryOptions>,
+    job_polls: bool,
 ) -> Result<(), String> {
     if clause.exception.is_empty() {
         return Err("an onException clause names no exception class".to_owned());
@@ -444,7 +495,7 @@ fn check_clause(
         clause.retry_while.as_ref(),
         effective_clause_redelivery_policy(clause, handler_policy),
     )?;
-    check_steps(&clause.steps, true)
+    check_steps(&clause.steps, true, job_polls)
 }
 
 /// A `retryWhile` that could never fire, because no redelivery stands
@@ -969,7 +1020,15 @@ pub async fn run_route(
     steps: &[Step],
     exchange: Exchange,
 ) -> RouteOutcome {
-    run_route_within_profile(context, None, steps, exchange, EXCHANGE_DEADLINE).await
+    run_route_within_profile(
+        context,
+        None,
+        steps,
+        exchange,
+        EXCHANGE_DEADLINE,
+        crate::exchange::MAXIMUM_EXCHANGE_BYTES,
+    )
+    .await
 }
 
 /// Run a route with the checked facade profile that governs any optional
@@ -982,7 +1041,15 @@ pub async fn run_route_with_profile(
     steps: &[Step],
     exchange: Exchange,
 ) -> RouteOutcome {
-    run_route_within_profile(context, Some(profile), steps, exchange, EXCHANGE_DEADLINE).await
+    run_route_within_profile(
+        context,
+        Some(profile),
+        steps,
+        exchange,
+        EXCHANGE_DEADLINE,
+        crate::exchange::MAXIMUM_EXCHANGE_BYTES,
+    )
+    .await
 }
 
 /// Run `steps` over `exchange`, failing it as `budget.exhausted` when
@@ -995,7 +1062,39 @@ pub async fn run_route_within(
     exchange: Exchange,
     deadline: Duration,
 ) -> RouteOutcome {
-    run_route_within_profile(context, None, steps, exchange, deadline).await
+    run_route_within_profile(
+        context,
+        None,
+        steps,
+        exchange,
+        deadline,
+        crate::exchange::MAXIMUM_EXCHANGE_BYTES,
+    )
+    .await
+}
+
+/// Run a job page's source route
+/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): the same
+/// interpreter with the caller's deadline and the job profile's
+/// retained-JSON ceiling instead of the facade's one-exchange budget,
+/// which a job endpoint's raised response bound may exceed. The
+/// interpreter itself is unchanged; no facade state is consulted.
+pub async fn run_job_route(
+    context: &RouteContext<'_>,
+    steps: &[Step],
+    exchange: Exchange,
+    deadline: Duration,
+    maximum_exchange_bytes: usize,
+) -> RouteOutcome {
+    run_route_within_profile(
+        context,
+        None,
+        steps,
+        exchange,
+        deadline,
+        maximum_exchange_bytes,
+    )
+    .await
 }
 
 async fn run_route_within_profile<'a>(
@@ -1004,8 +1103,9 @@ async fn run_route_within_profile<'a>(
     steps: &[Step],
     exchange: Exchange,
     deadline: Duration,
+    maximum_exchange_bytes: usize,
 ) -> RouteOutcome {
-    if let Err(class) = exchange.ensure_bounded() {
+    if let Err(class) = exchange.ensure_bounded_within(maximum_exchange_bytes) {
         return RouteOutcome {
             result: Err(RouteFailure::of(class)),
             events: Vec::new(),
@@ -1021,13 +1121,14 @@ async fn run_route_within_profile<'a>(
         exception_clause_depth: 0,
         token_budget: TokenBudget::new_exchange(),
         deadline: tokio::time::Instant::now() + deadline,
+        maximum_exchange_bytes,
     };
     let body = run.run_route_body(steps);
     let mut result = tokio::time::timeout(deadline, body)
         .await
         .unwrap_or_else(|_| Err(RouteFailure::of(ErrorClass::BudgetExhausted)));
     if result.is_ok() {
-        if let Err(class) = run.exchange.ensure_bounded() {
+        if let Err(class) = run.exchange.ensure_bounded_within(maximum_exchange_bytes) {
             result = Err(RouteFailure::of(class));
         }
     }
@@ -1079,6 +1180,10 @@ pub(crate) struct Run<'a, 'c> {
     /// when the wait cannot finish before this, instead of letting the
     /// run's budget expire it as `budget.exhausted`.
     pub(crate) deadline: tokio::time::Instant,
+    /// The retained-JSON ceiling this run applies to the exchange: the
+    /// facade's fixed budget, or the job profile's response bound for a
+    /// job page run (section 17.2).
+    pub(crate) maximum_exchange_bytes: usize,
 }
 
 impl Run<'_, '_> {
@@ -1544,7 +1649,9 @@ impl Run<'_, '_> {
     }
 
     fn ensure_exchange_bounded(&self) -> Result<(), RouteFailure> {
-        self.exchange.ensure_bounded().map_err(RouteFailure::of)
+        self.exchange
+            .ensure_bounded_within(self.maximum_exchange_bytes)
+            .map_err(RouteFailure::of)
     }
 
     async fn send(&mut self, to: &ToStep) -> Result<Flow, RouteFailure> {
