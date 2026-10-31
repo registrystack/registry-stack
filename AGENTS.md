@@ -51,7 +51,7 @@ remain supporting services beside their product, not products of their own.
 | `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks |
 | `crates/registry-adapter` | Adapter runtime: governed facade, call-plan interpreter, security surface, and audit journal |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
-| `crates/registry-adapter-connectors` | Ingestion-mode native product connectors over the maintained clients (BReg, Scheduling, Document Store), each behind an off-by-default feature; no facade binary links it, and `products/adapter/scripts/check_dependency_direction.py` holds that boundary |
+| `crates/registry-adapter-connectors` | Parked BReg connector over `registry-breg-client`, behind an off-by-default feature; linked by no facade binary and no job path while the governed-ingestion delivery design is decided, and `products/adapter/scripts/check_dependency_direction.py` holds that boundary |
 | `products/adapter` | Adapter product contract (`CONCEPT.md`), delivery plan, schemas, profiles, packs, examples, fixtures, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
@@ -307,10 +307,10 @@ reviewed, digest-pinned pack. The core is the source-neutral model and
 authoring checks; the runtime is a bounded port of Apache Camel concepts
 whose port table is the contract (`products/adapter/CONCEPT.md` section
 8.10); `adapterctl` is authoring and operator tooling. The connector crate
-is the ingestion mode's one product-surface exception: it reaches the
-maintained product clients only (BReg, Scheduling, Document Store) behind
-off-by-default features, is linked by no facade binary, and never reaches a
-product runtime, CLI, or database crate;
+is parked: it reaches exactly `registry-breg-client` behind an
+off-by-default feature, is linked by no facade binary and no job path,
+never reaches a product runtime, CLI, database crate, or any Coordinator
+crate, and
 `products/adapter/scripts/check_dependency_direction.py` enforces that
 split. The adapter inherits no authorization
 from any product and grants none to any source: upstream calls run under

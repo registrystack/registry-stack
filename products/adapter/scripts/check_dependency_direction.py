@@ -4,14 +4,14 @@
 
 The Adapter's engine and facade stay source-neutral: `registry-adapter`,
 `registry-adapter-core`, and `registry-adapterctl` reach shared platform
-primitives and nothing else of the workspace. The one product-surface
-exception is the connector crate (`products/adapter/CONCEPT.md` sections
-17.3 and 17.5): `registry-adapter-connectors` reaches the maintained
-product clients (`registry-breg-client`, `registry-scheduling-client`,
-`registry-documents-client`) behind off-by-default cargo features, is
-reached by no other workspace crate, and never reaches a product
-runtime, adopter tooling, supporting service, binding, or database
-crate.
+primitives and nothing else of the workspace, and no Adapter crate links a
+Coordinator crate. The one product-surface exception is the parked
+connector crate (`products/adapter/CONCEPT.md` section 17.5):
+`registry-adapter-connectors` reaches exactly `registry-breg-client`
+behind its off-by-default cargo feature, is reached by no other workspace
+crate, is linked by no facade binary and no job path while parked, and
+never reaches a product runtime, adopter tooling, supporting service,
+binding, or database crate.
 
 Edges are read with every feature enabled and on every target, so an
 optional dependency no default build enables still cannot escape the
@@ -39,16 +39,18 @@ ADAPTER_ENGINE = (
     "registry-adapterctl",
 )
 
-# The connector crate: the one Adapter crate that reaches product
-# clients.
+# The one product-surface exception: `registry-adapter-connectors` reaches
+# exactly one maintained product client, `registry-breg-client`, behind its
+# off-by-default cargo feature, is reached by no other workspace crate, is
+# parked (no facade binary and no job path links it), and never reaches a
+# product runtime, adopter tooling, supporting service, binding, database
+# crate, or any Coordinator crate.
 CONNECTOR = "registry-adapter-connectors"
 
-# The maintained product clients the connector may reach, by feature.
+# The maintained product client the parked connector may reach.
 CONNECTOR_CLIENTS = frozenset(
     {
         "registry-breg-client",
-        "registry-scheduling-client",
-        "registry-documents-client",
     }
 )
 
@@ -226,7 +228,8 @@ def main() -> int:
             print(f"dependency-direction violation: {failure}", file=sys.stderr)
         return 1
     print("Adapter dependency direction holds: the engine is source-neutral;")
-    print("connectors reach products only through their maintained clients.")
+    print("the parked connector reaches registry-breg-client alone, and no")
+    print("Adapter crate links a Coordinator crate.")
     return 0
 
 

@@ -5116,14 +5116,23 @@ dependencies = [
 name = "registry-adapter-connectors"
 version = "0.45.0"
 dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
  "registry-adapter-core",
  "registry-breg-client",
- "registry-documents-client",
- "registry-scheduling-client",
+ "registry-platform-crypto",
+ "registry-platform-testing",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "serde_norway",
+ "sha2 0.11.1",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-postgres",
+ "url",
  "uuid",
 ]
 

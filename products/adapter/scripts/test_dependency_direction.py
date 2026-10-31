@@ -47,14 +47,12 @@ INTENDED = {
     "engine": ["core", "platform", "platform-script", "serde", ("platform-testing", "dev")],
     "core": ["platform", "serde"],
     "ctl": ["core", ("engine", "dev")],
-    # Every product client the connector may reach is optional and
-    # feature-gated; the closure check reads them with all features on,
-    # so the fixture lists them as normal edges.
+    # The parked connector reaches exactly one product client, optional
+    # and feature-gated; the closure check reads it with all features on,
+    # so the fixture lists it as a normal edge.
     "connectors": [
         "core",
         "breg-client",
-        "scheduling-client",
-        "documents-client",
         "serde",
     ],
     "record": ["serde"],
@@ -172,15 +170,19 @@ class EngineTests(unittest.TestCase):
 
 
 class ConnectorTests(unittest.TestCase):
-    def test_the_connector_reaches_exactly_the_product_clients(self):
+    def test_the_parked_connector_reaches_exactly_one_client(self):
         self.assertEqual(
             MODULE.CONNECTOR_CLIENTS,
-            {
-                "registry-breg-client",
-                "registry-scheduling-client",
-                "registry-documents-client",
-            },
+            {"registry-breg-client"},
         )
+
+    def test_another_product_client_is_refused_while_parked(self):
+        for client in ("scheduling-client", "documents-client"):
+            with self.subTest(client=client):
+                self.assertIn(
+                    NAMES[client],
+                    failures(connectors=[*INTENDED["connectors"], client]),
+                )
 
     def test_the_connector_reaching_a_product_runtime_is_refused(self):
         for product in ("breg", "scheduling", "documents"):
