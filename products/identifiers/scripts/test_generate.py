@@ -518,6 +518,17 @@ class CatalogGeneratorTest(unittest.TestCase):
 class RepositoryCatalogSourceTest(unittest.TestCase):
     """The repository's own catalog source, read as it is committed."""
 
+    def test_external_adapter_profile_fixture_has_one_exact_reference_exclusion(self) -> None:
+        source = generate.load_source_config(
+            SCRIPT.parents[3] / "products/identifiers/contracts/catalog-source.json"
+        )
+        path = "crates/registry-mcp/tests/fixtures/adapter/optional-pagination/profile.yaml"
+        uri = f"{generate.BASE_URL}/schemas/adapter/profile/profile.v1alpha1.schema.json"
+        matches = [entry for entry in source["referenceExclusions"] if entry.get("path") == path]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["uri"], uri)
+        self.assertEqual(matches[0]["classification"], "fixture")
+        self.assertNotIn("glob", matches[0])
     def test_configurable_mcp_schema_has_an_active_catalog_owner(self) -> None:
         repo_root = SCRIPT.parents[3]
         source = generate.load_source_config(

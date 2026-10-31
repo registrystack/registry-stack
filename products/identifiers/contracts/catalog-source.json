@@ -209,6 +209,12 @@
       "glob": "schemas/*.schema.json",
       "classification": "retired-product",
       "reason": "Root Relay V1 and Notary configuration schemas are retired."
+    },
+    {
+      "path": "crates/registry-mcp/tests/fixtures/adapter/optional-pagination/profile.yaml",
+      "uri": "https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json",
+      "classification": "fixture",
+      "reason": "This committed producer profile is an external Adapter compatibility fixture. Its schema hint belongs to the separate experimental producer, not an active schema published by this consumer."
     }
   ],
   "schemaSources": [
