@@ -34,6 +34,7 @@ pub mod job_sources;
 pub mod language;
 pub mod load;
 pub mod processor;
+pub mod read_request;
 pub mod replay;
 pub mod resilience;
 pub mod route;

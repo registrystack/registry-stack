@@ -613,7 +613,10 @@ fn apply_cursor_contract(schema: &mut Value) {
     *schema = cursor_schema();
 }
 
-fn apply_filter_integer_bounds(schema: &mut Value, filters: &[crate::read_request::ServedFilter]) {
+fn apply_filter_integer_bounds(
+    schema: &mut Value,
+    filters: &[registry_adapter_core::ServedFilter],
+) {
     remove_nullable_wrapper(schema);
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
@@ -925,7 +928,7 @@ mod contract_schema_tests {
         });
         apply_filter_integer_bounds(
             &mut body,
-            &[crate::read_request::ServedFilter {
+            &[registry_adapter_core::ServedFilter {
                 name: "count".to_owned(),
                 field_type: RecordFieldType::Integer,
             }],

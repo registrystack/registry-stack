@@ -3,15 +3,25 @@
 """Check Adapter dependency direction from Cargo's resolved graph.
 
 The Adapter's engine and facade stay source-neutral: `registry-adapter`,
-`registry-adapter-core`, and `registry-adapterctl` reach shared platform
-primitives and nothing else of the workspace, and no Adapter crate links a
-Coordinator crate. The one product-surface exception is the parked
-connector crate (`products/adapter/CONCEPT.md` section 17.5):
+`registry-adapter-core`, `registry-adapter-job`, and
+`registry-adapterctl` reach shared platform primitives and nothing else
+of the workspace, and no Adapter crate links a Coordinator crate. The
+one product-surface exception is the parked connector crate
+(`products/adapter/CONCEPT.md` section 17.5):
 `registry-adapter-connectors` reaches exactly `registry-breg-client`
-behind its off-by-default cargo feature, is reached by no other workspace
-crate, is linked by no facade binary and no job path while parked, and
-never reaches a product runtime, adopter tooling, supporting service,
-binding, or database crate.
+behind its off-by-default cargo feature, is reached by no other
+workspace crate, is linked by no facade binary and no job path while
+parked, and never reaches a product runtime, adopter tooling,
+supporting service, binding, or database crate.
+
+Inside `registry-adapter` the engine boundary is a module
+(`crates/registry-adapter/src/engine`, `products/adapter/CONCEPT.md`
+section 17.2): the listener-free engine the ingestion job runs and the
+facade links. Until the boundary becomes its own crate, this gate
+holds the same line at import level: no file under `src/engine` names
+a facade module, and none names a dependency only the facade half
+links. When the split lands, `cargo tree` on the new crate asserts the
+same line and this section retires with the move.
 
 Edges are read with every feature enabled and on every target, so an
 optional dependency no default build enables still cannot escape the
@@ -25,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -36,7 +47,37 @@ ADAPTER_PREFIX = "registry-adapter"
 ADAPTER_ENGINE = (
     "registry-adapter",
     "registry-adapter-core",
+    "registry-adapter-job",
     "registry-adapterctl",
+)
+
+# The engine boundary module inside registry-adapter, and the crate it
+# becomes when the split lands.
+ENGINE_MODULE_DIRECTORY = Path("crates/registry-adapter/src/engine")
+
+# The facade modules of registry-adapter, staying beside the listener
+# when the engine module becomes a crate.
+FACADE_MODULES = (
+    "cli",
+    "custody",
+    "facade",
+    "facade_generated_properties",
+    "idempotent",
+    "journal",
+    "notifier",
+    "serve",
+    "replay_serve",
+)
+
+# Dependencies only the facade half of registry-adapter may link. The
+# engine half reaches the platform's shared crates freely.
+FACADE_DEPENDENCIES = (
+    "axum",
+    "deadpool_postgres",
+    "tokio_postgres",
+    "tokio_postgres_rustls",
+    "jsonwebtoken",
+    "registry_platform_oidc",
 )
 
 # The one product-surface exception: `registry-adapter-connectors` reaches
@@ -189,6 +230,46 @@ def violations(metadata: dict) -> list[str]:
     return failures
 
 
+def module_violations(repository_root: Path) -> list[str]:
+    """Import-level engine boundary inside registry-adapter.
+
+    Reads the files under the engine module and refuses a name of a
+    facade module or a facade-only dependency. Comments are stripped
+    first, so documentation may say `facade` while code may not.
+    """
+    engine_root = repository_root / ENGINE_MODULE_DIRECTORY
+    if not engine_root.is_dir():
+        return [
+            "crates/registry-adapter/src/engine is missing; the engine "
+            "module boundary is not assembled"
+        ]
+    failures: list[str] = []
+    for path in sorted(engine_root.rglob("*.rs")):
+        text = strip_comments(path.read_text(encoding="utf-8"))
+        relative = path.relative_to(repository_root)
+        for module in FACADE_MODULES:
+            for prefix in ("crate", "super::super"):
+                if re.search(rf"\b{prefix}::{module}\b", text):
+                    failures.append(
+                        f"{relative} names the facade module {module}"
+                    )
+        for dependency in FACADE_DEPENDENCIES:
+            if re.search(rf"\b{dependency}::", text):
+                failures.append(
+                    f"{relative} names the facade-only dependency {dependency}"
+                )
+    return failures
+
+
+def strip_comments(text: str) -> str:
+    """Remove line and block comments, keeping strings' contents short."""
+    without_blocks = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return "\n".join(
+        line.split("//", 1)[0] if "//" in line else line
+        for line in without_blocks.split("\n")
+    )
+
+
 def load_metadata(repository_root: Path, fixture: Path | None) -> dict:
     if fixture:
         return json.loads(fixture.read_text(encoding="utf-8"))
@@ -211,6 +292,7 @@ def main() -> int:
     repository_root = Path(__file__).resolve().parents[3]
     try:
         failures = violations(load_metadata(repository_root, args.metadata))
+        failures.extend(module_violations(repository_root))
     except (
         OSError,
         ValueError,
@@ -228,8 +310,9 @@ def main() -> int:
             print(f"dependency-direction violation: {failure}", file=sys.stderr)
         return 1
     print("Adapter dependency direction holds: the engine is source-neutral;")
-    print("the parked connector reaches registry-breg-client alone, and no")
-    print("Adapter crate links a Coordinator crate.")
+    print("the engine module names no facade module or facade-only")
+    print("dependency; the parked connector reaches registry-breg-client")
+    print("alone, and no Adapter crate links a Coordinator crate.")
     return 0
 
 

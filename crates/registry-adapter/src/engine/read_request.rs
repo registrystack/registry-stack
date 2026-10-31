@@ -14,18 +14,10 @@
 use std::collections::BTreeSet;
 
 use registry_adapter_core::{
-    decode_slot, is_date, is_date_time, parse_envelope_template, RecordFieldType, SlotForm,
-    READ_REQUEST_SLOTS,
+    decode_slot, is_date, is_date_time, parse_envelope_template, RecordFieldType, ServedFilter,
+    SlotForm, READ_REQUEST_SLOTS,
 };
 use serde_json::{Map, Number, Value};
-
-/// A filter one binding declares: the record field it names and that
-/// field's type.
-#[derive(Clone, Debug)]
-pub struct ServedFilter {
-    pub name: String,
-    pub field_type: RecordFieldType,
-}
 
 #[derive(Clone, Debug)]
 enum Node {

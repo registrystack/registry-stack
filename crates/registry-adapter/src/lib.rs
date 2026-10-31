@@ -49,5 +49,5 @@ pub mod facade;
 pub mod idempotent;
 pub mod journal;
 pub mod notifier;
-pub mod read_request;
+pub mod replay_serve;
 pub mod serve;

@@ -10,8 +10,8 @@
 //! `throw_exception`. Splitting and aggregation: `loop`, `split`,
 //! `enrich`, and the `aggregation` strategies. Resilience:
 //! `circuit_breaker` and `throttle`. Error structure: `do_try`. The
-//! `idempotentConsumer` EIP lives beside the idempotency store in
-//! `crate::idempotent` (section 9).
+//! `idempotentConsumer` EIP holds the write custody seam's key bound
+//! (`engine::exchange`, section 9).
 //!
 //! Camel defaults hold unless the port table says otherwise. Pagination
 //! is not an EIP and gets none: the facade side is the continuation

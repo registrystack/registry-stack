@@ -40,17 +40,18 @@ use crate::engine::effective_contract::{
     UNAVAILABLE_PROBLEM_CODE, WELL_KNOWN_PATH,
 };
 use crate::engine::envelope::CompiledEnvelope;
+use crate::engine::exchange::MAX_IDEMPOTENCY_KEY_BYTES;
 use crate::engine::exchange::{
     Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
 };
 use crate::engine::load::{Loaded, ServedOperation, ServedPagination};
+use crate::engine::read_request::{parse_filter_text, ReadRefusal};
 use crate::engine::route::{run_route_with_profile, RouteContext, RouteFailure};
 use crate::idempotent::{
     PostgresIdempotencyStore, StoredResponse, TerminalOutcome, VerifiedCallerIdentity,
-    MAX_IDEMPOTENCY_KEY_BYTES, MAX_STORED_RESPONSE_BYTES,
+    MAX_STORED_RESPONSE_BYTES,
 };
 use crate::journal::{self, JournalEvent};
-use crate::read_request::{parse_filter_text, ReadRefusal};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
 
 const REQUEST_ID_HEADER: &str = "x-registry-request-id";
@@ -1216,6 +1217,18 @@ pub(crate) struct Refusal {
     class: ErrorClass,
     status: StatusCode,
     reason: String,
+}
+
+impl crate::engine::load::Loaded {
+    /// The problems view the facade answers refusals from: the facade's
+    /// own projection of the compiled authored state.
+    #[must_use]
+    pub fn problems(&self) -> Problems<'_> {
+        Problems {
+            profile: &self.profile,
+            envelope: &self.problem_envelope,
+        }
+    }
 }
 
 impl Refusal {

@@ -10,8 +10,8 @@ use registry_adapter_core::{ErrorClass, IdempotentConsumerStep};
 use serde_json::Value;
 
 use crate::engine::exchange::WriteClaim;
+use crate::engine::exchange::MAX_IDEMPOTENCY_KEY_BYTES;
 use crate::engine::route::{Flow, RouteFailure, Run};
-use crate::idempotent::MAX_IDEMPOTENCY_KEY_BYTES;
 
 pub(crate) async fn run(
     run: &mut Run<'_, '_>,

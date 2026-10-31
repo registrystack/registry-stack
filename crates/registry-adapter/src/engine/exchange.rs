@@ -112,6 +112,13 @@ impl Message {
     }
 }
 
+/// The longest idempotency key the write custody seam accepts, the
+/// contract every custody implementation holds: the facade's store and
+/// the offline replay's simulation refuse the same length the engine
+/// refuses here, before any custody state is reached
+/// (`products/adapter/CONCEPT.md` section 9).
+pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
+
 /// The write custody seam the engine owns and the facade installs
 /// (`products/adapter/CONCEPT.md` section 9, and the E3 ruling in
 /// `products/adapter/scratch/core/engine-boundary-plan.md`): the engine

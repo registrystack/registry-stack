@@ -294,5 +294,113 @@ class CommandTests(unittest.TestCase):
         self.assertIn("did not include a resolved dependency graph", completed.stderr)
 
 
+class EngineModuleBoundaryTests(unittest.TestCase):
+    """The import-level boundary while the engine is a module."""
+
+    def tree(self, files: dict[str, str]) -> Path:
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        base = Path(root.name)
+        engine = base / "crates/registry-adapter/src/engine"
+        engine.mkdir(parents=True)
+        for name, body in files.items():
+            (engine / name).write_text(body, encoding="utf-8")
+        return base
+
+    def test_a_clean_engine_module_passes(self):
+        root = self.tree(
+            {
+                "route.rs": "use crate::engine::exchange::Exchange;\nuse serde_json::Value;\n",
+            }
+        )
+        self.assertEqual(MODULE.module_violations(root), [])
+
+    def test_a_facade_module_name_refuses(self):
+        root = self.tree({"route.rs": "use crate::facade::Problems;\n"})
+        failures = MODULE.module_violations(root)
+        self.assertTrue(any("facade module facade" in item for item in failures))
+
+    def test_a_super_super_facade_name_refuses(self):
+        root = self.tree({"sub.rs": "use super::super::serve::Listener;\n"})
+        failures = MODULE.module_violations(root)
+        self.assertTrue(any("facade module serve" in item for item in failures))
+
+    def test_a_facade_only_dependency_refuses(self):
+        root = self.tree({"egress.rs": "use axum::http::StatusCode;\n"})
+        failures = MODULE.module_violations(root)
+        self.assertTrue(any("facade-only dependency axum" in item for item in failures))
+
+    def test_comments_do_not_refuse(self):
+        root = self.tree(
+            {
+                "processor.rs": (
+                    "//! The idempotentConsumer EIP holds the seam's bound "
+                    "(section 9);\n"
+                    "// the facade journal once carried it.\n"
+                    "pub struct Step;\n"
+                ),
+            }
+        )
+        self.assertEqual(MODULE.module_violations(root), [])
+
+    def test_a_missing_engine_module_names_itself(self):
+        with tempfile.TemporaryDirectory() as empty:
+            failures = MODULE.module_violations(Path(empty))
+            self.assertEqual(len(failures), 1)
+            self.assertIn("engine module boundary is not assembled", failures[0])
+
+    def test_strip_comments_removes_line_and_block_forms(self):
+        text = "let a = 1; // crate::facade\n/* crate::serve */ let b = 2;\n"
+        stripped = MODULE.strip_comments(text)
+        self.assertNotIn("crate::facade", stripped)
+        self.assertNotIn("crate::serve", stripped)
+        self.assertIn("let a = 1;", stripped)
+        self.assertIn("let b = 2;", stripped)
+
+
+class JobHostGraphTests(unittest.TestCase):
+    """registry-adapter-job is one of the engine crates."""
+
+    def test_the_job_host_reaching_the_engine_is_accepted(self):
+        edges = {**INTENDED, "job": ["engine", "core", "platform", "serde"]}
+        names = {**NAMES, "job": "registry-adapter-job"}
+        self.assertEqual(
+            MODULE.violations(
+                {
+                    "packages": [
+                        {"id": package_id, "name": name} for package_id, name in names.items()
+                    ],
+                    "resolve": {
+                        "nodes": [
+                            {"id": package_id, "deps": [dependency(e) for e in entries]}
+                            for package_id, entries in edges.items()
+                        ]
+                    },
+                }
+            ),
+            [],
+        )
+
+    def test_the_job_host_reaching_a_product_refuses(self):
+        edges = {**INTENDED, "job": ["engine", "core", "breg"]}
+        names = {**NAMES, "job": "registry-adapter-job"}
+        failures = MODULE.violations(
+            {
+                "packages": [
+                    {"id": package_id, "name": name} for package_id, name in names.items()
+                ],
+                "resolve": {
+                    "nodes": [
+                        {"id": package_id, "deps": [dependency(e) for e in entries]}
+                        for package_id, entries in edges.items()
+                    ]
+                },
+            }
+        )
+        self.assertTrue(
+            any("registry-adapter-job reaches package(s)" in item for item in failures)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

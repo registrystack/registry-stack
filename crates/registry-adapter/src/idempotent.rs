@@ -23,6 +23,7 @@
 use std::fmt;
 use std::time::{Duration, SystemTime};
 
+use crate::engine::exchange::MAX_IDEMPOTENCY_KEY_BYTES;
 use deadpool_postgres::{GenericClient, Pool, PoolError};
 use http::HeaderValue;
 use sha2::{Digest, Sha256};
@@ -37,7 +38,6 @@ pub const MAX_DEPLOYMENT_IDENTITY_BYTES: usize = 256;
 /// Longest accepted concrete operation identifier in bytes.
 pub const MAX_CONCRETE_OPERATION_BYTES: usize = 256;
 /// Longest accepted caller-supplied idempotency key in bytes.
-pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 /// Longest exact facade content type retained with a response.
 pub const MAX_CONTENT_TYPE_BYTES: usize = 256;
 /// Exact lowercase-hex length of an Adapter-generated response request id.

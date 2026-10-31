@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, AggregationStrategy, ComponentKind, Endpoint, SendComponent, Step,
-    ToParameters, Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
+    AdapterRuntimeConfig, AggregationStrategy, ComponentKind, Endpoint, SendComponent,
+    ServedFilter, Step, ToParameters, Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
     ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
     ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
@@ -34,11 +34,11 @@ use crate::engine::auth::{AuthPlan, PlatformAssertionSigner, StaticCredential};
 use crate::engine::component::graphql::GraphQlQuery;
 use crate::engine::egress::EndpointEgress;
 use crate::engine::envelope::CompiledEnvelope;
+use crate::engine::read_request::ReadRequestTemplate;
 use crate::engine::route::{
     check_direct_targets, check_servable, is_served_auth, EndpointRuntime, RouteTable,
 };
 use crate::engine::scripts::{CodeMaps, ScriptSet};
-use crate::read_request::{ReadRequestTemplate, ServedFilter};
 use registry_adapter_core::{Expression, RouteTemplate};
 use serde_json::Value;
 
@@ -260,17 +260,6 @@ pub(crate) enum EndpointCompilation {
         detail: String,
     },
     Absent,
-}
-
-impl Loaded {
-    /// The problems view the facade answers refusals from.
-    #[must_use]
-    pub fn problems(&self) -> crate::facade::Problems<'_> {
-        crate::facade::Problems {
-            profile: &self.profile,
-            envelope: &self.problem_envelope,
-        }
-    }
 }
 
 /// Whether a served operation already answers the facade method and path:

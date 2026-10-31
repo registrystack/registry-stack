@@ -15,8 +15,22 @@ use crate::job::CsvDecoder;
 use crate::model::{
     AggregationStrategy, ErrorClass, Expression, HttpMethod, RhaiExpression, SendUri,
 };
+use crate::project::RecordFieldType;
 use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId, LocalId, UniqueList};
 use serde::{Deserialize, Serialize};
+
+/// A filter one served operation declares: the record field it names
+/// and that field's type. The operation's binding declares the filters;
+/// the engine compiles them into the effective contract, and the
+/// facade's request template matches a caller's filter values against
+/// them (`products/adapter/CONCEPT.md` sections 8.9 and 9).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServedFilter {
+    /// The filter's name, as the caller writes it.
+    pub name: String,
+    /// The record field type the filter's values must carry.
+    pub field_type: RecordFieldType,
+}
 
 /// A percentage the reader bounds to 1 through 100 (CFG-QTY-4).
 pub(crate) type Percentage = BoundedU32<1, 100>;
