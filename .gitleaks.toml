@@ -32,3 +32,17 @@ regexes = [
   '''"eyJhbGciOiJFUzI1NiJ9\.eyJzdWIiOiJzdGFmZi1zdWJqZWN0In0\.c2lnbmF0dXJlLWJ5dGVzLXZhbHVl"''',
   '''"eyJhbGciOiJFUzI1NiJ9\.eyJncmFudCI6InRhc2sifQ\.Z3JhbnQtc2lnbmF0dXJl"''',
 ]
+
+[[allowlists]]
+description = "Allow the throwaway ECDSA client key generated for the Adapter mTLS unit tests; it exists only under #[cfg(test)] and no deployment has trusted its self-signed certificate."
+condition = "AND"
+paths = ["^crates/registry-adapter/src/auth/tls\\.rs$"]
+regexTarget = "line"
+regexes = ['''const CLIENT_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcu64hV3YOzpMTbrA''']
+
+[[allowlists]]
+description = "Allow the reconstructed GraphQL page-state token in the Adapter cursor experiment fixture; it is a documented synthetic value, not a credential."
+condition = "AND"
+paths = ["^products/adapter/experiments/graphql-cursor-source/fixtures/find-first-page\\.yaml$"]
+regexTarget = "line"
+regexes = ['''^\s*pageStateToken: AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeGBtmPJ2tSNzFv1vbYu21rA$''']
