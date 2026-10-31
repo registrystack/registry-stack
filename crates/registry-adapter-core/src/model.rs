@@ -574,31 +574,46 @@ impl schemars::JsonSchema for ErrorClass {
 }
 
 /// A component kind, the ported subset of Camel's component library
-/// (`products/adapter/CONCEPT.md` section 8.8). `rest` is the facade
-/// consumer; `direct` calls routes in process; `http` and `graphql` are the
-/// upstream producers.
+/// (`products/adapter/CONCEPT.md` sections 8.8 and 17.2). `rest` is the
+/// facade consumer; `direct` calls routes in process; `http`, `graphql`,
+/// and `postgres` are the upstream producers; `file` and `sftp` are the
+/// job-only sources a facade route may never reach (section 17.1).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ComponentKind {
     Direct,
-    Http,
-    Rest,
+    File,
     GraphQl,
+    Http,
+    Postgres,
+    Rest,
+    Sftp,
 }
 
 impl ComponentKind {
     /// The complete closed set, in name order.
-    pub const ALL: &'static [Self] = &[Self::Direct, Self::GraphQl, Self::Http, Self::Rest];
+    pub const ALL: &'static [Self] = &[
+        Self::Direct,
+        Self::File,
+        Self::GraphQl,
+        Self::Http,
+        Self::Postgres,
+        Self::Rest,
+        Self::Sftp,
+    ];
 
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Direct => "direct",
-            Self::Http => "http",
-            Self::Rest => "rest",
+            Self::File => "file",
             Self::GraphQl => "graphql",
+            Self::Http => "http",
+            Self::Postgres => "postgres",
+            Self::Rest => "rest",
+            Self::Sftp => "sftp",
         }
     }
 
@@ -612,12 +627,23 @@ impl ComponentKind {
             .find(|candidate| candidate.name() == name)
     }
 
-    /// Whether a pack endpoint may declare this component. Only the two
-    /// producer components name upstream endpoints; `direct` names routes
-    /// and `rest` is the engine-owned facade consumer.
+    /// Whether a pack endpoint may declare this component as a producer
+    /// send: `http`, `graphql`, and the read-only `postgres` source. The
+    /// job-only `file` and `sftp` sources are read through the job's
+    /// `pollEnrich` step, never through a send (section 17.1), and
+    /// `direct` names routes while `rest` is the engine-owned facade
+    /// consumer.
     #[must_use]
     pub const fn is_producer(self) -> bool {
-        matches!(self, Self::Http | Self::GraphQl)
+        matches!(self, Self::Http | Self::GraphQl | Self::Postgres)
+    }
+
+    /// Whether this kind is a governed-ingestion job component: refused in
+    /// every facade-reachable route (`products/adapter/CONCEPT.md`
+    /// sections 17.1 and 17.2).
+    #[must_use]
+    pub const fn is_job_component(self) -> bool {
+        matches!(self, Self::File | Self::Sftp | Self::Postgres)
     }
 }
 
@@ -687,6 +713,7 @@ pub enum Eip {
     IdempotentConsumer,
     Loop,
     OnException,
+    PollEnrich,
     RemoveHeader,
     RemoveProperty,
     Script,
@@ -717,6 +744,7 @@ impl Eip {
         Self::IdempotentConsumer,
         Self::Loop,
         Self::OnException,
+        Self::PollEnrich,
         Self::RemoveHeader,
         Self::RemoveProperty,
         Self::Script,
@@ -747,6 +775,7 @@ impl Eip {
             Self::IdempotentConsumer => "idempotentConsumer",
             Self::Loop => "loop",
             Self::OnException => "onException",
+            Self::PollEnrich => "pollEnrich",
             Self::RemoveHeader => "removeHeader",
             Self::RemoveProperty => "removeProperty",
             Self::Script => "script",
@@ -775,9 +804,12 @@ impl Eip {
 }
 
 /// The destination of a `to` or `enrich` send: a `direct:` route, an
-/// `http:` endpoint, or a `graphql:` endpoint declared in the pack
-/// (`products/adapter/CONCEPT.md` sections 8.3 and 8.8). The URI is static;
-/// no `toD` is ported.
+/// `http:`, `graphql:`, or `postgres:` endpoint declared in the pack
+/// (`products/adapter/CONCEPT.md` sections 8.3, 8.8, and 17.2). The URI is
+/// static; no `toD` is ported. A `file:` or `sftp:` URI parses so the
+/// authoring checks can refuse it under its own code
+/// (`adapter.job.send-component-refused`): a job source is read through the
+/// `pollEnrich` step, never through a send.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SendUri {
@@ -794,6 +826,9 @@ pub enum SendComponent {
     Direct,
     Http,
     GraphQl,
+    Postgres,
+    File,
+    Sftp,
 }
 
 impl SendUri {
@@ -805,6 +840,9 @@ impl SendUri {
             "direct" => SendComponent::Direct,
             "http" => SendComponent::Http,
             "graphql" => SendComponent::GraphQl,
+            "postgres" => SendComponent::Postgres,
+            "file" => SendComponent::File,
+            "sftp" => SendComponent::Sftp,
             _ => return None,
         };
         if id.is_empty() {
@@ -823,6 +861,9 @@ impl SendUri {
             SendComponent::Direct => "direct",
             SendComponent::Http => "http",
             SendComponent::GraphQl => "graphql",
+            SendComponent::Postgres => "postgres",
+            SendComponent::File => "file",
+            SendComponent::Sftp => "sftp",
         };
         format!("{prefix}:{}", self.id)
     }
@@ -839,8 +880,8 @@ impl<'de> Deserialize<'de> for SendUri {
         let uri = String::deserialize(deserializer)?;
         Self::parse(&uri).ok_or_else(|| {
             serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
-                "a static send URI: direct:<routeId>, http:<endpointId>, or graphql:<endpointId>",
-                "Write a static `direct:`, `http:`, or `graphql:` URI; `toD` is not ported.",
+                "a static send URI: direct:<routeId>, http:<endpointId>, graphql:<endpointId>, or postgres:<endpointId>",
+                "Write a static `direct:`, `http:`, `graphql:`, or `postgres:` URI; `toD` is not ported, and a job source is read through pollEnrich, never sent to.",
             ))
         })
     }
@@ -1196,8 +1237,20 @@ mod tests {
                 .iter()
                 .filter(|component| component.is_producer())
                 .count(),
-            2
+            3,
+            "http, graphql, and postgres are the producer components"
         );
+        // The governed-ingestion job sources are read through the job-only
+        // pollEnrich step (CONCEPT 17.1): never producers, always refused
+        // in facade-reachable routes.
+        for name in ["file", "sftp", "postgres"] {
+            let component = ComponentKind::from_name(name).expect("a job component resolves");
+            assert!(component.is_job_component(), "{name} is a job component");
+        }
+        assert!(!ComponentKind::File.is_producer());
+        assert!(!ComponentKind::Sftp.is_producer());
+        assert!(ComponentKind::Postgres.is_producer());
+        assert!(!ComponentKind::Http.is_job_component());
     }
 
     #[test]
@@ -1213,8 +1266,13 @@ mod tests {
     }
 
     #[test]
-    fn send_uris_round_trip_over_the_three_components() {
-        for uri in ["direct:fetchRecord", "http:cases", "graphql:patient"] {
+    fn send_uris_round_trip_over_the_send_components() {
+        for uri in [
+            "direct:fetchRecord",
+            "http:cases",
+            "graphql:patient",
+            "postgres:ledger",
+        ] {
             let parsed = SendUri::parse(uri).expect("parse");
             assert_eq!(parsed.uri(), uri);
             let json = serde_json::to_string(&parsed).expect("serialize");
@@ -1224,6 +1282,30 @@ mod tests {
         assert_eq!(SendUri::parse("kafka:topic"), None);
         assert_eq!(SendUri::parse("direct:"), None);
         assert!(serde_json::from_str::<SendUri>("\"rest:facade\"").is_err());
+    }
+
+    /// A `file:` or `sftp:` URI parses so the authoring checks can refuse a
+    /// send to a job source under its own code
+    /// (`adapter.job.send-component-refused`): the reader accepts the shape,
+    /// the checks refuse the use (CONCEPT 17.1).
+    #[test]
+    fn job_source_uris_parse_for_the_checks_to_refuse() {
+        for uri in ["file:submissions", "sftp:dropbox"] {
+            let parsed = SendUri::parse(uri).expect("parse");
+            assert_eq!(parsed.uri(), uri);
+            assert_eq!(
+                serde_json::from_str::<SendUri>(&format!("\"{uri}\"")).ok(),
+                Some(parsed)
+            );
+        }
+        assert!(matches!(
+            SendUri::parse("file:submissions").expect("parse").component,
+            SendComponent::File
+        ));
+        assert!(matches!(
+            SendUri::parse("sftp:dropbox").expect("parse").component,
+            SendComponent::Sftp
+        ));
     }
 
     #[test]

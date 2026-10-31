@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# The clean job-mode control: a job over the pack's source route, bounded
+# by its profile. The job compiler's check_job passes it with zero
+# findings.
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobo-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: sha256:0298d8ab27ce3d89b646d1bec661d0663b0100f07e8ebff6a2395aa0a4c3160e
+  route: kobo-submissions
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 16777216
+  maximumPageItems: 500
+  maximumPageBytes: 1048576
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 500
