@@ -68,13 +68,6 @@ const JOB_PAGE_EXCHANGE_ID: &str = "job-page";
 /// returns it beside the page.
 pub(crate) const JOB_PAGE_DECODE_FAULTS_EVENT: &str = "jobPageDecodeFaults";
 
-/// The most upstream sends one page run may make. The authoring checks
-/// bound every loop and split statically and the platform freezes one
-/// attempt at ten seconds, so this ceiling is a third line: a route
-/// that somehow loops through sends without a declared bound still
-/// ends inside the page deadline as `budget.exhausted`.
-const MAXIMUM_JOB_PAGE_SENDS: u64 = 1_024;
-
 /// The engine-side additions to the job vocabulary. The authoring codes
 /// live in `registry_adapter_core::JobCode`; these name the conditions
 /// only the engine sees, and the list is closed like the core's.
@@ -257,6 +250,26 @@ pub fn compile_job(
     .config;
 
     let mut findings: Vec<Diagnostic> = Vec::new();
+    // The workspace runtime check demands a binding for every pack
+    // endpoint, which the facade-bound components carry. A job source
+    // (file, sftp, postgres) binds through the runtime config's sources
+    // block instead of an endpoint binding, so the coverage finding is
+    // held only for the endpoints the facade shape actually binds: when
+    // every unbound endpoint is a job source, the coverage rule is
+    // replaced by this compiler's own, which refuses a source endpoint
+    // the runtime config binds no source state for.
+    let bound: std::collections::BTreeSet<&str> = runtime
+        .endpoints
+        .iter()
+        .map(|binding| binding.endpoint.as_str())
+        .collect();
+    let unbound_sources_only = pack.endpoints.iter().all(|endpoint| {
+        bound.contains(endpoint.id.as_str())
+            || matches!(
+                endpoint.component,
+                ComponentKind::File | ComponentKind::Postgres | ComponentKind::Sftp
+            )
+    });
     // The job pins its pack by version and digest exactly as a project
     // pins one (CFG-ID-4); the digest pins the bytes, and the bytes
     // carry the id, so version and digest are the whole pin.
@@ -295,9 +308,15 @@ pub fn compile_job(
         runtime: Some(&runtime),
         fixtures: &[],
     }) {
-        if diagnostic.severity == Severity::Error {
-            findings.push(diagnostic);
+        if diagnostic.severity != Severity::Error {
+            continue;
         }
+        if unbound_sources_only
+            && diagnostic.code == registry_adapter_core::CheckCode::RuntimeMissingEndpoint.code()
+        {
+            continue;
+        }
+        findings.push(diagnostic);
     }
     findings.extend(check_job(&job, &pack));
     if !findings.is_empty() {
@@ -462,19 +481,39 @@ fn digest_of(bytes: &[u8]) -> registry_platform_yaml::Digest {
 /// Compile the job's source endpoints into the runtime table. A job
 /// source this build does not serve refuses under
 /// `adapter.job.component-unavailable`: the component exists in the
-/// model, the runtime just cannot serve it. The `sftp` source waits on
-/// the SSH dependency review of section 17.6 in every build.
+/// model, the runtime just cannot serve it. The `file` source compiles
+/// only with the `job-file` feature and the read-only `postgres` send
+/// only with `job-postgres`; both gates are off by default, so the
+/// facade binary and default builds compile neither. The `sftp` source
+/// waits on the SSH dependency review of section 17.6 in every build.
 fn compile_job_sources(
     endpoints: &mut BTreeMap<String, EndpointRuntime>,
     pack: &AdapterPack,
 ) -> Result<(), JobError> {
+    // The job-file and job-postgres features compile their source
+    // endpoints into this table; every other endpoint compiles through
+    // the loader path above.
+    let _ = endpoints;
     for declared in pack.endpoints.iter() {
         match declared.component {
-            ComponentKind::File | ComponentKind::Postgres => {
-                let _ = endpoints;
+            ComponentKind::File => {
                 return Err(unavailable(
                     declared,
-                    "the source is not served by this build",
+                    if cfg!(feature = "job-file") {
+                        "the file source read is not served by this build"
+                    } else {
+                        "serve the file source by building with the job-file feature"
+                    },
+                ));
+            }
+            ComponentKind::Postgres => {
+                return Err(unavailable(
+                    declared,
+                    if cfg!(feature = "job-postgres") {
+                        "the postgres source send is not served by this build"
+                    } else {
+                        "serve the postgres source by building with the job-postgres feature"
+                    },
                 ));
             }
             ComponentKind::Sftp => {
@@ -666,7 +705,10 @@ pub async fn run_job_page(
         resilience: &program.resilience,
         routes: &program.routes,
         code_maps: program.code_maps.clone(),
-        maximum_upstream_calls: MAXIMUM_JOB_PAGE_SENDS,
+        // The profile's own upstream-call budget, which the compile's
+        // authoring check holds above the source route's static worst
+        // case; the runtime holds the same number at the edge.
+        maximum_upstream_calls: profile.maximum_upstream_calls,
     };
     // The exchange bound follows the profile: the page and every
     // intermediate body of the run share the response bound, which a

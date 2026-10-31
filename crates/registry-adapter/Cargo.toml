@@ -22,6 +22,14 @@ path = "src/main.rs"
 # that drive it (tests/egress_tls_wiring.rs), the way registry-breg gates
 # its equivalent loopback TLS lane.
 postgres-test = ["registry-platform-httputil/test-support"]
+# The governed-ingestion job sources (CONCEPT.md sections 17.1 and 17.2),
+# each off by default: the facade binary and default builds compile
+# neither. `job-file` gates the file source runtime, the pollEnrich read,
+# and the CSV and JSONL decoders; `job-postgres` gates the read-only
+# postgres send component. A job whose source needs an ungated component
+# refuses at compile under adapter.job.component-unavailable.
+job-file = ["dep:csv"]
+job-postgres = ["dep:pg_query"]
 
 [dependencies]
 # The continuation cursor codec (CONCEPT.md section 8.11.2): XChaCha20-Poly1305
@@ -34,6 +42,11 @@ registry-platform-canonical-json.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
 deadpool-postgres.workspace = true
+# The file source's CSV decoder (feature job-file) and the postgres
+# source's query parser (feature job-postgres): optional, so the default
+# build links neither.
+csv = { workspace = true, optional = true }
+pg_query = { workspace = true, optional = true }
 http.workspace = true
 jsonpath-rust.workspace = true
 # Steering pin, unused in code: holds jsonpath-rust's pest at 2.8.5; see

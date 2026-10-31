@@ -57,6 +57,7 @@ fn profile_json(page_deadline_milliseconds: u64) -> String {
             "maximumResponseBytes": 16777216,
             "maximumPageItems": 100,
             "maximumPageBytes": 1048576,
+            "maximumUpstreamCalls": 8,
             "read": {{
                 "maximumFileBytes": 1073741824,
                 "maximumRowBytes": 1048576,
@@ -89,6 +90,7 @@ sourceRoutes:
   - id: submissions-page
     scan: finite
     nextRecovery: exact-replay
+    edits: ordered
     steps:
       - to:
           uri: http:submissions
@@ -186,7 +188,7 @@ recordTypes:
     )
 }
 
-fn job_yaml(pack_digest: &str, page_deadline_milliseconds: u64) -> String {
+fn job_yaml(pack_digest: &str, route: &str, page_deadline_milliseconds: u64) -> String {
     format!(
         r#"apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
 kind: AdapterJob
@@ -198,7 +200,14 @@ source:
     id: case-api-pack
     version: "1"
     digest: {pack_digest}
-  route: submissions-page
+  route: {route}
+projection:
+  fields:
+    - id
+    - answers.age
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
 {}"#,
         profile_json(page_deadline_milliseconds)
     )
@@ -216,6 +225,31 @@ fn runtime_yaml(base_url: &str) -> String {
                 "credential": {"type": "none"}
             }
         ],
+        "allowedPrivateCidrs": ["192.168.0.0/16"],
+        "listener": {"bind": "127.0.0.1:8080"},
+        "database": {
+            "runtimeUrlRef": "secret:env/JOB_TEST_DB",
+            "migrationUrlRef": "secret:env/JOB_TEST_DB"
+        },
+        "oidc": {
+            "issuer": "https://issuer.example.invalid",
+            "audience": "job-test"
+        },
+        "allowedClients": ["job-client"],
+        "audit": {"retentionDays": 90}
+    });
+    serde_json::to_string_pretty(&config).expect("the runtime config renders")
+}
+
+/// The runtime config of a source-only job: no endpoint bindings, because
+/// the file and postgres sources bind through the runtime's sources
+/// block, not an endpoint binding.
+fn runtime_yaml_without_bindings() -> String {
+    let config = json!({
+        "apiVersion": "id.registrystack.org/formats/adapter/runtime/v1alpha1",
+        "kind": "AdapterRuntimeConfig",
+        "id": "job-deployment",
+        "endpoints": [],
         "allowedPrivateCidrs": ["192.168.0.0/16"],
         "listener": {"bind": "127.0.0.1:8080"},
         "database": {
@@ -264,7 +298,11 @@ fn write_fixture(
     )
     .expect("the project");
     let job = root.join("job.yaml");
-    std::fs::write(&job, job_yaml(&pack_digest, page_deadline_milliseconds)).expect("the job");
+    std::fs::write(
+        &job,
+        job_yaml(&pack_digest, "submissions-page", page_deadline_milliseconds),
+    )
+    .expect("the job");
     let runtime = root.join("runtime.yaml");
     std::fs::write(&runtime, runtime_yaml(&double.url("/"))).expect("the runtime config");
     Fixture {
@@ -416,7 +454,11 @@ fn compile_refuses_a_route_that_writes_the_cursor_property() {
     std::fs::write(&pack, &guarded).expect("the pack rewrites");
     let pack_digest = sha256_uri(guarded.as_bytes());
     let workspace = fixture.job.parent().expect("the workspace").to_path_buf();
-    std::fs::write(&fixture.job, job_yaml(&pack_digest, 60_000)).expect("the job rewrites");
+    std::fs::write(
+        &fixture.job,
+        job_yaml(&pack_digest, "submissions-page", 60_000),
+    )
+    .expect("the job rewrites");
     let project = workspace.join("project.yaml");
     let project_text = std::fs::read_to_string(&project).expect("the project reads");
     let repinned = project_text.replace(
@@ -469,4 +511,138 @@ fn compile_refuses_a_job_pinned_to_other_pack_bytes() {
 #[test]
 fn the_cursor_property_is_the_read_only_engine_slot() {
     assert_eq!(ADAPTER_JOB_CURSOR_PROPERTY, "AdapterJobCursor");
+}
+
+/// The pack of a file-source job: one file endpoint, one source route
+/// whose pollEnrich read carries the mandatory timeout.
+fn file_pack_yaml() -> String {
+    r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: drop-pack
+version: "1"
+testedVersions: []
+endpoints:
+  - id: dropbox
+    component: file
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 65536
+sourceRoutes:
+  - id: drop-page
+    scan: finite
+    nextRecovery: exact-replay
+    edits: ordered
+    steps:
+      - pollEnrich:
+          uri: file:dropbox
+          timeoutMilliseconds: 10000
+capabilities: {}
+"#
+    .to_owned()
+}
+
+/// The pack of a postgres-source job: one read-only postgres endpoint
+/// with its digest-pinned query file, one source route that sends.
+fn postgres_pack_yaml(query: &str) -> String {
+    let digest = sha256_uri(query.as_bytes());
+    format!(
+        r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: ledger-pack
+version: "1"
+testedVersions: []
+endpoints:
+  - id: ledger
+    component: postgres
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 65536
+    queryFile: queries/ledger.sql
+queryFiles:
+  - path: queries/ledger.sql
+    digest: {digest}
+sourceRoutes:
+  - id: ledger-page
+    scan: finite
+    nextRecovery: exact-replay
+    edits: ordered
+    steps:
+      - to:
+          uri: postgres:ledger
+          parameters:
+            queryParameters:
+              offset:
+                constant: 0
+capabilities: {{}}
+"#
+    )
+}
+
+/// A fixture workspace around a caller-supplied pack text and the source
+/// route the job runs: profile and project beside it, the job, and the
+/// operator runtime config.
+fn write_pack_fixture(pack_text: &str, route: &str) -> Fixture {
+    let double = upstream::UpstreamDouble::start();
+    let directory = tempfile::tempdir().expect("a scratch workspace");
+    let root = directory.path().to_path_buf();
+    std::fs::create_dir_all(root.join("queries")).expect("the queries directory");
+    std::fs::write(root.join("pack.yaml"), pack_text).expect("the pack");
+    std::fs::write(root.join("profile.yaml"), PROFILE_YAML).expect("the profile");
+    let profile_digest = sha256_uri(PROFILE_YAML.as_bytes());
+    let pack_digest = sha256_uri(pack_text.as_bytes());
+    std::fs::write(
+        root.join("project.yaml"),
+        project_yaml(&profile_digest, &pack_digest, false),
+    )
+    .expect("the project");
+    let job = root.join("job.yaml");
+    std::fs::write(&job, job_yaml(&pack_digest, route, 60_000)).expect("the job");
+    let runtime = root.join("runtime.yaml");
+    std::fs::write(&runtime, runtime_yaml_without_bindings()).expect("the runtime config");
+    Fixture {
+        _directory: directory,
+        pack: root.join("pack.yaml"),
+        job,
+        runtime,
+        double,
+    }
+}
+
+/// The default build compiles no file source: a pack whose source route
+/// reads a file endpoint refuses at compile under
+/// `adapter.job.component-unavailable`, so a facade binary can never
+/// reach the file component (CONCEPT 17.1).
+#[cfg(not(feature = "job-file"))]
+#[test]
+fn the_default_build_refuses_a_file_job() {
+    let fixture = write_pack_fixture(&file_pack_yaml(), "drop-page");
+    let error = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
+        .expect_err("the default build refuses a file source");
+    assert!(
+        error.diagnostics.iter().any(|diagnostic| diagnostic.code
+            == "adapter.job.component-unavailable"
+            && diagnostic.path == "/endpoints/dropbox"),
+        "the refusal names the file endpoint: {:?}",
+        error.diagnostics
+    );
+}
+
+/// The default build compiles no postgres send: a pack whose source
+/// route sends to a postgres endpoint refuses at compile under
+/// `adapter.job.component-unavailable`.
+#[cfg(not(feature = "job-postgres"))]
+#[test]
+fn the_default_build_refuses_a_postgres_job() {
+    let fixture = write_pack_fixture(&postgres_pack_yaml("SELECT id FROM ledger"), "ledger-page");
+    let error = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
+        .expect_err("the default build refuses a postgres source");
+    assert!(
+        error.diagnostics.iter().any(|diagnostic| diagnostic.code
+            == "adapter.job.component-unavailable"
+            && diagnostic.path == "/endpoints/ledger"),
+        "the refusal names the postgres endpoint: {:?}",
+        error.diagnostics
+    );
 }
