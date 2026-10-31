@@ -34,7 +34,8 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
     let Some(bound) = step.maximum_items else {
         return Err(RouteFailure::of(ErrorClass::Validation));
     };
-    let pieces = bounded_pieces(run, &step.expression, bound.get() as usize)?;
+    let maximum_bytes = run.maximum_exchange_bytes;
+    let pieces = bounded_pieces(run, &step.expression, bound.get() as usize, maximum_bytes)?;
     let strategy = step
         .aggregation_strategy
         .clone()
@@ -45,7 +46,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
     let total = pieces.len() as u64;
     let mut accumulated = aggregation::initial_body(&strategy, &run.exchange.message.body);
     run.exchange
-        .ensure_body_bounded(&accumulated)
+        .ensure_body_bounded_within(&accumulated, maximum_bytes)
         .map_err(RouteFailure::of)?;
     let mut processed = 0_u64;
     let mut failures = 0_u64;
@@ -59,7 +60,8 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
         item.set_property(SPLIT_INDEX_PROPERTY, json!(index));
         item.set_property(SPLIT_SIZE_PROPERTY, json!(total));
         item.set_property(SPLIT_COMPLETE_PROPERTY, json!(index as u64 + 1 == total));
-        item.ensure_bounded().map_err(RouteFailure::of)?;
+        item.ensure_bounded_within(maximum_bytes)
+            .map_err(RouteFailure::of)?;
         std::mem::swap(&mut run.exchange, &mut item);
         let flow = run.run_steps(&step.steps).await;
         // The route exchange keeps the original until every piece has
@@ -78,6 +80,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
                     &mut accumulated,
                     &item,
                     run.deadline,
+                    maximum_bytes,
                 ) {
                     Ok(properties) => properties,
                     Err(failure) => {
@@ -86,7 +89,10 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
                     }
                 };
                 apply_properties(run, properties);
-                if let Err(class) = run.exchange.ensure_body_bounded(&accumulated) {
+                if let Err(class) = run
+                    .exchange
+                    .ensure_body_bounded_within(&accumulated, maximum_bytes)
+                {
                     record_pending_consumed(run, &mut last_failure);
                     return Err(RouteFailure::of(class));
                 }
@@ -139,6 +145,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
             &mut accumulated,
             &item,
             run.deadline,
+            maximum_bytes,
         ) {
             Ok(properties) => properties,
             Err(failure) => {
@@ -147,7 +154,10 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &SplitStep) -> Result<Flow,
             }
         };
         apply_properties(run, properties);
-        if let Err(class) = run.exchange.ensure_body_bounded(&accumulated) {
+        if let Err(class) = run
+            .exchange
+            .ensure_body_bounded_within(&accumulated, maximum_bytes)
+        {
             record_pending_consumed(run, &mut last_failure);
             return Err(RouteFailure::of(class));
         }
@@ -171,39 +181,45 @@ fn bounded_pieces(
     run: &Run<'_, '_>,
     expression: &Expression,
     maximum: usize,
+    maximum_bytes: usize,
 ) -> Result<Vec<serde_json::Value>, RouteFailure> {
     match expression {
-        Expression::Constant(value) => clone_array_within(value, maximum),
+        Expression::Constant(value) => clone_array_within(value, maximum, maximum_bytes),
         Expression::Header(name) => run.exchange.message.header(name).map_or_else(
             || Err(not_an_array()),
-            |value| clone_array_within(value, maximum),
+            |value| clone_array_within(value, maximum, maximum_bytes),
         ),
         Expression::ExchangeProperty(name) => run.exchange.property(name).map_or_else(
             || Err(not_an_array()),
-            |value| clone_array_within(value, maximum),
+            |value| clone_array_within(value, maximum, maximum_bytes),
         ),
         Expression::JsonPath(selector) => {
             let compiled =
                 compile_selector(selector).map_err(|_| RouteFailure::of(ErrorClass::Validation))?;
             match compiled.evaluate(&run.exchange.message.body) {
-                Ok(JsonPathResult::Singular(Some(value))) => clone_array_within(value, maximum),
+                Ok(JsonPathResult::Singular(Some(value))) => {
+                    clone_array_within(value, maximum, maximum_bytes)
+                }
                 Ok(JsonPathResult::List(nodes)) => {
                     if nodes.len() > maximum {
                         return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
                     }
-                    ensure_values_bounded(&nodes).map_err(RouteFailure::of)?;
+                    ensure_values_bounded(&nodes, maximum_bytes).map_err(RouteFailure::of)?;
                     Ok(nodes.into_iter().cloned().collect())
                 }
                 _ => Err(not_an_array()),
             }
         }
-        Expression::Rhai(_) => clone_owned_array_within(run.eval(expression)?, maximum),
+        Expression::Rhai(_) => {
+            clone_owned_array_within(run.eval(expression)?, maximum, maximum_bytes)
+        }
     }
 }
 
 fn clone_array_within(
     value: &serde_json::Value,
     maximum: usize,
+    maximum_bytes: usize,
 ) -> Result<Vec<serde_json::Value>, RouteFailure> {
     let serde_json::Value::Array(items) = value else {
         return Err(not_an_array());
@@ -211,13 +227,14 @@ fn clone_array_within(
     if items.len() > maximum {
         return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
     }
-    ensure_value_bounded(value).map_err(RouteFailure::of)?;
+    ensure_value_bounded(value, maximum_bytes).map_err(RouteFailure::of)?;
     Ok(items.clone())
 }
 
 fn clone_owned_array_within(
     value: serde_json::Value,
     maximum: usize,
+    maximum_bytes: usize,
 ) -> Result<Vec<serde_json::Value>, RouteFailure> {
     let serde_json::Value::Array(items) = &value else {
         return Err(not_an_array());
@@ -225,7 +242,7 @@ fn clone_owned_array_within(
     if items.len() > maximum {
         return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
     }
-    ensure_value_bounded(&value).map_err(RouteFailure::of)?;
+    ensure_value_bounded(&value, maximum_bytes).map_err(RouteFailure::of)?;
     match value {
         serde_json::Value::Array(items) => Ok(items),
         _ => Err(not_an_array()),

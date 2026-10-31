@@ -271,14 +271,10 @@ impl Exchange {
     }
 
     /// Check an accumulator as though it were this exchange's body,
-    /// without cloning or installing it first.
-    pub(crate) fn ensure_body_bounded(&self, body: &Value) -> Result<(), ErrorClass> {
-        self.ensure_body_bounded_within(body, MAXIMUM_EXCHANGE_BYTES)
-    }
-
-    /// The bounded-size check over one candidate body under an explicit
-    /// ceiling.
-    fn ensure_body_bounded_within(
+    /// without cloning or installing it first, under the caller's
+    /// ceiling: the facade's fixed budget, or the job profile's response
+    /// bound for a job page run.
+    pub(crate) fn ensure_body_bounded_within(
         &self,
         body: &Value,
         maximum_bytes: usize,
@@ -527,15 +523,20 @@ fn idempotency_failure(error: IdempotencyError) -> RouteFailure {
     RouteFailure::of(ErrorClass::Facade)
 }
 
-/// Apply the exchange's retained-JSON ceiling to a body or accumulator
-/// before it is installed on an exchange.
-pub(crate) fn ensure_value_bounded(value: &Value) -> Result<(), ErrorClass> {
-    ensure_serialized_bounded(value, MAXIMUM_EXCHANGE_BYTES)
+/// Apply the caller's retained-JSON ceiling to a body or accumulator
+/// before it is installed on an exchange: the facade's fixed budget, or
+/// the job profile's response bound for a job page run, whose endpoints
+/// may declare a raised bound (section 17.2).
+pub(crate) fn ensure_value_bounded(value: &Value, maximum_bytes: usize) -> Result<(), ErrorClass> {
+    ensure_serialized_bounded(value, maximum_bytes)
 }
 
 /// Apply the same ceiling to a borrowed list before a split clones it.
-pub(crate) fn ensure_values_bounded(values: &[&Value]) -> Result<(), ErrorClass> {
-    ensure_serialized_bounded(&values, MAXIMUM_EXCHANGE_BYTES)
+pub(crate) fn ensure_values_bounded(
+    values: &[&Value],
+    maximum_bytes: usize,
+) -> Result<(), ErrorClass> {
+    ensure_serialized_bounded(&values, maximum_bytes)
 }
 
 /// Count JSON bytes without building a second serialized copy in memory.

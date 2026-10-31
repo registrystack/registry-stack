@@ -75,12 +75,22 @@ pub(crate) fn fold(
     new: &Exchange,
 ) -> Result<Aggregated, RouteFailure> {
     let mut body = old.clone();
-    let properties = fold_into(scripts, maps, strategy, &mut body, new, None)?;
+    let properties = fold_into(
+        scripts,
+        maps,
+        strategy,
+        &mut body,
+        new,
+        None,
+        crate::exchange::MAXIMUM_EXCHANGE_BYTES,
+    )?;
     Ok(Aggregated { body, properties })
 }
 
 /// Fold an enrich resource into the route body under the route's absolute
 /// deadline. A custom strategy receives that same deadline at its Rhai seam.
+/// `maximum_bytes` is the run's retained-JSON ceiling: the facade's fixed
+/// budget, or the job profile's response bound for a job page run.
 pub(crate) fn fold_enrich(
     scripts: &ScriptSet,
     maps: &crate::scripts::CodeMaps,
@@ -88,15 +98,24 @@ pub(crate) fn fold_enrich(
     old: &Value,
     new: &Exchange,
     deadline: tokio::time::Instant,
+    maximum_bytes: usize,
 ) -> Result<Aggregated, RouteFailure> {
     let mut body = old.clone();
-    let properties = fold_into(scripts, maps, strategy, &mut body, new, Some(deadline))?;
+    let properties = fold_into(
+        scripts,
+        maps,
+        strategy,
+        &mut body,
+        new,
+        Some(deadline),
+        maximum_bytes,
+    )?;
     Ok(Aggregated { body, properties })
 }
 
 /// Fold a split piece into its accumulator in place. Reusing the one
 /// accumulator avoids cloning every value accumulated so far for every
-/// piece, while applying the fixed exchange bound after each fold.
+/// piece, while applying the run's retained-JSON ceiling after each fold.
 pub(crate) fn fold_split(
     scripts: &ScriptSet,
     maps: &crate::scripts::CodeMaps,
@@ -104,8 +123,17 @@ pub(crate) fn fold_split(
     old: &mut Value,
     new: &Exchange,
     deadline: tokio::time::Instant,
+    maximum_bytes: usize,
 ) -> Result<Vec<(String, Option<Value>)>, RouteFailure> {
-    fold_into(scripts, maps, strategy, old, new, Some(deadline))
+    fold_into(
+        scripts,
+        maps,
+        strategy,
+        old,
+        new,
+        Some(deadline),
+        maximum_bytes,
+    )
 }
 
 fn fold_into(
@@ -115,6 +143,7 @@ fn fold_into(
     old: &mut Value,
     new: &Exchange,
     deadline: Option<tokio::time::Instant>,
+    maximum_bytes: usize,
 ) -> Result<Vec<(String, Option<Value>)>, RouteFailure> {
     let properties = match strategy {
         AggregationStrategy::UseLatest {} => {
@@ -226,7 +255,7 @@ fn fold_into(
             "an aggregation strategy may not write a reserved exchange property",
         ));
     }
-    ensure_value_bounded(old).map_err(RouteFailure::of)?;
+    ensure_value_bounded(old, maximum_bytes).map_err(RouteFailure::of)?;
     Ok(properties)
 }
 
@@ -619,6 +648,7 @@ mod tests {
             &mut old,
             &exchange(json!({}), &[]),
             tokio::time::Instant::now() + std::time::Duration::from_millis(1),
+            usize::MAX,
         )
         .expect_err("the finite strategy must stop at the route deadline");
         assert_eq!(split_failed.class, ErrorClass::ScriptBudgetExceeded);
@@ -630,6 +660,7 @@ mod tests {
             &json!({}),
             &exchange(json!({}), &[]),
             tokio::time::Instant::now() + std::time::Duration::from_millis(1),
+            usize::MAX,
         )
         .expect_err("enrich aggregation must stop at the route deadline");
         assert_eq!(enrich_failed.class, ErrorClass::ScriptBudgetExceeded);

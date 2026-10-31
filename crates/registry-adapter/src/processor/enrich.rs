@@ -86,6 +86,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &EnrichStep) -> Result<Flow
         &old_body,
         &resource,
         run.deadline,
+        run.maximum_exchange_bytes,
     )?;
     run.exchange.message.body = merged.body;
     for (name, value) in merged.properties {

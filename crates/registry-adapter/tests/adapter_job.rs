@@ -779,3 +779,111 @@ capabilities: {{}}
         "the reached internal route's pacer rejected the second run"
     );
 }
+
+/// The job profile's raised byte ceiling reaches the split processor: a
+/// page the facade ceiling cannot hold passes through a split step and
+/// its accumulator under a job profile raised toward the platform cap,
+/// where the fixed facade budget would refuse it as budget.exhausted.
+#[tokio::test]
+async fn a_split_keeps_the_job_byte_ceiling() {
+    let pad = "x".repeat(700_000);
+    let part = |key: &str| {
+        serde_json::json!({"items": [{"key": key, "value": {"pad": pad}}], "next": null})
+            .to_string()
+    };
+    let reply = serde_json::json!({
+        "parts": [
+            serde_json::from_str::<Value>(&part("a")).expect("the first part"),
+            serde_json::from_str::<Value>(&part("b")).expect("the second part"),
+        ],
+        "nextCursor": {"position": 2}
+    });
+    assert!(
+        serde_json::to_vec(&reply)
+            .expect("the reply serializes")
+            .len()
+            > 1_048_576,
+        "the reply exceeds the facade's fixed exchange budget"
+    );
+    let merge_script = r#"// The split's grouped pieces, folded into the item
+// contract (CONCEPT 17.2): the pieces are whole page fragments.
+fn page(exchange) {
+    let items = [];
+    for part in exchange.body {
+        for item in part.items {
+            items.push(item);
+        }
+    }
+    #{items: items, next: exchange.properties.jobNext}
+}
+"#;
+    let pack = format!(
+        r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: []
+endpoints:
+  - id: submissions
+    component: http
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 16777216
+sourceRoutes:
+  - id: submissions-page
+    scan: finite
+    nextRecovery: exact-replay
+    edits: ordered
+    steps:
+      - to:
+          uri: http:submissions
+          parameters:
+            httpMethod: GET
+            path: /v1/submissions
+      - setProperty:
+          name: jobNext
+          value:
+            jsonpath: $.nextCursor
+      - split:
+          expression:
+            jsonpath: $.parts
+          maximumItems: 2
+          aggregationStrategy:
+            type: grouped-body
+          steps: []
+      - setBody:
+          rhai:
+            file: scripts/merge.rhai
+            entrypoint: page
+scripts:
+  - path: scripts/merge.rhai
+    digest: {digest}
+capabilities: {{}}
+"#,
+        digest = sha256_uri(merge_script.as_bytes())
+    );
+    let fixture = write_pack_fixture_with_runtime(&pack, "submissions-page", "");
+    let root = fixture._directory.path().to_path_buf();
+    std::fs::write(root.join("scripts/merge.rhai"), merge_script).expect("the merge script");
+    std::fs::remove_file(root.join("scripts/page.rhai")).expect("the unused page script");
+    let runtime = runtime_yaml(&fixture.double.url("/"));
+    std::fs::write(&fixture.runtime, runtime).expect("the runtime config");
+    // The page this job produces exceeds the format's default page-byte
+    // bound in profile_json, so the test job raises it under the cap.
+    let pack_digest = sha256_uri(pack.as_bytes());
+    let job = job_yaml(&pack_digest, "submissions-page", 60_000).replace(
+        "\"maximumPageBytes\": 1048576",
+        "\"maximumPageBytes\": 2097152",
+    );
+    std::fs::write(&fixture.job, job).expect("the job rewrites");
+    fixture
+        .double
+        .respond_with(vec![upstream::Response::json(200, &reply.to_string())]);
+    let program = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
+        .expect("the oversized page job compiles");
+    let result = run_job_page(&program, None).await.expect("the page runs");
+    assert_eq!(result.page.items.len(), 2, "both split pieces are items");
+    assert_eq!(result.page.items[0].key, "a");
+    assert_eq!(result.page.items[1].key, "b");
+}
