@@ -34,6 +34,7 @@ class NightlyCoverageTests(unittest.TestCase):
         expected_flags = {
             "discovery": "discovery",
             "platform": "platform",
+            "mcp": "mcp",
             "manifest": "manifest-unit",
             "breg": "breg",
             "casework": "casework",
