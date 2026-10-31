@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.from-not-direct: this artifact set must be refused with
+# exactly adapter.route.from-not-direct. A pack route's consumer is http:cases; only direct: consumers are admitted.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.from-not-direct/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:7326e8f3fc2345b6d55d3bfabf39318c89d6de6660e6fc058b32e48b79afcefb
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:bb2e613d5a2e6d32bb038385a049fae95a34cdfab3c8d10e38bc6233f721787f
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

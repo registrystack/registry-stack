@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Derived fixture: one tracked entity read through the govstack-consultation
+# profile. The upstream exchange is the captured one in
+# fixtures/dhis2-tracker/get-found.yaml; only the facade request and the
+# expected reply (the bare record, `recordId` beside `data`) differ.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-govstack-get-found
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: documented
+  reference: products/adapter/fixtures/dhis2-tracker/get-found.yaml
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/collections/persons/records/EeBJ3Sn9uLg
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/EeBJ3Sn9uLg
+        response:
+          status: 200
+          body:
+            trackedEntity: EeBJ3Sn9uLg
+            trackedEntityType: cQWYtUfH6Vx
+            createdAt: '2017-01-20T10:44:02.770'
+            createdAtClient: '2017-01-20T10:44:02.770'
+            updatedAt: '2017-05-26T11:46:22.372'
+            updatedAtClient: '2017-05-26T11:46:22.372'
+            orgUnit: slSrf7H9lMf
+            inactive: false
+            deleted: false
+            potentialDuplicate: false
+            attributes:
+              - attribute: rmeJVy1Rl5V
+                code: SYNTHETIC_CODE_01
+                displayName: Synthetic displayName 01
+                createdAt: '2017-05-26T11:46:22.369'
+                updatedAt: '2017-05-26T11:46:22.369'
+                valueType: TEXT
+                value: Synthetic text 01
+              - attribute: XQwFPP7o2yd
+                displayName: Synthetic displayName 02
+                createdAt: '2017-05-26T11:46:22.371'
+                updatedAt: '2017-05-26T11:46:22.371'
+                valueType: TEXT
+                value: Synthetic text 02
+    expected:
+      type: response
+      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        recordId: EeBJ3Sn9uLg
+        data:
+          tracked_entity_type: cQWYtUfH6Vx
+          org_unit: slSrf7H9lMf
+          created_at: "2017-01-20T10:44:02.770"
+          updated_at: "2017-05-26T11:46:22.372"

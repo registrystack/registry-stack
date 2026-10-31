@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Captured fixture: the source's answer for a soft-deleted tracked
+# entity, from the DHIS2 2.43.2.1 test server (registry test server,
+# 2026-10-30, scrubbed). A soft-deleted entity answers the same 404
+# WebMessage as an absent one, errorCode E1005, so the pack's not-found
+# clause covers it and no separate seam exists; `inactive` is not a
+# deletion and hides nothing.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-get-soft-deleted
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: captured
+  reference: registry test server, 2026-10-30, scrubbed
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/person/qZAX6uIS1Cv
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/qZAX6uIS1Cv
+        response:
+          status: 404
+          body:
+            httpStatus: Not Found
+            httpStatusCode: 404
+            status: ERROR
+            message: TrackedEntity with id qZAX6uIS1Cv could not be found.
+            errorCode: E1005
+    expected:
+      type: problem
+      class: outcome.not-found
+      code: source.not-found

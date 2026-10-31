@@ -1,0 +1,16 @@
+id: unique-list-sweep
+rules: [CFG-ID-6]
+summary: Each non-empty list of the example whose schema declares it a set has its first item copied after the last, and each copy is refused at the copy, naming the first item.
+mutation:
+  duplicateSetItems: {}
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.duplicate-item
+      path: "{pointer}/{index}"
+      from: item
+      at: {line: 1, column: 1}
+      related:
+        - path: "{pointer}/0"
+          from: first
+          at: {line: 1, column: 1}

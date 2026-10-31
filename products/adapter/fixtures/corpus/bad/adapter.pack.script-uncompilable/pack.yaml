@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.script-uncompilable: this artifact set must be refused with
+# exactly adapter.pack.script-uncompilable. The pack carries the adapter.pack.script-uncompilable defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.script-uncompilable/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - setBody:
+          rhai:
+            file: scripts/case-api.rhai
+            entrypoint: shape
+scripts:
+  - path: scripts/case-api.rhai
+    digest: sha256:ed3370159443c3e55798b134a66e565f846a477eeb3e82ce1b795eea67f3612d
+capabilities: {}

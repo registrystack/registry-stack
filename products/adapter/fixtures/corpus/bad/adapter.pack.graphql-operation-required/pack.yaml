@@ -1,0 +1,28 @@
+# Bad-corpus member adapter.pack.graphql-operation-required: a GraphQL endpoint omits operationName.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints:
+  - id: cases
+    component: graphql
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    queryFile: queries/find-cases.graphql
+    operations:
+      - id: cases-read
+        idempotentUpstream: true
+        graphql: query
+routeTemplates:
+  - id: find-cases
+    parameters: []
+    steps:
+      - setBody:
+          constant: {}
+queryFiles:
+  - path: queries/find-cases.graphql
+    digest: sha256:1f682105e4c6eb36ff6b1085e085ed6a4d9bf71763f3ada871f17f84ce353e97
+capabilities: {}

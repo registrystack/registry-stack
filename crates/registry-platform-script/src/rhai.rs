@@ -183,6 +183,18 @@ pub fn compile_entrypoint(
     Ok(ast)
 }
 
+/// The parameter names of the public functions named `entrypoint` in a
+/// compiled AST, in declaration order. Under [`compile_entrypoint`]'s
+/// contract the list holds exactly one function's parameters; a product
+/// reads them to hold its entry points to their own signature ABI, which
+/// stays with the product.
+pub fn entrypoint_parameters<'a>(ast: &'a AST, entrypoint: &str) -> Vec<&'a str> {
+    ast.iter_functions()
+        .filter(|function| function.access == rhai::FnAccess::Public && function.name == entrypoint)
+        .flat_map(|function| function.params)
+        .collect()
+}
+
 /// Invoke `entrypoint` on `ast` through `engine` with a fresh scope.
 ///
 /// Top-level statements in `ast` are never evaluated; only the named function
@@ -397,6 +409,31 @@ mod tests {
                 .cast::<i64>(),
             42
         );
+    }
+
+    /// The parameter reader sees the named public entrypoint's parameters
+    /// in declaration order, whatever else the same file defines.
+    #[test]
+    fn entrypoint_parameters_read_the_public_entrypoints_signature() {
+        let ast = compile_entrypoint(
+            &breg_shaped_profile(),
+            "fn entry(exchange) { exchange } fn helper(paging) { paging }",
+            "entry",
+            &[1],
+        )
+        .expect("test source compiles under its profile");
+        assert_eq!(entrypoint_parameters(&ast, "entry"), ["exchange"]);
+        assert_eq!(entrypoint_parameters(&ast, "helper"), ["paging"]);
+        assert!(entrypoint_parameters(&ast, "absent").is_empty());
+
+        let two = compile_entrypoint(
+            &breg_shaped_profile(),
+            "fn merge(older, newer) { newer }",
+            "merge",
+            &[2],
+        )
+        .expect("two-parameter entrypoint compiles");
+        assert_eq!(entrypoint_parameters(&two, "merge"), ["older", "newer"]);
     }
 
     #[test]

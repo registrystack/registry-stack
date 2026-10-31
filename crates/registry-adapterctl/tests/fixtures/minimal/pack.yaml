@@ -1,0 +1,94 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1.0.0"
+testedVersions:
+  - "2.7"
+endpoints:
+  - id: case-api
+    component: http
+    authentication:
+      type: oauth2-client-credentials
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    operations:
+      - id: cases-read
+        idempotentUpstream: true
+      - id: cases-create
+        idempotentUpstream: true
+routeTemplates:
+  - id: fetch-page
+    parameters:
+      - name: record-type
+        type: string
+        required: true
+        description: The declared record type the page fetches.
+    steps:
+      - to:
+          uri: http:case-api
+          parameters:
+            httpMethod: GET
+            path: /api/cases/case
+      - setBody:
+          rhai:
+            file: scripts/map.rhai
+            entrypoint: map
+  - id: create-case
+    parameters:
+      - name: record-type
+        type: string
+        required: true
+        description: The declared record type the create serves.
+    steps:
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - to:
+                uri: http:case-api
+                parameters:
+                  httpMethod: POST
+                  path: /api/cases
+                  body:
+                    rhai:
+                      file: scripts/to-upstream.rhai
+                      entrypoint: to_upstream
+                  operation: cases-create
+            - setBody:
+                rhai:
+                  file: scripts/map.rhai
+                  entrypoint: map
+routes:
+  - id: shared-lookup
+    from:
+      uri: direct:shared-lookup
+    steps:
+      - convertBodyTo:
+          type: codeMap:gender-codes
+      - to:
+          uri: http:case-api
+          parameters:
+            httpMethod: GET
+            path: /api/cases/{{type}}
+            pathParameters:
+              type:
+                constant: case
+codeMaps:
+  - id: gender-codes
+    entries:
+      female: F
+scripts:
+  - path: scripts/map.rhai
+    digest: sha256:1204d7f1c5e52aa62787c44f9736a498b1e5f5b60d812b08f8d9d15132d9fa3e
+  - path: scripts/to-upstream.rhai
+    digest: sha256:5e190986630fc5a27a5da5b0c309a63bf1e1f15e4333af7b19669048e2fff04a
+queryFiles: []
+capabilities:
+  components:
+    - http
+  languages:
+    - rhai
+    - constant
+  eips:
+    - setBody
+    - to

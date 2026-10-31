@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.unknown-intercept: this artifact set must be refused with
+# exactly adapter.fixture.unknown-intercept. The intercept names an endpoint the pack does not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.unknown-intercept/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: adapter-fixture-unknown-intercept
+pack: case-api-pack
+upstreamVersion: "1.0"
+provenance:
+  type: documented
+  reference: https://case-api.example.invalid/docs
+intercepts:
+  # The suite declares the intercept its recorded exchange needs, so the
+  # member refuses for the unknown intercept alone and not for a send no
+  # intercept covers.
+  - type: endpoint
+    endpoint: cases
+  - type: endpoint
+    endpoint: nope
+entries:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case/case_1
+    upstream:
+      - request:
+          endpoint: cases
+          method: GET
+          path: /v2/cases/x/case_1
+        response:
+          status: 200
+          body: {}
+    expected:
+      type: response
+      status: 200
+      body:
+        case:
+          case_type: "personal"
+        fetchedAt: "2026-01-01T00:00:00Z"

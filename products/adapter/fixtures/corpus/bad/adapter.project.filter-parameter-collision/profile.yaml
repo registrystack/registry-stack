@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.filter-parameter-collision: this artifact set must be refused with
+# exactly adapter.project.filter-parameter-collision. Clean baseline profile; the search operation
+# names its page-size parameter `limit`, the same name the binding's filter declares.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.filter-parameter-collision/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases-find
+    method: GET
+    path: /v2/cases/{type}
+    pathParameters:
+      - type
+    recordTypeParameter: type
+    pagination:
+      cursorParameter: cursor
+      pageSizeParameter: limit
+      pageSizeMinimum: 1
+      pageSizeMaximum: 100
+    responseEnvelope: '{"cases": {{records}}}'
+problems:
+  - code: cases.upstream
+    status: 502
+    title: the source could not be reached
+    classes: [upstream, breaker.open, throttle.rejected, loop.maximum-iterations-reached]
+  - code: cases.mapping
+    status: 422
+    title: the request or its mapping was refused
+    classes: [validation, conversion.unmapped, aggregation.duplicate]
+  - code: cases.exhausted
+    status: 502
+    title: the run exhausted a budget
+    classes: [script, budget.exhausted]
+  - code: cases.boundary
+    status: 500
+    title: the facade refused the call
+    classes: [disclosure.violation, egress.refused, credential.rejected, outcome, facade]
+problemEnvelope: '{"family": "{{problemCode}}"}'

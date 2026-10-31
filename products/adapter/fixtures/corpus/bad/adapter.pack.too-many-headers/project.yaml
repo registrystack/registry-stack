@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.too-many-headers: this artifact set must be refused with
+# exactly adapter.pack.too-many-headers. The endpoint allowlists 33 request headers, one past
+# the transport's 32-name bound the runtime's filter build enforces.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.too-many-headers/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:38f4d41ac826ae8eeac400bb0371d628f5227094288d9bdb47515a40f3123d08
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:3dde8154d119580e3517d0cb621060f3ac18269a68d6f0b6c6942c98aa081164
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

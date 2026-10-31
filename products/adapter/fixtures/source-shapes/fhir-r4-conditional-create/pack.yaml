@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Experiment pack (not maintained): FHIR R4 conditional create of a
+# Patient, authored from the public FHIR R4 specification to test the
+# write rules (idempotentConsumer, one non-safe send, redelivery only
+# over an idempotentUpstream operation). See README.md beside this file.
+#
+# Idempotency basis for `fhir-transaction` (idempotentUpstream: true): the
+# one request entry carries `ifNoneExist: identifier=<system>|<value>`, so
+# the server applies conditional-create rules
+# (https://hl7.org/fhir/R4/http.html#ccreate): no match creates the
+# Patient, one match returns it without creating a second, several
+# matches fail with 412. Repeating the same transaction after a timeout
+# therefore lands on the same Patient. The claim holds only because the
+# condition travels in the body; the direct form
+# (`POST /Patient` with the `If-None-Exist` header) cannot be authored,
+# since the `to` step declares no request headers. The claim is also only
+# as good as the server's conditional-create support: a server without
+# it creates a duplicate.
+#
+# `fhir-read` is the follow-up read of the created Patient, since a
+# transaction-response entry carries `response.location` and, without the
+# `Prefer: return=representation` request header (also not authorable),
+# no resource.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: fhir-r4-conditional-create
+version: "1"
+testedVersions:
+  - "4.0.1"
+endpoints:
+  - id: fhir
+    component: http
+    authentication:
+      type: oauth2-client-credentials
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    responseHeaders:
+      - location
+      - etag
+    operations:
+      - id: fhir-transaction
+        idempotentUpstream: true
+      - id: fhir-read
+    testedVersions:
+      - "4.0.1"
+routeTemplates:
+  - id: create-patient
+    parameters:
+      - name: identifier_system
+        type: string
+        required: true
+        description: The identifier system URI the create is conditioned on.
+      - name: id
+        type: string
+        required: false
+        description: The patient identifier the read-back resolves from the request.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+          steps:
+            - setBody:
+                constant:
+                  title: The source did not answer in time.
+                  status: 503
+                  code: source.unavailable
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/is-multiple-match.rhai
+              entrypoint: is_multiple_match
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  title: More than one source record matches the identifier.
+                  status: 409
+                  code: source.write-rejected
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  title: The source refused the write.
+                  status: 409
+                  code: source.write-rejected
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.too-large
+            - script
+            - validation
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  title: The source answered something unusable.
+                  status: 502
+                  code: source.upstream-error
+            - stop: {}
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - setProperty:
+                name: fhirIdentifierSystem
+                value:
+                  constant: "{{identifier_system}}"
+            - to:
+                uri: http:fhir
+                parameters:
+                  httpMethod: POST
+                  path: /
+                  query:
+                    _format:
+                      constant: json
+                  body:
+                    rhai:
+                      file: scripts/to-transaction.rhai
+                      entrypoint: to_transaction
+                  operation: fhir-transaction
+            - setProperty:
+                name: fhirPatientId
+                value:
+                  rhai:
+                    file: scripts/created-id.rhai
+                    entrypoint: created_id
+            - to:
+                uri: http:fhir
+                parameters:
+                  httpMethod: GET
+                  path: /Patient/{{id}}
+                  pathParameters:
+                    id:
+                      exchangeProperty: fhirPatientId
+                  query:
+                    _format:
+                      constant: json
+                  operation: fhir-read
+            - setBody:
+                rhai:
+                  file: scripts/to-record.rhai
+                  entrypoint: to_record
+scripts:
+  - path: scripts/to-transaction.rhai
+    digest: sha256:850ef5e8907640da4481edfbc82a3f0b3ddbafa98d48873f8bbc5b19b58aa7d6
+  - path: scripts/created-id.rhai
+    digest: sha256:792f0a6362f8b5d0c34338b6572c3bb6577a5945bfc5d5be5852b9e92c856d76
+  - path: scripts/is-multiple-match.rhai
+    digest: sha256:eb6e0c34291a0ba6a566321471bf9b80325c5d16925361996267f28866b15619
+  - path: scripts/to-record.rhai
+    digest: sha256:757a85a5978eb7c2a1696cf1d3fdebfa585e09cdb4ea8afb52c875311b6c72a1
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - header
+    - exchangeProperty
+    - rhai
+  eips:
+    - idempotentConsumer
+    - onException
+    - setBody
+    - setHeader
+    - setProperty
+    - stop
+    - to

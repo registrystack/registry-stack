@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.response-schema: this artifact set must be refused with
+# exactly adapter.fixture.response-schema. The expected facade response's record violates the derived result schema (case_type typed integer, declared string).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.response-schema/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: adapter-fixture-response-schema
+pack: case-api-pack
+upstreamVersion: "1.0"
+provenance:
+  type: documented
+  reference: https://case-api.example.invalid/docs
+intercepts:
+  - type: endpoint
+    endpoint: cases
+entries:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case/case_1
+    upstream:
+      - request:
+          endpoint: cases
+          method: GET
+          path: /v2/cases/x/case_1
+        response:
+          status: 200
+          body: {}
+    expected:
+      type: response
+      status: 200
+      body:
+        case:
+          case_type: 42
+        fetchedAt: "2026-01-01T00:00:00Z"

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.map-parameter-misplaced: this artifact set must be refused with
+# exactly adapter.pack.map-parameter-misplaced. The template body places the map parameter {{labels}} inside longer text, where an object cannot be rendered.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.map-parameter-misplaced/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:e4a7296ac106032985ecc6174cbbb32c37d3b947094e0cd2f502de3335da0462
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:ee7e33c38b7e34c7b53a3d354e9ff049b866bcf3e4ec02426ffc2f8202acf0ef
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

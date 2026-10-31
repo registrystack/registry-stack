@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Experiment project: the breg-records records-create operation bound to
+# the FHIR conditional-create route.
+#
+# Upstream-call budget (worst-case rule): 2 sends (the transaction and the
+# read-back) x (1 + 1 redelivery) = 4, plus the single resend after a
+# refreshed 401 for the OAuth endpoint = 5; budget 6.
+#
+# Check with:
+#   adapterctl check products/adapter/fixtures/source-shapes/fhir-r4-conditional-create/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --runtime products/adapter/fixtures/source-shapes/fhir-r4-conditional-create/runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: fhir-r4-conditional-create-experiment
+  version: "1.0.0"
+profile:
+  id: breg-records
+  version: "1"
+  digest: sha256:b75f2c5e62d6be01f2311fe04e46b6b6a6a5629b6ff34a4a7136c608f6178d31
+pack:
+  id: fhir-r4-conditional-create
+  version: "1"
+  digest: sha256:bbc31e5a13945bbbce0333cc3e45a7dd2e02a7c6c66901bea59ca693320d92ed
+recordTypes:
+  - name: patient
+    fields:
+      - name: national_id
+        type: string
+        required: true
+      - name: family_name
+        type: string
+      - name: given_names
+        type: string
+      - name: birth_date
+        type: date
+      - name: gender
+        type: string
+templatedRoutes:
+  - routeTemplate: create-patient
+    routeId: patient-create
+    parameters:
+      identifier_system: https://id.example.invalid/national-id
+bindings:
+  - id: patient-create
+    operation: records-create
+    recordType: patient
+    route: patient-create
+    maximumUpstreamCalls: 6
+accessProfiles:
+  - id: patient-writer
+    scopes:
+      - records.write
+    operations:
+      - records-create
+    recordTypes:
+      - patient
+parameterizedParts:
+  registryIdentifier: fhir-r4-conditional-create-registry
+  datasetIdentifier: records

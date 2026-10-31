@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 /// Build reference data for the supported Registry Stack command lines.
 pub fn catalog() -> Catalog {
     let mut binaries = vec![
+        command_reference(registry_adapter::cli::command(), None, None),
+        command_reference(registry_adapterctl::command(), None, None),
         command_reference(registry_coordinator::service::command(), None, None),
         command_reference(registry_coordinator::cli::command(), None, None),
         command_reference(registry_evidence::command(), None, None),
@@ -151,6 +153,8 @@ mod tests {
                 .map(|command| command.name.as_str())
                 .collect::<Vec<_>>(),
             [
+                "adapter",
+                "adapterctl",
                 "breg",
                 "breg-mcp",
                 "breg-review",

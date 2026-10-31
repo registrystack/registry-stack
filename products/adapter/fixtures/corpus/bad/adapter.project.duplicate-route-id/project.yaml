@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.duplicate-route-id: this artifact set must be refused with
+# exactly adapter.project.duplicate-route-id. The instantiated route id collides with the pack route template find-cases.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.duplicate-route-id/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:33784bd8bbdc5ea0aea1cba617f5b09437f7c3a006f588e7bd3cd5e081d46bfb
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:821c6787be8fd5891b963ad5f284ddb6239b6a1dabbe1f847444ad3ccf3ea226
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: find-cases
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: find-cases
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

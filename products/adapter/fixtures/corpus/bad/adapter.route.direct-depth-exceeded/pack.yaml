@@ -1,0 +1,161 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.direct-depth-exceeded: this artifact set must be refused with
+# exactly adapter.route.direct-depth-exceeded. Clean baseline pack; another artifact carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.direct-depth-exceeded/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+              filter[region]:
+                constant: west
+routes:
+  - id: chain01
+    from:
+      uri: direct:chain01
+    steps:
+      - enrich:
+          uri: direct:chain02
+  - id: chain02
+    from:
+      uri: direct:chain02
+    steps:
+      - enrich:
+          uri: direct:chain03
+  - id: chain03
+    from:
+      uri: direct:chain03
+    steps:
+      - enrich:
+          uri: direct:chain04
+  - id: chain04
+    from:
+      uri: direct:chain04
+    steps:
+      - enrich:
+          uri: direct:chain05
+  - id: chain05
+    from:
+      uri: direct:chain05
+    steps:
+      - enrich:
+          uri: direct:chain06
+  - id: chain06
+    from:
+      uri: direct:chain06
+    steps:
+      - enrich:
+          uri: direct:chain07
+  - id: chain07
+    from:
+      uri: direct:chain07
+    steps:
+      - enrich:
+          uri: direct:chain08
+  - id: chain08
+    from:
+      uri: direct:chain08
+    steps:
+      - enrich:
+          uri: direct:chain09
+  - id: chain09
+    from:
+      uri: direct:chain09
+    steps:
+      - enrich:
+          uri: direct:chain10
+  - id: chain10
+    from:
+      uri: direct:chain10
+    steps:
+      - enrich:
+          uri: direct:chain11
+  - id: chain11
+    from:
+      uri: direct:chain11
+    steps:
+      - enrich:
+          uri: direct:chain12
+  - id: chain12
+    from:
+      uri: direct:chain12
+    steps:
+      - enrich:
+          uri: direct:chain13
+  - id: chain13
+    from:
+      uri: direct:chain13
+    steps:
+      - enrich:
+          uri: direct:chain14
+  - id: chain14
+    from:
+      uri: direct:chain14
+    steps:
+      - enrich:
+          uri: direct:chain15
+  - id: chain15
+    from:
+      uri: direct:chain15
+    steps:
+      - enrich:
+          uri: direct:chain16
+  - id: chain16
+    from:
+      uri: direct:chain16
+    steps:
+      - enrich:
+          uri: direct:chain17
+  - id: chain17
+    from:
+      uri: direct:chain17
+    steps:
+      - enrich:
+          uri: direct:chain18
+  - id: chain18
+    from:
+      uri: direct:chain18
+    steps:
+      - setBody:
+          constant: "{}"
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+  eips:
+    - enrich

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus control workspace (base): adapterctl check must pass
+# with zero findings. The project is the clean baseline.
+#
+# Verify with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/base/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:0b4ad5c9239626c442ad5f9af71bcf152bf94580c675e97fd22968b0c5cc68ad
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:767af1e2819c23f50bb361a56a3f9ead28c8c03f2559c2adb579441d9207d93a
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

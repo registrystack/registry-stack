@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.unknown-operation: this artifact set must be refused with
+# exactly adapter.fixture.unknown-operation. The entry names an operation the profile does not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.unknown-operation/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: adapter-fixture-unknown-operation
+pack: case-api-pack
+upstreamVersion: "1.0"
+provenance:
+  type: documented
+  reference: https://case-api.example.invalid/docs
+intercepts:
+  - type: endpoint
+    endpoint: cases
+entries:
+  - facadeRequest:
+      operation: nope
+      path: /v2/cases/case/case_1
+    upstream:
+      - request:
+          endpoint: cases
+          method: GET
+          path: /v2/cases/x/case_1
+        response:
+          status: 200
+          body: {}
+    expected:
+      type: response
+      status: 200
+      body:
+        case:
+          case_type: "personal"
+        fetchedAt: "2026-01-01T00:00:00Z"

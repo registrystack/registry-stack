@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): a server error on the write path.
+# DHIS2 writes every error body in its consistent web API envelope
+# (httpStatus, httpStatusCode, status, message; DHIS2 documentation,
+# "Introduction", Error and info messages); the exact body of an
+# uncaught exception is unsettled, and no 500 was observed in the
+# 2026-10-30 capture (the capture proves the report-shaped 409 rejection;
+# the WebMessage routing stays documentation-derived). What this fixture
+# pins is the routing: a WebMessage error carries status ERROR but no
+# validationReport member, so the import route's rejection predicate does
+# not match and the failure propagates as upstream.http instead of the
+# refused-write problem. The facade request is a documented reconstruction,
+# not a captured Adapter request.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-import-server-error
+pack: dhis2-tracker
+upstreamVersion: "2.43"
+provenance:
+  type: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-243/introduction.html
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-create
+      path: /v1/records/person
+      headers:
+        idempotency-key: fixture-import-server-error
+      body:
+        data:
+          recordIdentifier: Uid00000006
+          domainData:
+            tracked_entity_type: person
+            org_unit: OqVpUaAYv2B
+    upstream:
+      - request:
+          endpoint: tracker
+          method: POST
+          path: /api/tracker
+          query: async=false
+          body:
+            trackedEntities:
+              - trackedEntity: Uid00000006
+                trackedEntityType: person
+                orgUnit: OqVpUaAYv2B
+                attributes: []
+        response:
+          status: 500
+          body:
+            httpStatus: Internal Server Error
+            httpStatusCode: 500
+            status: ERROR
+            message: An unexpected error occurred while processing the request.
+    expected:
+      type: problem
+      class: upstream.http
+      code: source.upstream-error

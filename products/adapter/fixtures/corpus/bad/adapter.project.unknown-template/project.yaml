@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.unknown-template: this artifact set must be refused with
+# exactly adapter.project.unknown-template. The orphan instantiation references no declared route template; the bound instantiation stays valid so only this finding fires.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.unknown-template/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:a6c4568f5923756e33c1df4f2b57e4653b84d94b23bf4671a1e244bc548db5b2
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:605bbfdf93e5f7b97e5d7a3f386e05e0fdf075a10d74e5bf03991d735cea2120
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: no-such-template
+    routeId: orphan-route
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

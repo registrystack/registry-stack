@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.empty-upstream: this artifact set must be refused with
+# exactly adapter.fixture.empty-upstream. The entry records no upstream exchange, so a
+# replay of it would hang on a send nothing answers.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.empty-upstream/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: adapter-fixture-empty-upstream
+pack: case-api-pack
+upstreamVersion: "1.0"
+provenance:
+  type: documented
+  reference: https://case-api.example.invalid/docs
+intercepts:
+  - type: endpoint
+    endpoint: cases
+entries:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case/case_1
+    upstream: []
+    expected:
+      type: response
+      status: 200
+      body:
+        case:
+          case_type: "personal"
+        fetchedAt: "2026-01-01T00:00:00Z"

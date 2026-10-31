@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Experiment project: the case-api profile's cases-find and cases-get bound
+# to the GraphQL case pack.
+#
+# Upstream-call budget (worst-case rule): each route makes 1 send x (1 + 1
+# redelivery) = 2; a static API key has no token refresh; budget 2.
+#
+# Check with:
+#   adapterctl check products/adapter/fixtures/source-shapes/graphql-cursor-source/project.yaml \
+#     --profile products/adapter/profiles/case-api/profile.yaml \
+#     --runtime products/adapter/fixtures/source-shapes/graphql-cursor-source/runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: graphql-cases-experiment
+  version: "1.0.0"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:e1ba35ee720649d6435dc2d634ad2212586a576b4bad796e587e0012418531c9
+pack:
+  id: graphql-cases
+  version: "1"
+  digest: sha256:bb68fcbe3eacc685127a9601ff8739650edff143e0b1453bd62a5d0dd6a51212
+recordTypes:
+  - name: benefit_case
+    fields:
+      - name: status
+        type: string
+        required: true
+      - name: opened_on
+        type: date
+      - name: programme
+        type: string
+      - name: applicant_national_id
+        type: string
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: benefit-case-find
+    parameters:
+      case_type: BENEFIT
+  - routeTemplate: get-case
+    routeId: benefit-case-get
+bindings:
+  - id: benefit-case-find
+    operation: cases-find
+    recordType: benefit_case
+    route: benefit-case-find
+    filters:
+      - status
+    maximumUpstreamCalls: 2
+  - id: benefit-case-get
+    operation: cases-get
+    recordType: benefit_case
+    route: benefit-case-get
+    maximumUpstreamCalls: 2
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-find
+      - cases-get
+    recordTypes:
+      - benefit_case

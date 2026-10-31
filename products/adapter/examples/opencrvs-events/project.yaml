@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# The opencrvs-events example deployment, DRAFT: the breg-records facade
+# profile bound to the opencrvs-events pack over one declared record type,
+# birth, read only. A caller reads OpenCRVS birth registrations through the
+# same two operations it uses for the dhis2-tracker example
+# (records-get and records-search); only the pack differs. No real OpenCRVS
+# system has been reached (the available credentials were rejected), so
+# every fixture beside this project is synthetic and `documented`; see the
+# pack header for the verified state.
+#
+# Declaration mapping is this project's decision, because OpenCRVS
+# declarations are configured per deployment. The `declaration_fields`
+# route parameter below is a map from the record field a declaration leaf
+# lands in to the declaration key it is read from; the two
+# parent-reference leaves are
+# the ones the Evidence reference's fixture project reads (mother and
+# father personReference), here as synthetic stand-ins. A deployment
+# replaces them with its own configured keys and declares the matching
+# record fields. A mapped field the record type does not declare is
+# refused at result validation.
+#
+# Upstream-call budgets, under the worst-case rule (route body plus the
+# widest exception-clause body; every send counts one plus the widest
+# declared maximumRedeliveries; token requests are bounded separately and
+# sit outside the budget, CONCEPT 10.2):
+#   - birth-search: 1 send x (1 + 1 redelivery) = 2; budget 4 (the check refused a budget of 2).
+#   - birth-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4 (the check refused a budget of 2).
+#
+# This folder holds only the project. The profile and pack its pins name are
+# the maintained artifacts (products/adapter/profiles/breg-records/profile.yaml
+# and products/adapter/packs/opencrvs-events/pack.yaml with its scripts/); the
+# project does not say where they live, so every command takes them with
+# --profile and --pack, run from the repository root. The pinned id, version
+# and digest are the guarantee: a file that does not match them refuses.
+#   target/debug/adapterctl check products/adapter/examples/opencrvs-events/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/opencrvs-events/pack.yaml
+#
+# The fixtures live in products/adapter/fixtures/opencrvs-events/. They are
+# hand-derived from OpenCRVS documentation, marked synthetic, and nothing has
+# run against a real OpenCRVS:
+#   target/debug/adapterctl fixtures replay \
+#     products/adapter/examples/opencrvs-events/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/opencrvs-events/pack.yaml \
+#     --fixtures products/adapter/fixtures/opencrvs-events/get-found.yaml \
+#     (and each other file in that directory)
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: opencrvs-events-example
+  version: "1.0.0"
+profile:
+  id: breg-records
+  version: "1"
+  digest: sha256:b75f2c5e62d6be01f2311fe04e46b6b6a6a5629b6ff34a4a7136c608f6178d31
+pack:
+  id: opencrvs-events
+  version: "1"
+  digest: sha256:89730445d04cbcf537a20bc64e2cd4dd8dc06ce2b922ac055d2a779f20ddfab1
+recordTypes:
+  - name: birth
+    fields:
+      - name: event_id
+        type: string
+        required: true
+      - name: tracking_id
+        type: string
+        required: true
+      - name: status
+        type: string
+        required: true
+      - name: event_type
+        type: string
+        required: true
+      - name: date_of_event
+        type: date
+      - name: mother_reference
+        type: string
+      - name: father_reference
+        type: string
+templatedRoutes:
+  - routeTemplate: search-events
+    routeId: birth-search
+    parameters:
+      event_type: birth
+      declaration_fields:
+        mother_reference: mother.personReference
+        father_reference: father.personReference
+  - routeTemplate: fetch-event
+    routeId: birth-fetch
+    parameters:
+      event_type: birth
+      declaration_fields:
+        mother_reference: mother.personReference
+        father_reference: father.personReference
+bindings:
+  - id: birth-search
+    operation: records-search
+    recordType: birth
+    route: birth-search
+    maximumUpstreamCalls: 4
+  - id: birth-get
+    operation: records-get
+    recordType: birth
+    route: birth-fetch
+    maximumUpstreamCalls: 4
+# records-create, records-update, and records-patch are not bound: writes
+# are out of scope for this example.
+accessProfiles:
+  - id: records-reader
+    scopes:
+      - records.read
+    operations:
+      - records-search
+      - records-get
+    recordTypes:
+      - birth
+parameterizedParts:
+  registryIdentifier: opencrvs-events-registry
+  datasetIdentifier: births

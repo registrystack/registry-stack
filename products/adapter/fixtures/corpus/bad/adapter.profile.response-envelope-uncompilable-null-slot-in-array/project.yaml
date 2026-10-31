@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.response-envelope-uncompilable-null-slot-in-array: this artifact set must be refused with
+# exactly adapter.profile.response-envelope-uncompilable. The response envelope places a null slot as an array item, where only an object member can be absent or null.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.response-envelope-uncompilable-null-slot-in-array/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:4a52fe3a8b639fa91d69bde0e9a1586f09444cebee0b2a0b7f89970e6f25e5d4
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:1ab59d029870a0a6f4334c6f9ebbeebf42ae46333a076ae8a33739dfeb8f16de
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

@@ -1,0 +1,25 @@
+# Relay cursor connection over cases of one type
+# (https://relay.dev/graphql/connections.htm). Documented shape, not a
+# captured schema: `cases` is a Connection, `first`/`after` are the forward
+# pagination arguments, and `pageInfo { hasNextPage endCursor }` is the
+# connection's PageInfo.
+query FindCases($caseType: String!, $first: Int!, $after: String, $status: CaseStatus) {
+  cases(caseType: $caseType, first: $first, after: $after, status: $status) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    edges {
+      node {
+        id
+        version
+        status
+        openedOn
+        programme
+        applicant {
+          nationalId
+        }
+      }
+    }
+  }
+}

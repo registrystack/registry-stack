@@ -22,6 +22,8 @@ const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
 export const schemaVersion = 'registry.cli-reference/v2';
 export const expectedBinaries = [
+  'adapter',
+  'adapterctl',
   'breg',
   'breg-mcp',
   'breg-review',
@@ -78,6 +80,7 @@ const groups = [
   { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },
   { title: 'Registry Manifest', binaries: ['manifest'] },
   { title: 'Registry Render', binaries: ['registry-render'] },
+  { title: 'Registry Adapter', binaries: ['adapter', 'adapterctl'], product: 'registry-adapter' },
 ];
 
 function exactKeys(value, expected, label) {

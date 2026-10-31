@@ -1,0 +1,19 @@
+# Bad-corpus member adapter.route.reserved-property-name: a conversion reads an engine-owned property.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints: []
+routeTemplates:
+  - id: find-cases
+    parameters: []
+    steps:
+      - convertPropertyTo:
+          type: codeMap:statuses
+          name: AdapterFilters
+codeMaps:
+  - id: statuses
+    entries:
+      active: ACTIVE
+capabilities: {}

@@ -1,0 +1,18 @@
+# Bad-corpus member adapter.pack.code-map-unreferenced: no conversion names the map.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints: []
+routeTemplates:
+  - id: find-cases
+    parameters: []
+    steps:
+      - setBody:
+          constant: {}
+codeMaps:
+  - id: statuses
+    entries:
+      active: ACTIVE
+capabilities: {}

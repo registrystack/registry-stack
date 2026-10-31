@@ -518,17 +518,65 @@ class CatalogGeneratorTest(unittest.TestCase):
 class RepositoryCatalogSourceTest(unittest.TestCase):
     """The repository's own catalog source, read as it is committed."""
 
-    def test_external_adapter_profile_fixture_has_one_exact_reference_exclusion(self) -> None:
+    def test_adapter_schemas_have_an_active_catalog_owner(self) -> None:
+        repo_root = SCRIPT.parents[3]
+        source = generate.load_source_config(
+            repo_root / "products/identifiers/contracts/catalog-source.json"
+        )
+        entries = generate.schema_entries(
+            repo_root,
+            source["schemaSources"],
+            generate.repository_files(repo_root),
+            source["referenceExclusions"],
+        )
+        for name in (
+            "effective-contract",
+            "fixture",
+            "pack",
+            "profile",
+            "project",
+            "runtime",
+        ):
+            with self.subTest(schema=name):
+                identifier = (
+                    f"{generate.BASE_URL}/schemas/adapter/{name}/{name}.v1alpha1.schema.json"
+                )
+                matching = [entry for entry in entries if entry["uri"] == identifier]
+                self.assertEqual(len(matching), 1)
+                self.assertEqual(matching[0]["owner"], "adapter")
+                self.assertEqual(matching[0]["compatibilityLine"], "v1alpha1")
+                self.assertEqual(
+                    matching[0]["source"]["path"],
+                    "crates/registry-adapterctl/src/schemas.rs",
+                )
+                self.assertEqual(
+                    matching[0]["artifact"]["path"],
+                    f"products/adapter/schemas/{name}.v1alpha1.schema.json",
+                )
+
+    def test_adapter_profile_fixture_needs_no_reference_exclusion(self) -> None:
         source = generate.load_source_config(
             SCRIPT.parents[3] / "products/identifiers/contracts/catalog-source.json"
         )
         path = "crates/registry-mcp/tests/fixtures/adapter/optional-pagination/profile.yaml"
-        uri = f"{generate.BASE_URL}/schemas/adapter/profile/profile.v1alpha1.schema.json"
-        matches = [entry for entry in source["referenceExclusions"] if entry.get("path") == path]
+        self.assertEqual(
+            [entry for entry in source["referenceExclusions"] if entry.get("path") == path],
+            [],
+        )
+
+    def test_adapter_problem_namespace_has_one_exact_reference_exclusion(self) -> None:
+        source = generate.load_source_config(
+            SCRIPT.parents[3] / "products/identifiers/contracts/catalog-source.json"
+        )
+        uri = f"{generate.BASE_URL}/problems/registry-adapter/"
+        matches = [
+            entry for entry in source["referenceExclusions"] if entry.get("uri") == uri
+        ]
         self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0]["uri"], uri)
-        self.assertEqual(matches[0]["classification"], "fixture")
+        self.assertEqual(matches[0]["path"], "crates/registry-adapter-core/src/naming.rs")
+        self.assertEqual(matches[0]["classification"], "planned-resolution")
         self.assertNotIn("glob", matches[0])
+
     def test_configurable_mcp_schema_has_an_active_catalog_owner(self) -> None:
         repo_root = SCRIPT.parents[3]
         source = generate.load_source_config(

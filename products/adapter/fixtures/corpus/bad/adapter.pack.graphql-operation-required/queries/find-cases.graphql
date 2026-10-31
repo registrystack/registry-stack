@@ -1,0 +1,5 @@
+query FetchCases {
+  cases {
+    case_type
+  }
+}

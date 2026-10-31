@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# The `adapterctl verify --live` pack: one basic-auth http endpoint and
+# one route template whose send is filled from constants and the
+# instantiation's `page-size` parameter alone.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: verify-pack
+version: "1.0.0"
+testedVersions:
+  - "2.7"
+endpoints:
+  - id: verify-source
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    operations:
+      - id: cases-search
+        idempotentUpstream: true
+routeTemplates:
+  - id: find-page
+    parameters:
+      - name: kind
+        type: string
+        required: false
+        description: The record kind the path asks for; the send's own constant fills it.
+      - name: page-size
+        type: string
+        required: true
+        description: The page size the probe asks the upstream for.
+    steps:
+      - to:
+          uri: http:verify-source
+          parameters:
+            httpMethod: GET
+            path: /api/cases/{{kind}}
+            pathParameters:
+              kind:
+                constant: case
+            query:
+              includeClosed:
+                constant: false
+              pageSize:
+                constant: "{{page-size}}"
+routes: []
+codeMaps: []
+scripts: []
+queryFiles: []
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+  eips:
+    - to
