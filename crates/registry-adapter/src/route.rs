@@ -2276,7 +2276,10 @@ mod credential_order_tests {
         std::sync::Arc::new(BTreeMap::new())
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test parses an inline YAML literal to build its input; it reads no operator configuration"
+    )]
     fn runtime_config(base_url: &str, key_env: &str) -> AdapterRuntimeConfig {
         serde_norway::from_str(&format!(
             r#"
@@ -2304,7 +2307,10 @@ audit:
         .expect("the runtime config parses")
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test parses an inline YAML literal to build its input; it reads no operator configuration"
+    )]
     fn pack_endpoint() -> Endpoint {
         serde_norway::from_str(
             r#"

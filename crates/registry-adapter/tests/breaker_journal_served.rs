@@ -11,7 +11,10 @@ use serde_json::{json, Value};
 use served_harness::upstream::{Response, UpstreamDouble};
 use served_harness::{copy_example_project, digest_of, Served};
 
-#[allow(clippy::disallowed_methods)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test reads a committed example, pack or fixture to build its input; it reads no operator configuration"
+)]
 fn install_one_call_breaker(directory: &std::path::Path) {
     let pack_path = directory.join("pack.yaml");
     let pack = std::fs::read_to_string(&pack_path).expect("the pack is readable");

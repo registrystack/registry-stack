@@ -2083,7 +2083,10 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/adapter/examples/dhis2-tracker/project.yaml");
         let text = std::fs::read_to_string(path).expect("the example project reads");
-        #[allow(clippy::disallowed_methods)]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the test reads a committed example, pack or fixture to build its input; it reads no operator configuration"
+        )]
         let mut value: Value = serde_norway::from_str(&text).expect("the example project parses");
         for profile in value["accessProfiles"].as_array_mut().expect("profiles") {
             profile["scopes"] = scopes.clone();

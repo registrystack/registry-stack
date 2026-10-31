@@ -129,7 +129,10 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    #[allow(clippy::disallowed_methods)]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test reads a committed example, pack or fixture to build its input; it reads no operator configuration"
+    )]
     pub fn load(scenario: Scenario) -> Self {
         let text = std::fs::read_to_string(scenario.fixture_path())
             .expect("read the committed experiment fixture");

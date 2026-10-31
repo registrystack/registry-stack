@@ -18,7 +18,10 @@ fn pack_path() -> PathBuf {
         .join("../../products/adapter/packs/dhis2-tracker/pack.yaml")
 }
 
-#[allow(clippy::disallowed_methods)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test reads a committed example, pack or fixture to build its input; it reads no operator configuration"
+)]
 fn scripts() -> ScriptSet {
     let text = std::fs::read_to_string(pack_path()).expect("the pack is readable");
     let mut document: Value = serde_norway::from_str(&text).expect("the pack is YAML");

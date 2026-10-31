@@ -43,7 +43,10 @@ static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
 
 /// The committed fixture directory for the DHIS2 Tracker pack. A fixture is
 /// test data, not configuration, so it is read without a config envelope.
-#[allow(clippy::disallowed_methods)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test reads a committed example, pack or fixture to build its input; it reads no operator configuration"
+)]
 pub fn fixture(name: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/adapter/fixtures/dhis2-tracker")
