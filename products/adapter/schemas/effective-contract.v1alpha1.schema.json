@@ -358,6 +358,15 @@
             "unknown"
           ]
         },
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH"
+          ],
+          "type": "string"
+        },
         "operationId": {
           "$ref": "#/$defs/nonEmptyText"
         },

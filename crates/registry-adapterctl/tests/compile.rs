@@ -444,8 +444,18 @@ fn the_maintained_example_compiles_under_breg_records() {
     assert_contract_pin(&create["parameters"]);
     assert_eq!(
         create["requestBody"]["content"]["application/json"]["schema"]["properties"]["data"]
-            ["properties"]["org_unit"],
+            ["properties"]["domainData"]["properties"]["org_unit"],
         json!({"type": "string"})
+    );
+    assert_eq!(
+        create["requestBody"]["content"]["application/json"]["schema"]["properties"]["data"]
+            ["properties"]["recordIdentifier"],
+        json!({"type": "string"})
+    );
+    assert_eq!(
+        create["requestBody"]["content"]["application/json"]["schema"]["properties"]["data"]
+            ["required"],
+        json!(["domainData", "recordIdentifier"])
     );
     assert_eq!(create["requestBody"]["required"], json!(true));
     // records-create declares successStatus 201 (BReg parity): the write
@@ -457,12 +467,19 @@ fn the_maintained_example_compiles_under_breg_records() {
     );
     assert!(create["responses"].get("200").is_none());
 
-    // records-update and records-patch are unbound: no path carries them.
+    let update = &document["paths"]["/v1/records/person/{record_id}"]["put"];
+    assert_eq!(update["operationId"], "records-update.person");
+    assert_eq!(
+        update["requestBody"]["content"]["application/json"]["schema"],
+        create["requestBody"]["content"]["application/json"]["schema"]
+    );
+
+    // Partial update remains unbound and unserved.
     for (path, item) in paths {
         for method in item.as_object().unwrap().keys() {
             let id = item[method]["operationId"].as_str().unwrap();
             assert!(
-                !id.starts_with("records-update.") && !id.starts_with("records-patch."),
+                !id.starts_with("records-patch."),
                 "{path} {method} carries an unbound operation"
             );
         }

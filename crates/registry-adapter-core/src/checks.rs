@@ -1223,6 +1223,49 @@ fn request_envelope_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Di
             "Place the record slot where the writable record sits in the body.",
         ));
     }
+    let path = format!("{prefix}/requestEnvelope");
+    let mut record_slots = 0_u8;
+    let mut record_id_slots = 0_u8;
+    for (name, form) in envelope_placeholders(request_envelope.text()) {
+        match name.as_str() {
+            SLOT_RECORD => {
+                record_slots = record_slots.saturating_add(1);
+                if form != crate::envelope::SlotForm::Required {
+                    findings.push(finding(
+                        CheckCode::ProfileUnknownSlot,
+                        &path,
+                        "the write request record slot is optional or nullable",
+                        "Declare one required {{record}} slot in the write request envelope.",
+                    ));
+                }
+            }
+            "recordId" => {
+                record_id_slots = record_id_slots.saturating_add(1);
+                if form == crate::envelope::SlotForm::Null {
+                    findings.push(finding(
+                        CheckCode::ProfileUnknownSlot,
+                        &path,
+                        "the write request recordId slot is nullable",
+                        "Declare recordId as {{recordId}} or {{?recordId}}.",
+                    ));
+                }
+            }
+            _ => findings.push(finding(
+                CheckCode::ProfileUnknownSlot,
+                &path,
+                "the request envelope of a write names a slot the caller's body does not fill",
+                "Use one record slot and, when the body carries identity, one recordId slot.",
+            )),
+        }
+    }
+    if record_slots > 1 || record_id_slots > 1 {
+        findings.push(finding(
+            CheckCode::ProfileUnknownSlot,
+            &path,
+            "the write request envelope repeats a caller-filled slot",
+            "Declare record and recordId at most once each.",
+        ));
+    }
     findings
 }
 
@@ -6078,7 +6121,9 @@ mod tests {
             record_type_parameter: local("type"),
             record_id_parameter: None,
             success_status: BoundedU32::new(200).expect("status"),
-            request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
+            request_envelope: Some(EnvelopeTemplate(
+                r#"{"target": "{{?recordId}}", "input": {{record}}}"#.to_string(),
+            )),
             response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
             item_envelope: None,
             read_only: false,
@@ -6086,6 +6131,15 @@ mod tests {
             pagination: None,
         }]);
         assert_clean(check_profile(&good));
+
+        let mut unsupported = good.operations[0].clone();
+        unsupported.request_envelope = Some(EnvelopeTemplate(
+            r#"{"trace": "{{requestId}}", "input": {{record}}}"#.to_string(),
+        ));
+        assert_has(
+            &check_profile(&profile_builder(vec![unsupported])),
+            CheckCode::ProfileUnknownSlot,
+        );
     }
 
     #[test]

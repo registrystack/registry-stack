@@ -7,7 +7,7 @@ use std::fs;
 use std::process::Command;
 
 use registry_adapter::effective_contract::{
-    DIGEST_DOMAIN, PIN_PROBLEM_CODE, UNAVAILABLE_PROBLEM_CODE,
+    schema as effective_contract_schema, DIGEST_DOMAIN, PIN_PROBLEM_CODE, UNAVAILABLE_PROBLEM_CODE,
 };
 use registry_adapter_core::{
     ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
@@ -185,6 +185,27 @@ fn empty_version_artifacts(
     (project_directory, profile_path, pack_path)
 }
 
+fn project_with_native_update(scratch: &std::path::Path) -> std::path::PathBuf {
+    let source = repo_root().join("products/adapter/examples/dhis2-tracker/project.yaml");
+    let mut project = read_yaml_value(&source, &PROJECT_FORMAT);
+    let binding = project["bindings"]
+        .as_array_mut()
+        .expect("project bindings")
+        .iter_mut()
+        .find(|binding| binding["id"] == "person-create")
+        .expect("create binding");
+    binding["id"] = Value::String("person-update".to_owned());
+    binding["operation"] = Value::String("records-update".to_owned());
+    let directory = scratch.join("project");
+    fs::create_dir(&directory).expect("create update project directory");
+    fs::write(
+        directory.join("project.yaml"),
+        serde_norway::to_string(&project).expect("encode update project"),
+    )
+    .expect("write update project");
+    directory
+}
+
 #[test]
 fn export_contains_only_effectively_served_reads_and_names_unserved_writes() {
     let contract = export("dhis2-tracker", "breg-records");
@@ -288,6 +309,145 @@ fn export_contains_only_effectively_served_reads_and_names_unserved_writes() {
             "contract leaked {forbidden}"
         );
     }
+}
+
+#[test]
+fn native_put_is_schema_valid_unserved_gateway_metadata() {
+    let scratch = tempfile::tempdir().expect("scratch directory");
+    let root = repo_root();
+    let project = project_with_native_update(scratch.path());
+    let export = export_paths(
+        &project,
+        &root.join("products/adapter/profiles/breg-records/profile.yaml"),
+        &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
+    );
+
+    let update = export["contract"]["unserved"]
+        .as_array()
+        .expect("unserved operations")
+        .iter()
+        .find(|operation| operation["operationId"] == "records-update.person")
+        .expect("the native update remains outside the gateway surface");
+    assert_eq!(update["method"], "PUT");
+    assert_eq!(update["effect"], "write");
+    assert_eq!(update["support"], "unserved");
+    assert_eq!(
+        update["reasonCode"],
+        "adapter.operation.gateway-write-disabled"
+    );
+    assert!(
+        export["contract"]["operations"]
+            .as_array()
+            .expect("served gateway operations")
+            .iter()
+            .all(|operation| operation["effect"] == "read"),
+        "native PUT cannot enter the gateway's served operation surface"
+    );
+
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&effective_contract_schema())
+        .expect("runtime effective-contract schema compiles");
+    assert!(
+        validator.is_valid(&export),
+        "the native PUT metadata is inside the runtime's closed wire schema"
+    );
+}
+
+#[test]
+fn native_write_202_exports_as_unsupported_until_async_recovery_exists() {
+    let scratch = tempfile::tempdir().expect("scratch directory");
+    let root = repo_root();
+    let source_profile = root.join("products/adapter/profiles/breg-records/profile.yaml");
+    let mut profile = read_yaml_value(&source_profile, &PROFILE_FORMAT);
+    let update = profile["operations"]
+        .as_array_mut()
+        .expect("profile operations")
+        .iter_mut()
+        .find(|operation| operation["id"] == "records-update")
+        .expect("update operation");
+    update["successStatus"] = serde_json::json!(202);
+    let profile_document = serde_norway::to_string(&profile).expect("encode async profile");
+    let profile_path = scratch.path().join("profile.yaml");
+    fs::write(&profile_path, &profile_document).expect("write async profile");
+
+    let project_directory = project_with_native_update(scratch.path());
+    let project_path = project_directory.join("project.yaml");
+    let mut project = read_yaml_value(&project_path, &PROJECT_FORMAT);
+    project["profile"]["digest"] = Value::String(sha256_uri(profile_document.as_bytes()));
+    fs::write(
+        &project_path,
+        serde_norway::to_string(&project).expect("encode async project"),
+    )
+    .expect("write async project");
+
+    let export = export_paths(
+        &project_directory,
+        &profile_path,
+        &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
+    );
+    let update = export["contract"]["unserved"]
+        .as_array()
+        .expect("unserved operations")
+        .iter()
+        .find(|operation| operation["operationId"] == "records-update.person")
+        .expect("the asynchronous update is unserved");
+    assert_eq!(update["method"], "PUT");
+    assert_eq!(
+        update["reasonCode"],
+        "adapter.operation.write-async-unsupported"
+    );
+    assert!(export["contract"]["operations"]
+        .as_array()
+        .expect("served operations")
+        .iter()
+        .all(|operation| operation["effect"] == "read"));
+}
+
+#[test]
+fn read_only_post_202_remains_a_served_read() {
+    let scratch = tempfile::tempdir().expect("scratch directory");
+    let root = repo_root();
+    let source_profile = root.join("products/adapter/profiles/govstack-consultation/profile.yaml");
+    let mut profile = read_yaml_value(&source_profile, &PROFILE_FORMAT);
+    let search = profile["operations"]
+        .as_array_mut()
+        .expect("profile operations")
+        .iter_mut()
+        .find(|operation| operation["id"] == "records-search")
+        .expect("read-only POST search operation");
+    assert_eq!(search["method"], "POST");
+    assert_eq!(search["readOnly"], true);
+    search["successStatus"] = serde_json::json!(202);
+    let profile_document = serde_norway::to_string(&profile).expect("encode read profile");
+    let profile_path = scratch.path().join("profile.yaml");
+    fs::write(&profile_path, &profile_document).expect("write read profile");
+
+    let source_project = root.join("products/adapter/examples/dhis2-govstack/project.yaml");
+    let mut project = read_yaml_value(&source_project, &PROJECT_FORMAT);
+    project["profile"]["digest"] = Value::String(sha256_uri(profile_document.as_bytes()));
+    let project_directory = scratch.path().join("project");
+    fs::create_dir(&project_directory).expect("create read project directory");
+    fs::write(
+        project_directory.join("project.yaml"),
+        serde_norway::to_string(&project).expect("encode read project"),
+    )
+    .expect("write read project");
+
+    let export = export_paths(
+        &project_directory,
+        &profile_path,
+        &root.join("products/adapter/packs/dhis2-tracker/pack.yaml"),
+    );
+    let search = export["contract"]["operations"]
+        .as_array()
+        .expect("served operations")
+        .iter()
+        .find(|operation| operation["id"] == "records-search.persons")
+        .expect("the read-only POST remains served");
+    assert_eq!(search["method"], "POST");
+    assert_eq!(search["effect"], "read");
+    assert_eq!(search["successStatus"], 202);
 }
 
 #[test]

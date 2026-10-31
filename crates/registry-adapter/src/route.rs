@@ -1780,6 +1780,11 @@ impl Run<'_, '_> {
                         at: SystemTime::now(),
                         detail: sent,
                     });
+                    if reply.status == 202
+                        && self.exchange.mark_unsupported_incomplete_write().await?
+                    {
+                        return Err(RouteFailure::of(ErrorClass::UpstreamHttp));
+                    }
                     let message = &mut self.exchange.message;
                     message.body = reply.body;
                     message.set_header("CamelHttpResponseCode", json!(reply.status));

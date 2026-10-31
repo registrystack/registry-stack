@@ -490,25 +490,25 @@ async fn a_post_write_binding_is_served_with_its_configured_success_status() {
 }
 
 #[tokio::test]
-async fn a_put_write_binding_is_left_unserved_with_a_named_reason() {
+async fn a_patch_write_binding_is_left_unserved_with_a_named_reason() {
     let upstream = UpstreamDouble::start();
     let directory = tempfile::tempdir().expect("a scratch directory");
     copy_example_project(directory.path());
     replace_profile_text(
         directory.path(),
         "  - id: records-create\n    method: POST\n",
-        "  - id: records-create\n    method: PUT\n",
+        "  - id: records-create\n    method: PATCH\n",
     );
     let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
 
     let token = served.token("records.write");
     let (status, _, _) = served.request(
-        "POST",
+        "PATCH",
         "/v1/records/person",
         Some(&token),
         &[
             ("Content-Type", "application/json"),
-            ("Idempotency-Key", "unsupported-put-create"),
+            ("Idempotency-Key", "unsupported-patch-create"),
         ],
         br#"{"data":{}}"#,
     );
@@ -518,8 +518,8 @@ async fn a_put_write_binding_is_left_unserved_with_a_named_reason() {
     assert!(
         stderr.contains("binding not served")
             && stderr.contains("adapter.operation.method-unsupported")
-            && stderr.contains("write facade operation is served as POST only"),
-        "the unserved PUT binding is named: {stderr}"
+            && stderr.contains("write facade operation is served only as POST or PUT"),
+        "the unserved PATCH binding is named: {stderr}"
     );
     assert_eq!(upstream.request_count(), 0);
 }

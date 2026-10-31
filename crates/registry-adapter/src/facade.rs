@@ -19,13 +19,13 @@ use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, RawQuery};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, MethodRouter};
+use axum::routing::{get, post, put, MethodRouter};
 use axum::Router;
 use deadpool_postgres::Pool;
 use registry_adapter_core::{
     decode_slot, fixed_facade_problem_response, parse_envelope_template, problem_data_schema,
     resolve_problem, validate_result_schema, AdapterProfile, AdapterProject, ErrorClass,
-    HttpMethod, MAX_PROBLEM_DATA_BYTES, SLOT_PROBLEM_DATA, SLOT_RECORD,
+    HttpMethod, SlotForm, MAX_PROBLEM_DATA_BYTES, SLOT_PROBLEM_DATA, SLOT_RECORD,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -119,16 +119,22 @@ pub fn router(state: Arc<FacadeState>) -> Router {
                 }
             };
             let method = state.loaded.served[index].method;
-            allowed.push(if method == HttpMethod::Post {
-                "POST"
-            } else {
-                "GET"
+            allowed.push(match method {
+                HttpMethod::Get => "GET",
+                HttpMethod::Post => "POST",
+                HttpMethod::Put => "PUT",
+                HttpMethod::Patch => unreachable!("the loader refuses PATCH facade operations"),
             });
             routes = Some(match (routes.take(), method) {
                 (None, HttpMethod::Post) => post(handler),
-                (None, _) => get(handler),
+                (None, HttpMethod::Put) => put(handler),
+                (None, HttpMethod::Get) => get(handler),
                 (Some(existing), HttpMethod::Post) => existing.post(handler),
-                (Some(existing), _) => existing.get(handler),
+                (Some(existing), HttpMethod::Put) => existing.put(handler),
+                (Some(existing), HttpMethod::Get) => existing.get(handler),
+                (_, HttpMethod::Patch) => {
+                    unreachable!("the loader refuses PATCH facade operations")
+                }
             });
         }
         let Some(routes) = routes else { continue };
@@ -352,7 +358,7 @@ async fn answer(
 
     let mut inputs = RequestInputs::default();
     let mut write_request: Option<(Value, Vec<u8>)> = None;
-    if operation.method == HttpMethod::Post {
+    if matches!(operation.method, HttpMethod::Post | HttpMethod::Put) {
         if !has_json_content_type(headers) {
             return refuse_call(
                 state,
@@ -387,7 +393,7 @@ async fn answer(
                 &caller,
                 &record_type,
                 &request_id,
-                Refusal::invalid_request("a read over POST takes no query parameters"),
+                Refusal::invalid_request("a body-bearing operation takes no query parameters"),
             )
             .await;
         }
@@ -426,8 +432,19 @@ async fn answer(
                     &request_id,
                 );
             };
-            match capture_write_record(template.text(), &parsed) {
-                Ok(record) => write_request = Some((record, bytes.to_vec())),
+            match capture_write_record(template.text(), &parsed).and_then(|captured| {
+                validate_write_record(operation, &captured, &record_id)?;
+                Ok(captured)
+            }) {
+                Ok(captured) => {
+                    if let Some(captured_id) = captured.record_id {
+                        if !names_record_id {
+                            names_record_id = true;
+                            record_id = captured_id;
+                        }
+                    }
+                    write_request = Some((captured.record, bytes.to_vec()));
+                }
                 Err(refusal) => {
                     return refuse_request(
                         state,
@@ -684,11 +701,17 @@ async fn answer(
     // journal never records `exchangeCompleted` for an exchange whose body
     // the facade then failed to seal or render.
     let rendered = match write_resolution.clone() {
-        WriteResolution::Replay(response) => {
-            events.push((journal_event("exchangeCompleted", None), SystemTime::now()));
+        WriteResolution::Replay { outcome, response } => {
+            let event = match outcome {
+                TerminalOutcome::Completed => "exchangeCompleted",
+                TerminalOutcome::Failed => "exchangeFailed",
+            };
+            events.push((journal_event(event, None), SystemTime::now()));
             Finished::Replay(response)
         }
-        WriteResolution::Conflict | WriteResolution::ResponseExpired => {
+        WriteResolution::Conflict
+        | WriteResolution::ResponseExpired
+        | WriteResolution::UnsupportedIncomplete => {
             events.push((
                 journal_event(
                     "exchangeFailed",
@@ -831,13 +854,16 @@ async fn answer(
             warn_exchange_failed(class, status);
             (
                 facade_problem(profile, class, status, &record_type, &request_id),
-                None,
+                Some(TerminalOutcome::Failed),
             )
         }
     };
-    let pending_write = matches!(write_resolution, WriteResolution::Pending)
-        .then_some(())
-        .and(write_execution.as_ref());
+    let pending_write = matches!(
+        write_resolution,
+        WriteResolution::Pending | WriteResolution::UnsupportedIncomplete
+    )
+    .then_some(())
+    .and(write_execution.as_ref());
     let (response, stored) = match pending_write {
         Some(_) => match prepare_write_response(response, &request_id).await {
             Ok(prepared) => prepared,
@@ -1053,11 +1079,17 @@ fn disclosed_record(body: &Value, schema: &Value) -> Result<Value, usize> {
 }
 
 /// [`disclosed_record`] and the source's record identifier, when the route's
-/// record was wrapped beside one. An identifier that is not a string is a
+/// record was wrapped beside one. The body is checked as raw declared domain
+/// data first, so a declared domain field named `recordIdentifier` keeps its
+/// ordinary meaning. Only a body that fails that schema may be interpreted as
+/// the normalized route wrapper. An identifier that is not a string is a
 /// disclosure violation.
 fn disclosed_parts(body: &Value, schema: &Value) -> Result<(Value, Option<String>), usize> {
-    let mut identifier = None;
-    let record = match body {
+    let direct_violations = registry_adapter_core::validate_result_schema(body, schema);
+    if direct_violations.is_empty() {
+        return Ok((body.clone(), None));
+    }
+    let (record, identifier) = match body {
         Value::Object(map) if map.contains_key("recordIdentifier") => {
             let wrapper_shaped = map.len() <= RECORD_WRAPPER_MEMBERS.len()
                 && map
@@ -1065,13 +1097,12 @@ fn disclosed_parts(body: &Value, schema: &Value) -> Result<(Value, Option<String
                     .all(|key| RECORD_WRAPPER_MEMBERS.contains(&key.as_str()));
             match (map.get("domainData"), map.get("recordIdentifier")) {
                 (Some(domain), Some(Value::String(id))) if wrapper_shaped => {
-                    identifier = Some(id.clone());
-                    domain
+                    (domain, Some(id.clone()))
                 }
                 _ => return Err(1),
             }
         }
-        other => other,
+        _ => return Err(direct_violations.len()),
     };
     let violations = registry_adapter_core::validate_result_schema(record, schema);
     if violations.is_empty() {
@@ -1424,53 +1455,123 @@ fn write_request_digest(
     digest.finalize().into()
 }
 
-/// Read the one `{{record}}` slot from a write request envelope while
-/// enforcing its complete literal and structural shape. No caller member
-/// outside the declared template enters the exchange.
-fn capture_write_record(template: &str, body: &Value) -> Result<Value, Refusal> {
+/// The caller-filled values an authored write request envelope may carry.
+pub(crate) struct CapturedWriteRequest {
+    pub(crate) record: Value,
+    pub(crate) record_id: Option<String>,
+}
+
+/// Read the required `{{record}}` and optional authored `{{recordId}}` slot
+/// from a write request envelope while enforcing its complete literal and
+/// structural shape. No caller member outside the declared template enters
+/// the exchange.
+pub(crate) fn capture_write_record(
+    template: &str,
+    body: &Value,
+) -> Result<CapturedWriteRequest, Refusal> {
     let parsed = parse_envelope_template(template)
         .map_err(|_| Refusal::invalid_request("the write request envelope is invalid"))?;
     let mut record = None;
-    match_write_node(&parsed, body, &mut record)?;
-    record.ok_or_else(|| Refusal::invalid_request("the write request carries no record"))
+    let mut record_id = None;
+    match_write_node(&parsed, body, &mut record, &mut record_id)?;
+    let record =
+        record.ok_or_else(|| Refusal::invalid_request("the write request carries no record"))?;
+    Ok(CapturedWriteRequest { record, record_id })
+}
+
+/// Check the extracted raw domain record and separately authored identity
+/// before either can enter the exchange. A path-bound operation and a body
+/// identity must name the same record. The request digest still binds the
+/// path independently when the profile carries no body identity.
+pub(crate) fn validate_write_record(
+    operation: &ServedOperation,
+    captured: &CapturedWriteRequest,
+    path_record_id: &str,
+) -> Result<(), Refusal> {
+    let violations = validate_result_schema(&captured.record, &operation.record_schema);
+    if !violations.is_empty() {
+        return Err(Refusal::invalid_field(
+            "the write record does not match its declared schema",
+        ));
+    }
+    if captured
+        .record_id
+        .as_deref()
+        .is_some_and(|identifier| !is_path_segment_value(identifier))
+    {
+        return Err(Refusal::invalid_field(
+            "the write record identifier is not one path segment",
+        ));
+    }
+    if operation.record_id_parameter.is_some()
+        && captured
+            .record_id
+            .as_deref()
+            .is_some_and(|identifier| identifier != path_record_id)
+    {
+        return Err(Refusal::invalid_field(
+            "the write record identifier does not match the request path",
+        ));
+    }
+    Ok(())
 }
 
 fn match_write_node(
     template: &Value,
     body: &Value,
     record: &mut Option<Value>,
+    record_id: &mut Option<String>,
 ) -> Result<(), Refusal> {
     if let Value::String(text) = template {
         if let Some((name, _form)) = decode_slot(text) {
-            if name != SLOT_RECORD || record.is_some() {
-                return Err(Refusal::invalid_request(
-                    "the write request envelope carries an unsupported slot",
-                ));
+            match name {
+                SLOT_RECORD if record.is_none() => {
+                    *record = Some(body.clone());
+                    return Ok(());
+                }
+                "recordId" if record_id.is_none() => {
+                    let Some(identifier) = body.as_str() else {
+                        return Err(Refusal::invalid_field(
+                            "the write record identifier is not a string",
+                        ));
+                    };
+                    *record_id = Some(identifier.to_owned());
+                    return Ok(());
+                }
+                _ => {
+                    return Err(Refusal::invalid_request(
+                        "the write request envelope carries an unsupported or repeated slot",
+                    ));
+                }
             }
-            *record = Some(body.clone());
-            return Ok(());
         }
     }
     match (template, body) {
         (Value::Object(template), Value::Object(body)) => {
-            if body.len() != template.len() || body.keys().any(|key| !template.contains_key(key)) {
+            if body.keys().any(|key| !template.contains_key(key)) {
                 return Err(Refusal::invalid_request(
                     "the write request object differs from the declared shape",
                 ));
             }
             for (key, child) in template {
                 let Some(value) = body.get(key) else {
+                    if matches!(
+                        child.as_str().and_then(decode_slot),
+                        Some((_, SlotForm::Optional))
+                    ) {
+                        continue;
+                    }
                     return Err(Refusal::invalid_request(
                         "the write request is missing a declared member",
                     ));
                 };
-                match_write_node(child, value, record)?;
+                match_write_node(child, value, record, record_id)?;
             }
             Ok(())
         }
         (Value::Array(template), Value::Array(body)) if template.len() == body.len() => {
             for (child, value) in template.iter().zip(body) {
-                match_write_node(child, value, record)?;
+                match_write_node(child, value, record, record_id)?;
             }
             Ok(())
         }
@@ -1751,7 +1852,7 @@ pub fn route_problem(
 
 /// A facade-level problem whose HTTP status the failure fixes (401, 403,
 /// 404 and the like), filled into the profile's problem for the class.
-fn facade_problem(
+pub(crate) fn facade_problem(
     profile: Problems<'_>,
     class: ErrorClass,
     status: StatusCode,
@@ -2070,11 +2171,30 @@ mod tests {
 
     #[test]
     fn a_wrapper_with_an_extra_member_or_no_domain_data_is_refused() {
-        let schema = json!({ "type": "object" });
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        });
         let extra = json!({ "recordIdentifier": "r1", "domainData": {}, "internal": "x" });
         assert!(disclosed_record(&extra, &schema).is_err());
         let bare = json!({ "recordIdentifier": "r1", "name": "A" });
         assert!(disclosed_record(&bare, &schema).is_err());
+    }
+
+    #[test]
+    fn a_declared_domain_field_named_record_identifier_stays_raw_domain_data() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "recordIdentifier"],
+            "properties": {
+                "name": {"type": "string"},
+                "recordIdentifier": {"type": "string"}
+            }
+        });
+        let record = json!({"name": "Ada", "recordIdentifier": "domain-value"});
+        assert_eq!(disclosed_record(&record, &schema), Ok(record));
     }
 
     #[test]
@@ -2112,7 +2232,8 @@ mod tests {
         let Ok(captured) = capture_write_record(template, &body) else {
             panic!("declared write body must be captured");
         };
-        assert_eq!(captured, record);
+        assert_eq!(captured.record, record);
+        assert_eq!(captured.record_id, None);
         assert!(capture_write_record(
             template,
             &json!({ "kind": "person", "payload": {}, "extra": true })
@@ -2120,6 +2241,77 @@ mod tests {
         .is_err());
         assert!(
             capture_write_record(template, &json!({ "kind": "other", "payload": {} })).is_err()
+        );
+
+        let identity_template = r#"{"command":{"target":"{{recordId}}","payload":{{record}}}}"#;
+        let Ok(captured) = capture_write_record(
+            identity_template,
+            &json!({
+                "command": {
+                    "target": "person-1",
+                    "payload": {"name": "Ada", "recordIdentifier": "domain-value"}
+                }
+            }),
+        ) else {
+            panic!("the profile-owned identity field must be captured separately");
+        };
+        assert_eq!(captured.record_id.as_deref(), Some("person-1"));
+        assert_eq!(
+            captured.record,
+            json!({"name": "Ada", "recordIdentifier": "domain-value"})
+        );
+
+        let optional_identity = r#"{"command":{"target":"{{?recordId}}","payload":{{record}}}}"#;
+        let Ok(captured) = capture_write_record(
+            optional_identity,
+            &json!({"command": {"payload": {"name": "Ada"}}}),
+        ) else {
+            panic!("an omitted optional body identity must leave path identity in control");
+        };
+        assert_eq!(captured.record_id, None);
+        assert_eq!(captured.record, json!({"name": "Ada"}));
+    }
+
+    #[test]
+    fn a_write_record_is_schema_checked_and_cannot_disagree_with_its_path() {
+        let mut operation = served("records-update", "person");
+        operation.record_id_parameter = Some("record_id".to_owned());
+        operation.record_schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "recordIdentifier"],
+            "properties": {
+                "name": {"type": "string"},
+                "recordIdentifier": {"type": "string"}
+            }
+        });
+
+        let record = json!({"name": "Ada", "recordIdentifier": "domain-value"});
+        let matching = CapturedWriteRequest {
+            record: record.clone(),
+            record_id: Some("person-1".to_owned()),
+        };
+        assert!(validate_write_record(&operation, &matching, "person-1").is_ok());
+
+        let mismatched = CapturedWriteRequest {
+            record: record.clone(),
+            record_id: Some("person-2".to_owned()),
+        };
+        assert!(validate_write_record(&operation, &mismatched, "person-1").is_err());
+
+        let undeclared = CapturedWriteRequest {
+            record: json!({"name": "Ada", "recordIdentifier": "domain-value", "private": true}),
+            record_id: Some("person-1".to_owned()),
+        };
+        assert!(validate_write_record(&operation, &undeclared, "person-1").is_err());
+
+        let path_only = CapturedWriteRequest {
+            record,
+            record_id: None,
+        };
+        assert!(
+            validate_write_record(&operation, &path_only, "person-1").is_ok(),
+            "a profile may place the path identity outside its domain record body"
         );
     }
 

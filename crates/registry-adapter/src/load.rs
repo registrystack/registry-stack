@@ -65,6 +65,7 @@ pub(crate) enum UnservedReason {
     ProfileOperationMissing,
     ReservedFacadePath,
     MethodUnsupported,
+    WriteAsyncUnsupported,
     RequestBodyUnsupported,
     RequestEnvelopeMissing,
     PaginationDeclarationMissing,
@@ -88,6 +89,7 @@ impl UnservedReason {
             Self::ProfileOperationMissing => "adapter.operation.profile-operation-missing",
             Self::ReservedFacadePath => "adapter.operation.reserved-facade-path",
             Self::MethodUnsupported => "adapter.operation.method-unsupported",
+            Self::WriteAsyncUnsupported => "adapter.operation.write-async-unsupported",
             Self::RequestBodyUnsupported => "adapter.operation.request-body-unsupported",
             Self::RequestEnvelopeMissing => "adapter.operation.request-envelope-missing",
             Self::PaginationDeclarationMissing => {
@@ -767,10 +769,21 @@ fn compile_binding(
             "a read facade operation is served only as GET or a readOnly POST",
         ));
     }
-    if !is_read && operation.method != registry_adapter_core::HttpMethod::Post {
+    if !is_read
+        && !matches!(
+            operation.method,
+            registry_adapter_core::HttpMethod::Post | registry_adapter_core::HttpMethod::Put
+        )
+    {
         return Err(not_served(
             UnservedReason::MethodUnsupported,
-            "a write facade operation is served as POST only in this slice",
+            "a write facade operation is served only as POST or PUT in this slice",
+        ));
+    }
+    if !is_read && operation.success_status.get() == 202 {
+        return Err(not_served(
+            UnservedReason::WriteAsyncUnsupported,
+            "a write successStatus of 202 is not served before asynchronous completion recovery is implemented",
         ));
     }
     if operation.method == registry_adapter_core::HttpMethod::Get

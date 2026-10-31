@@ -19,10 +19,10 @@ use served_harness::upstream::{Response, UpstreamDouble};
 use served_harness::{capture, Served};
 
 const CREATE_RESPONSE_ENVELOPE: &str = r#"    successStatus: 201
-    requestEnvelope: '{"data": {{record}}}'
+    requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
     responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'"#;
 const CREATE_RESPONSE_WITH_REQUEST_ID: &str = r#"    successStatus: 201
-    requestEnvelope: '{"data": {{record}}}'
+    requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
     responseEnvelope: '{"data": {{record}}, "requestId": "{{requestId}}", "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'"#;
 const PROBLEM_ENVELOPE: &str = r#"problemEnvelope: '{"title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}", "data": {{?problemData}}}'"#;
 const PROBLEM_WITH_REQUEST_ID: &str = r#"problemEnvelope: '{"title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}", "data": {{?problemData}}, "requestId": "{{requestId}}"}'"#;

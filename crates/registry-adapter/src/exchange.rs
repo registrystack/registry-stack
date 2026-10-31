@@ -205,6 +205,25 @@ impl Exchange {
         }
     }
 
+    /// Make an actual upstream 202 irreversible for a served write before
+    /// route-level handlers can normalize its body. Offline write replay
+    /// mirrors the private marker; an exchange with no write capability is a
+    /// read and remains unaffected.
+    pub(crate) async fn mark_unsupported_incomplete_write(&self) -> Result<bool, RouteFailure> {
+        match (&self.write_execution, &self.replay_write) {
+            (Some(context), None) => {
+                context.mark_unsupported_incomplete().await?;
+                Ok(true)
+            }
+            (None, Some(context)) => {
+                context.mark_unsupported_incomplete().await?;
+                Ok(true)
+            }
+            (None, None) => Ok(false),
+            (Some(_), Some(_)) => Err(RouteFailure::of(ErrorClass::Facade)),
+        }
+    }
+
     /// Apply Camel's `removeOnFailure` only if no non-safe effect may have
     /// happened. Once the effect marker is durable, the key stays spent and
     /// the facade records the terminal problem instead.
@@ -268,10 +287,14 @@ pub(crate) enum WriteClaim {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WriteResolution {
     Pending,
-    Replay(StoredResponse),
+    Replay {
+        outcome: TerminalOutcome,
+        response: StoredResponse,
+    },
     Conflict,
     Mismatch,
     ResponseExpired,
+    UnsupportedIncomplete,
     Released,
     Finished,
 }
@@ -282,10 +305,16 @@ enum WriteState {
         execution: Option<Execution>,
         effect_marked: bool,
     },
-    Replay(StoredResponse),
+    Replay {
+        outcome: TerminalOutcome,
+        response: StoredResponse,
+    },
     Conflict,
     Mismatch,
     ResponseExpired,
+    UnsupportedIncomplete {
+        execution: Option<Execution>,
+    },
     Released,
     Finished,
 }
@@ -338,8 +367,8 @@ impl WriteExecutionContext {
                 };
                 Ok(WriteClaim::Execute)
             }
-            Claim::Replay { response, .. } => {
-                *state = WriteState::Replay(response);
+            Claim::Replay { outcome, response } => {
+                *state = WriteState::Replay { outcome, response };
                 Ok(WriteClaim::Stop)
             }
             Claim::InFlight | Claim::EffectUnknown => {
@@ -403,13 +432,42 @@ impl WriteExecutionContext {
         Ok(())
     }
 
+    async fn mark_unsupported_incomplete(&self) -> Result<(), RouteFailure> {
+        let mut state = self.state.lock().await;
+        let WriteState::Executing {
+            execution,
+            effect_marked,
+        } = &mut *state
+        else {
+            return Err(RouteFailure::of(ErrorClass::Facade));
+        };
+        if !*effect_marked {
+            let Some(execution) = execution.as_mut() else {
+                return Err(RouteFailure::of(ErrorClass::Facade));
+            };
+            self.store
+                .mark_effect_attempted(execution, SystemTime::now())
+                .await
+                .map_err(idempotency_failure)?;
+            *effect_marked = true;
+        }
+        *state = WriteState::UnsupportedIncomplete {
+            execution: execution.take(),
+        };
+        Ok(())
+    }
+
     pub(crate) async fn resolution(&self) -> WriteResolution {
         match &*self.state.lock().await {
             WriteState::Ready | WriteState::Executing { .. } => WriteResolution::Pending,
-            WriteState::Replay(response) => WriteResolution::Replay(response.clone()),
+            WriteState::Replay { outcome, response } => WriteResolution::Replay {
+                outcome: *outcome,
+                response: response.clone(),
+            },
             WriteState::Conflict => WriteResolution::Conflict,
             WriteState::Mismatch => WriteResolution::Mismatch,
             WriteState::ResponseExpired => WriteResolution::ResponseExpired,
+            WriteState::UnsupportedIncomplete { .. } => WriteResolution::UnsupportedIncomplete,
             WriteState::Released => WriteResolution::Released,
             WriteState::Finished => WriteResolution::Finished,
         }
@@ -424,8 +482,10 @@ impl WriteExecutionContext {
         response: StoredResponse,
     ) -> Result<(), IdempotencyError> {
         let mut state = self.state.lock().await;
-        let WriteState::Executing { execution, .. } = &mut *state else {
-            return Err(IdempotencyError::StateConflict);
+        let execution = match &mut *state {
+            WriteState::Executing { execution, .. }
+            | WriteState::UnsupportedIncomplete { execution } => execution,
+            _ => return Err(IdempotencyError::StateConflict),
         };
         let execution = execution.take().ok_or(IdempotencyError::StateConflict)?;
         self.store

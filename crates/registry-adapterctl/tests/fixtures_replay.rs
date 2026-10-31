@@ -99,6 +99,23 @@ fn edited_tree(edit: fn(&str) -> String) -> (tempfile::TempDir, String) {
     (root, project)
 }
 
+fn edited_tree_with_pack(
+    edit_pack: fn(&str) -> String,
+    edit_fixture: fn(&str) -> String,
+) -> (tempfile::TempDir, String) {
+    let root = tempfile::tempdir().unwrap();
+    let copy = root.path().join("project");
+    copy_fs(&minimal_dir(), &copy);
+    let pack = copy.join("pack.yaml");
+    let text = std::fs::read_to_string(&pack).unwrap();
+    std::fs::write(&pack, edit_pack(&text)).unwrap();
+    let fixture = copy.join("fixtures/records.yaml");
+    let text = std::fs::read_to_string(&fixture).unwrap();
+    std::fs::write(&fixture, edit_fixture(&text)).unwrap();
+    let project = copy.join("project.yaml").to_str().unwrap().to_owned();
+    (root, project)
+}
+
 /// The codes one refusal carries, in report order.
 fn codes(report: &Value) -> Vec<&str> {
     report["diagnostics"]
@@ -134,6 +151,38 @@ fn the_minimal_suite_replays_against_its_compiled_contract() {
         .to_string()
         .contains("MUST_NOT_LEAK_FROM_DISCLOSURE_PROBLEM"));
     assert!(!String::from_utf8_lossy(&stderr).contains("MUST_NOT_LEAK_FROM_DISCLOSURE_PROBLEM"));
+}
+
+#[test]
+fn an_upstream_202_write_stays_a_conflict_when_a_handler_maps_a_valid_record() {
+    let (_root, project) = edited_tree_with_pack(
+        |text| {
+            text.replacen(
+                "    steps:\n      - idempotentConsumer:\n",
+                "    steps:\n      - onException:\n          exception:\n            - upstream.http\n          steps:\n            - setBody:\n                rhai:\n                  file: scripts/map.rhai\n                  entrypoint: map\n      - idempotentConsumer:\n",
+                1,
+            )
+            .replacen(
+                "  eips:\n    - setBody\n",
+                "  eips:\n    - onException\n    - setBody\n",
+                1,
+            )
+        },
+        |text| {
+            text.replacen(
+                "        response:\n          status: 201\n          body:\n            id: \"456\"\n    expected:\n      type: response\n      status: 201\n      headers:\n        cache-control: no-store\n        content-type: application/json\n      body:\n        record:\n          national_id: \"456\"\n",
+                "        response:\n          status: 202\n          body:\n            id: \"456\"\n    expected:\n      type: problem\n      class: facade.conflict\n      code: cases.boundary\n",
+                1,
+            )
+        },
+    );
+    let (lock_exit, lock_report, _) = run_json(&["project", "lock", &project]);
+    assert_eq!(lock_exit, ExitCode::SUCCESS, "{lock_report}");
+
+    let (exit, report, stderr) = run_json(&["fixtures", "replay", &project]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["drive"], "completed");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
 }
 
 /// The human form says the actual engine completed the offline drive.

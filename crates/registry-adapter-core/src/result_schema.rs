@@ -1480,8 +1480,9 @@ mod tests {
         let write_profile = profile(r#"{"cases": {{records}}}"#);
         let mut operations: Vec<ProfileOperation> =
             write_profile.operations.iter().cloned().collect();
-        operations[0].request_envelope =
-            Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string()));
+        operations[0].request_envelope = Some(EnvelopeTemplate(
+            r#"{"command": {"target": "{{recordId}}", "input": {{record}}}}"#.to_string(),
+        ));
         let write_profile = AdapterProfile {
             operations: UniqueIdList::new(operations).expect("unique"),
             ..write_profile
@@ -1490,7 +1491,14 @@ mod tests {
         let binding: Binding = deployment.bindings.iter().next().expect("bound").clone();
         let schema =
             derive_operation_request_schema(&write_profile, &deployment, &binding).expect("derive");
-        assert_eq!(schema["properties"]["input"]["required"], json!(["id"]));
+        assert_eq!(
+            schema["properties"]["command"]["properties"]["input"]["required"],
+            json!(["id"])
+        );
+        assert_eq!(
+            schema["properties"]["command"]["properties"]["target"],
+            json!({"type": "string"})
+        );
         let read_profile = profile(r#"{"cases": {{records}}}"#);
         assert!(
             derive_operation_request_schema(&read_profile, &deployment, &binding).is_err(),

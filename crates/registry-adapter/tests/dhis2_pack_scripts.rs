@@ -81,12 +81,12 @@ fn update_exchange(body: Value, map: Value, record_id: &str) -> Value {
     })
 }
 
-fn create_exchange(body: Value, map: Value) -> Value {
+fn create_exchange(body: Value, map: Value, record_id: &str) -> Value {
     json!({
         "body": body,
         "headers": {
             "idempotency-key": "create-person-1",
-            "recordid": "",
+            "recordid": record_id,
             "recordtype": "person"
         },
         "properties": {"dhis2AttributeMap": map}
@@ -121,21 +121,18 @@ fn one_project_owned_map_controls_both_read_directions_and_the_write_bundle() {
     assert_eq!(page[0]["domainData"], record["domainData"]);
 
     let submitted = json!({
-        "recordIdentifier": "EeBJ3Sn9uLg",
-        "domainData": {
-            "tracked_entity_type": "cQWYtUfH6Vx",
-            "org_unit": "slSrf7H9lMf",
-            "given_name": "Ada",
-            "clinic_code": "clinic-7",
-            "unmapped_sensitive": "REQUEST-SENSITIVE-CANARY"
-        }
+        "tracked_entity_type": "cQWYtUfH6Vx",
+        "org_unit": "slSrf7H9lMf",
+        "given_name": "Ada",
+        "clinic_code": "clinic-7",
+        "unmapped_sensitive": "REQUEST-SENSITIVE-CANARY"
     });
     let bundle = set
         .call(
             &empty_code_maps(),
             "scripts/to-bundle.rhai",
             "to_bundle",
-            &create_exchange(submitted, map),
+            &create_exchange(submitted, map, "EeBJ3Sn9uLg"),
         )
         .expect("to_bundle runs");
     assert_eq!(
@@ -170,42 +167,38 @@ fn the_empty_default_preserves_the_existing_base_record_and_writes_no_attributes
     );
 
     let submitted = json!({
-        "recordIdentifier": "EeBJ3Sn9uLg",
-        "domainData": {
-            "tracked_entity_type": "cQWYtUfH6Vx",
-            "org_unit": "slSrf7H9lMf"
-        }
+        "tracked_entity_type": "cQWYtUfH6Vx",
+        "org_unit": "slSrf7H9lMf"
     });
     let bundle = set
         .call(
             &empty_code_maps(),
             "scripts/to-bundle.rhai",
             "to_bundle",
-            &create_exchange(submitted, json!({})),
+            &create_exchange(submitted, json!({}), "EeBJ3Sn9uLg"),
         )
         .expect("to_bundle runs");
     assert_eq!(bundle["trackedEntities"][0]["attributes"], json!([]));
 }
 
 #[test]
-fn an_update_binds_the_source_uid_to_the_validated_path_identifier() {
+fn an_update_binds_the_source_uid_to_the_validated_record_id_header() {
     let set = scripts();
     let submitted = json!({
-        "recordIdentifier": "different-body-id",
-        "domainData": {
-            "tracked_entity_type": "cQWYtUfH6Vx",
-            "org_unit": "slSrf7H9lMf"
-        }
+        "tracked_entity_type": "cQWYtUfH6Vx",
+        "org_unit": "slSrf7H9lMf"
     });
-    let mismatched = set.call(
-        &empty_code_maps(),
-        "scripts/to-bundle.rhai",
-        "to_bundle",
-        &update_exchange(submitted, json!({}), "path-owned-id"),
-    );
-    assert!(
-        mismatched.is_err(),
-        "a request body cannot retarget the path-bound update"
+    let bundle = set
+        .call(
+            &empty_code_maps(),
+            "scripts/to-bundle.rhai",
+            "to_bundle",
+            &update_exchange(submitted, json!({}), "path-owned-id"),
+        )
+        .expect("the facade-validated update runs");
+    assert_eq!(
+        bundle["trackedEntities"][0]["trackedEntity"],
+        "path-owned-id"
     );
 }
 

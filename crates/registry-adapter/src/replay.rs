@@ -15,9 +15,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
 use registry_adapter_core::{
-    answer_send, decode_slot, parse_envelope_template, AdapterFixture, AdapterPack, AdapterProfile,
-    AdapterProject, ErrorClass, HttpMethod, RecordedExchange, RecordedHeaders, RecordedResponse,
-    ReplayMismatch, Send, SLOT_RECORD,
+    answer_send, AdapterFixture, AdapterPack, AdapterProfile, AdapterProject, ErrorClass,
+    HttpMethod, RecordedExchange, RecordedHeaders, RecordedResponse, ReplayMismatch, Send,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::Value;
@@ -65,6 +64,7 @@ pub(crate) fn test_write_capability() -> ReplayWriteCapability {
 enum ReplayWriteState {
     Ready,
     Claimed { effect_started: bool },
+    UnsupportedIncomplete,
     Released,
 }
 
@@ -118,16 +118,32 @@ impl ReplayWriteContext {
             ReplayWriteState::Claimed {
                 effect_started: true,
             } => Ok(()),
-            ReplayWriteState::Ready | ReplayWriteState::Released => {
-                Err(RouteFailure::of(ErrorClass::Facade))
-            }
+            ReplayWriteState::Ready
+            | ReplayWriteState::UnsupportedIncomplete
+            | ReplayWriteState::Released => Err(RouteFailure::of(ErrorClass::Facade)),
         }
+    }
+
+    pub(crate) async fn mark_unsupported_incomplete(&self) -> Result<(), RouteFailure> {
+        let mut state = self.state.lock().await;
+        let ReplayWriteState::Claimed { effect_started } = &mut *state else {
+            return Err(RouteFailure::of(ErrorClass::Facade));
+        };
+        *effect_started = true;
+        *state = ReplayWriteState::UnsupportedIncomplete;
+        Ok(())
+    }
+
+    pub(crate) async fn is_unsupported_incomplete(&self) -> bool {
+        *self.state.lock().await == ReplayWriteState::UnsupportedIncomplete
     }
 
     pub(crate) async fn was_claimed(&self) -> bool {
         matches!(
             *self.state.lock().await,
-            ReplayWriteState::Claimed { .. } | ReplayWriteState::Released
+            ReplayWriteState::Claimed { .. }
+                | ReplayWriteState::UnsupportedIncomplete
+                | ReplayWriteState::Released
         )
     }
 }
@@ -498,7 +514,7 @@ pub async fn run(
     let mut page_size = None;
     let mut request_cursor = None;
     let mut write_record = None;
-    if operation.method == HttpMethod::Post {
+    if matches!(operation.method, HttpMethod::Post | HttpMethod::Put) {
         let body = entry
             .facade_request
             .body
@@ -510,7 +526,14 @@ pub async fn run(
                 .request_envelope
                 .as_ref()
                 .ok_or(ReplayRunFailure::Request)?;
-            write_record = Some(capture_write_record(template.text(), body)?);
+            let captured = crate::facade::capture_write_record(template.text(), body)
+                .map_err(|_| ReplayRunFailure::Request)?;
+            crate::facade::validate_write_record(operation, &captured, &record_id)
+                .map_err(|_| ReplayRunFailure::Request)?;
+            if let Some(id) = captured.record_id {
+                record_id = id;
+            }
+            write_record = Some(captured.record);
         } else {
             let captured = operation
                 .request_template
@@ -632,16 +655,37 @@ pub async fn run(
     };
     let outcome = run_route_with_profile(&context, profile, &operation.steps, exchange).await;
     transcript.finish()?;
-    if let Some(write) = &replay_write {
-        if !write.was_claimed().await {
-            return Err(ReplayRunFailure::WriteCapability);
-        }
-    }
     let durability = if is_write {
         ReplayDurability::Simulated
     } else {
         ReplayDurability::NotApplicable
     };
+    if let Some(write) = &replay_write {
+        if !write.was_claimed().await {
+            return Err(ReplayRunFailure::WriteCapability);
+        }
+        if write.is_unsupported_incomplete().await {
+            let class = ErrorClass::FacadeConflict;
+            let problem = registry_adapter_core::resolve_problem(profile, class)
+                .ok_or(ReplayRunFailure::Render)?;
+            return facade_result(
+                crate::facade::facade_problem(
+                    crate::facade::Problems {
+                        profile,
+                        envelope: &authored.problem_envelope,
+                    },
+                    class,
+                    StatusCode::CONFLICT,
+                    &record_type,
+                    "fixture-replay-request",
+                ),
+                Some(class),
+                Some(problem.code.as_str().to_owned()),
+                durability,
+            )
+            .await;
+        }
+    }
     match outcome.result {
         Ok(done) => {
             let next_cursor = match (cursor_filters, page_size) {
@@ -850,45 +894,6 @@ fn hex_digit(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
-}
-
-fn capture_write_record(template: &str, body: &Value) -> Result<Value, ReplayRunFailure> {
-    fn capture(template: &Value, body: &Value, record: &mut Option<Value>) -> bool {
-        if let Value::String(text) = template {
-            if let Some((name, _)) = decode_slot(text) {
-                if name != SLOT_RECORD || record.is_some() {
-                    return false;
-                }
-                *record = Some(body.clone());
-                return true;
-            }
-        }
-        match (template, body) {
-            (Value::Object(expected), Value::Object(actual))
-                if expected.len() == actual.len()
-                    && actual.keys().all(|key| expected.contains_key(key)) =>
-            {
-                expected.iter().all(|(key, child)| {
-                    actual
-                        .get(key)
-                        .is_some_and(|value| capture(child, value, record))
-                })
-            }
-            (Value::Array(expected), Value::Array(actual)) if expected.len() == actual.len() => {
-                expected
-                    .iter()
-                    .zip(actual)
-                    .all(|(child, value)| capture(child, value, record))
-            }
-            (expected, actual) => expected == actual,
-        }
-    }
-    let parsed = parse_envelope_template(template).map_err(|_| ReplayRunFailure::Request)?;
-    let mut record = None;
-    if !capture(&parsed, body, &mut record) {
-        return Err(ReplayRunFailure::Request);
-    }
-    record.ok_or(ReplayRunFailure::Request)
 }
 
 async fn facade_result(

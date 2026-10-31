@@ -164,6 +164,8 @@ pub struct UnservedOperation {
     pub version: String,
     pub binding_id: String,
     pub profile_operation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<&'static str>,
     pub support: &'static str,
     pub effect: &'static str,
     pub reason_code: String,
@@ -192,6 +194,7 @@ impl EffectiveContract {
                     version: loaded.profile.version.clone(),
                     binding_id: entry.binding.clone(),
                     profile_operation_id,
+                    method: profile_operation.map(|operation| method_name(operation.method)),
                     support: "unserved",
                     effect: unserved_effect(profile_operation),
                     reason_code: entry.reason_code.to_owned(),
@@ -212,6 +215,7 @@ impl EffectiveContract {
                     version: loaded.profile.version.clone(),
                     binding_id: served.binding.clone(),
                     profile_operation_id: served.operation.clone(),
+                    method: Some(method_name(profile.method)),
                     support: "unserved",
                     effect: "write",
                     reason_code: "adapter.operation.gateway-write-disabled".to_owned(),
@@ -227,6 +231,7 @@ impl EffectiveContract {
                     version: loaded.profile.version.clone(),
                     binding_id: served.binding.clone(),
                     profile_operation_id: served.operation.clone(),
+                    method: Some(method_name(profile.method)),
                     support: "unserved",
                     effect: operation_effect(profile.method, profile.read_only),
                     reason_code: "adapter.operation.no-access-profile".to_owned(),
@@ -389,6 +394,9 @@ fn public_unserved_reason(code: &str) -> &'static str {
             "the binding has no loaded profile operation"
         }
         "adapter.operation.method-unsupported" => "the facade method is not served by this runtime",
+        "adapter.operation.write-async-unsupported" => {
+            "a write success status of 202 needs asynchronous completion recovery"
+        }
         "adapter.operation.request-body-unsupported" => {
             "the operation declares a request body form this runtime does not serve"
         }
@@ -1300,6 +1308,15 @@ pub fn schema() -> Value {
             },
             "profileOperationId": {
               "$ref": "#/$defs/LocalId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH"
+              ]
             },
             "support": {
               "const": "unserved"

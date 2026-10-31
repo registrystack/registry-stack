@@ -117,13 +117,15 @@ metadata anonymous. A successful response is the export envelope plus:
 
 The endpoint returns `adapter.contract.unavailable` when it cannot query
 the journal or the live migration set differs from the set this binary
-supports. A gateway should pin the expected `digest`, read the protected
-runtime document, and refuse listing or invocation when the two differ.
+supports. A gateway pins the expected `digest` and reads the protected runtime
+document when establishing catalog readiness. A mismatch or unavailable
+readiness prevents the catalog from being served. A separate metadata read
+before every invocation is not required.
 Readiness does not probe the upstream source and must not be presented as a
 source-health or end-to-end facade check.
 
-To bind preflight to execution, a gateway sends the pinned digest on every
-operation request:
+To bind each invocation to the reviewed contract, a gateway sends the pinned
+digest on every operation request:
 
 ```text
 x-registry-adapter-contract: sha256:<effective contract digest>
