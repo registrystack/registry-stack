@@ -13096,20 +13096,23 @@ mod tests {
             "a rescan route without its delay refuses: {findings:?}"
         );
 
-        let delay_out_of_bounds = job_pack(
-            r#"{
-                "id": "kobo-pack",
-                "version": "1",
-                "testedVersions": [],
-                "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 59 }
-                ]
-            }"#,
-        );
-        let findings = check_pack(&delay_out_of_bounds);
+        // The reader holds the range itself: a delay below it refuses at
+        // the pack's own reader, before any check runs, the same
+        // refusal the check arm carries for a pack that bypassed the
+        // reader.
         assert!(
-            has_job_code(&findings, JobCode::SourceRescanDelay),
-            "a delay below its range refuses: {findings:?}"
+            serde_json::from_str::<AdapterPack>(
+                r#"{
+                    "id": "kobo-pack",
+                    "version": "1",
+                    "testedVersions": [],
+                    "sourceRoutes": [
+                        { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 59 }
+                    ]
+                }"#,
+            )
+            .is_err(),
+            "a delay below its range refuses at the reader"
         );
 
         let delay_beside_ordered = job_pack(
