@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
-use registry_adapter::job::compile_job;
+use registry_adapter::engine::job::compile_job;
 use registry_adapter_core::{AdapterJob, JobIdentity};
 use registry_adapter_job::destination::{
     DeliverableItem, HandOffOutcome, JobDestination, NullDestination,
@@ -171,7 +171,7 @@ async fn pass_fixture() -> (JobFixture, Pool) {
     (fixture, isolated.pool)
 }
 
-async fn compile(fixture: &JobFixture) -> registry_adapter::job::JobProgram {
+async fn compile(fixture: &JobFixture) -> registry_adapter::engine::job::JobProgram {
     compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles")
 }
 
@@ -387,7 +387,7 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     let page = vec![(200, reply_page())];
     let _ = page;
     let client = pool.get().await.expect("a pooled client");
-    let items = registry_adapter::job::run_job_page(&program, None)
+    let items = registry_adapter::engine::job::run_job_page(&program, None)
         .await
         .expect("the page runs")
         .page;

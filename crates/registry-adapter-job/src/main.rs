@@ -10,8 +10,8 @@
 
 use clap::{Parser, Subcommand};
 use deadpool_postgres::Pool;
-use registry_adapter::job::{compile_job, JobError, JobProgram};
-use registry_adapter_core::{AdapterJob, AdapterPack, AdapterRuntimeConfig, SourceRouteDecl};
+use registry_adapter::engine::job::{compile_job, JobError, JobProgram};
+use registry_adapter_core::AdapterJob;
 use registry_adapter_job::destination::{FixtureDestination, NullDestination};
 use registry_adapter_job::pass::{run_pass, PassOptions, PassReport, StopReason};
 use registry_adapter_job::store;
@@ -60,8 +60,8 @@ enum Command {
         /// The pinned adapter pack file.
         #[arg(long)]
         pack: PathBuf,
-        /// The operator runtime config file, whose database block names
-        /// the job store's connection references.
+        /// The operator runtime config file, whose store block names
+        /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
         /// Hand off to the built-in fixture destination, which posts
@@ -92,8 +92,8 @@ enum Command {
     Status {
         /// The job definition file.
         job_yaml: PathBuf,
-        /// The operator runtime config file, whose database block names
-        /// the job store's connection references.
+        /// The operator runtime config file, whose store block names
+        /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
     },
@@ -102,8 +102,8 @@ enum Command {
     Inspect {
         /// The job definition file.
         job_yaml: PathBuf,
-        /// The operator runtime config file, whose database block names
-        /// the job store's connection references.
+        /// The operator runtime config file, whose store block names
+        /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
         /// The source item's key.
@@ -118,8 +118,8 @@ enum Command {
         /// The pinned adapter pack file.
         #[arg(long)]
         pack: PathBuf,
-        /// The operator runtime config file, whose database block names
-        /// the job store's connection references.
+        /// The operator runtime config file, whose store block names
+        /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
         /// Hand off to the built-in fixture destination at --fixture-url.
@@ -254,7 +254,7 @@ async fn pass(
     show_values: bool,
 ) -> Result<ExitCode, String> {
     let program = compile(pack, job_yaml, runtime_path)?;
-    let pool = open_pools(runtime_path).await?;
+    let pool = open_pool(runtime_path).await?;
     let preview = NullDestination::new();
     if once {
         let options = PassOptions {
@@ -278,7 +278,7 @@ async fn pass(
     // rescan source's declared delay decides when a scan runs from the
     // first page, and greedy restarts after a pass that read at least
     // one item.
-    let edits = source_edits(pack, program.job.source.route.as_str())?;
+    let edits = source_edits(&program)?;
     let interval = trigger::interval_trigger(&program.job)
         .cloned()
         .ok_or_else(|| {
@@ -326,6 +326,7 @@ async fn pass(
 }
 
 /// Mark a rescan due now, then run one rescan pass from the first page.
+#[allow(clippy::too_many_arguments)]
 async fn rescan(
     job_yaml: &Path,
     pack: &Path,
@@ -337,13 +338,13 @@ async fn rescan(
     show_values: bool,
 ) -> Result<ExitCode, String> {
     let program = compile(pack, job_yaml, runtime_path)?;
-    let edits = source_edits(pack, program.job.source.route.as_str())?;
+    let edits = source_edits(&program)?;
     if !matches!(edits, Edits::Rescan { .. }) {
         return Err(
             "the job's source route declares edits: ordered, whose edits the position finds; only an edits: rescan source rescans".to_string(),
         );
     }
-    let pool = open_pools(runtime_path).await?;
+    let pool = open_pool(runtime_path).await?;
     let preview = NullDestination::new();
     if !dry_run {
         let client = pool
@@ -590,37 +591,11 @@ fn job_error_message(error: &JobError) -> String {
     format!("the job was refused: {rendered}")
 }
 
-/// The job's source route edit property, read from the pinned pack: the
-/// declaration the rescan gate runs on. The compile already proved the
-/// pack bytes match the job's pin, so reading them again is faithful.
-fn source_edits(pack_path: &Path, route: &str) -> Result<Edits, String> {
-    let declared = source_route(pack_path, route)?;
-    to_edits(&declared)
-}
-
-fn source_route(pack_path: &Path, route: &str) -> Result<SourceRouteDecl, String> {
-    let pack = read_pack(pack_path)?;
-    pack.source_routes
-        .iter()
-        .find(|declared| declared.id.as_str() == route)
-        .cloned()
-        .ok_or_else(|| format!("the pinned pack declares no source route {route}"))
-}
-
-/// The source route's edit declaration, as the rescan gate reads it.
-fn to_edits(declared: &SourceRouteDecl) -> Result<Edits, String> {
-    match declared.edits.as_deref() {
-        Some("ordered") => Ok(Edits::Ordered),
-        Some("rescan") => {
-            let delay_seconds = declared.rescan_delay_seconds.ok_or_else(|| {
-                "the source route declares edits: rescan with no rescanDelaySeconds".to_string()
-            })?;
-            Ok(Edits::Rescan { delay_seconds })
-        }
-        other => Err(format!(
-            "the source route declares edits {other:?}, which is neither ordered nor rescan; the job checks refuse it at compile"
-        )),
-    }
+/// The job's source route edit property, from the compiled program's
+/// resolved declaration: the declaration the rescan gate runs on, read
+/// at compile so the host never re-reads the pack file.
+fn source_edits(program: &JobProgram) -> Result<Edits, String> {
+    Edits::of(&program.source_route)
 }
 
 /// The job state the schedule reads, from the store row.
@@ -649,31 +624,28 @@ fn trigger_state(row: &store::JobStateRow) -> JobState {
     }
 }
 
-/// Open the job store: migrate through the migration reference, then
-/// hand back the least-privileged runtime pool.
-async fn open_pools(runtime_path: &Path) -> Result<Pool, String> {
-    let runtime_config = read_runtime(runtime_path)?;
+/// Open the job store: one pool from the store block's connection
+/// reference, migrated before it serves.
+async fn open_pool(runtime_path: &Path) -> Result<Pool, String> {
+    let store_config = read_store(runtime_path)?;
     let resolver = secret_resolver()?;
-    let migration_pool = store::build_pool(&runtime_config.database, &resolver, true)
-        .map_err(|error| error.to_string())?;
-    {
-        let client = migration_pool
-            .get()
-            .await
-            .map_err(|error| format!("the job store migration could not connect: {error}"))?;
-        store::migrate(&client)
-            .await
-            .map_err(|error| format!("the job store migration failed: {error}"))?;
-    }
-    store::build_pool(&runtime_config.database, &resolver, false).map_err(|error| error.to_string())
+    let pool = store::build_pool(&store_config, &resolver).map_err(|error| error.to_string())?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store migration could not connect: {error}"))?;
+    store::migrate(&client)
+        .await
+        .map_err(|error| format!("the job store migration failed: {error}"))?;
+    Ok(pool)
 }
 
 /// The read-only pool of the status and inspect surfaces, from the
-/// runtime config's database block.
+/// runtime config's store block.
 fn read_pool(runtime_path: &Path) -> Result<Pool, String> {
-    let runtime_config = read_runtime(runtime_path)?;
+    let store_config = read_store(runtime_path)?;
     let resolver = secret_resolver()?;
-    store::build_pool(&runtime_config.database, &resolver, false).map_err(|error| error.to_string())
+    store::build_pool(&store_config, &resolver).map_err(|error| error.to_string())
 }
 
 fn secret_resolver() -> Result<SecretResolver, String> {
@@ -681,41 +653,32 @@ fn secret_resolver() -> Result<SecretResolver, String> {
         .map_err(|error| format!("the secret resolver could not start: {error:?}"))
 }
 
-/// Read the job definition: the envelope the loader carries, checked
-/// here the way the engine checks it before the type parses the body.
+/// Read the job definition: the engine boundary's public artifact
+/// read, the same envelope, expression, and unknown-key discipline the
+/// compile path reads the job through.
 fn read_job(path: &Path) -> Result<AdapterJob, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| format!("the job definition could not be read: {error}"))?;
-    let job: AdapterJob = serde_norway::from_str(&text)
-        .map_err(|error| format!("the job definition was refused: {error}"))?;
-    if job.api_version != registry_adapter_core::ADAPTER_JOB_API_VERSION
-        || job.kind != registry_adapter_core::ADAPTER_JOB_KIND
-    {
-        return Err(format!(
-            "the job definition carries apiVersion {} and kind {}, not the {} {} this executable reads",
-            job.api_version,
-            job.kind,
-            registry_adapter_core::ADAPTER_JOB_API_VERSION,
-            registry_adapter_core::ADAPTER_JOB_KIND,
-        ));
-    }
-    Ok(job)
+    registry_adapter::engine::load::read_artifact::<AdapterJob>(
+        path,
+        registry_adapter_core::ADAPTER_JOB_KIND,
+        registry_adapter_core::ADAPTER_JOB_API_VERSION,
+    )
+    .map(|(job, _bytes)| job)
+    .map_err(|error| format!("the job definition was refused: {error}"))
 }
 
-/// Read the pinned pack, for the declarations the compiled program does
-/// not carry.
-fn read_pack(path: &Path) -> Result<AdapterPack, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| format!("the pack could not be read: {error}"))?;
-    serde_norway::from_str(&text).map_err(|error| format!("the pack was refused: {error}"))
-}
-
-/// Read the operator runtime config.
-fn read_runtime(path: &Path) -> Result<AdapterRuntimeConfig, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| format!("the runtime config could not be read: {error}"))?;
-    serde_norway::from_str(&text)
-        .map_err(|error| format!("the runtime config was refused: {error}"))
+/// Read the job store block of the operator runtime config: the one
+/// reader the compile path shares (`engine::job_sources`), then the
+/// host's own strict decode of the `store` member alone. The endpoint
+/// bindings and the job sources block refuse in that reader; the store
+/// block refuses here.
+fn read_store(path: &Path) -> Result<store::JobStoreConfig, String> {
+    let document = registry_adapter::engine::job_sources::JobRuntimeConfig::load(path)
+        .map_err(|error| format!("the runtime config was refused: {error}"))?;
+    let store = document
+        .store
+        .ok_or_else(|| "the runtime config carries no store block for the job store".to_string())?;
+    serde_json::from_value::<store::JobStoreConfig>(store)
+        .map_err(|error| format!("the store block was refused: {error}"))
 }
 
 /// One timestamp in the operator output: UTC, RFC 3339, or absent.

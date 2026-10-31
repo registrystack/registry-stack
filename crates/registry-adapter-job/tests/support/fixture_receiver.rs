@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// The scripted destination fixture: one module included by more than
+// one test binary, each using a different part of its receiver's
+// recording surface. The allow keeps the parts one binary leaves
+// unread compilable for the other.
+#![allow(dead_code)]
 //! The scripted fixture receiver: an in-process HTTP server the seam
 //! delivers to, one scripted answer per request, and a value-complete
 //! record of every delivery it received. The record is deliberately

@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use deadpool_postgres::Pool;
-use registry_adapter::job::{run_job_page, JobPageFailure, JobProgram};
+use registry_adapter::engine::job::{run_job_page, JobPageFailure, JobProgram};
 use serde_json::Value;
 
 use crate::destination::{DeliverableItem, HandOffOutcome, JobDestination, SettledPage};

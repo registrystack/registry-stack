@@ -61,6 +61,33 @@ pub enum Edits {
     },
 }
 
+impl Edits {
+    /// The source route's edit declaration, as the rescan gate reads
+    /// it: the declaration the compiled program carries, so the host
+    /// never re-reads the pack file. The job checks refuse a malformed
+    /// declaration at compile; this surfaces one a compiled program
+    /// still carries.
+    ///
+    /// # Errors
+    ///
+    /// A declaration that is neither `ordered` nor `rescan`, or a
+    /// `rescan` with no delay.
+    pub fn of(declared: &registry_adapter_core::SourceRouteDecl) -> Result<Self, String> {
+        match declared.edits.as_deref() {
+            Some("ordered") => Ok(Self::Ordered),
+            Some("rescan") => {
+                let delay_seconds = declared.rescan_delay_seconds.ok_or_else(|| {
+                    "the source route declares edits: rescan with no rescanDelaySeconds".to_string()
+                })?;
+                Ok(Self::Rescan { delay_seconds })
+            }
+            other => Err(format!(
+                "the source route declares edits {other:?}, which is neither ordered nor rescan; the job checks refuse it at compile"
+            )),
+        }
+    }
+}
+
 /// The job's first `interval` trigger, the trigger the loop schedule
 /// runs. A hook trigger starts a pass early or late; it never
 /// substitutes for the interval, so the schedule reads only interval
@@ -226,8 +253,10 @@ mod tests {
 
     #[test]
     fn the_delay_separates_two_passes_from_the_last_pass() {
-        let mut state = JobState::default();
-        state.last_pass_at = Some(at(200));
+        let state = JobState {
+            last_pass_at: Some(at(200)),
+            ..JobState::default()
+        };
         let due = next_due(&job(trigger(60_000, 0, 0, 0, 1)), &state, at(230));
         assert_eq!(due, Some(Duration::from_secs(30)));
         // Once the delay has passed the pass is due now, never negative.
@@ -244,9 +273,11 @@ mod tests {
         // The multiplier is the number of passes skipped, so the next
         // attempt lands multiplier delays after the last pass, not
         // multiplier times the time already gone.
-        let mut state = JobState::default();
-        state.last_pass_at = Some(at(200));
-        state.idle_streak = 3;
+        let mut state = JobState {
+            last_pass_at: Some(at(200)),
+            idle_streak: 3,
+            ..JobState::default()
+        };
         let due = next_due(&job(trigger(60_000, 0, 3, 0, 4)), &state, at(230));
         assert_eq!(
             due,

@@ -33,11 +33,9 @@ use registry_adapter_core::{
     AdapterPack, AdapterProfile, AdapterProject, ComponentKind, Step, Workspace,
     ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
     ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
-    ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_KIND,
 };
-use registry_platform_config::{
-    sha256_uri, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
-};
+use registry_platform_config::{sha256_uri, SecretProvider, SecretResolver};
 use registry_platform_yaml::{Diagnostic, Severity};
 use serde_json::Value;
 
@@ -129,6 +127,10 @@ fn job_finding(
 pub struct JobProgram {
     /// The checked job definition.
     pub job: AdapterJob,
+    /// The source route's declaration, resolved from the pinned pack:
+    /// the scan, recovery, and edit semantics the host's triggers read,
+    /// so they never re-read the pack file.
+    pub source_route: registry_adapter_core::SourceRouteDecl,
     /// The source route's steps, the one list every page run
     /// interprets.
     pub steps: Arc<Vec<Step>>,
@@ -267,17 +269,10 @@ pub fn compile_job_with(
         &format_spec(ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_API_VERSION),
     )
     .map_err(artifact_error)?;
-    let absolute_runtime =
-        std::fs::canonicalize(runtime_path).map_err(|_| runtime_error(UNREADABLE_RUNTIME))?;
-    let job_runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
-        api_version: ADAPTER_RUNTIME_API_VERSION,
-        kind: ADAPTER_RUNTIME_KIND,
-    })
-    .removed_keys(ADAPTER_REMOVED_KEYS)
-    .load::<crate::engine::job_sources::JobRuntimeConfig>(&absolute_runtime)
-    .map_err(|error| runtime_error(&format!("the runtime config was refused: {error}")))?;
-    let runtime = job_runtime.config.core;
-    let sources = job_runtime.config.sources;
+    let job_runtime = crate::engine::job_sources::JobRuntimeConfig::load(runtime_path)
+        .map_err(|error| runtime_error(&format!("the runtime config was refused: {error}")))?;
+    let runtime = job_runtime.core;
+    let sources = job_runtime.sources;
     compile_job_from_artifacts(
         &pack,
         &job,
@@ -515,6 +510,7 @@ pub fn compile_job_from_artifacts(
     }
     Ok(JobProgram {
         job: job.clone(),
+        source_route: source.clone(),
         steps,
         endpoints,
         scripts,
@@ -556,9 +552,6 @@ impl JobProgram {
         Ok(())
     }
 }
-
-const UNREADABLE_RUNTIME: &str =
-    "the runtime config could not be read; pass the absolute path of the operator runtime config file";
 
 fn runtime_error(reason: &str) -> JobError {
     job_error(vec![job_finding(

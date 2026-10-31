@@ -227,10 +227,7 @@ pub struct AdapterEndpointBindings {
     /// The private ranges egress may reach, at least one and at most the
     /// platform bound (CFG-EMPTY-2).
     #[serde(deserialize_with = "at_least_one_cidr")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "at_least_one_cidr_schema")
-    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "at_least_one_cidr_schema"))]
     pub allowed_private_cidrs: UniqueList<Cidr>,
 }
 

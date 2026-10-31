@@ -23,6 +23,7 @@ use registry_adapter_core::{
     AdapterEndpointBindings, MAXIMUM_JOB_FIELD_BYTES, MAXIMUM_JOB_FILE_BYTES,
     MAXIMUM_JOB_ROWS_PER_PAGE, MAXIMUM_JOB_ROW_BYTES,
 };
+use registry_platform_config::{RuntimeConfigLoader, RuntimeEnvelope};
 use registry_platform_yaml::{BoundedU64, LocalId, SecretReference};
 use serde::Deserialize;
 
@@ -65,22 +66,56 @@ pub struct JobPageState {
         BTreeMap<String, std::sync::Arc<dyn crate::engine::component::postgres::PostgresSource>>,
 }
 
-/// The runtime config as the job compiler reads it: the core document
-/// the facade reader accepts, plus the job-only `sources` block. The
-/// core member is decoded from the same document with `sources` set
-/// aside, so the bindings core's own unknown-key refusal stands: a
-/// facade member in a job document refuses exactly as the facade reader
-/// refuses it, and a facade load of the same file refuses the `sources`
-/// member itself. The bindings core is
+/// The runtime config as the job mode reads it: the endpoint bindings
+/// core beside the job-only `sources` block and the job host's `store`
+/// block. The core member is decoded from the same document with the
+/// other two set aside, so the bindings core's own unknown-key refusal
+/// stands: a facade member in a job document refuses exactly as the
+/// facade reader refuses it, and a facade load of the same file refuses
+/// the `sources` member itself. The bindings core is
 /// `registry_adapter_core::AdapterEndpointBindings`, the shape the
 /// facade document sets aside with `AdapterRuntimeConfig::endpoint_bindings`.
 #[derive(Debug)]
-pub(crate) struct JobRuntimeConfig {
-    pub(crate) core: AdapterEndpointBindings,
+pub struct JobRuntimeConfig {
+    /// The endpoint bindings every mode shares.
+    pub core: AdapterEndpointBindings,
     /// The governed-ingestion source bindings. Absent, the deployment
     /// binds no job source; a pack whose source route reads one refuses
     /// at the job compile, never at the first read.
-    pub(crate) sources: Option<JobSources>,
+    pub sources: Option<JobSources>,
+    /// The job host's store block, passed through raw and uninterpreted
+    /// by the engine: the item table's database references are the
+    /// host's own state, which the host validates with its own reader.
+    /// Absent, the document configures no job store.
+    pub store: Option<serde_json::Value>,
+}
+
+impl JobRuntimeConfig {
+    /// Read the job runtime document through the platform runtime
+    /// loader: the envelope and retired keys the facade document
+    /// carries, then this document's own member discipline. The one
+    /// reader the compile path and the job host share.
+    ///
+    /// # Errors
+    ///
+    /// The loader's refusal, the reader's own value-free report.
+    pub fn load(
+        path: &std::path::Path,
+    ) -> Result<Self, registry_platform_config::RuntimeConfigError> {
+        // The loader refuses a path with a symbolic-link component; the
+        // canonical path names the same file without one (the system
+        // temporary directory carries such a component on some
+        // platforms). A path that cannot be canonicalized is left to
+        // the loader's own unreadable refusal.
+        let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        RuntimeConfigLoader::new(RuntimeEnvelope {
+            api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
+            kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
+        })
+        .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
+        .load::<Self>(&absolute)
+        .map(|loaded| loaded.config)
+    }
 }
 
 impl<'de> Deserialize<'de> for JobRuntimeConfig {
@@ -96,8 +131,17 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
             ));
         };
         let sources = members.get("sources").cloned();
+        let store = members.get("store").cloned();
         let mut core_members = members.clone();
         core_members.remove("sources");
+        // The job host's store block, beside `sources`: the engine sets
+        // it aside without interpreting it. The item table's database
+        // references are the job host's own state (`registry-adapter-job`
+        // reads and validates the block); every other member of the
+        // document refuses here, so a member neither the bindings core,
+        // the sources block, nor the host's store claims is refused by
+        // one of the two readers.
+        core_members.remove("store");
         core_members.remove("apiVersion");
         core_members.remove("kind");
         let core = AdapterEndpointBindings::deserialize(serde_json::Value::Object(core_members))
@@ -110,7 +154,11 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
                 Some(JobSources::deserialize(sources).map_err(serde::de::Error::custom)?)
             }
         };
-        Ok(Self { core, sources })
+        Ok(Self {
+            core,
+            sources,
+            store,
+        })
     }
 }
 
@@ -597,6 +645,37 @@ mod tests {
             serde_json::from_str::<registry_adapter_core::AdapterRuntimeConfig>(facade_json)
                 .is_err(),
             "the sources block refuses a facade document"
+        );
+    }
+
+    /// The job host's store block sits beside the engine's members: the
+    /// engine reader sets it aside without interpreting it, and any
+    /// member no reader claims still refuses. The host validates the
+    /// block's own shape for the item table's database.
+    #[test]
+    fn the_store_block_is_set_aside_and_uninterpreted() {
+        let with_store = r#"{
+                "id": "job-deployment",
+                "endpoints": [],
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "sources": { "file": {} },
+                "store": {
+                    "runtimeUrlRef": "secret:env/JOB_DB",
+                    "a_member_only_the_host_knows": true
+                }
+            }"#;
+        let read: JobRuntimeConfig =
+            serde_json::from_str(with_store).expect("the store block is tolerated");
+        assert!(read.sources.is_some(), "the sources block still reads");
+        let unclaimed = r#"{
+                "id": "job-deployment",
+                "endpoints": [],
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "listeners": { "bind": "127.0.0.1:8080" }
+            }"#;
+        assert!(
+            serde_json::from_str::<JobRuntimeConfig>(unclaimed).is_err(),
+            "a member no reader claims refuses"
         );
     }
 

@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// The shared job fixture: one module included by more than one test
+// binary, each using a different part of its surface. The allow keeps
+// the parts one binary leaves unread compilable for the other.
+#![allow(dead_code)]
 //! The job test workspace: a loopback upstream double, and the pack,
 //! profile, project, job, and runtime files beside it, compiled through
 //! the engine's own `compile_job` the way `registry-adapter`'s
@@ -351,17 +355,10 @@ fn runtime_yaml(base_url: &str) -> String {
             }
         ],
         "allowedPrivateCidrs": ["192.168.0.0/16"],
-        "listener": {"bind": "127.0.0.1:8080"},
-        "database": {
+        "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "migrationUrlRef": "secret:env/JOB_TEST_DB"
-        },
-        "oidc": {
-            "issuer": "https://issuer.example.invalid",
-            "audience": "job-test"
-        },
-        "allowedClients": ["job-client"],
-        "audit": {"retentionDays": 90}
+            "testOnlyPlaintext": true
+        }
     });
     serde_json::to_string_pretty(&config).expect("the runtime config renders")
 }

@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 use deadpool_postgres::{
     GenericClient, Manager, ManagerConfig, Object, Pool, RecyclingMethod, Runtime,
 };
-use registry_platform_config::{DatabaseConfig, SecretResolver};
+use registry_platform_config::SecretResolver;
 use serde_json::Value;
 use tokio_postgres::Error as PgError;
 
@@ -154,29 +154,45 @@ async fn apply_migrations(client: &impl GenericClient) -> Result<(), StoreError>
     Ok(())
 }
 
+/// The job store block of the operator runtime config (`store:`): the
+/// item table's single connection reference. The job store runs its
+/// migrations on the same connection it serves from, so the block
+/// carries no separate migration member; the facade's database block
+/// (journal and idempotency pools) is a facade member the job document
+/// refuses. Secret references only, resolved by the host, never a URL
+/// in the document.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobStoreConfig {
+    /// The runtime connection reference of the item table's database.
+    pub runtime_url_ref: registry_platform_yaml::SecretReference,
+    /// The root certificate the connection trusts beside the platform
+    /// roots; absent, the platform roots alone.
+    #[serde(default)]
+    pub trusted_root_certificate_ref: Option<registry_platform_yaml::SecretReference>,
+    /// Plaintext connections for the loopback test database only;
+    /// refused in any build without this crate's `postgres-test`
+    /// feature, the way the facade database refuses it.
+    #[serde(default)]
+    pub test_only_plaintext: bool,
+}
+
 /// Build the connection pool the way the facade's serving runtime does:
 /// the URL resolved from the operator runtime config's secret reference,
 /// TLS required, and plaintext allowed only where the facade allows it,
 /// in a build with this crate's `postgres-test` feature and the
-/// operator's `testOnlyPlaintext` member.
+/// operator's `testOnlyPlaintext` member. The same pool carries the
+/// store's migrations and its passes.
 ///
 /// # Errors
 ///
 /// An unresolvable reference, an invalid URL, or an unbuildable pool
 /// refuses, naming the block and never the URL.
-pub fn build_pool(
-    config: &DatabaseConfig,
-    resolver: &SecretResolver,
-    migration: bool,
-) -> Result<Pool, StoreError> {
-    let invalid = |what: &str| StoreError::Pool(format!("database: {what}"));
-    let reference = if migration {
-        &config.migration_url_ref
-    } else {
-        &config.runtime_url_ref
-    };
+pub fn build_pool(config: &JobStoreConfig, resolver: &SecretResolver) -> Result<Pool, StoreError> {
+    let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
+    let reference = &config.runtime_url_ref;
     let protected = resolver
-        .resolve(reference)
+        .resolve(reference.as_str())
         .map_err(|_| invalid("a connection reference could not be resolved"))?;
     let url = std::str::from_utf8(protected.expose_secret())
         .map_err(|_| invalid("the connection url is not text"))?;
@@ -215,13 +231,13 @@ pub fn build_pool(
 }
 
 /// The TLS connector for the job host's database connections: the
-/// configured root certificate when the runtime config names one, the
+/// configured root certificate when the store block names one, the
 /// platform's own roots otherwise.
 fn tls_connector(
-    config: &DatabaseConfig,
+    config: &JobStoreConfig,
     resolver: &SecretResolver,
 ) -> Result<tokio_postgres_rustls::MakeRustlsConnect, StoreError> {
-    let invalid = |what: &str| StoreError::Pool(format!("database: {what}"));
+    let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
     let _ = rustls::crypto::ring::default_provider().install_default();
     let Some(reference) = &config.trusted_root_certificate_ref else {
         let (connector, warnings) =
@@ -233,7 +249,7 @@ fn tls_connector(
         return Ok(connector);
     };
     let protected = resolver
-        .resolve(reference)
+        .resolve(reference.as_str())
         .map_err(|_| invalid("a certificate reference could not be resolved"))?;
     let mut roots = rustls::RootCertStore::empty();
     use rustls::pki_types::pem::PemObject as _;

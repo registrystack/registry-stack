@@ -297,6 +297,24 @@ pub(crate) fn format_spec(kind: &'static str, api_version: &'static str) -> Form
     }
 }
 
+/// Read one authored artifact through the shared reader for the format
+/// its envelope names: the boundary's public artifact read for hosts
+/// that assemble their own documents (`registry-adapter-job`'s status
+/// and inspect surfaces), under the same envelope, expression, and
+/// unknown-key discipline the compile path reads through.
+///
+/// # Errors
+///
+/// An unreadable path or a refused document, the reader's own report
+/// rendered value-free.
+pub fn read_artifact<T: DeserializeOwned>(
+    path: &Path,
+    kind: &'static str,
+    api_version: &'static str,
+) -> Result<(T, Vec<u8>), LoadError> {
+    read(path, &format_spec(kind, api_version))
+}
+
 pub(crate) fn read<T: DeserializeOwned>(
     path: &Path,
     format: &FormatSpec<'static>,

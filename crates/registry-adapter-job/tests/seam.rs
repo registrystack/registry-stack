@@ -16,7 +16,7 @@ mod fixture_receiver;
 
 use fixture_receiver::{FixtureReceiver, Scripted};
 use job_fixture::{reply_page, JobFixture};
-use registry_adapter::job::{compile_job, run_job_page};
+use registry_adapter::engine::job::{compile_job, run_job_page};
 use registry_adapter_core::JobIdentity;
 use registry_adapter_job::destination::{
     DeliverableItem, FixtureDestination, HandOffOutcome, JobDestination, DESTINATION_UNREACHABLE,
