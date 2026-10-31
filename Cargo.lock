@@ -5705,6 +5705,7 @@ version = "0.45.0"
 dependencies = [
  "clap",
  "registry-adapter",
+ "registry-adapter-job",
  "registry-adapterctl",
  "registry-breg",
  "registry-breg-mcp",

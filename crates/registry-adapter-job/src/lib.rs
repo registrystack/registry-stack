@@ -25,3 +25,5 @@ pub mod pass;
 pub mod projection;
 pub mod store;
 pub mod trigger;
+
+pub mod cli;

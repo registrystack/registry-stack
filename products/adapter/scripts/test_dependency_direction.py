@@ -19,6 +19,7 @@ NAMES = {
     "engine": "registry-adapter",
     "core": "registry-adapter-core",
     "ctl": "registry-adapterctl",
+    "job": "registry-adapter-job",
     "connectors": "registry-adapter-connectors",
     "record": "registry-record",
     "platform": "registry-platform-httputil",
@@ -73,7 +74,7 @@ INTENDED = {
     "coordinator": ["breg-client", "platform"],
     "coordinator-client": ["platform"],
     "stack-client": ["breg-client", "coordinator-client"],
-    "cli-docs": ["engine", "ctl"],
+    "cli-docs": ["engine", "ctl", "job"],
     "evidence": ["platform"],
     "casework": ["platform"],
 }

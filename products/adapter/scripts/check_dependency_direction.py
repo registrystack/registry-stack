@@ -124,6 +124,7 @@ ALLOWED_DEPENDENTS = {
         {
             "registry-adapter",
             "registry-adapter-core",
+            "registry-adapter-job",
             "registry-adapterctl",
         }
     ),
