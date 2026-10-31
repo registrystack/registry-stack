@@ -39,7 +39,7 @@ fn document() -> Value {
         "artifactDeploymentDigest":format!("sha256:{}", "a".repeat(64)),
         "authentication":{
             "scheme":"bearer",
-            "audience":"https://adapter.example.invalid/",
+            "audience":"adapter-example",
             "clientAdmission":"allowlist"
         },
         "authority":{
@@ -130,6 +130,32 @@ fn adapter_contract_is_pinned_and_only_effective_reads_can_be_bound() {
     ] {
         let mut changed = document.clone();
         changed["contract"]["operations"][0][member] = value;
+        rehash(&mut changed);
+        assert!(parse(&changed).is_err());
+    }
+}
+
+#[test]
+fn adapter_contract_accepts_only_bounded_opaque_oidc_audiences() {
+    let baseline = document();
+    let parsed = parse(&baseline).expect("the producer's opaque OIDC audience is valid");
+    let bindings = [("Adapter.Record_Read".to_owned(), "records.list".to_owned())]
+        .into_iter()
+        .collect();
+    assert!(parsed
+        .validate_binding(&bindings, "adapter-example")
+        .is_ok());
+    assert!(parsed
+        .validate_binding(&bindings, "Adapter-example")
+        .is_err());
+
+    for audience in [
+        String::new(),
+        "contains\ncontrol".to_owned(),
+        "a".repeat(513),
+    ] {
+        let mut changed = baseline.clone();
+        changed["contract"]["authentication"]["audience"] = json!(audience);
         rehash(&mut changed);
         assert!(parse(&changed).is_err());
     }

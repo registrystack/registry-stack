@@ -7,7 +7,7 @@ use registry_breg_mcp::config::{
 use registry_mcp_edge::{AccessTokenAlgorithm, ResourceServerOptions};
 use registry_platform_config::{
     PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
-    SecretReference, TlsTermination,
+    SecretReference, TlsTermination, MAX_OIDC_AUDIENCE_CHARACTERS,
 };
 use registry_platform_yaml::{Diagnostic, Digest, LocalId, Report, UniqueList, Url};
 use serde::Deserialize;
@@ -100,7 +100,14 @@ pub enum ProviderConfig {
         contract_digest: Digest,
         #[serde(rename = "dataClass")]
         data_class: AdapterDataClass,
-        audience: ResourceUri,
+        #[cfg_attr(
+            feature = "schema",
+            schemars(
+                length(min = 1, max = 512),
+                extend("pattern" = "^[^\\u0000-\\u001F\\u007F-\\u009F]+$")
+            )
+        )]
+        audience: String,
         #[serde(rename = "machineTokenRef")]
         machine_token_ref: SecretReference,
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
@@ -444,6 +451,13 @@ impl RuntimeConfig {
                             "Declare the environment or file provider used by machineTokenRef.",
                         );
                     }
+                    if !valid_adapter_audience(audience) {
+                        reject(
+                            &format!("{provider}/audience"),
+                            "The Adapter audience is invalid.",
+                            "Use the exact non-empty Adapter OIDC audience of at most 512 characters, without control characters.",
+                        );
+                    }
                     if audience.as_str() == self.resource_server.resource.as_str() {
                         reject(
                             &format!("{provider}/audience"),
@@ -504,6 +518,12 @@ fn valid_digest(value: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     })
+}
+
+fn valid_adapter_audience(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_OIDC_AUDIENCE_CHARACTERS
+        && !value.chars().any(char::is_control)
 }
 fn stand_in(pointer: &str) -> &'static str {
     if let Some(index) = pointer.strip_prefix("/resourceServer/algorithms/") {

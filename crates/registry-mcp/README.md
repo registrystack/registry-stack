@@ -80,6 +80,8 @@ adapter effective-contract --runtime-config /srv/adapter/runtime.yaml --project 
 
 Configure the reviewed contract file, its exact digest, expected adapter audience,
 `dataClass: non-personal`, one machine credential reference and an explicit public-tool-to-operation map.
+Copy the audience exactly from the export, including an opaque name such as
+`adapter-example`; matching preserves its case and characters.
 The file must declare the JSON Schema 2020-12 dialect, trusted-machine authority,
 and served reads with complete embedded closed schemas and declared success statuses.
 The versioned digest covers the format identity and complete contract.

@@ -301,7 +301,7 @@ mod tests {
             "project":{"id":"fixture","version":"1"},
             "profileVersion":"1",
             "artifactDeploymentDigest":format!("sha256:{}", "a".repeat(64)),
-            "authentication":{"scheme":"bearer","audience":"urn:example:adapter","clientAdmission":"allowlist"},
+            "authentication":{"scheme":"bearer","audience":"adapter-example","clientAdmission":"allowlist"},
             "authority":{
                 "callerMode":"trusted-machine",
                 "representedSubject":"unsupported",
@@ -358,7 +358,7 @@ mod tests {
             "contractFile":contract_file,
             "contractDigest":document["digest"],
             "dataClass":"non-personal",
-            "audience":"urn:example:adapter",
+            "audience":"adapter-example",
             "machineTokenRef":"secret:env/MCP_ADAPTER_TOKEN",
             "operations":{(PUBLIC_TOOL):"records.list"}
         });
@@ -371,6 +371,37 @@ mod tests {
         let report = crate::config::RuntimeConfig::check(&runtime_file, false);
         assert!(!report.has_errors(), "{}", report.render_human());
         assert!(validator().is_valid(&runtime));
+
+        for audience in [
+            String::new(),
+            "contains\ncontrol".to_owned(),
+            "a".repeat(513),
+        ] {
+            let mut invalid = runtime.clone();
+            invalid["bindings"][0]["provider"]["audience"] = json!(audience);
+            std::fs::write(&runtime_file, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(
+                crate::config::RuntimeConfig::check(&runtime_file, false).has_errors(),
+                "the reader accepted an invalid Adapter audience"
+            );
+            assert!(
+                !validator().is_valid(&invalid),
+                "the schema accepted an invalid Adapter audience"
+            );
+        }
+
+        let mut mismatched = runtime.clone();
+        mismatched["bindings"][0]["provider"]["audience"] = json!("Adapter-example");
+        std::fs::write(&runtime_file, serde_json::to_vec(&mismatched).unwrap()).unwrap();
+        let report = crate::config::RuntimeConfig::check(&runtime_file, false);
+        assert!(
+            report.has_errors(),
+            "a case-mismatched Adapter audience was accepted"
+        );
+        assert!(
+            validator().is_valid(&mismatched),
+            "a bounded opaque Adapter audience should remain structurally valid"
+        );
 
         runtime["bindings"][0]["provider"]["operations"][PUBLIC_TOOL] = json!("records.missing");
         std::fs::write(&runtime_file, serde_json::to_vec(&runtime).unwrap()).unwrap();
