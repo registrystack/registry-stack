@@ -276,20 +276,66 @@ mod tests {
     #[test]
     fn offline_check_loads_the_exact_adapter_contract_and_operation_map() {
         const PUBLIC_TOOL: &str = "Adapter.Record_Read";
+        const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
         let empty = json!({"type":"object","additionalProperties":false,"properties":{}});
+        let protocol_problem = |code: &str, status: u16, title: &str| {
+            json!({
+                "type":"object",
+                "properties":{
+                    "code":{"const":code},
+                    "status":{"const":status},
+                    "title":{"const":title},
+                    "requestId":{
+                        "type":"string",
+                        "minLength":32,
+                        "maxLength":32,
+                        "pattern":"^[0-9a-f]{32}$"
+                    }
+                },
+                "required":["code","status","title","requestId"],
+                "additionalProperties":false
+            })
+        };
         let contract = json!({
+            "schemaDialect":SCHEMA_DIALECT,
             "project":{"id":"fixture","version":"1"},
             "profileVersion":"1",
             "artifactDeploymentDigest":format!("sha256:{}", "a".repeat(64)),
             "authentication":{"scheme":"bearer","audience":"urn:example:adapter","clientAdmission":"allowlist"},
+            "authority":{
+                "callerMode":"trusted-machine",
+                "representedSubject":"unsupported",
+                "personalDelegation":"unsupported",
+                "targetBinding":"unsupported",
+                "rowDisclosureAuthority":"not-granted",
+                "fieldDisclosureAuthority":"not-granted"
+            },
             "operations":[{
                 "id":"records.list","version":"1","bindingId":"read",
                 "profileOperationId":"list","method":"GET","path":"/records",
-                "support":"served","effect":"read",
+                "support":"served","effect":"read","successStatus":200,
                 "input":{"path":empty.clone(),"query":empty.clone()},
                 "output":empty.clone(),"access":{"anyOf":[{"allScopes":["read"]}]}
             }],
-            "unserved":[],"problemSchema":empty
+            "unserved":[],"problemSchema":empty,
+            "protocolProblems":{
+                "schema":{"$schema":SCHEMA_DIALECT,"oneOf":[
+                    protocol_problem(
+                        "adapter.contract.precondition-failed",
+                        412,
+                        "Effective contract precondition failed"
+                    ),
+                    protocol_problem(
+                        "adapter.contract.unavailable",
+                        503,
+                        "Effective contract unavailable"
+                    )
+                ]},
+                "problems":[
+                    {"code":"adapter.contract.precondition-failed","status":412,"title":"Effective contract precondition failed"},
+                    {"code":"adapter.contract.unavailable","status":503,"title":"Effective contract unavailable"}
+                ]
+            }
         });
         let digest = crate::adapter::contract_digest(&contract).unwrap();
         let document = json!({

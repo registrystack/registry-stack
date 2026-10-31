@@ -114,7 +114,7 @@ async fn native_get_and_read_only_post_use_the_live_effective_contract() {
     uuid::Uuid::parse_str(correlation).expect("gateway correlation is its request UUID");
     let correlation_digest = registry_platform_config::sha256_uri(correlation.as_bytes());
     let adapter_log = stack.adapter_log();
-    assert!(adapter_log.contains(&correlation_digest), "{adapter_log}");
+    assert!(!adapter_log.contains(&correlation_digest), "{adapter_log}");
     assert!(!adapter_log.contains(correlation));
     assert!(!get.to_string().contains(correlation));
     assert!(stack.source.requests().iter().all(|request| {
@@ -156,6 +156,21 @@ async fn native_get_and_read_only_post_use_the_live_effective_contract() {
         &stack.adapter_root,
         "get-found",
     ))]);
+    let before_pin_refusal = stack.source.request_count();
+    let wrong_pin = format!("sha256:{}", "0".repeat(64));
+    let refusal = stack.direct_get_with_contract_pin(RECORD, &wrong_pin).await;
+    assert_eq!(refusal.status(), reqwest::StatusCode::PRECONDITION_FAILED);
+    let refusal_id = refusal.headers()["x-registry-request-id"]
+        .to_str()
+        .expect("Adapter request id")
+        .to_owned();
+    let refusal: serde_json::Value = refusal.json().await.expect("typed pin problem");
+    assert_eq!(refusal["code"], "adapter.contract.precondition-failed");
+    assert_eq!(refusal["status"], 412);
+    assert_eq!(refusal["title"], "Effective contract precondition failed");
+    assert_eq!(refusal["requestId"], refusal_id);
+    assert_eq!(stack.source.request_count(), before_pin_refusal);
+
     let response = stack.direct_get_with_correlation(RECORD, correlation).await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     assert!(response
@@ -169,7 +184,9 @@ async fn native_get_and_read_only_post_use_the_live_effective_contract() {
     assert!(!response_body
         .windows(correlation.len())
         .any(|bytes| bytes == correlation.as_bytes()));
-    assert!(!stack.adapter_journal_text().await.contains(correlation));
+    let journal = stack.adapter_journal_text().await;
+    assert!(!journal.contains(correlation));
+    assert!(!journal.contains(&correlation_digest));
 
     let requests = stack.source.requests();
     assert_eq!(requests.len(), 3);

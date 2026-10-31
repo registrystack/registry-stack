@@ -36,8 +36,16 @@ It obtains the contract through the Adapter's public CLI and authenticated endpo
 It exercises GET, read-only POST, input/output validation, digest drift, unavailable journal and other negative cases.
 The fixture data is synthetic and no production service is contacted.
 
-Build the matching Adapter sources separately.
-They must support `effective-contract/v1alpha1`, authenticated contract/readiness readback and the operation's `x-registry-adapter-contract` precondition.
+Build the matching Adapter sources separately. For the explicitly owned plaintext
+PostgreSQL fixture, run from that Adapter source tree:
+
+```sh
+cargo build --locked -p registry-adapter --features postgres-test --bin adapter
+```
+
+The binary must support the versioned/domain-bound `effective-contract/v1alpha1`
+digest, trusted-machine authority, authenticated contract/readiness readback and
+the operation's `x-registry-adapter-contract` precondition.
 Use the fixtures from that same source tree and an explicitly disposable PostgreSQL database.
 Then run from the gateway source workspace:
 

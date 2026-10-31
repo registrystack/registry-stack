@@ -80,14 +80,21 @@ adapter effective-contract --runtime-config /srv/adapter/runtime.yaml --project 
 
 Configure the reviewed contract file, its exact digest, expected adapter audience,
 `dataClass: non-personal`, one machine credential reference and an explicit public-tool-to-operation map.
-The file must describe served reads with complete embedded closed schemas.
+The file must declare the JSON Schema 2020-12 dialect, trusted-machine authority,
+and served reads with complete embedded closed schemas and declared success statuses.
+The versioned digest covers the format identity and complete contract.
+Re-export, review and update the pin when upgrading the effective-contract format.
 The gateway refuses schema references, unsupported writes, unknown operations, duplicate names, wrong audiences and digest mismatches.
 
 Every catalog read checks the authenticated adapter contract and journal readiness.
 Every operation checks readiness again and sends `x-registry-adapter-contract` so the adapter refuses a deployment change before source access.
 The tool arguments contain only the exported `path`, `query` and, for a read-only POST, `body` objects.
 They cannot choose an origin, credential, profile or operation.
-The response must match the pinned output schema and carry an adapter-minted request identifier.
+The response must use the declared success status, match the pinned output schema,
+and carry the Adapter's 32-character lowercase hexadecimal request identifier.
+Profile problems and the protocol's typed 412/503 problems retain their separate schemas.
+Each service keeps its own request identity: the gateway retains its audit correlation
+locally, and returns the Adapter's request identifier as `traceId`.
 Redirects, automatic pagination and automatic retries are disabled.
 
 The non-personal declaration is an operator constraint, not a data classifier or a personal-data grant.
