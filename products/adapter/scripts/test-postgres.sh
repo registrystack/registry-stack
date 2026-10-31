@@ -3,12 +3,11 @@ set -euo pipefail
 
 : "${CARGO_TARGET_DIR:?Set CARGO_TARGET_DIR to an external worktree Cargo target.}"
 
-# The Adapter PostgreSQL gate (products/adapter/DELIVERY-PLAN.md,
-# Increment 1 wave 0): runs the adapter crates' PostgreSQL-gated suites.
-# Without ADAPTER_TEST_DATABASE_URL this script starts its own disposable
-# loopback PostgreSQL 17 container, proves it answers queries, and removes
-# it on the way out; with the variable set it uses that server as given
-# and touches nothing outside this process.
+# The Adapter PostgreSQL gate: runs the adapter crates' PostgreSQL-gated
+# suites. Without ADAPTER_TEST_DATABASE_URL this script starts its own
+# disposable loopback PostgreSQL 17 container, proves it answers queries,
+# and removes it on the way out; with the variable set it uses that server
+# as given and touches nothing outside this process.
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 cd "$repo_root"
@@ -70,12 +69,12 @@ else
 	printf '%s\n' 'Using ADAPTER_TEST_DATABASE_URL from the environment.' >&2
 fi
 
-# Native experiment acceptance invokes the matching authoring CLI as well as
+# Native source-shape acceptance invokes the matching authoring CLI as well as
 # the feature-enabled runtime. Build the CLI first: building default-feature
 # binaries during native tests can replace the runtime they are executing.
 PATH="$HOME/.cargo/bin:$PATH" cargo build --locked -p registry-adapterctl
 export ADAPTERCTL_BIN="${CARGO_TARGET_DIR}/debug/adapterctl"
 
 # The postgres-test feature gates the suites that need the database, so a
-# plain cargo test run never silently skips them (DELIVERY-PLAN.md rule 8).
+# plain cargo test run never silently skips them.
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features postgres-test
