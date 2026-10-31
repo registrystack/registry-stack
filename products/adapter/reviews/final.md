@@ -43,25 +43,21 @@ filtering.
 | Workspace Clippy | PASS | Locked workspace, all targets, warnings denied |
 | CLI catalog | PASS | 24 unit and 3 snapshot tests |
 | Port-table milestone | PASS for Increment 1 | 37 rows, 35 delivered with evidence, 2 pending |
-| Strict workspace configuration conformance | EXCEPTION, not green | 5,553 cells: 4,133 pass, 2 fail, 0 stale, 0 blocked, 1,418 not applicable; no Adapter failure |
-| Dependency advisory gate | EXCEPTION, not green | Three unchanged Wasmtime 48.0.7 advisories; no manifest or version change and no new ignore |
+| Strict workspace configuration conformance | PASS with two recorded expected failures | 5,657 cells: 4,227 pass, 2 expected failures, 0 fail, 0 stale, 0 blocked, 1,428 not applicable; no Adapter failure |
+| Dependency advisory gate | PASS | `cargo deny check` clean on the current base |
 | Latest MCP/gateway read pairing | PASS | 6 native Adapter/PostgreSQL cases passed, zero failed or ignored; four artifact hashes stable and committed fixture archive reproduced |
 | Full program definition of done | HOLD | Later port rows, increments, real OpenCRVS, and workspace debt remain open |
 
-The two strict-configuration failures are the unchanged `evidence/bundle` and
-`coordinator/runtime` `unique-list-sweep` diagnostics. Their owning readers
-wrap the expected duplicate-item diagnostic in a domain diagnostic. No Adapter
-cell failed. This is a written exception, not a green command or a fix to
-either product.
+The two expected failures are the `evidence/bundle` and `coordinator/runtime`
+cells of the `unique-list-sweep` case this branch adds. Their owning readers
+refuse the duplicate but wrap the expected `config.duplicate-item` diagnostic
+in a domain diagnostic. No Adapter cell failed. Both cells are digest-pinned in
+`products/platform/conformance/yaml/expected-failures.yaml` until those readers
+conform; they are not a fix to either product.
 
-`cargo deny check` remains red on RUSTSEC-2026-0422,
-RUSTSEC-2026-0423, and RUSTSEC-2026-0424 in Wasmtime 48.0.7. The Adapter normal
-dependency tree does not reach Wasmtime. Bans, licenses, and sources pass, but
-the advisories remain workspace debt.
-
-The written exceptions are sufficient for the accepted Increment 1 checkpoint
-under its inherited acceptance rule. They are not a full-program PASS:
-`CONCEPT.md` section 14 item 4 requires every gate to be green.
+The recorded expected failures are sufficient for the accepted Increment 1
+checkpoint under its inherited acceptance rule. They are not a full-program
+PASS: `CONCEPT.md` section 14 item 4 requires every gate to be green.
 
 ## Current served behavior
 
@@ -148,11 +144,12 @@ the external gateway contract.
 7. Complete the remaining Increment 3 obligations, including real OpenCRVS
    reads and writes, the applicable source protocol decision, and the planned
    facade-contract work.
-8. Resolve or formally retain the two non-Adapter strict-configuration
-   failures. The current command is red even though no Adapter cell failed.
-9. Resolve or formally retain the three Wasmtime advisories. The current
-    dependency advisory command is red even though Adapter does not reach
-    Wasmtime normally.
+8. Make the `evidence/bundle` and `coordinator/runtime` readers report
+   duplicate set items as `config.duplicate-item`, and remove their two
+   entries from the expected-failures register.
+9. Publish the Adapter problem inventory in the identifier catalog. Its type
+   base is reserved by one `planned-resolution` exclusion until the inventory
+   has titles, descriptions, and a settled URI form.
 10. Keep personal delegation, record-level and field-level authorization,
     MCP writes, and typed non-record commands behind their separate contracts
     and acceptance gates.
