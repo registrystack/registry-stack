@@ -102,8 +102,17 @@ native-drill prerequisites.
 Export the effective contract from the matching adapter runtime and reviewed artifact:
 
 ```sh
-adapter effective-contract --runtime-config /srv/adapter/runtime.yaml --project /srv/adapter/project > /srv/mcp/adapter-contract.json
+adapter effective-contract \
+  --runtime-config /srv/adapter/runtime.yaml \
+  --project /srv/adapter/project \
+  --profile /srv/adapter/profiles/govstack-consultation/profile.yaml \
+  --pack /srv/adapter/packs/dhis2-tracker/pack.yaml \
+  > /srv/mcp/adapter-contract.json
 ```
+
+Select the exact profile and pack files used by the reviewed deployment; their
+pins must match the project. The CLI sibling-file defaults apply only when the
+project directory actually contains `profile.yaml` and `pack.yaml`.
 
 Configure the reviewed contract file, its exact digest, expected adapter audience,
 `dataClass: non-personal`, one machine credential reference and an explicit
