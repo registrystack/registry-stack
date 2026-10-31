@@ -404,8 +404,10 @@ fn serve<S: Read + Write>(
     let answer = answers
         .pop_front()
         .unwrap_or_else(|| Response::json(500, "the script is exhausted"));
-    write_response(stream, &answer);
+    // Record before answering: once the answer is written the CLI can exit
+    // and the test can read the recording before this thread runs again.
     recorded.lock().unwrap().push(request);
+    write_response(stream, &answer);
 }
 
 /// Read one HTTP/1.1 request head (bounded) plus its content-length body.
