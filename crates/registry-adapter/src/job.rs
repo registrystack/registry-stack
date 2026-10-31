@@ -30,9 +30,9 @@ use std::time::Duration;
 
 use registry_adapter_core::{
     check_job, check_project_pins, check_workspace, AdapterJob, AdapterPack, AdapterProfile,
-    AdapterProject, AdapterRuntimeConfig, ComponentKind, Step, Workspace, ADAPTER_JOB_API_VERSION,
-    ADAPTER_JOB_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION,
-    ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
+    AdapterProject, ComponentKind, Step, Workspace, ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND,
+    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS,
     ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
@@ -77,6 +77,7 @@ pub const JOB_ENGINE_CODES: &[&str] = &[
     "adapter.job.direct-unknown",
     "adapter.job.postgres-query-refused",
     "adapter.job.read-bound",
+    "adapter.job.source-unbound",
 ];
 
 /// Why a compiled job was refused. Every diagnostic carries its closed
@@ -137,6 +138,8 @@ pub struct JobProgram {
     pub(crate) resilience: ResilienceRuntime,
     pub(crate) routes: RouteTable,
     pub(crate) resolver: SecretResolver,
+    /// The compiled governed-ingestion sources the page runs read.
+    pub(crate) job_state: crate::job_sources::JobPageState,
 }
 
 impl JobProgram {
@@ -241,14 +244,15 @@ pub fn compile_job(
     .map_err(artifact_error)?;
     let absolute_runtime =
         std::fs::canonicalize(runtime_path).map_err(|_| runtime_error(UNREADABLE_RUNTIME))?;
-    let runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let job_runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
         api_version: ADAPTER_RUNTIME_API_VERSION,
         kind: ADAPTER_RUNTIME_KIND,
     })
     .removed_keys(ADAPTER_REMOVED_KEYS)
-    .load::<AdapterRuntimeConfig>(&absolute_runtime)
-    .map_err(|error| runtime_error(&format!("the runtime config was refused: {error}")))?
-    .config;
+    .load::<crate::job_sources::JobRuntimeConfig>(&absolute_runtime)
+    .map_err(|error| runtime_error(&format!("the runtime config was refused: {error}")))?;
+    let runtime = job_runtime.config.core;
+    let sources = job_runtime.config.sources;
 
     let mut findings: Vec<Diagnostic> = Vec::new();
     // The workspace runtime check demands a binding for every pack
@@ -394,8 +398,8 @@ pub fn compile_job(
         },
     )
     .map_err(|error| runtime_error(&format!("the job's workspace could not compile: {error}")))?;
-    let mut endpoints = authored.endpoints;
-    compile_job_sources(&mut endpoints, &pack)?;
+    let endpoints = authored.endpoints;
+    let job_state = compile_job_sources(&pack, sources.as_ref())?;
 
     let Some(source) = pack.source_routes.get(job.source.route.as_str()) else {
         // The job checks refused the unknown route already; the same
@@ -445,6 +449,7 @@ pub fn compile_job(
         resilience,
         routes: authored.routes,
         resolver,
+        job_state,
     })
 }
 
@@ -492,33 +497,69 @@ fn digest_of(bytes: &[u8]) -> registry_platform_yaml::Digest {
         .expect("a computed sha256 uri is a valid digest")
 }
 
-/// Compile the job's source endpoints into the runtime table. A job
-/// source this build does not serve refuses under
+/// Compile the job's source endpoints into the page state the runs
+/// carry. A job source this build does not serve refuses under
 /// `adapter.job.component-unavailable`: the component exists in the
 /// model, the runtime just cannot serve it. The `file` source compiles
-/// only with the `job-file` feature and the read-only `postgres` send
-/// only with `job-postgres`; both gates are off by default, so the
-/// facade binary and default builds compile neither. The `sftp` source
-/// waits on the SSH dependency review of section 17.6 in every build.
+/// from the runtime config's `sources.file` block only with the
+/// `job-file` feature; the read-only `postgres` send compiles the same
+/// way from `sources.postgres` with `job-postgres`. Both gates are off
+/// by default, so the facade binary and default builds compile neither.
+/// The `sftp` source waits on the SSH dependency review of section 17.6
+/// in every build. The coverage rule the endpoint-binding checks hand
+/// over holds here: every source endpoint carries its source binding,
+/// and every source binding names a declared endpoint of its kind,
+/// under `adapter.job.source-unbound`.
 fn compile_job_sources(
-    endpoints: &mut BTreeMap<String, EndpointRuntime>,
     pack: &AdapterPack,
-) -> Result<(), JobError> {
-    // The job-file and job-postgres features compile their source
-    // endpoints into this table; every other endpoint compiles through
-    // the loader path above.
-    let _ = endpoints;
+    sources: Option<&crate::job_sources::JobSources>,
+) -> Result<crate::job_sources::JobPageState, JobError> {
+    let declared_file: std::collections::BTreeSet<&str> = pack
+        .endpoints
+        .iter()
+        .filter(|endpoint| matches!(endpoint.component, ComponentKind::File))
+        .map(|endpoint| endpoint.id.as_str())
+        .collect();
+    if let Some(sources) = sources {
+        for id in sources.file.keys() {
+            if !declared_file.contains(id.as_str()) {
+                return Err(source_unbound(
+                    &format!("/sources/file/{id}"),
+                    "the runtime config binds a file source no pack endpoint declares",
+                ));
+            }
+        }
+    }
+    #[cfg_attr(not(feature = "job-file"), allow(unused_mut))]
+    let mut files = std::collections::BTreeMap::new();
     for declared in pack.endpoints.iter() {
         match declared.component {
             ComponentKind::File => {
-                return Err(unavailable(
-                    declared,
-                    if cfg!(feature = "job-file") {
-                        "the file source read is not served by this build"
-                    } else {
-                        "serve the file source by building with the job-file feature"
-                    },
-                ));
+                #[cfg(feature = "job-file")]
+                {
+                    let id = declared.id.as_str();
+                    let Some(config) = sources.and_then(|sources| sources.file.get(id)) else {
+                        return Err(source_unbound(
+                            &format!("/endpoints/{id}"),
+                            "the pack declares a file source the runtime config binds no directory for",
+                        ));
+                    };
+                    // The resolved lock shape holds at compile, never at
+                    // the first read: a lock name outside the closed
+                    // pair, or a lock bound beside no changed lock,
+                    // refuses the job.
+                    config.read_lock().map_err(|reason| {
+                        runtime_error(&format!("endpoint {id} source was refused: {reason}"))
+                    })?;
+                    files.insert(id.to_owned(), config.clone());
+                }
+                #[cfg(not(feature = "job-file"))]
+                {
+                    return Err(unavailable(
+                        declared,
+                        "serve the file source by building with the job-file feature",
+                    ));
+                }
             }
             ComponentKind::Postgres => {
                 return Err(unavailable(
@@ -542,7 +583,22 @@ fn compile_job_sources(
             | ComponentKind::Rest => {}
         }
     }
-    Ok(())
+    Ok(crate::job_sources::JobPageState {
+        profile: None,
+        files,
+    })
+}
+
+/// The source coverage refusal: a source endpoint or a source binding
+/// whose counterpart the artifacts name nothing for.
+fn source_unbound(path: &str, message: &str) -> JobError {
+    job_error(vec![job_finding(
+        "adapter.job.source-unbound",
+        ADAPTER_RUNTIME_KIND,
+        path,
+        message,
+        "Bind every source endpoint in the runtime config's sources block, and declare every bound endpoint in the pack.",
+    )])
 }
 
 fn unavailable(declared: &registry_adapter_core::Endpoint, reason: &str) -> JobError {
@@ -746,6 +802,10 @@ pub async fn run_job_page(
         // authoring check holds above the source route's static worst
         // case; the runtime holds the same number at the edge.
         maximum_upstream_calls: profile.maximum_upstream_calls,
+        job: crate::job_sources::JobPageState {
+            profile: Some(profile.clone()),
+            files: program.job_state.files.clone(),
+        },
     };
     // The exchange bound follows the profile: the page and every
     // intermediate body of the run share the response bound, which a
@@ -762,7 +822,15 @@ pub async fn run_job_page(
     )
     .await;
     let exchange = match outcome.result {
-        Err(failure) => return Err(JobPageFailure::of_class(failure.class)),
+        Err(failure) => {
+            return Err(match failure.code {
+                Some(code) => JobPageFailure {
+                    class: Some(failure.class),
+                    code: Some(code),
+                },
+                None => JobPageFailure::of_class(failure.class),
+            })
+        }
         Ok(exchange) => exchange,
     };
     let malformed_lines = outcome

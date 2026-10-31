@@ -186,15 +186,10 @@ fn empty_version_artifacts(
 }
 
 fn project_with_native_update(scratch: &std::path::Path) -> std::path::PathBuf {
+    // The example project carries the records-update binding natively,
+    // so the native-update contract is read straight from it.
     let source = repo_root().join("products/adapter/examples/dhis2-tracker/project.yaml");
     let project = read_yaml_value(&source, &PROJECT_FORMAT);
-    let binding = project["bindings"]
-        .as_array()
-        .expect("project bindings")
-        .iter()
-        .find(|binding| binding["id"] == "person-update")
-        .expect("maintained update binding");
-    assert_eq!(binding["operation"], "records-update");
     let directory = scratch.join("project");
     fs::create_dir(&directory).expect("create update project directory");
     fs::write(

@@ -132,6 +132,7 @@ async fn run_over(step_list: Value, replies: Vec<upstream::Response>) -> (RouteO
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 12,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("error-cluster".to_owned());
     exchange.message.body = json!({"q": 1});

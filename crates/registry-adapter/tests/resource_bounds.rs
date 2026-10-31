@@ -39,6 +39,7 @@ async fn run_with_deadline(step_list: &[Step], deadline: Duration) -> RouteOutco
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     run_route_within(
         &context,
@@ -64,6 +65,7 @@ async fn run(step_list: &[Step]) -> RouteOutcome {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     run_route(
         &context,

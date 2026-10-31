@@ -430,6 +430,7 @@ async fn run_once(case: &GeneratedRoute, accepted: u64) -> Result<(usize, Vec<u8
         routes: &routes,
         code_maps,
         maximum_upstream_calls: accepted,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let outcome = run_route(&context, &root.steps, Exchange::new("generated".to_owned())).await;
     let exchange = outcome.result.map_err(|failure| {
@@ -491,6 +492,7 @@ async fn run_pages(pages: &[Value]) -> Result<(usize, Result<Value, ErrorClass>)
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: pages.len() as u64,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("generated-pagination".to_owned());
     exchange.message.body = json!({"records": []});
@@ -574,6 +576,7 @@ async fn run_local_route(route: &[Step]) -> RouteOutcome {
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 1,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     run_route(&context, route, Exchange::new("generated-split".to_owned())).await
 }

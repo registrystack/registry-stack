@@ -652,6 +652,7 @@ pub async fn run(
         routes: &authored.routes,
         code_maps: Arc::clone(&authored.code_maps),
         maximum_upstream_calls: operation.maximum_upstream_calls,
+        job: crate::job_sources::JobPageState::default(),
     };
     let outcome = run_route_with_profile(&context, profile, &operation.steps, exchange).await;
     transcript.finish()?;

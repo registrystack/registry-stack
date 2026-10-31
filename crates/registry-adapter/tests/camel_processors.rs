@@ -40,6 +40,7 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> registry_adapter::rou
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 4,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("test".to_owned());
     exchange.message.body = json!({"items": [{"id": "a"}, {"id": "b"}]});

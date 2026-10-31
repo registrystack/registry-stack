@@ -137,6 +137,7 @@ async fn run_timed(
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("upstream-fault".to_owned());
     exchange.message.body = body;

@@ -26,6 +26,8 @@ pub mod enrich;
 pub mod filter;
 pub mod idempotent_consumer;
 pub mod r#loop;
+#[cfg(feature = "job-file")]
+pub(crate) mod poll_enrich;
 pub mod redelivery;
 pub mod remove_header;
 pub mod remove_property;

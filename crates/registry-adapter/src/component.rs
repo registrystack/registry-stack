@@ -8,6 +8,8 @@
 //! `log` and `mock` outside the test harness, is not ported.
 
 pub mod direct;
+#[cfg(feature = "job-file")]
+pub mod file;
 pub mod graphql;
 pub mod http;
 pub mod rest;

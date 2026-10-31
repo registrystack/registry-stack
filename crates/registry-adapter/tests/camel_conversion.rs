@@ -70,6 +70,7 @@ async fn run_over(
         routes: &routes,
         code_maps: maps,
         maximum_upstream_calls: 4,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("test".to_owned());
     exchange.message.body = body;

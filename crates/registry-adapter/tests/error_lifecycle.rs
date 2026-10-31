@@ -45,6 +45,7 @@ async fn run_empty(main: Value, targets: Value) -> RouteOutcome {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 4,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     run_route(&context, &main, Exchange::new("error-lifecycle".to_owned())).await
 }

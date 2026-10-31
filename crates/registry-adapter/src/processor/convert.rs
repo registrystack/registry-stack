@@ -23,6 +23,7 @@ fn unmapped(map_id: &str, condition: &str) -> RouteFailure {
         message: Some(format!("code map {map_id} {condition}")),
         data: None,
         auth: None,
+        code: None,
     }
 }
 

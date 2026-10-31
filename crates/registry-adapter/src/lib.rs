@@ -45,6 +45,8 @@
 pub mod auth;
 pub mod cli;
 pub mod component;
+#[cfg(feature = "job-file")]
+pub mod decoder;
 pub mod effective_contract;
 pub mod egress;
 pub mod envelope;
@@ -53,6 +55,7 @@ pub mod exchange;
 pub mod facade;
 pub mod idempotent;
 pub mod job;
+pub mod job_sources;
 pub mod journal;
 pub mod language;
 pub mod load;

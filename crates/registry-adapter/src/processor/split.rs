@@ -255,6 +255,7 @@ fn not_an_array() -> RouteFailure {
         message: Some("a split expression must yield a JSON array".to_owned()),
         data: None,
         auth: None,
+        code: None,
     }
 }
 

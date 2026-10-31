@@ -97,6 +97,7 @@ fn not_an_integer() -> RouteFailure {
         message: Some("a loop count must be an integer".to_owned()),
         data: None,
         auth: None,
+        code: None,
     }
 }
 

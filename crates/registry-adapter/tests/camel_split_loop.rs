@@ -48,6 +48,7 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> RouteOutcome {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 8,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("test".to_owned());
     exchange.message.body = json!({"records": [{"id": "a"}, {"id": "b"}, {"id": "c"}]});
@@ -1326,6 +1327,7 @@ async fn run_enrich(
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 8,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("enrich".to_owned());
     exchange.message.body = json!({"q": 1});
@@ -1372,6 +1374,7 @@ async fn direct_enrich_runs_the_resource_route_on_a_copy() {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let route = steps(json!([{
         "enrich": {

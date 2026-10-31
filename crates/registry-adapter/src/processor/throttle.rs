@@ -82,6 +82,7 @@ fn invalid_limit() -> RouteFailure {
         message: Some("a throttle limit must be a positive integer".to_owned()),
         data: None,
         auth: None,
+        code: None,
     }
 }
 

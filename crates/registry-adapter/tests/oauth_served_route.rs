@@ -131,6 +131,7 @@ async fn run(
         routes: &routes,
         code_maps: std::sync::Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 12,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let send: Step = serde_json::from_value(
         json!({"to":{"uri":"http:source","parameters":{"httpMethod":"GET","path":"/data"}}}),

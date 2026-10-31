@@ -215,6 +215,7 @@ impl Lane {
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
+            job: registry_adapter::job_sources::JobPageState::default(),
         };
         run_route(&context, &self.steps, exchange).await
     }
@@ -231,6 +232,7 @@ impl Lane {
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
+            job: registry_adapter::job_sources::JobPageState::default(),
         };
         run_route_within(
             &context,

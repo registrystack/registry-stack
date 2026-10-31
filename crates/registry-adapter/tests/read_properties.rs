@@ -413,6 +413,7 @@ async fn checker_accepted_read_budgets_bound_actual_interpreter_sends() {
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: accepted,
+            job: registry_adapter::job_sources::JobPageState::default(),
         };
         let outcome = run_route(
             &context,
@@ -473,6 +474,7 @@ async fn an_oversized_http_body_is_a_too_large_failure_with_no_partial_result() 
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::job_sources::JobPageState::default(),
     };
     let route = steps(json!([get()]));
     let outcome = run_route(&context, &route, Exchange::new("oversized-body".to_owned())).await;

@@ -187,6 +187,7 @@ impl Lane {
             routes: &self.routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
+            job: registry_adapter::job_sources::JobPageState::default(),
         };
         run_route(&context, &self.steps, Exchange::new("graphql".to_owned())).await
     }

@@ -686,6 +686,7 @@ async fn answer(
         routes: &state.loaded.routes,
         code_maps: state.loaded.code_maps.clone(),
         maximum_upstream_calls: operation.maximum_upstream_calls,
+        job: crate::job_sources::JobPageState::default(),
     };
     let outcome =
         run_route_with_profile(&context, &state.loaded.profile, &operation.steps, exchange).await;
@@ -788,6 +789,7 @@ async fn answer(
                         message: None,
                         data: None,
                         auth: None,
+                        code: None,
                     };
                     events.push((
                         journal_event(

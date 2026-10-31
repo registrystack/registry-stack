@@ -514,7 +514,10 @@ fn the_cursor_property_is_the_read_only_engine_slot() {
 }
 
 /// The pack of a file-source job: one file endpoint, one source route
-/// whose pollEnrich read carries the mandatory timeout.
+/// whose pollEnrich read carries the mandatory timeout. The default
+/// build's refusal test is its only caller, and the job-file build
+/// compiles none.
+#[cfg_attr(feature = "job-file", allow(dead_code))]
 fn file_pack_yaml() -> String {
     r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
@@ -543,7 +546,10 @@ capabilities: {}
 }
 
 /// The pack of a postgres-source job: one read-only postgres endpoint
-/// with its digest-pinned query file, one source route that sends.
+/// with its digest-pinned query file, one source route that sends. The
+/// default build's refusal test is its only caller, and the
+/// job-postgres build compiles none.
+#[cfg_attr(feature = "job-postgres", allow(dead_code))]
 fn postgres_pack_yaml(query: &str) -> String {
     let digest = sha256_uri(query.as_bytes());
     format!(

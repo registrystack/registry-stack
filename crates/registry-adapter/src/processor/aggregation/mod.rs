@@ -320,6 +320,7 @@ fn fault(message: &str) -> RouteFailure {
         message: Some(message.to_owned()),
         data: None,
         auth: None,
+        code: None,
     }
 }
 

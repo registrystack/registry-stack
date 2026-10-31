@@ -803,6 +803,9 @@ pub struct RouteContext<'a> {
     pub code_maps: crate::scripts::CodeMaps,
     /// The binding's `maximumUpstreamCalls`.
     pub maximum_upstream_calls: u64,
+    /// The governed-ingestion state a job source route runs under:
+    /// empty in every facade deployment, whose routes carry no job step.
+    pub job: crate::job_sources::JobPageState,
 }
 
 /// The deployment's declared routes by id, each entry the route's whole
@@ -958,6 +961,11 @@ pub struct RouteFailure {
     /// The value-free authentication events of a send that failed at its
     /// credential, for the failure's own journal row.
     pub auth: Option<Value>,
+    /// The closed engine-read code a job read raised, when the failure
+    /// is the read's own (`adapter.job.read-bound`,
+    /// `adapter.job.decoder-row`); the job entry reports it beside the
+    /// class, and every other failure carries none.
+    pub code: Option<&'static str>,
 }
 
 impl fmt::Debug for RouteFailure {
@@ -967,6 +975,7 @@ impl fmt::Debug for RouteFailure {
         debug.field("message", &self.message);
         debug.field("data", &self.data.as_ref().map(|_| "<redacted>"));
         debug.field("auth", &self.auth);
+        debug.field("code", &self.code);
         debug.finish()
     }
 }
@@ -978,6 +987,7 @@ impl RouteFailure {
             message: None,
             data: None,
             auth: None,
+            code: None,
         }
     }
 }
@@ -1151,6 +1161,7 @@ pub(crate) fn script_failure(failure: crate::scripts::ScriptFailure) -> RouteFai
             message: Some(failure.to_string()),
             data: None,
             auth: None,
+            code: None,
         },
         other => RouteFailure::of(other.class()),
     }
@@ -1511,6 +1522,7 @@ impl Run<'_, '_> {
                     message: throw.message.clone(),
                     data,
                     auth: None,
+                    code: None,
                 })
             }
             Step::To(to) => self.send(to).await,
@@ -1539,12 +1551,17 @@ impl Run<'_, '_> {
             // with one was never checked: the facade loader refuses the
             // step by name and the job compiler serves it, so the
             // runtime holds the boundary, uncatchably, before anything
-            // reads a source.
+            // reads a source. The gate holds the same line in a build
+            // that compiles no file source.
+            #[cfg(feature = "job-file")]
+            Step::PollEnrich(poll) => Box::pin(processor::poll_enrich::run(self, poll)).await,
+            #[cfg(not(feature = "job-file"))]
             Step::PollEnrich(_) => Err(RouteFailure {
                 class: ErrorClass::EgressRefused,
                 message: Some("a pollEnrich step is served in a job source route only".to_owned()),
                 data: None,
                 auth: None,
+                code: None,
             }),
             // Configuration the runner collected before the first step;
             // in the body it runs nothing.
@@ -1670,6 +1687,7 @@ impl Run<'_, '_> {
                     message: Some("a job source endpoint is read through the pollEnrich step only, never sent to".to_owned()),
                     data: None,
                     auth: None,
+                code: None,
                 });
             }
             SendComponent::Postgres => {
@@ -1680,6 +1698,7 @@ impl Run<'_, '_> {
                     ),
                     data: None,
                     auth: None,
+                    code: None,
                 });
             }
             SendComponent::Direct | SendComponent::Http | SendComponent::GraphQl => {}
@@ -1735,6 +1754,7 @@ impl Run<'_, '_> {
                     message: Some("graphql variables must yield an object".to_owned()),
                     data: None,
                     auth: None,
+                    code: None,
                 });
             }
             let mut request = json!({ "query": query.text, "variables": variables });
@@ -2067,6 +2087,7 @@ impl Run<'_, '_> {
                     message: Some("an httpUri must yield a string".to_owned()),
                     data: None,
                     auth: None,
+                    code: None,
                 })
             }
         };
@@ -2142,6 +2163,7 @@ fn graphql_reply_body(body: &Value) -> Result<Value, RouteFailure> {
             message: Some("the graphql reply carries an errors array".to_owned()),
             data: None,
             auth: None,
+            code: None,
         });
     }
     Ok(object.get("data").cloned().unwrap_or(Value::Null))
@@ -2544,6 +2566,7 @@ testedVersions: []
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 4,
+            job: crate::job_sources::JobPageState::default(),
         };
         // The key resolved at compile time; it is gone when the send needs it.
         std::env::remove_var(key_env);
@@ -2592,6 +2615,7 @@ testedVersions: []
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 4,
+            job: crate::job_sources::JobPageState::default(),
         };
 
         let started = Instant::now();
