@@ -612,10 +612,10 @@ ROWS: tuple[Row, ...] = (
                 "crates/registry-breg-mcp/src/config.rs", "RuntimeConfig", "secret_providers", "SecretProvidersConfig",
             ),
             RustBlock(
-                "crates/registry-breg-mcp/src/config.rs", "AuditConfig", "key", "AuditKeyConfig",
+                "crates/registry-mcp-edge/src/config.rs", "AuditConfig", "key", "AuditKeyConfig",
             ),
             RustBlock(
-                "crates/registry-breg-mcp/src/config.rs", "ResourceServerConfig", "jwks_source", "JwksSource",
+                "crates/registry-mcp-edge/src/config.rs", "ResourceServerConfig", "jwks_source", "JwksSource",
             ),
         ),
     ),
