@@ -53,6 +53,7 @@ use crate::route::{run_route, RouteContext, RouteFailure};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
 
 const REQUEST_ID_HEADER: &str = "x-registry-request-id";
+const WRITE_REQUEST_DIGEST_DOMAIN: &[u8] = b"registry-adapter:write-request:v2\0";
 
 /// What every handler shares.
 pub struct FacadeState {
@@ -570,11 +571,16 @@ async fn answer(
             "{}:{}:{}",
             operation.operation, operation.binding, record_type
         );
-        let digest = write_request_digest(&record_type, &record_id, &raw_body);
+        let digest = write_request_digest(
+            &state.loaded.deployment,
+            &record_type,
+            &record_id,
+            &raw_body,
+        );
         Some(exchange.prepare_write(
             store,
             caller_identity,
-            state.loaded.deployment.clone(),
+            state.loaded.runtime.id.as_str().to_owned(),
             concrete_operation,
             digest,
         ))
@@ -1375,14 +1381,24 @@ fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
     })
 }
 
-/// Bind the key to the exact validated write request. The concrete
-/// operation already namespaces the key; the record type and identifier are
-/// repeated here so an update cannot reuse a key for another record even if
-/// a profile's body envelope omits the identifier.
-fn write_request_digest(record_type: &str, record_id: &str, body: &[u8]) -> [u8; 32] {
+/// Bind the key to the exact governed artifact revision and validated write
+/// request. The concrete operation already namespaces the key; the record
+/// type and identifier are repeated here so an update cannot reuse a key for
+/// another record even if a profile's body envelope omits the identifier.
+fn write_request_digest(
+    artifact_revision: &str,
+    record_type: &str,
+    record_id: &str,
+    body: &[u8],
+) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"registry-adapter:write-request:v1\0");
-    for part in [record_type.as_bytes(), record_id.as_bytes(), body] {
+    digest.update(WRITE_REQUEST_DIGEST_DOMAIN);
+    for part in [
+        artifact_revision.as_bytes(),
+        record_type.as_bytes(),
+        record_id.as_bytes(),
+        body,
+    ] {
         let length = u64::try_from(part.len()).expect("facade request bounds fit u64");
         digest.update(length.to_be_bytes());
         digest.update(part);
@@ -2032,18 +2048,22 @@ mod tests {
 
     #[test]
     fn a_write_request_digest_binds_body_record_type_and_record_id() {
-        let first = write_request_digest("person", "p-1", br#"{"name":"A"}"#);
+        let first = write_request_digest("sha256:revision-a", "person", "p-1", br#"{"name":"A"}"#);
         assert_ne!(
             first,
-            write_request_digest("person", "p-2", br#"{"name":"A"}"#)
+            write_request_digest("sha256:revision-a", "person", "p-2", br#"{"name":"A"}"#)
         );
         assert_ne!(
             first,
-            write_request_digest("permit", "p-1", br#"{"name":"A"}"#)
+            write_request_digest("sha256:revision-a", "permit", "p-1", br#"{"name":"A"}"#)
         );
         assert_ne!(
             first,
-            write_request_digest("person", "p-1", br#"{"name":"B"}"#)
+            write_request_digest("sha256:revision-a", "person", "p-1", br#"{"name":"B"}"#)
+        );
+        assert_ne!(
+            first,
+            write_request_digest("sha256:revision-b", "person", "p-1", br#"{"name":"A"}"#)
         );
     }
 

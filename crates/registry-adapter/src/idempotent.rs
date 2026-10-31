@@ -32,7 +32,7 @@ use tokio_postgres::{Error as PgError, Row};
 pub const MAX_CALLER_ISSUER_BYTES: usize = 2_048;
 /// Longest accepted verified subject or acting client identifier in bytes.
 pub const MAX_CALLER_IDENTITY_BYTES: usize = 512;
-/// Longest deployment identity component in a key namespace.
+/// Longest logical deployment identifier in a key namespace.
 pub const MAX_DEPLOYMENT_IDENTITY_BYTES: usize = 256;
 /// Longest accepted concrete operation identifier in bytes.
 pub const MAX_CONCRETE_OPERATION_BYTES: usize = 256;
@@ -54,10 +54,17 @@ pub const MAX_SWEEP_BATCH: u32 = 1_000;
 const MIN_RESPONSE_RETENTION: Duration = Duration::from_secs(1);
 const SCOPE_DIGEST_DOMAIN: &[u8] = b"registry-adapter:idempotency-scope:v1\0";
 
-const MIGRATIONS: [(i64, &str); 1] = [(
-    100,
-    include_str!("idempotent/migrations/0100_idempotency_store.sql"),
-)];
+const LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION: i64 = 200;
+const MIGRATIONS: [(i64, &str); 2] = [
+    (
+        100,
+        include_str!("idempotent/migrations/0100_idempotency_store.sql"),
+    ),
+    (
+        LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION,
+        include_str!("idempotent/migrations/0200_logical_deployment_identity.sql"),
+    ),
+];
 const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 /// Session advisory-lock key for the idempotency migration. Its bytes spell
 /// `adap_idm`, distinct from the audit journal's `adapter_` lock.
@@ -108,8 +115,10 @@ impl VerifiedCallerIdentity {
 pub struct ClaimRequest<'a> {
     /// Authenticated issuer, subject, and acting client id.
     pub caller: &'a VerifiedCallerIdentity,
-    /// Digest-pinned deployment identity. A database may be shared by more
-    /// than one Adapter deployment, whose response custody must not cross.
+    /// Stable logical deployment identifier. A database may be shared by
+    /// more than one Adapter deployment, whose response custody must not
+    /// cross. Artifact revisions belong to `request_digest`, so a changed
+    /// revision mismatches rather than opening a fresh effect namespace.
     pub deployment: &'a str,
     /// Concrete facade operation, including its bound record type.
     pub concrete_operation: &'a str,
@@ -259,6 +268,9 @@ pub enum IdempotencyError {
     InvalidInput { field: &'static str },
     /// The database has an idempotency schema newer than this release.
     SchemaNewer { found: i64, supported: i64 },
+    /// Opaque v0100 entries cannot be remapped to the logical deployment
+    /// namespace without risking a fresh retry of an existing effect.
+    LegacyDeploymentIdentityEntries,
     /// The migration advisory lock was not held when released.
     MigrationLock,
     /// An execution token attempted an invalid or already-completed state
@@ -281,6 +293,10 @@ impl fmt::Display for IdempotencyError {
             Self::SchemaNewer { found, supported } => write!(
                 formatter,
                 "adapter.idempotency-schema-newer: database version {found} is newer than supported version {supported}"
+            ),
+            Self::LegacyDeploymentIdentityEntries => write!(
+                formatter,
+                "adapter.idempotency-legacy-deployment-entries: existing idempotency entries require operator reconciliation before the logical deployment identity migration"
             ),
             Self::MigrationLock => write!(
                 formatter,
@@ -310,6 +326,7 @@ impl std::error::Error for IdempotencyError {
             Self::Query(error) => Some(error),
             Self::InvalidInput { .. }
             | Self::SchemaNewer { .. }
+            | Self::LegacyDeploymentIdentityEntries
             | Self::MigrationLock
             | Self::StateConflict
             | Self::StoredDataInvalid => None,
@@ -357,7 +374,7 @@ impl PostgresIdempotencyStore {
         now: SystemTime,
     ) -> Result<Claim, IdempotencyError> {
         validate_component(
-            "deployment identity",
+            "deployment id",
             request.deployment.as_bytes(),
             MAX_DEPLOYMENT_IDENTITY_BYTES,
         )?;
@@ -614,7 +631,14 @@ async fn apply_migrations(client: &impl GenericClient) -> Result<(), Idempotency
         if applied.contains(&version) {
             continue;
         }
-        client.batch_execute(migration).await?;
+        if let Err(error) = client.batch_execute(migration).await {
+            if version == LOGICAL_DEPLOYMENT_IDENTITY_MIGRATION
+                && error.code().is_some_and(|code| code.code() == "P0001")
+            {
+                return Err(IdempotencyError::LegacyDeploymentIdentityEntries);
+            }
+            return Err(IdempotencyError::Query(error));
+        }
         client
             .execute(
                 "INSERT INTO adapter_idempotency_schema_migrations(version, applied_at) \
@@ -711,4 +735,38 @@ fn replay_from_row(row: &Row, outcome: TerminalOutcome) -> Result<Claim, Idempot
     )
     .map_err(|_| IdempotencyError::StoredDataInvalid)?;
     Ok(Claim::Replay { outcome, response })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest_for(deployment: &str, operation: &str) -> [u8; 32] {
+        let caller =
+            VerifiedCallerIdentity::new("https://issuer.example.invalid", "subject", "client")
+                .expect("the identity is bounded");
+        scope_digest(&ClaimRequest {
+            caller: &caller,
+            deployment,
+            concrete_operation: operation,
+            key: "key",
+            request_digest: [7; 32],
+        })
+    }
+
+    #[test]
+    fn scope_digest_separates_logical_deployments() {
+        assert_ne!(
+            digest_for("tracker-east", "records-create:person-create:person"),
+            digest_for("tracker-west", "records-create:person-create:person")
+        );
+    }
+
+    #[test]
+    fn scope_digest_frames_deployment_and_operation_components() {
+        assert_ne!(
+            digest_for("deployment-ab", "c"),
+            digest_for("deployment-a", "bc")
+        );
+    }
 }

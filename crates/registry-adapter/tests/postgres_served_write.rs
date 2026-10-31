@@ -134,6 +134,113 @@ async fn a_completed_duplicate_replays_exact_bytes_and_a_changed_request_mismatc
     );
 }
 
+#[tokio::test]
+async fn two_runtime_ids_sharing_a_database_have_distinct_write_namespaces() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![
+        accepted_upstream_response(),
+        accepted_upstream_response(),
+    ]);
+    let first = Served::start_for_deployment(
+        &upstream.url(""),
+        &Served::example_project(),
+        "tracker-east",
+        None,
+    )
+    .await;
+    let second = Served::start_for_deployment(
+        &upstream.url(""),
+        &Served::example_project(),
+        "tracker-west",
+        Some(&first.database),
+    )
+    .await;
+    let request = accepted_record("2026-03-01T12:00:00.000");
+
+    let first_response = raw_post(
+        &first,
+        &first.token("records.write"),
+        "shared-key",
+        &request,
+    );
+    let second_response = raw_post(
+        &second,
+        &second.token("records.write"),
+        "shared-key",
+        &request,
+    );
+
+    assert_eq!(
+        first_response.0,
+        201,
+        "{}",
+        String::from_utf8_lossy(&first_response.1)
+    );
+    assert_eq!(
+        second_response.0,
+        201,
+        "{}",
+        String::from_utf8_lossy(&second_response.1)
+    );
+    assert_eq!(
+        upstream.request_count(),
+        2,
+        "logical deployments sharing PostgreSQL cannot replay each other's writes"
+    );
+}
+
+#[tokio::test]
+async fn changed_artifacts_under_one_runtime_id_mismatch_without_a_fresh_send() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![
+        accepted_upstream_response(),
+        accepted_upstream_response(),
+    ]);
+    let project = tempfile::tempdir().expect("a copied project directory");
+    served_harness::copy_example_project(project.path());
+    let first =
+        Served::start_for_deployment(&upstream.url(""), project.path(), "tracker-stable", None)
+            .await;
+    let request = accepted_record("2026-03-01T12:00:00.000");
+    let first_response = raw_post(
+        &first,
+        &first.token("records.write"),
+        "stable-key",
+        &request,
+    );
+    assert_eq!(
+        first_response.0,
+        201,
+        "{}",
+        String::from_utf8_lossy(&first_response.1)
+    );
+
+    let script_path = project.path().join("scripts/accepted-record.rhai");
+    let mut script = std::fs::read_to_string(&script_path).expect("the pack script reads");
+    script.push_str("\n// governed artifact revision\n");
+    served_harness::replace_pack_script(project.path(), "scripts/accepted-record.rhai", &script);
+    let second = Served::start_for_deployment(
+        &upstream.url(""),
+        project.path(),
+        "tracker-stable",
+        Some(&first.database),
+    )
+    .await;
+    let retry = raw_post(
+        &second,
+        &second.token("records.write"),
+        "stable-key",
+        &request,
+    );
+
+    assert_eq!(retry.0, 422, "{}", String::from_utf8_lossy(&retry.1));
+    assert_eq!(
+        upstream.request_count(),
+        1,
+        "an artifact change cannot open a fresh effect namespace"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_concurrent_duplicate_conflicts_while_the_first_source_send_is_in_flight() {
     let upstream = UpstreamDouble::start();

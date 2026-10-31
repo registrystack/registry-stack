@@ -23,7 +23,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use deadpool_postgres::{GenericClient, Manager, ManagerConfig, Pool, RecyclingMethod};
 use registry_adapter::idempotent::{
     self, Claim, ClaimRequest, IdempotencyError, StoredResponse, TerminalOutcome,
     VerifiedCallerIdentity, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
@@ -32,6 +32,7 @@ use registry_adapter::idempotent::{
 use tokio_postgres::{Client, Config as PgConfig, NoTls};
 
 static NEXT_SCHEMA: AtomicU32 = AtomicU32::new(0);
+const V0100_SCHEMA: &str = include_str!("../src/idempotent/migrations/0100_idempotency_store.sql");
 
 #[derive(Clone)]
 struct Isolated {
@@ -102,6 +103,54 @@ impl Isolated {
         idempotent::PostgresIdempotencyStore::new(self.pool.clone(), retention)
             .expect("construct the Adapter idempotency store")
     }
+}
+
+async fn install_v0100(client: &impl GenericClient) {
+    client
+        .batch_execute(
+            "CREATE TABLE adapter_idempotency_schema_migrations (\
+             version bigint PRIMARY KEY CHECK (version > 0),\
+             applied_at timestamptz NOT NULL)",
+        )
+        .await
+        .expect("create the v0100 migration ledger");
+    client
+        .batch_execute(V0100_SCHEMA)
+        .await
+        .expect("apply the historical v0100 schema");
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_schema_migrations(version, applied_at) \
+             VALUES (100, now())",
+            &[],
+        )
+        .await
+        .expect("record the historical v0100 migration");
+}
+
+async fn migration_versions(client: &impl GenericClient) -> Vec<i64> {
+    client
+        .query(
+            "SELECT version FROM adapter_idempotency_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await
+        .expect("read idempotency migration versions")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+async fn insert_claimed_row(client: &impl GenericClient) {
+    client
+        .execute(
+            "INSERT INTO adapter_idempotency_entries \
+             (scope_digest, request_digest, state, claimed_at) \
+             VALUES ($1, $2, 'claimed', now())",
+            &[&[1_u8; 32].as_slice(), &[2_u8; 32].as_slice()],
+        )
+        .await
+        .expect("insert a synthetic claimed idempotency row");
 }
 
 fn request<'a>(
@@ -215,6 +264,71 @@ async fn migration_owns_a_separate_idempotency_ledger_and_is_idempotent() {
             "adapter_idempotency_schema_migrations".to_owned(),
         ],
         "the idempotency migration neither creates nor borrows the journal ledger"
+    );
+    assert_eq!(migration_versions(&client).await, vec![100, 200]);
+}
+
+#[tokio::test]
+async fn logical_deployment_migration_refuses_legacy_rows_without_altering_them() {
+    let isolated = isolated().await;
+    let client = isolated.client().await;
+    install_v0100(&client).await;
+    insert_claimed_row(&client).await;
+
+    let error = idempotent::migrate(&client)
+        .await
+        .expect_err("opaque v0100 rows cannot be silently moved into the new namespace");
+    assert!(matches!(
+        error,
+        IdempotencyError::LegacyDeploymentIdentityEntries
+    ));
+    assert_eq!(
+        error.to_string(),
+        "adapter.idempotency-legacy-deployment-entries: existing idempotency entries require operator reconciliation before the logical deployment identity migration"
+    );
+    assert_eq!(migration_versions(&client).await, vec![100]);
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM adapter_idempotency_entries", &[])
+            .await
+            .expect("count the preserved v0100 rows")
+            .get::<_, i64>(0),
+        1
+    );
+}
+
+#[tokio::test]
+async fn logical_deployment_migration_accepts_an_empty_v0100_ledger() {
+    let isolated = isolated().await;
+    let client = isolated.client().await;
+    install_v0100(&client).await;
+
+    idempotent::migrate(&client)
+        .await
+        .expect("an empty v0100 ledger can adopt the logical deployment namespace");
+    assert_eq!(migration_versions(&client).await, vec![100, 200]);
+}
+
+#[tokio::test]
+async fn current_rows_do_not_block_a_subsequent_startup() {
+    let isolated = isolated().await;
+    let client = isolated.client().await;
+    idempotent::migrate(&client)
+        .await
+        .expect("fresh storage reaches the current schema");
+    insert_claimed_row(&client).await;
+
+    idempotent::migrate(&client)
+        .await
+        .expect("the applied semantic migration does not inspect current rows again");
+    assert_eq!(migration_versions(&client).await, vec![100, 200]);
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM adapter_idempotency_entries", &[])
+            .await
+            .expect("count the current rows")
+            .get::<_, i64>(0),
+        1
     );
 }
 

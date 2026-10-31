@@ -1106,8 +1106,10 @@ process (draft, declare), several `to` steps in sequence.
   (default true), `removeOnFailure` (default true), `completionEager`
   (default false). Divergences, from HTTP idempotency semantics and the BReg
   precedent in `crates/registry-breg/src/idempotency.rs`: the key is
-  namespaced by caller identity and concrete operation, and bound to the
-  request digest (same key, different body, is a 422); a duplicate replays
+  namespaced by verified issuer, subject, acting client, logical deployment
+  (`runtime.id`), and concrete operation. The request digest binds the exact
+  project/profile/pack revision and request bytes (same key, different body
+  or artifact revision, is a 422); a duplicate replays
   the recorded facade response instead of being dropped (`skipDuplicate` is
   not ported); a duplicate arriving while the first is in flight answers 409.
 - The idempotency store is PostgreSQL, separate from the audit journal. It is
@@ -1115,6 +1117,11 @@ process (draft, declare), several `to` steps in sequence.
   response, for a retention window the deployment configures, then erased
   by a supervised sweep, as BReg's store does. This is a data-minimization decision (D12)
   and carries a security review note.
+  Deployment identifiers must remain stable across artifact upgrades and
+  distinct for deployments sharing a database. The logical-deployment
+  migration refuses any legacy artifact-namespaced entries, preserving
+  their responses and spent keys for operator reconciliation. It never
+  clears opaque legacy keys or treats them as fresh work.
 - `removeOnFailure` before any upstream effect removes the key, as in Camel.
   A failure after a non-safe `to` has been sent keeps the key in a failed
   state and replays the recorded problem; it never re-executes a sent effect.

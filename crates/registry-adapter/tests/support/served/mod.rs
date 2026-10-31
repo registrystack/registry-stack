@@ -28,6 +28,7 @@ pub const USERNAME: &str = "synthetic-reader";
 pub const PASSWORD: &str = "synthetic-password";
 /// Exactly 32 bytes, the cursor key length.
 const CURSOR_KEY: &str = "synthetic-cursor-key-0123456789!";
+const DEFAULT_RUNTIME_ID: &str = "dhis2-tracker-test";
 /// The subject the default token carries.
 pub const SUBJECT: &str = "synthetic-caller";
 
@@ -151,6 +152,30 @@ impl Served {
 
     pub async fn start(upstream_url: &str) -> Self {
         Self::start_with_project(upstream_url, &Self::example_project()).await
+    }
+
+    /// Start one logical deployment, optionally sharing an existing test
+    /// schema with another running deployment.
+    pub async fn start_for_deployment(
+        upstream_url: &str,
+        project: &Path,
+        runtime_id: &str,
+        database: Option<&str>,
+    ) -> Self {
+        let mut served = Self::spawn_config_for_deployment(
+            upstream_url,
+            project,
+            CURSOR_KEY,
+            &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            BASIC_CREDENTIAL,
+            86_400,
+            runtime_id,
+            database,
+        )
+        .await;
+        served.wait_until_listening();
+        served
     }
 
     /// Start with an explicit exact-response custody window.
@@ -280,7 +305,36 @@ impl Served {
         credential: &str,
         response_retention_seconds: u64,
     ) -> Self {
-        let database = schema_url().await;
+        Self::spawn_config_for_deployment(
+            upstream_url,
+            project,
+            cursor_key,
+            omitted_env,
+            cursor_lines,
+            credential,
+            response_retention_seconds,
+            DEFAULT_RUNTIME_ID,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_config_for_deployment(
+        upstream_url: &str,
+        project: &Path,
+        cursor_key: &str,
+        omitted_env: &[&str],
+        cursor_lines: &str,
+        credential: &str,
+        response_retention_seconds: u64,
+        runtime_id: &str,
+        database: Option<&str>,
+    ) -> Self {
+        let database = match database {
+            Some(database) => database.to_owned(),
+            None => schema_url().await,
+        };
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
         let port = free_port();
@@ -291,7 +345,7 @@ impl Served {
             format!(
                 r#"apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
 kind: AdapterRuntimeConfig
-id: dhis2-tracker-test
+id: {runtime_id}
 endpoints:
   - endpoint: tracker
     baseUrl: {upstream_url}
