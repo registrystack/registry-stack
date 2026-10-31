@@ -24,7 +24,14 @@ Two independent primitives live here:
   same admission behavior, because nothing outside the breaker can see
   a phase nobody asked about. A failing half-open trial reopens with a
   fresh wait; trials that all succeed close the breaker with a fresh
-  window.
+  window. Admission hands the caller a
+  [`circuit_breaker::BreakerPermit`]: the call's outcome is recorded
+  through the permit, and a permit dropped unrecorded counts its call
+  as failed, so a caller whose future is abandoned mid-call cannot
+  strand a half-open breaker. Every phase change starts a new cycle and
+  the permit carries its own, so an outcome, or an abandoned permit,
+  from an earlier cycle lands nowhere: a slow call of the closed window
+  can neither close nor fail a later recovery cycle.
 
 Everything here is process-local and in-memory: state is not shared
 across replicas, and a deployment with more than one replica gets an

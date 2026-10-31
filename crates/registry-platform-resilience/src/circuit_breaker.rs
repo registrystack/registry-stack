@@ -3,7 +3,17 @@
 //! The breaker moves between three phases over the calls and records its
 //! caller makes; it owns no clock of its own and starts nothing. A
 //! caller asks [`CircuitBreaker::acquire`] before a guarded call and
-//! records the call's outcome and duration afterwards.
+//! records the call's outcome and duration through the permit it was
+//! handed. A permit dropped without a record counts as a failed call
+//! for its elapsed duration, so a caller whose future is abandoned
+//! between the acquire and the record cannot strand a half-open
+//! breaker: the trial goes back as a failure and the breaker reopens
+//! with a fresh wait.
+//!
+//! Every phase change starts a new cycle, and a permit carries the
+//! cycle it was admitted in: an outcome, or an abandoned permit, from
+//! an earlier cycle is ignored, so a slow call of the closed window can
+//! neither close nor fail a later recovery cycle.
 //!
 //! - **Closed**: every call is permitted. Outcomes land in a fixed
 //!   count-based window of the last `sliding_window_calls` calls; once
@@ -22,18 +32,60 @@
 //!   once trials equal to `maximum_half_open_calls` have succeeded, the
 //!   breaker closes with a fresh window.
 
-use std::{collections::VecDeque, sync::Mutex, time::Duration};
+use std::{cell::Cell, collections::VecDeque, sync::Mutex, time::Duration};
 
 use thiserror::Error;
 use tokio::time::Instant;
 
-/// Whether one guarded call may run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BreakerAdmission {
-    /// The call may run; record its outcome when it completes.
-    Permitted,
+/// Whether one guarded call may run: the call's permit, or a rejection
+/// the caller refuses its own way.
+#[derive(Debug)]
+pub enum Acquired<'a> {
+    /// The call may run; record its outcome through the permit when it
+    /// completes, or drop the permit unrecorded to count the abandoned
+    /// call as a failure.
+    Permitted(BreakerPermit<'a>),
     /// The call may not run; the caller refuses it its own way.
     Rejected,
+}
+
+/// One admitted guarded call. The call's outcome and duration are
+/// recorded through [`BreakerPermit::record`]; a permit dropped without
+/// a record counts the call as failed for its elapsed duration, so an
+/// abandoned trial can never hold a half-open breaker shut. The permit
+/// carries the cycle it was admitted in, and an outcome that arrives
+/// after the breaker has left that cycle lands nowhere.
+#[derive(Debug)]
+pub struct BreakerPermit<'a> {
+    breaker: &'a CircuitBreaker,
+    acquired_at: Instant,
+    cycle: u64,
+    recorded: Cell<bool>,
+}
+
+impl BreakerPermit<'_> {
+    /// Record the completed call's outcome. A duration at or above the
+    /// slow threshold counts against the slow-call rate even when the
+    /// call succeeded. An outcome from a cycle the breaker has already
+    /// left is ignored.
+    pub fn record(self, success: bool, duration: Duration) {
+        self.recorded.set(true);
+        self.breaker
+            .record_outcome(success, duration, Some(self.cycle));
+    }
+}
+
+impl Drop for BreakerPermit<'_> {
+    fn drop(&mut self) {
+        if !self.recorded.get() {
+            // The call was abandoned before it completed: its outcome
+            // is unknown, so it fails closed, and the elapsed duration
+            // carries it into the slow-call rate. If the breaker has
+            // left the call's cycle, the failure lands nowhere.
+            self.breaker
+                .record_outcome(false, self.acquired_at.elapsed(), Some(self.cycle));
+        }
+    }
 }
 
 /// The phase the breaker is in, advanced by any wait its own clock
@@ -85,12 +137,21 @@ enum Phase {
     HalfOpen { permitted: usize, successes: usize },
 }
 
+/// The phase plus the cycle that phase belongs to. Every phase change
+/// starts a new cycle, and an outcome from an earlier cycle is ignored:
+/// a call admitted in one cycle can neither help nor hurt a later one.
+#[derive(Debug)]
+struct Internals {
+    phase: Phase,
+    cycle: u64,
+}
+
 /// One circuit breaker, process-local, shared by reference across the
 /// calls it guards.
 #[derive(Debug)]
 pub struct CircuitBreaker {
     config: BreakerConfig,
-    inner: Mutex<Phase>,
+    inner: Mutex<Internals>,
 }
 
 impl CircuitBreaker {
@@ -109,30 +170,45 @@ impl CircuitBreaker {
         }
         Ok(Self {
             config,
-            inner: Mutex::new(Phase::Closed {
-                window: VecDeque::new(),
+            inner: Mutex::new(Internals {
+                phase: Phase::Closed {
+                    window: VecDeque::new(),
+                },
+                cycle: 0,
             }),
         })
     }
 
-    /// Whether one guarded call may run. A permitted call must be
-    /// recorded when it completes; a rejected call must not run.
-    pub fn acquire(&self) -> BreakerAdmission {
+    /// Whether one guarded call may run. A permitted call holds its
+    /// permit until the call completes and is recorded through it; a
+    /// rejected call must not run.
+    pub fn acquire(&self) -> Acquired<'_> {
         let now = Instant::now();
-        let mut phase = self.inner.lock().expect("the breaker lock is not poisoned");
-        match *phase {
-            Phase::Closed { .. } => BreakerAdmission::Permitted,
+        let mut guard = self.inner.lock().expect("the breaker lock is not poisoned");
+        let internals = &mut *guard;
+        let permit = |cycle: u64| {
+            Acquired::Permitted(BreakerPermit {
+                breaker: self,
+                acquired_at: now,
+                cycle,
+                recorded: Cell::new(false),
+            })
+        };
+        match internals.phase {
+            Phase::Closed { .. } => permit(internals.cycle),
             Phase::Open { opened_at } => {
                 if now.duration_since(opened_at) >= self.config.open_state_wait {
                     // The first acquire after the wait is the first
-                    // half-open trial.
-                    *phase = Phase::HalfOpen {
+                    // half-open trial, and it starts the cycle of that
+                    // recovery attempt.
+                    internals.cycle += 1;
+                    internals.phase = Phase::HalfOpen {
                         permitted: 1,
                         successes: 0,
                     };
-                    BreakerAdmission::Permitted
+                    permit(internals.cycle)
                 } else {
-                    BreakerAdmission::Rejected
+                    Acquired::Rejected
                 }
             }
             Phase::HalfOpen {
@@ -140,13 +216,13 @@ impl CircuitBreaker {
                 successes,
             } => {
                 if permitted < self.config.maximum_half_open_calls {
-                    *phase = Phase::HalfOpen {
+                    internals.phase = Phase::HalfOpen {
                         permitted: permitted + 1,
                         successes,
                     };
-                    BreakerAdmission::Permitted
+                    permit(internals.cycle)
                 } else {
-                    BreakerAdmission::Rejected
+                    Acquired::Rejected
                 }
             }
         }
@@ -154,12 +230,28 @@ impl CircuitBreaker {
 
     /// Record one completed permitted call. A duration at or above the
     /// slow threshold counts against the slow-call rate even when the
-    /// call succeeded.
+    /// call succeeded. The outcome lands in the breaker's current
+    /// cycle; callers that hold a permit record through the permit, so
+    /// an outcome from a cycle the breaker has left is ignored.
     pub fn record(&self, success: bool, duration: Duration) {
+        self.record_outcome(success, duration, None);
+    }
+
+    /// Record one completed call's outcome, in the cycle the call's
+    /// permit named when it held one. An outcome from a cycle the
+    /// breaker has already left lands nowhere.
+    fn record_outcome(&self, success: bool, duration: Duration, cycle: Option<u64>) {
         let now = Instant::now();
-        let mut phase = self.inner.lock().expect("the breaker lock is not poisoned");
-        match &mut *phase {
-            Phase::Closed { window } => {
+        let mut guard = self.inner.lock().expect("the breaker lock is not poisoned");
+        let internals = &mut *guard;
+        if cycle.is_some_and(|cycle| cycle != internals.cycle) {
+            // The call belonged to a cycle the breaker has already
+            // left; its outcome can neither help nor hurt the current
+            // one.
+            return;
+        }
+        match internals.phase {
+            Phase::Closed { ref mut window } => {
                 window.push_back(Call {
                     failed: !success,
                     slow: duration >= self.config.slow_call_duration_threshold,
@@ -176,24 +268,32 @@ impl CircuitBreaker {
                     if failure_rate >= self.config.failure_rate_threshold
                         || slow_rate >= self.config.slow_call_rate_threshold
                     {
-                        *phase = Phase::Open { opened_at: now };
+                        // Opening starts a new cycle.
+                        internals.cycle += 1;
+                        internals.phase = Phase::Open { opened_at: now };
                     }
                 }
             }
             // A record for a permit issued before the breaker opened.
             Phase::Open { .. } => {}
-            Phase::HalfOpen { successes, .. } => {
+            Phase::HalfOpen {
+                ref mut successes, ..
+            } => {
                 if success {
                     *successes += 1;
                     if *successes >= self.config.maximum_half_open_calls {
-                        *phase = Phase::Closed {
+                        // Closing starts a new cycle with a fresh
+                        // window.
+                        internals.cycle += 1;
+                        internals.phase = Phase::Closed {
                             window: VecDeque::new(),
                         };
                     }
                 } else {
                     // One failing trial is enough to reopen, with a
-                    // fresh wait.
-                    *phase = Phase::Open { opened_at: now };
+                    // fresh wait and a fresh cycle.
+                    internals.cycle += 1;
+                    internals.phase = Phase::Open { opened_at: now };
                 }
             }
         }
@@ -203,8 +303,9 @@ impl CircuitBreaker {
     /// already allows. This observes without admitting anything.
     pub fn state(&self) -> BreakerState {
         let now = Instant::now();
-        let phase = self.inner.lock().expect("the breaker lock is not poisoned");
-        match *phase {
+        let guard = self.inner.lock().expect("the breaker lock is not poisoned");
+        let internals = &*guard;
+        match internals.phase {
             Phase::Closed { .. } => BreakerState::Closed,
             Phase::Open { opened_at } => {
                 if now.duration_since(opened_at) >= self.config.open_state_wait {
@@ -290,7 +391,12 @@ mod tests {
         let mut config = config();
         config.minimum_number_of_calls = 3;
         let breaker = CircuitBreaker::new(config).expect("the breaker builds");
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
+        // The permitted call is held outstanding: admission alone adds
+        // nothing to the window.
+        let outstanding = match breaker.acquire() {
+            Acquired::Permitted(permit) => permit,
+            Acquired::Rejected => panic!("a closed breaker permits the call"),
+        };
         // Two failures recorded, but the breaker judges only from three
         // recorded calls.
         breaker.record(false, Duration::from_millis(1));
@@ -298,6 +404,7 @@ mod tests {
         assert_eq!(breaker.state(), BreakerState::Closed);
         breaker.record(false, Duration::from_millis(1));
         assert_eq!(breaker.state(), BreakerState::Open);
+        drop(outstanding);
     }
 
     #[test]
@@ -306,7 +413,7 @@ mod tests {
         breaker.record(false, Duration::from_millis(1));
         breaker.record(false, Duration::from_millis(1));
         assert_eq!(breaker.state(), BreakerState::Open);
-        assert_eq!(breaker.acquire(), BreakerAdmission::Rejected);
+        assert!(matches!(breaker.acquire(), Acquired::Rejected));
     }
 
     #[test]
@@ -320,7 +427,10 @@ mod tests {
             breaker.record(!failed, Duration::from_millis(1));
         }
         assert_eq!(breaker.state(), BreakerState::Closed);
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(true, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the breaker stays closed below the rate"),
+        };
     }
 
     #[test]
@@ -343,9 +453,12 @@ mod tests {
         let breaker = breaker();
         breaker.record(false, Duration::from_millis(1));
         breaker.record(false, Duration::from_millis(1));
-        assert_eq!(breaker.acquire(), BreakerAdmission::Rejected);
+        assert!(matches!(breaker.acquire(), Acquired::Rejected));
         tokio::time::sleep(Duration::from_millis(40)).await;
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(true, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the trial is permitted after the wait"),
+        }
         assert_eq!(breaker.state(), BreakerState::HalfOpen);
     }
 
@@ -355,12 +468,17 @@ mod tests {
         breaker.record(false, Duration::from_millis(1));
         breaker.record(false, Duration::from_millis(1));
         tokio::time::sleep(Duration::from_millis(40)).await;
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
-        breaker.record(false, Duration::from_millis(1));
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(false, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the trial is permitted after the wait"),
+        }
         assert_eq!(breaker.state(), BreakerState::Open);
-        assert_eq!(breaker.acquire(), BreakerAdmission::Rejected);
+        assert!(matches!(breaker.acquire(), Acquired::Rejected));
         tokio::time::sleep(Duration::from_millis(40)).await;
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
+        assert!(
+            matches!(breaker.acquire(), Acquired::Permitted(_)),
+            "a fresh trial is permitted after the fresh wait"
+        );
     }
 
     #[tokio::test]
@@ -369,11 +487,15 @@ mod tests {
         breaker.record(false, Duration::from_millis(1));
         breaker.record(false, Duration::from_millis(1));
         tokio::time::sleep(Duration::from_millis(40)).await;
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
-        breaker.record(true, Duration::from_millis(1));
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(true, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the trial is permitted after the wait"),
+        }
         assert_eq!(breaker.state(), BreakerState::HalfOpen);
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
-        breaker.record(true, Duration::from_millis(1));
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(true, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the second trial is permitted"),
+        }
         assert_eq!(breaker.state(), BreakerState::Closed);
         // The closed window is fresh: one failure of a two-call minimum
         // does not open it again.
@@ -389,9 +511,11 @@ mod tests {
         breaker.record(false, Duration::from_millis(1));
         breaker.record(false, Duration::from_millis(1));
         tokio::time::sleep(Duration::from_millis(40)).await;
-        assert_eq!(breaker.acquire(), BreakerAdmission::Permitted);
+        // The first trial is held outstanding and unrecorded.
+        let trial = breaker.acquire();
+        assert!(matches!(trial, Acquired::Permitted(_)));
         // One trial is outstanding and unrecorded; a second is refused.
-        assert_eq!(breaker.acquire(), BreakerAdmission::Rejected);
+        assert!(matches!(breaker.acquire(), Acquired::Rejected));
     }
 
     #[tokio::test]
@@ -403,5 +527,96 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(40)).await;
         // No call was made; the view still reports the wait as elapsed.
         assert_eq!(breaker.state(), BreakerState::HalfOpen);
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_trial_does_not_strand_the_breaker() {
+        let mut config = config();
+        config.maximum_half_open_calls = 1;
+        let breaker = CircuitBreaker::new(config).expect("the breaker builds");
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        // The trial's caller is dropped before the call completes, so no
+        // record can ever arrive for it. The abandoned permit itself
+        // must count the trial as failed, reopening the breaker with a
+        // fresh wait instead of holding half-open shut.
+        match breaker.acquire() {
+            Acquired::Permitted(trial) => drop(trial),
+            Acquired::Rejected => panic!("the breaker opened, so the trial is permitted"),
+        }
+        assert_eq!(breaker.state(), BreakerState::Open);
+        assert!(matches!(breaker.acquire(), Acquired::Rejected));
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        match breaker.acquire() {
+            Acquired::Permitted(_) => {}
+            Acquired::Rejected => {
+                panic!("an abandoned trial must not strand the breaker in half-open")
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn an_outcome_from_an_earlier_cycle_never_counts_in_a_later_one() {
+        let mut config = config();
+        config.maximum_half_open_calls = 1;
+        let breaker = CircuitBreaker::new(config).expect("the breaker builds");
+        // One call of the closed cycle is still outstanding when the
+        // breaker opens and the recovery cycle begins.
+        let outstanding = match breaker.acquire() {
+            Acquired::Permitted(permit) => permit,
+            Acquired::Rejected => panic!("a closed breaker permits the call"),
+        };
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Open);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let trial = match breaker.acquire() {
+            Acquired::Permitted(permit) => permit,
+            Acquired::Rejected => panic!("the recovery cycle admits its trial"),
+        };
+        // The closed-cycle call completes successfully inside the
+        // recovery cycle: its outcome must not be counted as the
+        // trial's and close the breaker early.
+        outstanding.record(true, Duration::from_millis(1));
+        assert_eq!(
+            breaker.state(),
+            BreakerState::HalfOpen,
+            "an outcome from the closed cycle does not close the recovery cycle"
+        );
+        trial.record(false, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Open);
+    }
+
+    #[tokio::test]
+    async fn a_permit_dropped_in_a_later_cycle_does_not_fail_that_cycle() {
+        let breaker = breaker();
+        let outstanding = match breaker.acquire() {
+            Acquired::Permitted(permit) => permit,
+            Acquired::Rejected => panic!("a closed breaker permits the call"),
+        };
+        breaker.record(false, Duration::from_millis(1));
+        breaker.record(false, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::Open);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let first_trial = match breaker.acquire() {
+            Acquired::Permitted(permit) => permit,
+            Acquired::Rejected => panic!("the recovery cycle admits its first trial"),
+        };
+        first_trial.record(true, Duration::from_millis(1));
+        assert_eq!(breaker.state(), BreakerState::HalfOpen);
+        // The closed-cycle call is abandoned here, inside the recovery
+        // cycle: its dropped permit must not fail the recovery cycle.
+        drop(outstanding);
+        assert_eq!(
+            breaker.state(),
+            BreakerState::HalfOpen,
+            "an abandoned permit of the closed cycle does not reopen the breaker"
+        );
+        match breaker.acquire() {
+            Acquired::Permitted(permit) => permit.record(true, Duration::from_millis(1)),
+            Acquired::Rejected => panic!("the recovery cycle admits its second trial"),
+        }
+        assert_eq!(breaker.state(), BreakerState::Closed);
     }
 }

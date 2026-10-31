@@ -19,7 +19,7 @@
 //! steps (section 8.7, `inheritErrorHandler` false).
 
 use registry_adapter_core::{CircuitBreakerStep, ErrorClass};
-use registry_platform_resilience::circuit_breaker::{BreakerAdmission, BreakerState};
+use registry_platform_resilience::circuit_breaker::{Acquired, BreakerState};
 use serde_json::json;
 
 use crate::route::{Flow, RouteFailure, Run};
@@ -34,26 +34,29 @@ pub(crate) async fn run(
     let Some(breaker) = run.context.resilience.breaker(key) else {
         return Err(RouteFailure::of(ErrorClass::Script));
     };
-    if breaker.acquire() == BreakerAdmission::Rejected {
-        // The refusal never reached the source, so it carries the
-        // adapter's own class and the state that refused it.
-        let state = match breaker.state() {
-            BreakerState::HalfOpen => "halfOpen",
-            _ => "open",
-        };
-        run.record("breakerRefused", json!({ "state": state }));
-        return fallback(run, step, None).await;
-    }
+    let permit = match breaker.acquire() {
+        Acquired::Permitted(permit) => permit,
+        Acquired::Rejected => {
+            // The refusal never reached the source, so it carries the
+            // adapter's own class and the state that refused it.
+            let state = match breaker.state() {
+                BreakerState::HalfOpen => "halfOpen",
+                _ => "open",
+            };
+            run.record("breakerRefused", json!({ "state": state }));
+            return fallback(run, step, None).await;
+        }
+    };
     let started = std::time::Instant::now();
     let outcome = run.run_steps(&step.steps).await;
     let duration = started.elapsed();
     match outcome {
         Ok(flow) => {
-            breaker.record(true, duration);
+            permit.record(true, duration);
             Ok(flow)
         }
         Err(failure) => {
-            breaker.record(false, duration);
+            permit.record(false, duration);
             fallback(run, step, Some(failure)).await
         }
     }

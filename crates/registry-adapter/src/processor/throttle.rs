@@ -50,18 +50,14 @@ pub(crate) async fn run(
             }
         }
         ThrottlePacer::Concurrent(governor) => {
-            // The slot is held for the body's own run and given back
-            // when it completes, on every exit.
-            if governor
+            // The slot is held by the permit for the body's own run and
+            // given back when it drops, on every exit, including a
+            // future dropped mid-run.
+            let _permit = governor
                 .acquire(limit, run.deadline, step.reject_execution)
                 .await
-                .is_err()
-            {
-                return Err(refused(run, "concurrent"));
-            }
-            let outcome = run.run_steps(&step.steps).await;
-            governor.release();
-            return outcome;
+                .map_err(|()| refused(run, "concurrent"))?;
+            return run.run_steps(&step.steps).await;
         }
     }
     run.run_steps(&step.steps).await

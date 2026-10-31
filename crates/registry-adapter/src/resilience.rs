@@ -44,6 +44,19 @@ pub struct ConcurrentGovernor {
     notify: tokio::sync::Notify,
 }
 
+/// One held concurrent-request slot. The slot is given back when the
+/// permit drops, however the body ends, including a future dropped
+/// mid-run by a route timeout.
+pub struct GovernorPermit<'a> {
+    governor: &'a ConcurrentGovernor,
+}
+
+impl Drop for GovernorPermit<'_> {
+    fn drop(&mut self) {
+        self.governor.release();
+    }
+}
+
 impl ConcurrentGovernor {
     fn new() -> Self {
         Self {
@@ -52,37 +65,65 @@ impl ConcurrentGovernor {
         }
     }
 
-    /// Take one slot under `limit`. `Ok(())` means the caller holds a
-    /// slot and must release it when its body completes; `Err(())`
-    /// means the exchange is over the limit and, unless it rejects
-    /// immediately, waited at most until `deadline` for a slot.
-    pub async fn acquire(&self, limit: u32, deadline: Instant, reject: bool) -> Result<(), ()> {
+    /// Take one slot under `limit`. `Ok` hands the caller a permit that
+    /// holds the slot until it drops; `Err(())` means the exchange is
+    /// over the limit and, unless it rejects immediately, waited at
+    /// most until `deadline` for a slot.
+    pub async fn acquire(
+        &self,
+        limit: u32,
+        deadline: Instant,
+        reject: bool,
+    ) -> Result<GovernorPermit<'_>, ()> {
         loop {
-            // Registered before the state check, so a release that
-            // happens while this exchange is checking cannot be missed.
+            // Listening starts at enable(), before the state check, so
+            // a release while this exchange is checking is delivered to
+            // this listener rather than collapsing into the single
+            // stored wakeup the notifier can hold.
             let notified = self.notify.notified();
-            {
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let taken = {
                 let mut outstanding = self
                     .outstanding
                     .lock()
                     .expect("the governor lock is not poisoned");
                 if *outstanding < limit as usize {
                     *outstanding += 1;
-                    return Ok(());
+                    true
+                } else {
+                    false
                 }
+            };
+            if taken {
+                // The slot is taken without waiting: a wakeup this
+                // listener may already have absorbed is passed on so no
+                // release is lost. A wakeup with no waiter behind it
+                // only wakes one exchange to re-check.
+                self.notify.notify_one();
+                return Ok(GovernorPermit { governor: self });
             }
             if reject {
+                // Nothing was taken, but the enabled listener may have
+                // absorbed a wakeup on its way out.
+                self.notify.notify_one();
                 return Err(());
             }
             tokio::select! {
-                () = notified => {}
-                () = tokio::time::sleep_until(deadline) => return Err(()),
+                () = &mut notified => {}
+                () = tokio::time::sleep_until(deadline) => {
+                    // The wait lost the race with the deadline; a
+                    // wakeup already delivered to this listener leaves
+                    // with it.
+                    self.notify.notify_one();
+                    return Err(());
+                }
             }
         }
     }
 
     /// Give one slot back and wake one waiting exchange.
-    pub fn release(&self) {
+    fn release(&self) {
         let mut outstanding = self
             .outstanding
             .lock()
@@ -231,5 +272,73 @@ fn pacer(throttle: &ThrottleStep) -> ThrottlePacer {
             })
             .expect("the period is bounded away from zero by its type"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A body whose future is dropped mid-run must not leak its
+    /// concurrent slot: the next exchange is admitted without waiting
+    /// for a release that never comes.
+    #[tokio::test]
+    async fn an_aborted_body_gives_its_slot_back() {
+        let governor = Arc::new(ConcurrentGovernor::new());
+        let far = tokio::time::Instant::now() + Duration::from_secs(30);
+        let body = {
+            let governor = Arc::clone(&governor);
+            tokio::spawn(async move {
+                let _permit = governor.acquire(1, far, false).await;
+                std::future::pending::<()>().await;
+            })
+        };
+        // Wait until the body holds the slot: a rejecting probe is
+        // refused only once the limit is reached.
+        while let Ok(probe) = governor.acquire(1, far, true).await {
+            drop(probe);
+            tokio::task::yield_now().await;
+        }
+        body.abort();
+        let soon = tokio::time::Instant::now() + Duration::from_millis(500);
+        let admitted = governor.acquire(1, soon, false).await.is_ok();
+        assert!(admitted, "an aborted body must give its slot back");
+    }
+
+    /// Two releases while two exchanges wait must wake both: the
+    /// second release may not collapse into the first.
+    #[tokio::test]
+    async fn two_releases_wake_two_waiting_exchanges() {
+        let governor = Arc::new(ConcurrentGovernor::new());
+        let far = tokio::time::Instant::now() + Duration::from_secs(30);
+        let (first, second) = match (
+            governor.acquire(2, far, false).await,
+            governor.acquire(2, far, false).await,
+        ) {
+            (Ok(first), Ok(second)) => (first, second),
+            _ => panic!("a governor at its limit admits two bodies"),
+        };
+        let waiter = |governor: Arc<ConcurrentGovernor>| async move {
+            governor.acquire(2, far, false).await.is_ok()
+        };
+        let one = tokio::spawn(waiter(Arc::clone(&governor)));
+        let two = tokio::spawn(waiter(Arc::clone(&governor)));
+        // Let both waiters park before releasing.
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        drop(first);
+        drop(second);
+        let (one, two) = tokio::time::timeout(Duration::from_secs(2), async {
+            (
+                one.await.expect("waiter one finishes"),
+                two.await.expect("waiter two finishes"),
+            )
+        })
+        .await
+        .expect("both releases wake their own waiter");
+        assert!(one, "the first released slot admits its waiter");
+        assert!(two, "the second released slot admits its waiter");
     }
 }
