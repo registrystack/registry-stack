@@ -16,7 +16,7 @@
 
 use crate::auth::token::resolve_binary;
 use crate::auth::{AuthError, ProtectedText};
-use registry_adapter_core::{AdapterRuntimeConfig, EndpointBinding};
+use registry_adapter_core::{AdapterRuntimeConfig, EndpointBinding, RuntimeCredential};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::destination::{
     DestinationTlsMaterial, MAX_DESTINATION_CA_BUNDLE_BYTES,
@@ -40,6 +40,12 @@ pub enum TlsFault {
     /// without a usable certificate, or an identity without exactly one
     /// certificate chain and one private key.
     Material,
+    /// The binding declares TLS material for a destination that is not
+    /// `https`. A plain destination never performs the handshake the
+    /// material configures, so resolving it would install a trust
+    /// profile or client identity that silently does nothing; the
+    /// declaration is refused instead.
+    PlainDestination,
 }
 
 impl fmt::Display for TlsFault {
@@ -52,6 +58,9 @@ impl fmt::Display for TlsFault {
             Self::Material => {
                 formatter.write_str("the endpoint's outbound TLS material is not usable")
             }
+            Self::PlainDestination => formatter.write_str(
+                "the endpoint's declared TLS material rides a destination that is not https",
+            ),
         }
     }
 }
@@ -109,6 +118,26 @@ impl EndpointTls {
         runtime: &AdapterRuntimeConfig,
         resolver: &SecretResolver,
     ) -> Result<Self, AuthError> {
+        // Neither destination the material rides may be plain: the
+        // binding's own, and the token endpoint its credential names,
+        // both need the handshake the trust profile and identity
+        // configure, and a plain destination would carry them unused.
+        // Both refusals run here, at deployment load, before any secret
+        // is read.
+        if binding.tls_trust_profile.is_some() || binding.mtls_identity.is_some() {
+            let token_endpoint = match binding.credential.as_ref() {
+                Some(RuntimeCredential::Oauth2ClientCredentials { token_endpoint, .. })
+                | Some(RuntimeCredential::Oauth2PrivateKeyJwt { token_endpoint, .. }) => {
+                    Some(token_endpoint)
+                }
+                _ => None,
+            };
+            if binding.base_url.to_url().scheme() != "https"
+                || token_endpoint.is_some_and(|endpoint| endpoint.to_url().scheme() != "https")
+            {
+                return Err(AuthError::Tls(TlsFault::PlainDestination));
+            }
+        }
         let ca = match &binding.tls_trust_profile {
             Some(profile) => Some(resolve_ca_bundle(runtime, profile.as_str())?),
             None => None,
@@ -208,18 +237,22 @@ fn resolve_ca_bundle(
     Ok(ProtectedText::from_owned(bytes))
 }
 
+/// The TLS tests hold the throwaway self-signed PEM fixtures; the egress
+/// token-transport tests reuse the root certificate through this
+/// crate-visible module so one fixture serves both.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use registry_adapter_core::{MtlsIdentity, RuntimeCredential};
+    use registry_adapter_core::{CredentialPlacement, MtlsIdentity, RuntimeCredential};
     use registry_platform_httputil::destination::{
         CredentialDestinationPolicy, DataDestinationPolicy, DestinationProfile,
     };
-    use registry_platform_yaml::{ExternalId, LocalId, SecretReference, Url};
+    use registry_platform_yaml::{BoundedU64, ExternalId, LocalId, SecretReference, Url};
 
     /// Throwaway self-signed fixtures generated for these tests only;
-    /// no deployment has ever trusted them.
-    const ROOT_CERTIFICATE_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBnzCCAUWgAwIBAgIUGSkZVSD93tTafMYk9zXkW+9N+VcwCgYIKoZIzj0EAwIw\nJTEjMCEGA1UEAwwaUmVnaXN0cnkgQWRhcHRlciBUZXN0IFJvb3QwHhcNMjYxMDMw\nMDQ1NDIwWhcNMzYxMDI3MDQ1NDIwWjAlMSMwIQYDVQQDDBpSZWdpc3RyeSBBZGFw\ndGVyIFRlc3QgUm9vdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIDV7zIjqChx\n97aw2DaQUGi02tuThFuNl5IKP4RFr+5lxRclqsvlNfhU0Y4JnNLDuxdToqXgVKz6\nDnA2hpkMqZyjUzBRMB0GA1UdDgQWBBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAfBgNV\nHSMEGDAWgBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAPBgNVHRMBAf8EBTADAQH/MAoG\nCCqGSM49BAMCA0gAMEUCIQDE6ceiEQLBfR3wcAbPoXkClwMWZCs+QRHpi9asKR6w\nGwIgG/WsmuvsVVNeDynYVj92+B5SNtyVRK2+p3eo97VtmF0=\n-----END CERTIFICATE-----\n";
+    /// no deployment has ever trusted them. The root is crate-visible
+    /// for the egress token-transport tests.
+    pub(crate) const ROOT_CERTIFICATE_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBnzCCAUWgAwIBAgIUGSkZVSD93tTafMYk9zXkW+9N+VcwCgYIKoZIzj0EAwIw\nJTEjMCEGA1UEAwwaUmVnaXN0cnkgQWRhcHRlciBUZXN0IFJvb3QwHhcNMjYxMDMw\nMDQ1NDIwWhcNMzYxMDI3MDQ1NDIwWjAlMSMwIQYDVQQDDBpSZWdpc3RyeSBBZGFw\ndGVyIFRlc3QgUm9vdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIDV7zIjqChx\n97aw2DaQUGi02tuThFuNl5IKP4RFr+5lxRclqsvlNfhU0Y4JnNLDuxdToqXgVKz6\nDnA2hpkMqZyjUzBRMB0GA1UdDgQWBBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAfBgNV\nHSMEGDAWgBSPV2C1/cYwPYf/YYcSqJMvbWT8OjAPBgNVHRMBAf8EBTADAQH/MAoG\nCCqGSM49BAMCA0gAMEUCIQDE6ceiEQLBfR3wcAbPoXkClwMWZCs+QRHpi9asKR6w\nGwIgG/WsmuvsVVNeDynYVj92+B5SNtyVRK2+p3eo97VtmF0=\n-----END CERTIFICATE-----\n";
     const CLIENT_CERTIFICATE_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBojCCAUmgAwIBAgIUBz6xzkGZHFIeP5fMAc8V6F6xm8UwCgYIKoZIzj0EAwIw\nNzElMCMGA1UEAwwcUmVnaXN0cnkgQWRhcHRlciBUZXN0IENsaWVudDAeFw0yNjEw\nMzAwNDU0MjBaFw0zNjEwMjcwNDU0MjBaMCcxJTAjBgNVBAMMHFJlZ2lzdHJ5IEFk\nYXB0ZXIgVGVzdCBDbGllbnQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASF0oBX\nS/LsU8FsocRWwJ/N8VazeqamiXcJ3wiCQlR8HOmO6RnJ1wDbrQcfYcEnFPyNxi+C\ndnIYPRU8Cg9FZo+ko1MwUTAdBgNVHQ4EFgQUWRGGtHle4QQaNtLdD34RuXhTBmww\nHwYDVR0jBBgwFoAUWRGGtHle4QQaNtLdD34RuXhTBmwwDwYDVR0TAQH/BAUwAwEB\n/zAKBggqhkjOPQQDAgNHADBEAiBW+k+uqrpHbZPdMoz4JEYuDDkC7W4zCWhzUWN9\nTl43DwIgMkjYqsF9WAV8L5NMl5em/u8Y4wcnr+vtvqyt4HSQJYM=\n-----END CERTIFICATE-----\n";
     const CLIENT_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcu64hV3YOzpMTbrA\nS7rf1eo4blksHD/fMmlOLZi06MmhRANCAASF0oBXS/LsU8FsocRWwJ/N8Vazeqam\niXcJ3wiCQlR8HOmO6RnJ1wDbrQcfYcEnFPyNxi+CdnIYPRU8Cg9FZo+k\n-----END PRIVATE KEY-----\n";
 
@@ -236,14 +269,81 @@ mod tests {
         tls_trust_profile: Option<LocalId>,
         mtls_identity: Option<MtlsIdentity>,
     ) -> EndpointBinding {
+        binding_over(
+            "https://cases.example.invalid",
+            tls_trust_profile,
+            mtls_identity,
+        )
+    }
+
+    fn binding_over(
+        base_url: &str,
+        tls_trust_profile: Option<LocalId>,
+        mtls_identity: Option<MtlsIdentity>,
+    ) -> EndpointBinding {
         EndpointBinding {
             endpoint: ExternalId::new("case-api").expect("id"),
-            base_url: Url::new("https://cases.example.invalid").expect("url"),
+            base_url: Url::new(base_url).expect("url"),
             credential: Some(RuntimeCredential::None {}),
             tls_trust_profile,
             mtls_identity,
             attempt_timeout_milliseconds: None,
             maximum_response_bytes: None,
+        }
+    }
+
+    /// A binding whose data destination is https and whose credential
+    /// names `token_endpoint` as its token destination.
+    fn oauth_binding(
+        token_endpoint: &str,
+        tls_trust_profile: Option<LocalId>,
+        mtls_identity: Option<MtlsIdentity>,
+    ) -> EndpointBinding {
+        EndpointBinding {
+            credential: Some(RuntimeCredential::Oauth2ClientCredentials {
+                token_endpoint: Url::new(token_endpoint).expect("url"),
+                client_id_ref: secret("CLIENT_ID"),
+                client_secret_ref: secret("CLIENT_SECRET"),
+                scope: None,
+                audience: None,
+                resource: None,
+                credential_placement: CredentialPlacement::BasicHeader,
+                maximum_cache_seconds: BoundedU64::new(3600).expect("cache"),
+                assumed_lifetime_seconds: None,
+            }),
+            ..binding_over(
+                "https://cases.example.invalid",
+                tls_trust_profile,
+                mtls_identity,
+            )
+        }
+    }
+
+    /// The same shape through the private-key-jwt credential kind: it
+    /// names the same token destination and rides the same material.
+    fn pkjwt_binding(
+        token_endpoint: &str,
+        tls_trust_profile: Option<LocalId>,
+        mtls_identity: Option<MtlsIdentity>,
+    ) -> EndpointBinding {
+        EndpointBinding {
+            credential: Some(RuntimeCredential::Oauth2PrivateKeyJwt {
+                token_endpoint: Url::new(token_endpoint).expect("url"),
+                client_id_ref: secret("CLIENT_ID"),
+                client_assertion_key_ref: SecretReference::new("secret:file/assertion-key.pem")
+                    .expect("secret reference"),
+                client_assertion_audience: None,
+                scope: None,
+                audience: None,
+                resource: None,
+                maximum_cache_seconds: BoundedU64::new(3600).expect("cache"),
+                assumed_lifetime_seconds: None,
+            }),
+            ..binding_over(
+                "https://cases.example.invalid",
+                tls_trust_profile,
+                mtls_identity,
+            )
         }
     }
 
@@ -313,6 +413,83 @@ mod tests {
         assert!(materials.token.is_none());
         let none = EndpointTls::none().into_materials();
         assert!(none.data.is_none() && none.token.is_none());
+    }
+
+    /// A binding that declares TLS material for a destination that is
+    /// not `https` refuses at load: a plain destination never performs
+    /// the handshake the material configures, so resolving it would
+    /// install a trust profile or client identity that silently does
+    /// nothing. A plain destination without material stays admitted.
+    #[test]
+    fn a_plain_destination_refuses_declared_tls_material() {
+        for binding in [
+            binding_over("http://cases.example.invalid", Some(private_ca()), None),
+            binding_over(
+                "http://127.0.0.1:8080",
+                None,
+                Some(identity_refs(
+                    "ADAPTER_TEST_CLIENT_CERT",
+                    "ADAPTER_TEST_CLIENT_KEY",
+                )),
+            ),
+        ] {
+            let fault = EndpointTls::resolve(&binding, &runtime_config(None), &resolver())
+                .expect_err("a plain destination refuses declared TLS material");
+            assert!(
+                matches!(fault, AuthError::Tls(TlsFault::PlainDestination)),
+                "{fault:?}"
+            );
+        }
+        let tls = EndpointTls::resolve(
+            &binding_over("http://cases.example.invalid", None, None),
+            &runtime_config(None),
+            &resolver(),
+        )
+        .expect("a plain destination without material resolves");
+        assert!(!tls.is_configured());
+    }
+
+    /// The token endpoint the credential names rides the same material
+    /// (section 10.2): with the data destination https and the token
+    /// endpoint plain, a declared trust profile or client identity
+    /// refuses at load, before any secret is read, through either OAuth
+    /// credential kind; the https control resolves its material.
+    #[test]
+    fn a_plain_token_endpoint_refuses_declared_tls_material() {
+        for binding in [
+            oauth_binding("http://127.0.0.1:9999/token", Some(private_ca()), None),
+            oauth_binding(
+                "http://127.0.0.1:9999/token",
+                None,
+                Some(identity_refs(
+                    "ADAPTER_TEST_CLIENT_CERT",
+                    "ADAPTER_TEST_CLIENT_KEY",
+                )),
+            ),
+            pkjwt_binding("http://127.0.0.1:9999/token", Some(private_ca()), None),
+        ] {
+            let fault = EndpointTls::resolve(&binding, &runtime_config(None), &resolver())
+                .expect_err("a plain token endpoint refuses declared TLS material");
+            assert!(
+                matches!(fault, AuthError::Tls(TlsFault::PlainDestination)),
+                "{fault:?}"
+            );
+        }
+        let path = bundle_path("token-control");
+        std::fs::write(&path, ROOT_CERTIFICATE_PEM).expect("write bundle");
+        let runtime = runtime_config(Some(path.to_str().expect("utf-8 path")));
+        let tls = EndpointTls::resolve(
+            &oauth_binding(
+                "https://token.example.invalid/token",
+                Some(private_ca()),
+                None,
+            ),
+            &runtime,
+            &resolver(),
+        )
+        .expect("an https token endpoint resolves its material");
+        std::fs::remove_file(&path).expect("remove bundle");
+        assert!(tls.is_configured());
     }
 
     /// A declared trust profile's CA bundle file resolves and parses

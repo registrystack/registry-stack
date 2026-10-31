@@ -1166,6 +1166,15 @@ fn freeze_token_send(
     let policy = CredentialDestinationPolicy::new(&origin_id, origin.as_str(), profile, &networks)
         .map_err(EgressFault::Destination)?;
     let policy = if let Some(material) = material {
+        // The load-time resolution already refused a plain token
+        // destination; this re-check keeps the freeze fail-closed the
+        // same way when reached without that resolution, instead of
+        // installing material a plain destination never uses.
+        if parsed.scheme() != "https" {
+            return Err(EgressFault::Auth(AuthError::Tls(
+                crate::auth::TlsFault::PlainDestination,
+            )));
+        }
         let mut policy = policy.require_configured_tls();
         policy
             .install_configured_tls(material)
@@ -1980,6 +1989,59 @@ mod tests {
         assert_eq!(
             authorization_slots(None, &authentication).unwrap_err(),
             DestinationRequestError::InvalidAuthorization
+        );
+    }
+
+    /// A token endpoint that is not https refuses TLS material at the
+    /// freeze too: the load-time resolution owns the refusal, and this
+    /// re-check keeps the install fail-closed when the freeze is reached
+    /// without that resolution, instead of installing material a plain
+    /// destination never uses.
+    #[test]
+    fn a_plain_token_endpoint_refuses_tls_material_at_install() {
+        use crate::auth::TlsFault;
+        use registry_adapter_core::{CredentialPlacement, RuntimeCredential};
+        use registry_platform_yaml::{BoundedU64, SecretReference, Url};
+        let binding = EndpointBinding {
+            endpoint: ExternalId::new("case-api").expect("id"),
+            base_url: Url::new("https://cases.example.invalid").expect("url"),
+            credential: Some(RuntimeCredential::Oauth2ClientCredentials {
+                token_endpoint: Url::new("http://127.0.0.1:9999/token").expect("url"),
+                client_id_ref: SecretReference::new("secret:env/CLIENT_ID")
+                    .expect("secret reference"),
+                client_secret_ref: SecretReference::new("secret:env/CLIENT_SECRET")
+                    .expect("secret reference"),
+                scope: None,
+                audience: None,
+                resource: None,
+                credential_placement: CredentialPlacement::BasicHeader,
+                maximum_cache_seconds: BoundedU64::new(3600).expect("cache"),
+                assumed_lifetime_seconds: None,
+            }),
+            tls_trust_profile: None,
+            mtls_identity: None,
+            attempt_timeout_milliseconds: None,
+            maximum_response_bytes: None,
+        };
+        let plan = AuthPlan::compile(
+            &EndpointAuthentication::Oauth2ClientCredentials {},
+            &binding,
+        )
+        .expect("the plan compiles");
+        let material = registry_platform_httputil::destination::DestinationTlsMaterial::from_pem(
+            Some(crate::auth::tls::tests::ROOT_CERTIFICATE_PEM.as_bytes()),
+            None,
+        )
+        .expect("material");
+        let fault = freeze_token_send(&binding, &plan, &[], Some(material))
+            .err()
+            .expect("a plain token endpoint refuses TLS material");
+        assert!(
+            matches!(
+                fault,
+                EgressFault::Auth(AuthError::Tls(TlsFault::PlainDestination))
+            ),
+            "{fault:?}"
         );
     }
 }

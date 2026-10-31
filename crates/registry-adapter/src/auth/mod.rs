@@ -37,7 +37,7 @@
 
 mod material;
 mod plan;
-mod tls;
+pub(crate) mod tls;
 mod token;
 
 pub use material::{AuthHeader, ProtectedText};
@@ -99,9 +99,10 @@ impl AuthError {
     #[must_use]
     pub fn class(&self) -> &'static str {
         match self {
-            Self::Plan(_) | Self::Tls(TlsFault::CaBundle | TlsFault::ClientIdentity) => {
-                CREDENTIAL_REJECTED_CLASS
-            }
+            Self::Plan(_)
+            | Self::Tls(
+                TlsFault::CaBundle | TlsFault::ClientIdentity | TlsFault::PlainDestination,
+            ) => CREDENTIAL_REJECTED_CLASS,
             // The engine refuses to send without the configured trust.
             Self::Tls(TlsFault::Material) => "egress.refused",
             Self::Credential => CREDENTIAL_REJECTED_CLASS,
