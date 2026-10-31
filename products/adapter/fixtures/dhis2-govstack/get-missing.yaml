@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Derived fixture: the source's hard not-found answer read through the
+# govstack-consultation profile. The upstream exchange is the captured one in
+# fixtures/dhis2-tracker/get-missing.yaml; the problem is the same outcome
+# class, which the profile serves as its record-not-available problem.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-govstack-get-missing
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: documented
+  reference: products/adapter/fixtures/dhis2-tracker/get-missing.yaml
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/collections/persons/records/TV7SRzsjKQi
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/TV7SRzsjKQi
+        response:
+          status: 404
+          body:
+            httpStatus: Not Found
+            httpStatusCode: 404
+            status: ERROR
+            message: TrackedEntity with id TV7SRzsjKQi could not be found.
+            errorCode: E1005
+    expected:
+      type: problem
+      class: outcome.not-found
+      code: https://govstack.global/problems/digital-registries/record-not-available

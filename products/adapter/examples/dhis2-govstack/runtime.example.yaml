@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# The dhis2-govstack example deployment's runtime configuration, in the
+# example form: every secret is a reference into the operator's provider,
+# never a value, and the listener binds loopback only. A deployment copies
+# this file to its own runtime.yaml and fills in its environment's
+# references. Check it with the project (whose header comment carries the
+# full command):
+#   adapterctl check products/adapter/examples/dhis2-govstack/project.yaml \
+#     --profile products/adapter/profiles/govstack-consultation/profile.yaml \
+#     --pack products/adapter/packs/dhis2-tracker/pack.yaml \
+#     --runtime products/adapter/examples/dhis2-govstack/runtime.example.yaml
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: dhis2-govstack-example
+endpoints:
+  - endpoint: tracker
+    baseUrl: https://tracker.example.invalid
+    tlsTrustProfile: dhis2-private-ca
+    credential:
+      type: basic
+      usernameRef: secret:env/DHIS2_USERNAME
+      passwordRef: secret:env/DHIS2_PASSWORD
+outboundTls:
+  trustProfiles:
+    dhis2-private-ca:
+      # The absolute path of the bundle file on the deployment's own host;
+      # a CA bundle is not a secret, so the profile names a file.
+      caBundleFile: /etc/registry-adapter/trust/dhis2-private-ca.pem
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter-example
+allowedClients:
+  # The OAuth clients whose access tokens the facade admits; a token from
+  # any other client is refused even when the issuer signed it.
+  - registry-adapter-example-client
+allowedPrivateCidrs:
+  # The private ranges this deployment may call upstream. The example
+  # range stands in for the deployment's own; private endpoints stay
+  # refused unless their range is listed here.
+  - 10.0.0.0/8
+audit:
+  retentionDays: 90
+# Seals the pagination cursors a search returns: exactly 32 bytes. A
+# deployment that serves no search may omit it.
+cursorKeyRef: secret:env/ADAPTER_CURSOR_KEY

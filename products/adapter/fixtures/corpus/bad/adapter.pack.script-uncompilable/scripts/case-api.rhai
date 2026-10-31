@@ -1,0 +1,1 @@
+fn shape(input) { input

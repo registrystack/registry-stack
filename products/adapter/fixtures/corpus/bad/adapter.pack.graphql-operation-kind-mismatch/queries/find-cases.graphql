@@ -1,0 +1,5 @@
+mutation FetchCases {
+  cases {
+    case_type
+  }
+}

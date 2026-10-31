@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.credential-recorded: this artifact set must be refused with
+# exactly adapter.fixture.credential-recorded. The recorded read request carries the reserved
+# header `authorization`, and a fixture never sees credentials (CONCEPT 10.2); replay supplies
+# credentials from the runtime configuration, never from a recording. The token exchange itself
+# stays clean: no authorization header, no request body, and the reply's token is a synthetic
+# value, never a captured one.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.credential-recorded/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: case-api-fixtures
+pack: case-api-pack
+upstreamVersion: "2.7"
+provenance:
+  type: documented
+  reference: https://example.invalid/api-handbook#cases
+intercepts:
+  - type: endpoint
+    endpoint: case-api
+  - type: token-endpoint
+    endpoint: case-api
+entries:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case
+      headers:
+        accept: application/json
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+      - request:
+          endpoint: case-api
+          method: GET
+          path: /v2/cases/welfare/c-1
+          query: _format=json
+          headers:
+            accept: application/json
+            authorization: Bearer captured-token
+        response:
+          status: 200
+          body:
+            id: c-1
+    expected:
+      type: response
+      status: 200
+      body:
+        record:
+          case_type: welfare

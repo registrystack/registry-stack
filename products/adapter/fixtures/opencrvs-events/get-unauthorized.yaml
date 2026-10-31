@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real OpenCRVS system):
+# the source rejects the bearer token (401); after the single token refresh
+# of CONCEPT 10.2 the facade answers a credential problem.
+# No OpenCRVS server was contacted; the available credentials were
+# rejected. The upstream shapes are derived from the reviewed Evidence
+# reference (products/evidence/reference/request-adapter/
+# opencrvs-event-search/, response-match.json and
+# expected-request-parts.json) and every value is a made-up stand-in. The
+# The expected problem carries no deployment-specific response envelope.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: opencrvs-events-get-unauthorized
+pack: opencrvs-events
+upstreamVersion: "unverified"
+provenance:
+  type: documented
+  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+intercepts:
+  - type: endpoint
+    endpoint: events
+  - type: token-endpoint
+    endpoint: events
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/birth/EVT-SYNTHETIC-001
+    upstream:
+      - request:
+          endpoint: events
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: events
+          method: POST
+          path: /events/search
+          body:
+            query:
+              type: and
+              clauses:
+                - eventType: birth
+                  status:
+                    type: exact
+                    term: REGISTERED
+                  trackingId:
+                    type: exact
+                    term: EVT-SYNTHETIC-001
+            limit: 2
+            offset: 0
+        response:
+          status: 401
+          body:
+            message: Unauthorized
+      - request:
+          endpoint: events
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token-refreshed
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: events
+          method: POST
+          path: /events/search
+          body:
+            query:
+              type: and
+              clauses:
+                - eventType: birth
+                  status:
+                    type: exact
+                    term: REGISTERED
+                  trackingId:
+                    type: exact
+                    term: EVT-SYNTHETIC-001
+            limit: 2
+            offset: 0
+        response:
+          status: 401
+          body:
+            message: Unauthorized
+    expected:
+      type: problem
+      class: credential.rejected
+      code: source.credential

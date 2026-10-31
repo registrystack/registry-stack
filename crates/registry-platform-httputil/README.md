@@ -80,7 +80,10 @@ Outbound HTTP utilities for registry services.
   during validation, with a default request timeout.
 - Async validation with a wall-clock timeout around DNS resolution.
 - Marker-typed fixed-destination requests and opaque bounded response bodies for
-  registry-data and credential endpoints.
+  registry-data and credential endpoints. The registry-data body stays opaque
+  behind the reviewed strict data decoder; the event and credential bodies move
+  their whole zeroizing buffer out (`to_event_answer`, `into_credential_bytes`)
+  for the protocol decodes their slots name, with no borrowing accessor.
 - A side-effecting send class for data destinations, compiled only by
   `DataDestinationRequestTemplate::new_script_send` and refused by every
   read-only constructor. It sends a POST with a JSON or form body, or a GET

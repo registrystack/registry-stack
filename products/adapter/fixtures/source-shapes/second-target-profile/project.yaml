@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Experiment project: the rest-offset-mtls jsonapi-households pack, byte for byte
+# (pack.yaml and scripts/ are copies, same digest), bound to the
+# FHIR-shaped experiment profile in profile.yaml beside this file. It tests
+# D17: one pack, a second target API, no pack change.
+#
+# Upstream-call budgets as in rest-offset-mtls: search 11, read 2.
+#
+# Check with:
+#   adapterctl check products/adapter/fixtures/source-shapes/second-target-profile/project.yaml \
+#     --profile products/adapter/fixtures/source-shapes/second-target-profile/profile.yaml \
+#     --runtime products/adapter/fixtures/source-shapes/second-target-profile/runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: fhir-facade-households-experiment
+  version: "1.0.0"
+profile:
+  id: fhir-facade
+  version: "1"
+  digest: sha256:68fda14c8b9d4a466d092f16544095293b73c3feda6cf5a706a5d3b23a68f563
+pack:
+  id: jsonapi-households
+  version: "1"
+  digest: sha256:3918f17516428ee0d81030ab84c13c2edd4710fa43968b50436fe48614a6fedd
+recordTypes:
+  - name: household
+    fields:
+      - name: household_number
+        type: string
+      - name: region_code
+        type: string
+      - name: member_count
+        type: integer
+      - name: registered_on
+        type: date
+templatedRoutes:
+  - routeTemplate: search-households
+    routeId: household-search
+    parameters:
+      region_code: R-07
+      page_size: 100
+      maximum_total: 1000
+  - routeTemplate: get-household
+    routeId: household-get
+    parameters: {}
+bindings:
+  - id: household-search
+    operation: fhir-search-type
+    recordType: household
+    route: household-search
+    maximumUpstreamCalls: 11
+  - id: household-read
+    operation: fhir-read
+    recordType: household
+    route: household-get
+    maximumUpstreamCalls: 2
+accessProfiles:
+  - id: household-reader
+    scopes:
+      - system/Basic.read
+    operations:
+      - fhir-search-type
+      - fhir-read
+    recordTypes:
+      - household

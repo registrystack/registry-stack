@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real OpenCRVS system):
+# first search page: limit 2, offset 0, total 3, so a next cursor carrying offset 2.
+# No OpenCRVS server was contacted; the available credentials were
+# rejected. The upstream shapes are derived from the reviewed Evidence
+# reference (products/evidence/reference/request-adapter/
+# opencrvs-event-search/, response-match.json and
+# expected-request-parts.json) and every value is a made-up stand-in. The
+# meta registry and dataset identifiers are deployment values the engine
+# writes at instantiation, so the replay expectation carries this example
+# project's configured values.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: opencrvs-events-search-page
+pack: opencrvs-events
+upstreamVersion: "unverified"
+provenance:
+  type: documented
+  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+intercepts:
+  - type: endpoint
+    endpoint: events
+  - type: token-endpoint
+    endpoint: events
+entries:
+  - facadeRequest:
+      operation: records-search
+      path: /v1/records/birth
+      query: limit=2
+    upstream:
+      - request:
+          endpoint: events
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: events
+          method: POST
+          path: /events/search
+          body:
+            query:
+              type: and
+              clauses:
+                - eventType: birth
+                  status:
+                    type: exact
+                    term: REGISTERED
+            limit: 2
+            offset: 0
+        response:
+          status: 200
+          body:
+            total: 3
+            results:
+              - id: 00000000-0000-4000-8000-000000000001
+                trackingId: EVT-SYNTHETIC-001
+                type: birth
+                status: REGISTERED
+                dateOfEvent: "2015-04-01"
+                declaration:
+                  mother.personReference: PERSON-SYNTHETIC-A
+                  father.personReference: PERSON-SYNTHETIC-B
+                  unrelated.field: SOURCE-UNRELATED-CANARY
+              - id: 00000000-0000-4000-8000-000000000002
+                trackingId: EVT-SYNTHETIC-002
+                type: birth
+                status: REGISTERED
+                dateOfEvent: "2015-04-02"
+                declaration:
+                  mother.personReference: PERSON-SYNTHETIC-A
+                  father.personReference: PERSON-SYNTHETIC-B
+                  unrelated.field: SOURCE-UNRELATED-CANARY
+    expected:
+      type: response
+      status: 200
+      headers:
+        content-type: application/json
+        cache-control: no-store
+      body:
+        items:
+          - recordIdentifier: EVT-SYNTHETIC-001
+            domainData:
+              event_id: 00000000-0000-4000-8000-000000000001
+              tracking_id: EVT-SYNTHETIC-001
+              status: REGISTERED
+              event_type: birth
+              date_of_event: "2015-04-01"
+              mother_reference: PERSON-SYNTHETIC-A
+              father_reference: PERSON-SYNTHETIC-B
+          - recordIdentifier: EVT-SYNTHETIC-002
+            domainData:
+              event_id: 00000000-0000-4000-8000-000000000002
+              tracking_id: EVT-SYNTHETIC-002
+              status: REGISTERED
+              event_type: birth
+              date_of_event: "2015-04-02"
+              mother_reference: PERSON-SYNTHETIC-A
+              father_reference: PERSON-SYNTHETIC-B
+        pageInfo:
+          nextCursor: AaW8rI1CvWK9y53Ni6oLOJeDjcl5fBVpQyicqzLMqPodcjKcJsY6mPbB0--gjsJEkxENyrX6bQqqqmFk1ag
+        meta:
+          registryIdentifier: opencrvs-events-registry
+          datasetIdentifier: births
+          recordTypeIdentifier: birth

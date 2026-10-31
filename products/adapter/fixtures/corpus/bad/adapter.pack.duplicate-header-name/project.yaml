@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.duplicate-header-name: this artifact set must be refused with
+# exactly adapter.pack.duplicate-header-name. The endpoint allowlists the same header name twice
+# compared without case (`ETag` and `etag`), a repeat the reader's exact `uniqueItems` cannot see.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.duplicate-header-name/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:44bdf36e18b03e2b3a5ad38310edd316769cb784ca21c571ef5aa661d16120be
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:2c6ca7d3b45952a09b766ffc64af02e12f56ecb6fd7f234515fd22318e627a2e
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

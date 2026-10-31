@@ -34,6 +34,8 @@ const withCoordinator = { products: { 'registry-coordinator': { ref: 'HEAD' } } 
 const withoutCoordinator = withoutMessaging;
 const withDocuments = { products: { 'registry-documents': { ref: 'HEAD' } } };
 const withoutDocuments = withoutMessaging;
+const withAdapter = { products: { 'registry-adapter': { ref: 'HEAD' } } };
+const withoutAdapter = withoutMessaging;
 const withSchedulingAndRender = {
   products: { 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } },
 };
@@ -276,9 +278,11 @@ test('drops a gated product\'s pages and CLI references from the docs collection
   assert.deepEqual(omittedCliBinaries(withoutMessaging), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render',
     'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
+    'adapter', 'adapterctl',
   ]);
   assert.deepEqual(omittedCliBinaries(withMessaging), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
+    'adapter', 'adapterctl',
   ]);
 });
 
@@ -301,6 +305,7 @@ test('drops Registry Scheduling\'s and Registry Render\'s pages and CLI referenc
   }
   assert.deepEqual(omittedCliBinaries(withSchedulingAndRender), [
     'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
+    'adapter', 'adapterctl',
   ]);
 });
 
@@ -326,6 +331,7 @@ test('drops the citizen services\' pages and CLI references from the docs collec
   }
   assert.deepEqual(omittedCliBinaries(withBregServices), [
     'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
+    'adapter', 'adapterctl',
   ]);
 });
 
@@ -344,8 +350,24 @@ test('drops Registry Coordinator\'s pages and CLI references from the docs colle
   }
   assert.deepEqual(omittedCliBinaries(withCoordinator), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl',
-    'documents', 'documentsctl',
+    'documents', 'documentsctl', 'adapter', 'adapterctl',
   ]);
+});
+
+test('drops the Registry Adapter\'s CLI references from the docs collection', () => {
+  for (const id of [
+    'reference/cli/adapter',
+    'reference/cli/adapter/serve',
+    'reference/cli/adapterctl',
+    'reference/cli/adapterctl/check',
+  ]) {
+    assert.equal(isEntryGatedOut(id, withoutAdapter), true, id);
+    assert.equal(isEntryGatedOut(id, withAdapter), false, id);
+  }
+  for (const id of ['index', 'reference/cli', 'reference/configuration-files', 'reference/cli/adapterx']) {
+    assert.equal(isEntryGatedOut(id, withoutAdapter), false, id);
+  }
+  assert.ok(!omittedCliBinaries(withAdapter).includes('adapterctl'));
 });
 
 test('drops the Document Store\'s pages and CLI references from the docs collection', () => {

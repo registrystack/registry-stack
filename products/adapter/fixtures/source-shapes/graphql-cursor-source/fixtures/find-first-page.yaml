@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): reconstructed from the Relay cursor
+# connection spec (https://relay.dev/graphql/connections.htm) and GraphQL
+# over HTTP (https://graphql.github.io/graphql-over-http/draft/). No server
+# was contacted.
+#
+# The recorded upstream body is the exact GraphQL-over-HTTP request the
+# endpoint builds from its pinned query document and variables script. The
+# preserved reply produces a continuation; the fixture does not rewrite it
+# into a last page merely to make replay easier.
+#
+# The cases-get not-found entry (a Relay `node: null` answer mapped to the
+# cases.missing problem) is not in this file: an expected facade response
+# is validated against the success result schema whatever its status, so a
+# problem body is refused (adapter.fixture.response-schema). The README
+# records the entry and the refusal.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: graphql-cases-find-first-page
+pack: graphql-cases
+upstreamVersion: "2024-01"
+provenance:
+  type: documented
+  reference: https://relay.dev/graphql/connections.htm
+intercepts:
+  - type: endpoint
+    endpoint: cases-query
+entries:
+  - facadeRequest:
+      operation: cases-find
+      path: /v2/cases/benefit_case
+      body:
+        query:
+          status: open
+    upstream:
+      - request:
+          endpoint: cases-query
+          method: POST
+          path: /
+          body:
+            query: |
+              # Relay cursor connection over cases of one type
+              # (https://relay.dev/graphql/connections.htm). Documented shape, not a
+              # captured schema: `cases` is a Connection, `first`/`after` are the forward
+              # pagination arguments, and `pageInfo { hasNextPage endCursor }` is the
+              # connection's PageInfo.
+              query FindCases($caseType: String!, $first: Int!, $after: String, $status: CaseStatus) {
+                cases(caseType: $caseType, first: $first, after: $after, status: $status) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  edges {
+                    node {
+                      id
+                      version
+                      status
+                      openedOn
+                      programme
+                      applicant {
+                        nationalId
+                      }
+                    }
+                  }
+                }
+              }
+            operationName: FindCases
+            variables:
+              caseType: BENEFIT
+              first: 50
+              status: OPEN
+        response:
+          status: 200
+          body:
+            data:
+              cases:
+                pageInfo:
+                  hasNextPage: true
+                  endCursor: Y3Vyc29yOjUw
+                edges:
+                  - node:
+                      id: Q2FzZTox
+                      version: "3"
+                      status: OPEN
+                      openedOn: "2026-02-11"
+                      programme: CHILD-GRANT
+                      applicant:
+                        nationalId: NID-0001
+    expected:
+      type: response
+      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        cases:
+          - status: open
+            opened_on: "2026-02-11"
+            programme: CHILD-GRANT
+            applicant_national_id: NID-0001
+        pageStateToken: AQGTVIRecXOAHQpErfOzhEknm-j2T4eSa5osZDxhcPxbjL4ZWsi_fwuEmekmwe3pJzk7HzaQ5NkeOQEeGBtmPJ2tSNzFv1vbYu21rA

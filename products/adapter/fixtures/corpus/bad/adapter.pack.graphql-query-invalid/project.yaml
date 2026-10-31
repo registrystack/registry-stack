@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.graphql-query-invalid: this artifact set must be refused with
+# exactly adapter.pack.graphql-query-invalid. The pinned query file does not parse as a GraphQL
+# document (its pin matches the broken bytes).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.graphql-query-invalid/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:65f360f1c9a0a9c30c3baa25d29e1da3492d89333052741389ae4ab31de0efce
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:77ee8e2df16e2cfb3cc001136420bc3dcd164063e34e81af16d553ca28c61bc4
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

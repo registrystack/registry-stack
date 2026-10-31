@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Experiment runtime config (a copy of rest-offset-mtls's, renamed): binds the household registry over mutual TLS
+# with a private root bundle, and its RFC 7523 private-key-jwt grant. Every
+# secret is a reference; every origin is under .example.invalid.
+#
+# The token endpoint sits on the same mTLS-only network as the registry;
+# nothing here can say that the token request needs the client certificate
+# or the private CA too (RFC 8705 section 2). The README records the gap.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: fhir-facade-households-experiment
+endpoints:
+  - endpoint: registry
+    baseUrl: https://households.example.invalid/api
+    credential:
+      type: oauth2-private-key-jwt
+      tokenEndpoint: https://auth.example.invalid/oauth2/token
+      clientIdRef: secret:env/HOUSEHOLDS_CLIENT_ID
+      clientAssertionKeyRef: secret:file/households-assertion.jwk
+      clientAssertionAudience: https://auth.example.invalid/oauth2/token
+      scope: households.read
+      maximumCacheSeconds: 300
+    tlsTrustProfile: households-ca
+    mtlsIdentity:
+      certificateRef: secret:file/households-client.crt
+      keyRef: secret:file/households-client.key
+outboundTls:
+  trustProfiles:
+    households-ca:
+      caBundleFile: /etc/registry-adapter/trust/households-ca.pem
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter
+allowedClients:
+  - registry-adapter-example-client
+audit:
+  retentionDays: 90

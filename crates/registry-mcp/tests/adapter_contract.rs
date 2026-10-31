@@ -12,15 +12,15 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const PRODUCER_GOLDEN: &[u8] =
     include_bytes!("fixtures/adapter/govstack-facilities/effective-contract.json");
 const PRODUCER_GOLDEN_DIGEST: &str =
-    "sha256:ac04bfe127bd5b32018771a2e0909887259bf210176d07b3d6f2721677532d5f";
+    "sha256:837055a253b539255465834d1a030b80735360b8d61baf8ba698c5565760804c";
 const PRODUCER_GOLDEN_BYTES_DIGEST: &str =
-    "sha256:2097153d7ef6d97d5ffe26d6a3ee312df4a0e46fb49003ee3733e932e79ef7eb";
+    "sha256:a46ac0a656ee599151c6557c0c233f5b9ecdec4dcfa50403d112153fca9d5a15";
 const OPTIONAL_PAGINATION_GOLDEN: &[u8] =
     include_bytes!("fixtures/adapter/optional-pagination/effective-contract.json");
 const OPTIONAL_PAGINATION_DIGEST: &str =
-    "sha256:cff127c172f42dd32192f24ec0afebf95e243368198d6c1661136e0130f89a65";
+    "sha256:e3d9c7fe90cb10b1e6588051d429010ef656ffca96d65721e3c6aabfcc6da591";
 const OPTIONAL_PAGINATION_BYTES_DIGEST: &str =
-    "sha256:fe0f3e0f88a3e78e2586f772de47c978b9c972b132a02d2cf55438fbd6659710";
+    "sha256:03c9c5f60f49f8d2929752ac5b072e537896148bd3a82000520b138ccaf1a7e8";
 
 fn document() -> Value {
     let empty = json!({"type":"object","additionalProperties":false,"properties":{}});
@@ -153,7 +153,7 @@ fn producer_generated_facility_contract_matches_fixed_bytes_and_parses() {
     );
     let selected = selected(&["records-get.facilities", "records-search.facilities"]);
     let contract = AdapterContract::parse_bound(PRODUCER_GOLDEN, PRODUCER_GOLDEN_DIGEST, &selected)
-        .expect("the exact Adapter 8c43e6ce6 facility export remains compatible");
+        .expect("the producer-generated Adapter facility export remains compatible");
     let bindings = [
         (
             "get_facility".to_owned(),

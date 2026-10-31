@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.auth.none-not-loopback: this artifact set must be refused with
+# exactly adapter.auth.none-not-loopback. The none-kind endpoint reaches a named host over TLS with no mTLS identity.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.auth.none-not-loopback/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:bd87f6231464a0c966a73676e2ae3643d25932c9b8189a2ba93b96c9896294d9
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:e8f142f2d279f5b73214c0a8a192c2fbff9a1851ea9ace8df5626fa3fde40925
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

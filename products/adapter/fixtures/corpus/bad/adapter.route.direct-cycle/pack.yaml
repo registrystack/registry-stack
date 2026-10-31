@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.direct-cycle: this artifact set must be refused with
+# exactly adapter.route.direct-cycle. Clean baseline pack; another artifact carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.direct-cycle/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+              filter[region]:
+                constant: west
+routes:
+  - id: loop-a
+    from:
+      uri: direct:loop-a
+    steps:
+      - enrich:
+          uri: direct:loop-b
+  - id: loop-b
+    from:
+      uri: direct:loop-b
+    steps:
+      - enrich:
+          uri: direct:loop-a
+capabilities:
+  components:
+    - http
+  eips:
+    - enrich

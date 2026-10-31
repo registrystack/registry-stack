@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.unknown-problem-code: this artifact set must be refused with
+# exactly adapter.fixture.unknown-problem-code. The expected problem carries the code cases.spectre, which is not among the profile's declared problem codes.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.unknown-problem-code/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: adapter-fixture-unknown-problem-code
+pack: case-api-pack
+upstreamVersion: "1.0"
+provenance:
+  type: documented
+  reference: https://case-api.example.invalid/docs
+intercepts:
+  - type: endpoint
+    endpoint: cases
+entries:
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case/case_1
+    upstream:
+      - request:
+          endpoint: cases
+          method: GET
+          path: /v2/cases/x/case_1
+        response:
+          status: 200
+          body: {}
+    expected:
+      type: problem
+      class: outcome
+      code: cases.spectre

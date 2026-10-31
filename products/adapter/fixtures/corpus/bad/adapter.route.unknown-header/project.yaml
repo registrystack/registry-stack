@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.unknown-header: this artifact set must be refused with
+# exactly adapter.route.unknown-header. The route reads Etag, which no facade input, engine placement, endpoint allowlist, or earlier step of the body places.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.unknown-header/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:937eb496983397bfccfefff832dfd1ad285a1994e69e8ee19a4ac198352dd1ae
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:e9c43ed8a163a639b525bfe310a9e0c269a8933df4efb63cfbbff18a7befd9e6
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

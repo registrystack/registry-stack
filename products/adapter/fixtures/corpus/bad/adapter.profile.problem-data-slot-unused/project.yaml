@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.problem-data-slot-unused: this artifact set must be refused with
+# exactly adapter.profile.problem-data-slot-unused. The profile and pack pins match the sibling bytes.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.problem-data-slot-unused/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:07d7e5f3968ff4d3a21cf53f17df0bef91a82ac58d4000baa0c743e7a3bc53e0
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:a59daeb0af1f7af490cfcc3b2d66ae73a9fcb5c13f6656419bf556528ba72d07
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case
+

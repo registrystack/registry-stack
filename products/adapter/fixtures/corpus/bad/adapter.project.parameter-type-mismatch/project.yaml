@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.parameter-type-mismatch: this artifact set must be refused with
+# exactly adapter.project.parameter-type-mismatch. The instantiation binds integer parameter page_size a string.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.parameter-type-mismatch/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:b296b23e3842c65cbb515f2bde1a7ba810415681e2d274d5f7002904b7a6b6ec
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:97c91bc8e6974dc62f90d506972f38fc9f22ccad05d129e575cb77d9ff9c03a4
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+    parameters:
+      page_size: "fifty"
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

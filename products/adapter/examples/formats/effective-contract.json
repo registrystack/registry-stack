@@ -1,0 +1,932 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
+  "kind": "AdapterEffectiveContract",
+  "digest": "sha256:c3027aa1e8fce576c0ebecc3b62530456db509ccf371722392f82caf08d83896",
+  "contract": {
+    "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
+    "project": {
+      "id": "dhis2-tracker-example",
+      "version": "1.0.0"
+    },
+    "profileVersion": "1",
+    "artifactDeploymentDigest": "sha256:c7be9968ccb95af763ea55b78144866443b9a9de09c03095d9d649ae653006d3",
+    "authentication": {
+      "scheme": "bearer",
+      "audience": "adapter-example",
+      "clientAdmission": "allowlist"
+    },
+    "authority": {
+      "callerMode": "trusted-machine",
+      "representedSubject": "unsupported",
+      "personalDelegation": "unsupported",
+      "targetBinding": "unsupported",
+      "rowDisclosureAuthority": "not-granted",
+      "fieldDisclosureAuthority": "not-granted"
+    },
+    "operations": [
+      {
+        "id": "records-search.person",
+        "version": "1",
+        "bindingId": "person-search",
+        "profileOperationId": "records-search",
+        "method": "GET",
+        "path": "/v1/records/person",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "anyOf": [
+                  {
+                    "required": [
+                      "cursor"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "limit"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "properties": {
+              "cursor": {
+                "maxLength": 2796,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string",
+                "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
+              },
+              "limit": {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "domainData": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "org_unit": {
+                        "type": "string"
+                      },
+                      "tracked_entity_type": {
+                        "type": "string"
+                      },
+                      "updated_at": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "org_unit",
+                      "tracked_entity_type"
+                    ],
+                    "type": "object"
+                  },
+                  "recordIdentifier": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "domainData",
+                  "recordIdentifier"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
+            "meta": {
+              "additionalProperties": false,
+              "properties": {
+                "datasetIdentifier": {
+                  "type": "string"
+                },
+                "recordTypeIdentifier": {
+                  "type": "string"
+                },
+                "registryIdentifier": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "datasetIdentifier",
+                "recordTypeIdentifier",
+                "registryIdentifier"
+              ],
+              "type": "object"
+            },
+            "pageInfo": {
+              "additionalProperties": false,
+              "properties": {
+                "nextCursor": {
+                  "type": "string"
+                }
+              },
+              "required": [],
+              "type": "object"
+            }
+          },
+          "required": [
+            "items",
+            "meta",
+            "pageInfo"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "records-get.person",
+        "version": "1",
+        "bindingId": "person-get",
+        "profileOperationId": "records-get",
+        "method": "GET",
+        "path": "/v1/records/person/{record_id}",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {
+              "record_id": {
+                "minLength": 1,
+                "not": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        ".",
+                        ".."
+                      ]
+                    },
+                    {
+                      "pattern": "[/\\\\?;:%\\u{0000}-\\u{001f}\\u{007f}-\\u{009f}\\u{00ad}\\u{034f}\\u{061c}\\u{180e}\\u{200b}-\\u{200f}\\u{2028}-\\u{202e}\\u{2060}-\\u{206f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0001}\\u{e0020}-\\u{e007f}]"
+                    }
+                  ]
+                },
+                "type": "string"
+              }
+            },
+            "required": [
+              "record_id"
+            ],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": false,
+              "properties": {
+                "domainData": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "org_unit": {
+                      "type": "string"
+                    },
+                    "tracked_entity_type": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "org_unit",
+                    "tracked_entity_type"
+                  ],
+                  "type": "object"
+                },
+                "recordIdentifier": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "domainData",
+                "recordIdentifier"
+              ],
+              "type": "object"
+            },
+            "meta": {
+              "additionalProperties": false,
+              "properties": {
+                "datasetIdentifier": {
+                  "type": "string"
+                },
+                "recordTypeIdentifier": {
+                  "type": "string"
+                },
+                "registryIdentifier": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "datasetIdentifier",
+                "recordTypeIdentifier",
+                "registryIdentifier"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "data",
+            "meta"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "unserved": [
+      {
+        "operationId": "records-create.person",
+        "version": "1",
+        "bindingId": "person-create",
+        "profileOperationId": "records-create",
+        "method": "POST",
+        "support": "unserved",
+        "effect": "write",
+        "reasonCode": "adapter.operation.gateway-write-disabled",
+        "reason": "the external gateway contract does not expose write operations"
+      },
+      {
+        "operationId": "records-update.person",
+        "version": "1",
+        "bindingId": "person-update",
+        "profileOperationId": "records-update",
+        "method": "PUT",
+        "support": "unserved",
+        "effect": "write",
+        "reasonCode": "adapter.operation.gateway-write-disabled",
+        "reason": "the external gateway contract does not expose write operations"
+      }
+    ],
+    "problemSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.upstream-error",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 502,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the source answered with an error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.unavailable",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 504,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the source did not answer in time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.breaker",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 503,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the circuit protecting the source is open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.throttle",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 429,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the source is throttling requests",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.loop-bound",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the route exceeded its loop bound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.validation",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 422,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the request failed validation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.conversion",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "a value could not be converted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.aggregation",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the aggregation produced duplicates",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.script",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "a route script failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.budget",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the upstream call budget was exhausted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.credential",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the credential for the source was rejected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.disclosure",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the response would exceed its disclosure limits",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.egress",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 500,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the request was refused by egress policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.not-found",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 404,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the record could not be found",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.write-partial",
+              "type": "string"
+            },
+            "data": {
+              "additionalProperties": false,
+              "properties": {
+                "ignored": {
+                  "type": "integer"
+                },
+                "imported": {
+                  "type": "integer"
+                },
+                "rejected": {
+                  "type": "integer"
+                },
+                "updated": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ignored",
+                "imported",
+                "rejected",
+                "updated"
+              ],
+              "type": "object"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 409,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the write was only partially accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.write-rejected",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 409,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the source refused the write",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.outcome",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "const": 422,
+              "type": "integer"
+            },
+            "title": {
+              "const": "the request could not be served",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "source.facade",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "const": 400,
+                  "type": "integer"
+                },
+                {
+                  "const": 401,
+                  "type": "integer"
+                },
+                {
+                  "const": 403,
+                  "type": "integer"
+                },
+                {
+                  "const": 404,
+                  "type": "integer"
+                },
+                {
+                  "const": 405,
+                  "type": "integer"
+                },
+                {
+                  "const": 406,
+                  "type": "integer"
+                },
+                {
+                  "const": 409,
+                  "type": "integer"
+                },
+                {
+                  "const": 413,
+                  "type": "integer"
+                },
+                {
+                  "const": 415,
+                  "type": "integer"
+                },
+                {
+                  "const": 422,
+                  "type": "integer"
+                },
+                {
+                  "const": 500,
+                  "type": "integer"
+                },
+                {
+                  "const": 503,
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": {
+              "const": "the facade request was not valid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "protocolProblems": {
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "adapter.contract.precondition-failed"
+              },
+              "requestId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "status": {
+                "const": 412
+              },
+              "title": {
+                "const": "Effective contract precondition failed"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title",
+              "requestId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "adapter.contract.unavailable"
+              },
+              "requestId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "status": {
+                "const": 503
+              },
+              "title": {
+                "const": "Effective contract unavailable"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title",
+              "requestId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "problems": [
+        {
+          "code": "adapter.contract.precondition-failed",
+          "status": 412,
+          "title": "Effective contract precondition failed"
+        },
+        {
+          "code": "adapter.contract.unavailable",
+          "status": 503,
+          "title": "Effective contract unavailable"
+        }
+      ]
+    }
+  }
+}

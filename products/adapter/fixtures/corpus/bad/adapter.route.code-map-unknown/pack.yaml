@@ -1,0 +1,14 @@
+# Bad-corpus member adapter.route.code-map-unknown: the conversion names no declared code map.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints: []
+routeTemplates:
+  - id: find-cases
+    parameters: []
+    steps:
+      - convertBodyTo:
+          type: codeMap:missing
+capabilities: {}

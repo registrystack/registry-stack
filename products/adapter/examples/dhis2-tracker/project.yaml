@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# The dhis2-tracker example deployment: the breg-records facade profile
+# bound to the dhis2-tracker pack over one declared record type. The
+# program UID is the deployment's own DHIS2 program; every secret travels
+# through the runtime config as a secret reference, never here.
+#
+# Deployment precondition of the pack's idempotency claim: this
+# deployment's account must reach a program of the person tracked-entity
+# type. Without such a program an accepted import's repeat is refused
+# with E1323 (fixture no-program-type-import-repeat) and the entity
+# reads back 404; the pack header carries the full captured behavior.
+#
+# Attribute disclosure and writes are project-owned. The same
+# `attribute_fields` map is supplied to search, fetch, and import. This
+# maintained example chooses the empty map, so it preserves the base record
+# and writes no attribute values. A deployment that maps attributes also
+# declares those record fields, then replaces all three empty maps together.
+#
+# Upstream-call budgets, under the worst-case rule (route body plus the
+# widest exception-clause body; every send counts one plus the widest
+# declared maximumRedeliveries; token requests none, the endpoint is
+# basic):
+#   - person-search: 1 send x (1 + 1 redelivery) = 2; budget 4. The search
+#     answers one facade page from one upstream page (CONCEPT 8.11.2).
+#   - person-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
+#   - person-create and person-update: 1 send x (1 + 1 redelivery) = 2;
+#     budget 4 each.
+#
+# This folder holds only the project. The profile and pack its pins name are
+# the maintained artifacts (products/adapter/profiles/breg-records/profile.yaml
+# and products/adapter/packs/dhis2-tracker/pack.yaml with its scripts/); the
+# project does not say where they live, so every command takes them with
+# --profile and --pack, run from the repository root. The pinned id, version
+# and digest are the guarantee: a file that does not match them refuses. With
+# no flag a command looks beside the project and, finding nothing, refuses by
+# naming the missing file and the flag to pass.
+#   target/debug/adapterctl check products/adapter/examples/dhis2-tracker/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/dhis2-tracker/pack.yaml
+#
+# Serve takes the same two flags:
+#   adapter serve --runtime-config RUNTIME --project products/adapter/examples/dhis2-tracker \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/dhis2-tracker/pack.yaml
+#
+# The fixtures live in their own product directory, so replay passes them
+# explicitly:
+#   target/debug/adapterctl fixtures replay \
+#     products/adapter/examples/dhis2-tracker/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/dhis2-tracker/pack.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/search-page.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/get-found.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/get-soft-deleted.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/get-missing.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/get-server-error.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-accepted.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-rejected.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-server-error.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-update.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/no-program-type-import-repeat.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: dhis2-tracker-example
+  version: "1.0.0"
+profile:
+  id: breg-records
+  version: "1"
+  digest: sha256:b75f2c5e62d6be01f2311fe04e46b6b6a6a5629b6ff34a4a7136c608f6178d31
+pack:
+  id: dhis2-tracker
+  version: "1"
+  digest: sha256:2eea0866fc51101a704f90a4ab00ab8e3a842946d1eccee103c2b35fc8bc08ad
+recordTypes:
+  - name: person
+    fields:
+      - name: org_unit
+        type: string
+        required: true
+      - name: tracked_entity_type
+        type: string
+        required: true
+      # DHIS2 timestamps carry no UTC offset, so they are not RFC 3339
+      # date-times; the closed record schema holds them as plain text.
+      - name: created_at
+        type: string
+      - name: updated_at
+        type: string
+templatedRoutes:
+  - routeTemplate: search-tracked-entities
+    routeId: person-search
+    parameters:
+      program: qyVpUaAYv2A
+      attribute_fields: {}
+  - routeTemplate: fetch-tracked-entity
+    routeId: person-fetch
+    parameters:
+      attribute_fields: {}
+  - routeTemplate: import-tracked-entity
+    routeId: person-import
+    parameters:
+      attribute_fields: {}
+bindings:
+  - id: person-search
+    operation: records-search
+    recordType: person
+    route: person-search
+    maximumUpstreamCalls: 4
+  - id: person-get
+    operation: records-get
+    recordType: person
+    route: person-fetch
+    maximumUpstreamCalls: 4
+  - id: person-create
+    operation: records-create
+    recordType: person
+    route: person-import
+    maximumUpstreamCalls: 4
+  - id: person-update
+    operation: records-update
+    recordType: person
+    route: person-import
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: records-reader
+    scopes:
+      - records.read
+    operations:
+      - records-search
+      - records-get
+    recordTypes:
+      - person
+  - id: records-writer
+    scopes:
+      - records.write
+    operations:
+      - records-create
+      - records-update
+      - records-patch
+    recordTypes:
+      - person
+parameterizedParts:
+  registryIdentifier: dhis2-tracker-registry
+  datasetIdentifier: persons

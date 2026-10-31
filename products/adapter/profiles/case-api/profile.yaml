@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# The second test profile of the Increment 0 corpus: a foreign convention
+# set, deliberately unlike breg-records in every authored choice a caller
+# sees. Its operation ids, facade paths, envelope shape, pagination
+# parameter names, and problem vocabulary share nothing with
+# `products/adapter/profiles/breg-records/profile.yaml`, so a passing check
+# over both proves that a second target API is pure configuration, not a
+# second engine. The corpus README at
+# `products/adapter/fixtures/corpus/README.md` maps every corpus member to
+# the refusal it expects; this profile is the good member of that corpus.
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases-find
+    method: POST
+    readOnly: true
+    path: /v2/cases/{type}
+    pathParameters:
+      - type
+    recordTypeParameter: type
+    requestEnvelope: '{"query": {{filters}}, "maxResults": {{?pageSize}}, "pageStateToken": "{{?cursor}}"}'
+    responseEnvelope: '{"cases": {{records}}, "pageStateToken": "{{?nextCursor}}"}'
+    pagination:
+      cursorParameter: pageStateToken
+      pageSizeParameter: maxResults
+      pageSizeMinimum: 10
+      pageSizeMaximum: 500
+      pageSizeDefault: 50
+  - id: cases-get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    pathParameters:
+      - type
+      - case_id
+    recordTypeParameter: type
+    recordIdParameter: case_id
+    responseEnvelope: '{"case": {{record}}, "retrievedAt": "{{requestId}}"}'
+  - id: cases-file
+    method: PUT
+    path: /v2/cases/{type}/{case_id}
+    pathParameters:
+      - type
+      - case_id
+    recordTypeParameter: type
+    recordIdParameter: case_id
+    requestEnvelope: '{"record": {{record}}}'
+    responseEnvelope: '{"case": {{record}}}'
+problems:
+  - code: cases.unreachable
+    status: 502
+    title: the case service could not be reached
+    classes: [upstream]
+  - code: cases.breaker
+    status: 503
+    title: the circuit protecting the case service is open
+    classes: [breaker.open]
+  - code: cases.throttle
+    status: 429
+    title: the case service is throttling requests
+    classes: [throttle.rejected]
+  - code: cases.loop-bound
+    status: 500
+    title: the route exceeded its loop bound
+    classes: [loop.maximum-iterations-reached]
+  - code: cases.validation
+    status: 422
+    title: the request failed validation
+    classes: [validation]
+  - code: cases.conversion
+    status: 500
+    title: a value could not be converted
+    classes: [conversion.unmapped]
+  - code: cases.aggregation
+    status: 500
+    title: the aggregation produced duplicates
+    classes: [aggregation.duplicate]
+  - code: cases.script
+    status: 500
+    title: a route script failed
+    classes: [script]
+  - code: cases.budget
+    status: 500
+    title: the upstream call budget was exhausted
+    classes: [budget.exhausted]
+  - code: cases.credential
+    status: 500
+    title: the credential for the case service was rejected
+    classes: [credential.rejected]
+  - code: cases.disclosure
+    status: 500
+    title: the response would exceed its disclosure limits
+    classes: [disclosure.violation]
+  - code: cases.egress
+    status: 500
+    title: the request was refused by egress policy
+    classes: [egress.refused]
+  - code: cases.missing
+    status: 404
+    title: the case could not be found
+    classes: [outcome.not-found]
+  - code: cases.conflict
+    status: 409
+    title: the case changed while the request was in flight
+    classes: [outcome.conflict]
+  - code: cases.refused
+    status: 403
+    title: the case service refused the request
+    classes: [outcome.rejected]
+  - code: cases.outcome
+    status: 422
+    title: the request could not be served
+    classes: [outcome]
+  - code: cases.facade
+    status: 400
+    title: the facade request was not valid
+    classes: [facade]
+problemEnvelope: '{"family": "{{problemCode}}", "message": "{{problemTitle}}", "httpStatus": {{status}}, "more": "{{?problemDetail}}"}'

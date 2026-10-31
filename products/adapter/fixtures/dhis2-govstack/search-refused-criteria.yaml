@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Derived fixture: the source's bad-request answer to a criteria value it
+# cannot read, read through the govstack-consultation profile. The upstream
+# answer is the documented DHIS2 error envelope (the same one captured for
+# the not-found case in fixtures/dhis2-tracker/get-missing.yaml, with the
+# 400 status); the profile serves the outcome class as its invalid-field
+# problem. Synthetic: no real DHIS2 produced this exact reply.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-govstack-search-refused-criteria
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: documented
+  reference: products/adapter/fixtures/dhis2-tracker/get-missing.yaml
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-search
+      path: /v1/collections/persons/search
+      headers:
+        content-type: application/json
+      body:
+        search: byCriteria
+        criteria:
+          org_unit: "x&orgUnitMode=ALL"
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities
+          query: order=createdAt%3Adesc&orgUnitMode=SELECTED&orgUnits=x%26orgUnitMode%3DALL&page=1&pageSize=20&program=qyVpUaAYv2A&totalPages=true
+        response:
+          status: 400
+          body:
+            httpStatus: Bad Request
+            httpStatusCode: 400
+            status: ERROR
+            message: Org unit mode requires org units
+    expected:
+      type: problem
+      class: outcome.invalid-request
+      code: https://govstack.global/problems/digital-registries/invalid-field

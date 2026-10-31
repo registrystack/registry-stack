@@ -362,3 +362,41 @@ formats:
     init: {command: "coordinatorctl init --directory {directory}", file: workflow.yaml}
   coordinator/runtime:
     init: {command: "coordinatorctl init --directory {directory}", file: runtime.yaml}
+  # The adapter's check reads a whole authored workspace: the example stages
+  # the project directory, and copies land the pinned profile, pack, and
+  # fixtures beside it where the check's flags name them. A profile or pack
+  # mutation changes the bytes the project pins, so those two formats run
+  # the lock after each write; the project format never does, so its
+  # pin-tampering cases keep their meaning.
+  adapter/project:
+    project: products/adapter/examples/dhis2-tracker
+    copies:
+      profile: {from: products/adapter/profiles/breg-records}
+      pack: {from: products/adapter/packs/dhis2-tracker}
+      fixtures: {from: products/adapter/fixtures/dhis2-tracker}
+  adapter/profile:
+    project: products/adapter/examples/dhis2-tracker
+    copies:
+      profile: {from: products/adapter/profiles/breg-records}
+      pack: {from: products/adapter/packs/dhis2-tracker}
+      fixtures: {from: products/adapter/fixtures/dhis2-tracker}
+    afterWrite: ["adapterctl project lock {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml"]
+  adapter/pack:
+    project: products/adapter/examples/dhis2-tracker
+    copies:
+      profile: {from: products/adapter/profiles/breg-records}
+      pack: {from: products/adapter/packs/dhis2-tracker}
+      fixtures: {from: products/adapter/fixtures/dhis2-tracker}
+    afterWrite: ["adapterctl project lock {project} --profile {profile}/profile.yaml --pack {pack}/pack.yaml"]
+  adapter/fixture:
+    project: products/adapter/examples/dhis2-tracker
+    copies:
+      profile: {from: products/adapter/profiles/breg-records}
+      pack: {from: products/adapter/packs/dhis2-tracker}
+      fixtures: {from: products/adapter/fixtures/dhis2-tracker}
+  adapter/runtime:
+    project: products/adapter/examples/dhis2-tracker
+    copies:
+      profile: {from: products/adapter/profiles/breg-records}
+      pack: {from: products/adapter/packs/dhis2-tracker}
+      fixtures: {from: products/adapter/fixtures/dhis2-tracker}

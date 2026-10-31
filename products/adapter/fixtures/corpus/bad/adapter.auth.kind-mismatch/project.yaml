@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.auth.kind-mismatch: this artifact set must be refused with
+# exactly adapter.auth.kind-mismatch. The runtime binds a static-authorization credential to an endpoint declared basic.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.auth.kind-mismatch/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:d94352d8bdf2e5463a5249492803c4f0f5afbd71fc88a9819347c861b5bc293e
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:6c08e9637acb2d5e1934a02a6ac32849b9bc52bf00f9100079ea6926238ca985
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.entrypoint-parameter: this artifact set must be refused with
+# exactly adapter.pack.entrypoint-parameter. The pinned script scripts/case-api.rhai parses and
+# hashes to its pin, and its entrypoint takes record, not the exchange the slot passes.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.entrypoint-parameter/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:993c4f70ca7fa754c7858a57d7d4b2d5db01ec6ebbae07c9bfea3171e2b7e190
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:4d5134bf05c224364a2bbf49d2c473cbd1a614bff17490554554c72daf2084d3
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

@@ -5,7 +5,7 @@ in-memory keyed rate limiting. It carries no product vocabulary: a caller
 presents an opaque key, never raw caller-controlled text, and gets back
 admission or a refusal.
 
-Two independent primitives live here:
+Two keyed primitives live here, and one unkeyed paces a single budget:
 
 - `TokenBucketLimiter` is a smooth per-key request budget with burst.
   `requests_per_minute` refills a per-key bucket of size `burst`, and
@@ -20,6 +20,11 @@ Two independent primitives live here:
   counter, for example). `check(key)` answers the current budget without
   recording anything; `record(key)` records one occurrence and refuses once
   the window's count exceeds `limit`.
+- `RollingWindowLimiter` is one unkeyed budget: at most `limit`
+  admissions inside the last `window`, with the limit supplied on each
+  `acquire` because a caller's limit can be derived per call. A refusal
+  carries `retry_after`, the rest of the oldest admission's window, so a
+  pacing caller knows how long to wait instead of guessing.
 
 Both primitives are process-local: they track keys in memory only, not across
 replicas, so a deployment with more than one replica gets independent budgets

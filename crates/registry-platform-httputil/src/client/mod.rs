@@ -36,6 +36,10 @@ pub use retry::{
     DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRY_AFTER_SECONDS,
 };
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};
+// The bearer bound is public to the crate's own tests, which tie the
+// open-member decode's credential bound to it.
+#[cfg(test)]
+pub(crate) use token::MAXIMUM_TOKEN_BYTES;
 
 /// Default total request timeout for credential-bearing service clients.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

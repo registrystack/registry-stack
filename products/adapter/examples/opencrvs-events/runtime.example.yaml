@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# The opencrvs-events example deployment's runtime configuration, in the
+# example form: every secret is a reference into the operator's provider,
+# never a value, and the listener binds loopback only. The two origins are
+# deployment values and differ: the token endpoint sits on the auth host,
+# the data endpoint on the events host. A deployment copies this file to
+# its own runtime.yaml and fills in its environment's references. Check it
+# with the project (whose header comment carries the full command):
+#   adapterctl check products/adapter/examples/opencrvs-events/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/packs/opencrvs-events/pack.yaml \
+#     --runtime products/adapter/examples/opencrvs-events/runtime.example.yaml
+#
+# Credentials travel in the token request's form body (client_id,
+# client_secret, grant_type=client_credentials), as the Evidence reference
+# does. The OpenCRVS token reply is documented there as carrying no
+# `expires_in`, so the lifetime is assumed here and clamped by
+# maximumCacheSeconds. Neither value was observed against a live system.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: opencrvs-events-example
+endpoints:
+  - endpoint: events
+    baseUrl: https://events.opencrvs.example.invalid
+    credential:
+      type: oauth2-client-credentials
+      tokenEndpoint: https://auth.opencrvs.example.invalid/token
+      clientIdRef: secret:file/events-client-id
+      clientSecretRef: secret:file/events-client-secret
+      scope: recordsearch
+      credentialPlacement: form-body
+      maximumCacheSeconds: 300
+      assumedLifetimeSeconds: 600
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter-example
+allowedClients:
+  # The OAuth clients whose access tokens the facade admits; a token from
+  # any other client is refused even when the issuer signed it.
+  - registry-adapter-example-client
+allowedPrivateCidrs:
+  # The private ranges this deployment may call upstream. The example
+  # range stands in for the deployment's own; private endpoints stay
+  # refused unless their range is listed here.
+  - 10.0.0.0/8
+audit:
+  retentionDays: 90
+# Seals the pagination cursors a search returns: exactly 32 bytes.
+cursorKeyRef: secret:env/ADAPTER_CURSOR_KEY

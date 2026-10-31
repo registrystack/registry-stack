@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.invalid-outbound-tls: this artifact set must be refused with
+# exactly adapter.runtime.invalid-outbound-tls. The trust profile's caBundleFile is a relative path,
+# not the absolute operator path the runtime may read.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.runtime.insecure-origin/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:677b2f21d0ddb59f933589a41400e7dfa49562c74bbd2688231f9d978fcb4209
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:651d7f4d725d89754e2ac8d836c85d546cd2c3beeeaa6b7c54812c1f4e752e7b
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

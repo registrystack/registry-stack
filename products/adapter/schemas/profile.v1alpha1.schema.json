@@ -1,0 +1,352 @@
+{
+  "$defs": {
+    "EnvelopeTemplate": {
+      "description": "An envelope template: a JSON template whose string members carry\n`{{slot}}` placeholders from the closed vocabulary\n(`products/adapter/CONCEPT.md` section 7). The template is data; the\nengine fills it.",
+      "type": "string"
+    },
+    "ErrorClass": {
+      "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+      "enum": [
+        "aggregation.duplicate",
+        "breaker.open",
+        "budget.exhausted",
+        "conversion.unmapped",
+        "credential.rejected",
+        "disclosure.violation",
+        "egress.refused",
+        "loop.maximum-iterations-reached",
+        "script",
+        "script.budget-exceeded",
+        "throttle.rejected",
+        "upstream",
+        "upstream.connection",
+        "upstream.http",
+        "upstream.malformed",
+        "upstream.redirect",
+        "upstream.timeout",
+        "upstream.too-large",
+        "validation",
+        "outcome",
+        "outcome.conflict",
+        "outcome.invalid-request",
+        "outcome.not-found",
+        "outcome.rejected",
+        "facade",
+        "facade.conflict",
+        "facade.forbidden",
+        "facade.idempotency-mismatch",
+        "facade.invalid-cursor",
+        "facade.invalid-field",
+        "facade.invalid-request",
+        "facade.method-not-allowed",
+        "facade.not-acceptable",
+        "facade.not-found",
+        "facade.payload-too-large",
+        "facade.unauthenticated",
+        "facade.unsupported-media-type"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "HttpMethod": {
+      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PaginationParameters": {
+      "additionalProperties": false,
+      "description": "The pagination parameters of a search operation: the cursor and\npage-size query parameter names and their bounds\n(`products/adapter/CONCEPT.md` section 7). The engine owns encoding the\ncursor; the profile owns the names.",
+      "properties": {
+        "cursorParameter": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The cursor query parameter name."
+        },
+        "pageSizeDefault": {
+          "description": "The page size a call that names none gets; within the bounds. A\ncursor carries the page size of the call that minted it: a later\ncall may omit the size, and one that names a different size is\nrefused.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pageSizeMaximum": {
+          "description": "The largest page size a caller may ask for.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pageSizeMinimum": {
+          "description": "The smallest page size a caller may ask for.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pageSizeParameter": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The page-size query parameter name."
+        }
+      },
+      "required": [
+        "cursorParameter",
+        "pageSizeParameter",
+        "pageSizeMinimum",
+        "pageSizeMaximum"
+      ],
+      "type": "object"
+    },
+    "ParameterizedPart": {
+      "additionalProperties": false,
+      "description": "One parameterized part: a part of the profile a deployment declares at\nbind time (`products/adapter/CONCEPT.md` sections 6 and 7).",
+      "properties": {
+        "description": {
+          "description": "What the part means, for review.",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The part name."
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "type": "object"
+    },
+    "Problem": {
+      "additionalProperties": false,
+      "description": "One problem a caller can receive: the profile's own answer shape for\nthe error classes it maps (`products/adapter/CONCEPT.md` sections 7\nand 8.11.6). A pack raises error classes and never names a problem\ncode or builds a problem body; the profile decides what the caller\nsees.",
+      "properties": {
+        "classes": {
+          "description": "The error classes this problem answers: a class resolves to the\nentry whose declared class is closest to it, by the rule of\n`products/adapter/CONCEPT.md` section 8.7.",
+          "items": {
+            "$ref": "#/$defs/ErrorClass"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "code": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The profile's own problem code a caller receives."
+        },
+        "dataFields": {
+          "description": "The optional closed scalar object this problem may disclose. Every\ndeclared field is required when the object is present; authoring\nchecks enforce the field-count and required-field bounds.",
+          "items": {
+            "$ref": "#/$defs/RecordField"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "status": {
+          "description": "The default HTTP status for profile-governed route failures. Fixed\nfacade admission failures retain their engine-defined status; the\neffective problem schema includes those resolved class/status pairs.",
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 400,
+          "type": "integer"
+        },
+        "title": {
+          "description": "The problem title the envelope's `problemTitle` slot fills from.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "status",
+        "title",
+        "classes"
+      ],
+      "type": "object"
+    },
+    "ProfileOperation": {
+      "additionalProperties": false,
+      "description": "One facade operation, declared by id\n(`products/adapter/CONCEPT.md` sections 6 and 7). The id is a\nprofile-declared bounded string (CFG-ID-5), never an engine enum.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The profile-declared operation id a binding names."
+        },
+        "itemEnvelope": {
+          "$ref": "#/$defs/EnvelopeTemplate",
+          "description": "The per-record template: when declared, every record the response\nenvelope's `record` or `records` slot carries is rendered through\nit first. It may name `record`, `recordId` (the identifier the\nroute's record carries beside its domain data), `recordType`, and\n`requestId`. A call whose route yields no identifier for a template\nthat names `recordId` is a disclosure violation."
+        },
+        "method": {
+          "$ref": "#/$defs/HttpMethod",
+          "description": "The facade method."
+        },
+        "pagination": {
+          "$ref": "#/$defs/PaginationParameters",
+          "description": "The pagination parameters of a search operation."
+        },
+        "path": {
+          "description": "The facade path template, e.g. `/v2/cases/{type}`. Placeholders\nare single-brace `{name}` templates, Camel REST DSL / OpenAPI path\ntemplating; `{{name}}` is the pack layer's substitution syntax and\nrefuses here.",
+          "type": "string"
+        },
+        "pathParameters": {
+          "description": "The path parameters the template names: every `{name}` in `path`\nmust resolve here, every entry must appear in the path, and the\nlist is unique (CFG-ID-6).",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "readOnly": {
+          "description": "Whether a POST operation only reads: it is served like a read\n(never the write path), its request envelope is a closed template\nover the caller's JSON body, and its route reaches only safe sends.\nA GET operation is a read without declaring it.",
+          "type": "boolean"
+        },
+        "recordIdParameter": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The path parameter the caller's `recordId` header fills on get,\nupdate, and patch; one of `pathParameters` when declared. A search\nor create operation fills none; the profile checks require the\nparameter exactly where the facade reads it."
+        },
+        "recordTypeParameter": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The path parameter the bound record type substitutes into\n(`products/adapter/CONCEPT.md` section 7): one of `pathParameters`,\nchecked at the profile checks. No rule reads meaning from the\nparameter's position."
+        },
+        "requestEnvelope": {
+          "$ref": "#/$defs/EnvelopeTemplate",
+          "description": "Where a writable record sits in an incoming body. A write\noperation's request envelope must name the `record` slot."
+        },
+        "requestMaximumBytes": {
+          "description": "The largest request body, in bytes, a read operation with a body\naccepts; a larger one answers `facade.payload-too-large`. Sixteen\nkibibytes when absent.",
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "responseEnvelope": {
+          "$ref": "#/$defs/EnvelopeTemplate",
+          "description": "The response envelope; must name its result slot."
+        },
+        "successStatus": {
+          "default": 200,
+          "description": "The status the facade answers a success with; two hundreds only\n(CFG-QTY-4). Every non-2xx answer is a problem body.",
+          "format": "uint32",
+          "maximum": 299,
+          "minimum": 200,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "path",
+        "recordTypeParameter",
+        "responseEnvelope"
+      ],
+      "type": "object"
+    },
+    "RecordField": {
+      "additionalProperties": false,
+      "description": "One declared record field, typed under CFG-VAL-9 so fixture values and\nroute outputs are checked against it.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The field name."
+        },
+        "required": {
+          "description": "Whether every record of the type carries the field.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/RecordFieldType",
+          "description": "The field's value type."
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "RecordFieldType": {
+      "description": "A record field's value type (CFG-VAL-9).",
+      "enum": [
+        "string",
+        "integer",
+        "decimal",
+        "boolean",
+        "date",
+        "date-time"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The facade profile artifact (`AdapterProfile`): the operation set, the\nenvelope templates, the pagination parameters, and the problems and\nproblem envelope.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/profile/v1alpha1",
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId",
+      "description": "The profile identifier a project pins."
+    },
+    "kind": {
+      "const": "AdapterProfile",
+      "type": "string"
+    },
+    "operations": {
+      "description": "The operations the profile serves.",
+      "items": {
+        "$ref": "#/$defs/ProfileOperation"
+      },
+      "type": "array"
+    },
+    "parameterizedParts": {
+      "default": [],
+      "description": "The parts of the profile a deployment declares at bind time.",
+      "items": {
+        "$ref": "#/$defs/ParameterizedPart"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "problemEnvelope": {
+      "$ref": "#/$defs/EnvelopeTemplate",
+      "description": "The problem envelope template; must carry the `problemCode` slot."
+    },
+    "problems": {
+      "description": "The problems a caller can receive, each mapping error classes to a\ncode, status, and title. The totality check requires every class of\nthe closed hierarchy, uncatchable and facade classes included, to\nresolve to exactly one entry\n(`products/adapter/CONCEPT.md` sections 7 and 8.11.6).",
+      "items": {
+        "$ref": "#/$defs/Problem"
+      },
+      "type": "array"
+    },
+    "version": {
+      "description": "The profile's own version; a project pin names it next to the\ndigest (CFG-ID-4).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "id",
+    "kind",
+    "operations",
+    "problemEnvelope",
+    "problems",
+    "version"
+  ],
+  "title": "Registry Adapter facade profile",
+  "type": "object"
+}

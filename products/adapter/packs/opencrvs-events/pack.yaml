@@ -1,0 +1,258 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# The opencrvs-events pack: OpenCRVS v2 birth-registration reads through
+# `POST /events/search`, DRAFT. Verified state, stated plainly: no real
+# OpenCRVS system has been reached. The deployment credentials available to
+# this program were rejected, so nothing here was captured. The wire shape
+# comes from the reviewed Evidence reference that already encodes it
+# (products/evidence/source-recipes/opencrvs-event-search/ and
+# products/evidence/reference/request-adapter/opencrvs-event-search/, with
+# the live-source check in crates/registry-evidence/tests/live_sources.rs),
+# and every fixture beside the example is synthetic and `documented`, never
+# `captured`. `testedVersions` is therefore empty on purpose: it lists
+# versions a pack was exercised against, and none was. A reader who needs a
+# claim about an OpenCRVS version must obtain a capture first.
+#
+# What the pack does: the same breg-records facade a caller already uses for
+# DHIS2 (`GET /v1/records/{type}/{record_id}` and
+# `GET /v1/records/{type}?limit=&cursor=`), served from OpenCRVS. Same
+# profile, same engine; only this pack differs.
+#   - records-get: `record_id` is the tracking ID. The route searches for an
+#     exact trackingId, exact status REGISTERED, the configured event type,
+#     limit 2, offset 0. Total 0 with no result raises `outcome.not-found`.
+#     Total 1 with one result whose trackingId equals the requested one
+#     exactly, of the configured type and status REGISTERED, is the record.
+#     Everything else (two results, a different or differently typed
+#     trackingId, a wrong type or status, a total that disagrees with the
+#     results) raises `upstream.malformed`, a source problem, never a
+#     guessed record. The limit of 2 exists only to make ambiguity visible.
+#   - records-search: the same query without the trackingId clause, `limit`
+#     from the facade's page size, offset from the opaque cursor. Next
+#     cursor only while `total` says rows remain.
+#   - records-create, records-update, and records-patch are not bound by any
+#     route here: writes are out of scope for this pack. OpenCRVS
+#     registration is a multi-step source process (draft, declare, register)
+#     with its own authority, and a facade write would imply an authority
+#     this pack does not hold.
+#
+# Output record: only the declared event index members (id, trackingId,
+# status, type, dateOfEvent) and the declaration leaves the project maps.
+# Declarations are configured per OpenCRVS deployment, so the route
+# template's `declaration_fields` parameter, set in the project, is the
+# only way a declaration leaf reaches a record: a map from record field to
+# declaration key, for example
+# `mother_reference: mother.personReference`. A key not listed never leaves
+# the source. A mapped record field the project has not declared is refused
+# when the engine validates the route result against the closed model.
+#
+# Authentication (cited choice): OpenCRVS integration clients use the
+# client-credentials grant; the Evidence reference declares
+# `oauth2-client-credentials` with `credentialPlacement: form-body`
+# (client_id, client_secret, and grant_type in the form body, so the
+# secret never reaches a URL a proxy may log) and the data request then
+# carries `Authorization: Bearer`. The token endpoint is on a separate
+# host from the events host (auth versus events). Both origins, the
+# credential references, the scope, and the placement are deployment values
+# bound in the runtime config (runtime.example.yaml), never in this pack.
+# The OpenCRVS token reply carries `access_token` and `token_type` and no
+# `expires_in` in the Evidence reference's account; RFC 6749 section 5.1
+# permits the omission, so the runtime config states `assumedLifetimeSeconds`
+# (CONCEPT 10.2: a missing `expires_in` without one fails as a credential
+# error) and `maximumCacheSeconds` clamps it. That omission is read from the
+# Evidence reference, not observed here.
+#
+# Safe search form: `POST /events/search` reads and changes nothing, so the
+# endpoint operation declares `safeUpstream: true` (a reviewed claim, as
+# for FHIR `POST _search`; CONCEPT 8.8). That lets the read routes reach
+# the send and redeliver it on a transport fault.
+#
+# Upstream responses and their declared headers: the facade consumes no
+# response header, so the allowlist stays empty and the engine copies
+# nothing.
+#
+# Error clauses: the pack raises the closed error classes of CONCEPT 8.7
+# and never names a profile's problem codes (CONCEPT 8.11.6). An upstream
+# 401 after the single token refresh raises the uncatchable
+# `credential.rejected`; any other upstream HTTP failure propagates as
+# `upstream.http`, which breg-records maps to its upstream-error problem.
+#
+# Paging: one facade page per upstream page (CONCEPT 8.11.2). The position
+# is the offset: the continuation is the offset the next page starts at,
+# the search body carries it as `offset`, and `limit` is the caller's page
+# size. The OpenCRVS maximum for `limit` is not established here; the bound
+# profile's pageSize maximum must respect the deployment's.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: opencrvs-events
+version: "1"
+testedVersions: []
+endpoints:
+  - id: events
+    component: http
+    authentication:
+      type: oauth2-client-credentials
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    operations:
+      - id: events-search
+        safeUpstream: true
+    testedVersions: []
+routeTemplates:
+  - id: search-events
+    parameters:
+      - name: event_type
+        type: string
+        required: true
+        description: The OpenCRVS event type the search is limited to, for example birth.
+      - name: declaration_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from the record field a declaration leaf lands in to the
+          OpenCRVS declaration key it is read from. Empty exposes none.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: opencrvsEventType
+          value:
+            constant: "{{event_type}}"
+      - setProperty:
+          name: opencrvsDeclarationMap
+          value:
+            constant: "{{declaration_fields}}"
+      - to:
+          uri: http:events
+          parameters:
+            httpMethod: POST
+            path: /events/search
+            operation: events-search
+            body:
+              rhai:
+                file: scripts/search-query.rhai
+                entrypoint: search_query
+      # A page the route cannot prove sound (a total that is not an
+      # integer, more results than the total, a result of another type or
+      # status, a result with no tracking ID) is a source problem, never a
+      # page to shape.
+      - choice:
+          when:
+            - rhai:
+                file: scripts/page-sound.rhai
+                entrypoint: is_sound_page
+              steps:
+                # The offset the next page starts at while `total` says
+                # more remain, absent on the last page
+                # (scripts/next-continuation.rhai).
+                - setProperty:
+                    name: AdapterNextContinuation
+                    value:
+                      rhai:
+                        file: scripts/next-continuation.rhai
+                        entrypoint: next_continuation
+                - setBody:
+                    rhai:
+                      file: scripts/shape-records.rhai
+                      entrypoint: shape_records
+          otherwise:
+            steps:
+              - throwException:
+                  exceptionType: upstream.malformed
+                  message: The source answered a page that does not match the request.
+  - id: fetch-event
+    parameters:
+      - name: event_type
+        type: string
+        required: true
+        description: The OpenCRVS event type the lookup is limited to, for example birth.
+      - name: declaration_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from the record field a declaration leaf lands in to the
+          OpenCRVS declaration key it is read from. Empty exposes none.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: opencrvsEventType
+          value:
+            constant: "{{event_type}}"
+      - setProperty:
+          name: opencrvsDeclarationMap
+          value:
+            constant: "{{declaration_fields}}"
+      - to:
+          uri: http:events
+          parameters:
+            httpMethod: POST
+            path: /events/search
+            operation: events-search
+            body:
+              rhai:
+                file: scripts/get-query.rhai
+                entrypoint: get_query
+      # The three answers of the reference: none (not found), exactly one
+      # that is the requested registered event (the record), anything else
+      # (a source problem). Ambiguity and identity mismatch are the third
+      # case on purpose.
+      - choice:
+          when:
+            - rhai:
+                file: scripts/get-outcome.rhai
+                entrypoint: is_missing
+              steps:
+                - throwException:
+                    exceptionType: outcome.not-found
+                    message: No registered event with that tracking ID exists at the source.
+            - rhai:
+                file: scripts/get-outcome.rhai
+                entrypoint: is_unique_match
+              steps:
+                - setBody:
+                    rhai:
+                      file: scripts/to-record.rhai
+                      entrypoint: to_record
+          otherwise:
+            steps:
+              - throwException:
+                  exceptionType: upstream.malformed
+                  message: The source answered something other than one registered event for that tracking ID.
+scripts:
+  - path: scripts/search-query.rhai
+    digest: sha256:ee07bee2fc027a90791f3e83dd6b365d79ad7158a904adae8b590177c1e37481
+  - path: scripts/page-sound.rhai
+    digest: sha256:19568fee65006167f54c102f75417608de1861e1cb464a6354a290255e20a02a
+  - path: scripts/next-continuation.rhai
+    digest: sha256:283b66a19638f8ec1699c588781043db7bd62ed9d89d671cec02cd2815648bd4
+  - path: scripts/shape-records.rhai
+    digest: sha256:a2ed4e5ce768555fca5c388028e9549fb751e9bf588b74ec22f5ce83f3fd3f00
+  - path: scripts/get-query.rhai
+    digest: sha256:892f252e9a97304ebb78ca2e16eaad79e22680581428f1ab7f24d84521d9d6fa
+  - path: scripts/get-outcome.rhai
+    digest: sha256:1774b3c858f51e32305ae56f2915d63f3e4865dafa94bd29d1f9ce57e526234e
+  - path: scripts/to-record.rhai
+    digest: sha256:d42ba86e4c85f9b692b4a086c97c15c9cedb50f8dd02bc658d6f15519a4d1414
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - rhai
+  eips:
+    - choice
+    - onException
+    - setBody
+    - setProperty
+    - throwException
+    - to

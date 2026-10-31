@@ -1,0 +1,24 @@
+[package]
+name = "registry-adapter-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source-neutral model, wire DTOs, problem codes, and authoring checks for the Registry Stack Adapter."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+schema = ["dep:schemars", "registry-platform-yaml/schema", "registry-platform-config/schema"]
+
+[dependencies]
+ipnet.workspace = true
+registry-platform-config.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true

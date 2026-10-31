@@ -1,8 +1,9 @@
-//! Generic in-memory keyed rate limiting.
+//! Generic in-memory rate limiting.
 //!
-//! Two independent primitives share one shape: a caller presents an opaque
-//! key (a pseudonym, never raw caller-controlled text) and gets back either
-//! admission or a refusal.
+//! Two keyed primitives share one shape: a caller presents an opaque key
+//! (a pseudonym, never raw caller-controlled text) and gets back either
+//! admission or a refusal. One unkeyed primitive beside them paces a
+//! single caller-designated budget.
 //!
 //! - [`token_bucket::TokenBucketLimiter`] is a smooth per-key request budget
 //!   with burst: `requests per minute` refills a per-key bucket of size
@@ -13,8 +14,12 @@
 //!   times an event may be recorded inside a rolling window, for budgets that
 //!   should reset in one step rather than refill smoothly (for example,
 //!   failed-attempt counters).
+//! - [`rolling_window::RollingWindowLimiter`] is one unkeyed budget of at
+//!   most `limit` admissions inside a rolling `window`, with the limit
+//!   supplied per acquire, for pacing one caller-designated node rather
+//!   than one budget per key.
 //!
-//! Both primitives track keys in memory only: process-local, not shared
+//! The keyed primitives track keys in memory only: process-local, not shared
 //! across replicas. Both cap the number of distinct keys they will track at
 //! [`MAX_TRACKED_KEYS`] and prune stale entries before admitting a new key
 //! past that cap, so an unbounded population of one-shot keys cannot grow
@@ -22,6 +27,7 @@
 //! deployment can publish that population as a metric.
 
 pub mod fixed_window;
+pub mod rolling_window;
 pub mod token_bucket;
 
 /// Ceiling on distinct keys tracked by one limiter instance, independent of

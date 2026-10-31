@@ -1,0 +1,157 @@
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: case-api-fixtures
+pack: case-api-pack
+upstreamVersion: "2.7"
+provenance:
+  type: documented
+  reference: https://example.invalid/api-handbook#cases
+intercepts:
+  - type: endpoint
+    endpoint: case-api
+  - type: token-endpoint
+    endpoint: case-api
+entries:
+  # A found record: the token request and the case read answer in order.
+  # The token exchange records no credential (CONCEPT 10.2): no
+  # authorization header, no request body; the reply's token is a
+  # synthetic value, never a captured one.
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case
+      headers:
+        accept: application/json
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          headers:
+            content-type: application/json
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: case-api
+          method: GET
+          path: /api/cases/case
+        response:
+          status: 200
+          body:
+            id: "123"
+    expected:
+      type: response
+      status: 200
+      headers:
+        content-type: application/json
+        cache-control: no-store
+      body:
+        record:
+          national_id: "123"
+  # An unreachable source: the read answers 503 with an explicit null body,
+  # and the facade answers the declared upstream problem by class and code.
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case
+      body: null
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: case-api
+          method: GET
+          path: /api/cases/case
+        response:
+          status: 503
+          body: null
+    expected:
+      type: problem
+      class: upstream
+      code: cases.upstream
+  # A synchronous write executes the real idempotent-consumer and POST
+  # interpreter paths. Replay simulates the claim in memory and does not
+  # claim PostgreSQL durability.
+  - facadeRequest:
+      operation: cases-create
+      path: /v2/cases/case
+      headers:
+        content-type: application/json
+        idempotency-key: fixture-create-456
+      body:
+        record:
+          national_id: "456"
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: case-api
+          method: POST
+          path: /api/cases
+          body:
+            id: "456"
+        response:
+          status: 201
+          body:
+            id: "456"
+    expected:
+      type: response
+      status: 201
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        record:
+          national_id: "456"
+  # A successful source reply that maps to a record outside the closed
+  # project schema follows the live facade's disclosure-problem path. The
+  # source-only canary must reach neither the problem body nor diagnostics.
+  - facadeRequest:
+      operation: cases-get
+      path: /v2/cases/case
+    upstream:
+      - request:
+          endpoint: case-api
+          tokenRequest: true
+          method: POST
+          path: /oauth/token
+        response:
+          status: 200
+          body:
+            access_token: synthetic-replay-token
+            token_type: Bearer
+            expires_in: 300
+      - request:
+          endpoint: case-api
+          method: GET
+          path: /api/cases/case
+        response:
+          status: 200
+          body:
+            id: null
+            source_private_marker: MUST_NOT_LEAK_FROM_DISCLOSURE_PROBLEM
+    expected:
+      type: problem
+      class: disclosure.violation
+      code: cases.boundary

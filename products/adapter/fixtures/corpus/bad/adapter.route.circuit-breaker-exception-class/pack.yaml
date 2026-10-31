@@ -1,0 +1,18 @@
+# Bad-corpus member adapter.route.circuit-breaker-exception-class: an uncatchable class is configured as a breaker filter.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints: []
+routeTemplates:
+  - id: find-cases
+    parameters: []
+    steps:
+      - circuitBreaker:
+          ignoreException:
+            - script.budget-exceeded
+          steps:
+            - setBody:
+                constant: 1
+capabilities: {}

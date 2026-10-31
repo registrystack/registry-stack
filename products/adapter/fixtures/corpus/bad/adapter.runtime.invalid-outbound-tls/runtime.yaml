@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.invalid-outbound-tls, runtime half: checked with
+# --runtime runtime.yaml. The runtime config must be refused with
+# exactly adapter.runtime.invalid-outbound-tls. The runtime config carries the defect:
+# the trust profile's caBundleFile is a relative path, not an absolute operator path.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.runtime.invalid-outbound-tls/project.yaml --runtime runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: case-deployment
+endpoints:
+  - endpoint: cases
+    baseUrl: https://cases.example.invalid
+    tlsTrustProfile: private-ca
+    credential:
+      type: basic
+      usernameRef: secret:env/CASES_USER
+      passwordRef: secret:env/CASES_PASSWORD
+outboundTls:
+  trustProfiles:
+    private-ca:
+      caBundleFile: private-ca.pem
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/DB_RUNTIME
+  migrationUrlRef: secret:env/DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: case-api
+allowedClients:
+  - registry-adapter-example-client
+audit:
+  retentionDays: 90
