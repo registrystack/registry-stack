@@ -611,7 +611,8 @@ Increment 1:
 9. `rg -n 'CamelHttpResponseCode|source\.(not-found|unavailable|upstream-error|write-rejected|write-partial)' products/adapter/packs`
    prints no `setHeader` of the response code and no profile problem code
    (packs raise classes; profiles own problems).
-10. For every experiment under `products/adapter/experiments/`,
+10. For every API transformation experiment project under
+    `products/adapter/experiments/`,
     `adapterctl check`, `adapterctl fixtures replay`, and
     `adapterctl verify --live` against the upstream double each exit 0, and
     `FINDINGS.md` carries the executed rerun with each command's output.

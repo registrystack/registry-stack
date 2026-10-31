@@ -23,6 +23,7 @@ increments and external acceptance still blocked on a supplied client.
 | Header relay in both directions | `camel_header_filter.rs` proves request allowlisting, response copying, and refusal of reserved and API-key names in both configured lists. |
 | Empty client allowlist | Runtime configuration tests refuse both omitted `allowedClients` and an explicit empty list. |
 | PostgreSQL temporary-server probe race | Both probes in `test-postgres.sh` use TCP at 127.0.0.1. The exact pinned image starts its temporary server with an empty `listen_addresses`, so that server cannot satisfy either TCP probe. The wrapper regression passes and requires both probes before Cargo. |
+| Safe worktree cleanup | The former C6a checkout is absent. The active lead checkout is retained; two other Adapter-named checkouts contain untracked work and remain preserved. No dirty checkout is treated as disposable. |
 | One reviewable PR and source privacy | One local branch and a prepared PR handoff cover the related work. The latest matching MCP read proof is retained with immutable artifacts. Source-host and credential scans found no matching values in changed tracked blobs. No producer push, merge, tag, release or production deployment is claimed. |
 
 The same immutable executable has recorded DHIS2 read and synchronous write

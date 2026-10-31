@@ -97,7 +97,8 @@ acceptance item 10 requires this file to carry the executed rerun and each
 command's output.
 
 The new native harness was materially stronger than that document. Its five
-cases cover all five experiment directories. For each one, the source invokes
+cases cover all five API transformation experiment projects. For each one,
+the source invokes
 `adapterctl check`, fixture replay, and `verify --live`, rejects a forged
 facade token before source I/O, and then drives the documented facade request
 through the native Adapter process to the upstream double. The mTLS cases use
@@ -204,8 +205,8 @@ these changes.
   library. The Adapter normal tree contains no Wasmtime dependency.
 - Local history inspection found conventional subjects, exactly one DCO
   sign-off per commit, and no agent-attribution trailer.
-- The five experiment directories and five native experiment cases match one
-  for one. Their report distinguishes `verify --live` caller-sourced waits
+- The five API transformation projects and five native experiment cases match
+  one for one. Their report distinguishes `verify --live` caller-sourced waits
   from the separate native facade transport proof.
 - The native PUT source and tests enforce authentication, scope, contract pin,
   closed request identity, exact replay custody, mismatch without a source
