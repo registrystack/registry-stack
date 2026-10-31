@@ -20,7 +20,7 @@ use registry_adapter::route::{
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
     AdapterRuntimeConfig, AuditRetention, Cidr, ComponentKind, Endpoint, EndpointAuthentication,
-    EndpointBinding, ErrorClass, Step,
+    EndpointBinding, ErrorClass, RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::{
@@ -65,7 +65,8 @@ fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
         endpoints: UniqueIdList::new(vec![EndpointBinding {
             endpoint: external("source"),
             base_url: Url::new(base_url).expect("loopback base URL"),
-            credential: None,
+            credential: Some(RuntimeCredential::None {}),
+            anonymous_https: None,
             tls_trust_profile: None,
             mtls_identity: None,
             attempt_timeout_milliseconds: None,

@@ -285,6 +285,7 @@ pub(crate) mod tests {
             endpoint: ExternalId::new("case-api").expect("id"),
             base_url: Url::new(base_url).expect("url"),
             credential: Some(RuntimeCredential::None {}),
+            anonymous_https: None,
             tls_trust_profile,
             mtls_identity,
             attempt_timeout_milliseconds: None,

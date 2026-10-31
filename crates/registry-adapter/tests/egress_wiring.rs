@@ -156,6 +156,7 @@ fn oauth_binding(
             maximum_cache_seconds: BoundedU64::<0, 86_400>::new(3600).expect("cache ceiling"),
             assumed_lifetime_seconds: None,
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
@@ -176,6 +177,7 @@ fn basic_binding(
             username_ref: secret(user_env),
             password_ref: secret(password_env),
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
@@ -190,6 +192,7 @@ fn static_api_key_binding(endpoint: &str, base_url: &str, value_env: &str) -> En
         credential: Some(RuntimeCredential::StaticApiKey {
             value_ref: secret(value_env),
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

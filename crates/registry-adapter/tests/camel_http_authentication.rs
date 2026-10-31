@@ -64,6 +64,7 @@ fn binding(base_url: &str, credential: Option<RuntimeCredential>) -> EndpointBin
         endpoint: ExternalId::new("case-api").expect("id"),
         base_url: Url::new(base_url).expect("url"),
         credential,
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

@@ -4403,23 +4403,45 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             continue;
         }
         let endpoint = endpoint.expect("checked");
-        match &binding.credential {
-            Some(credential) => {
-                check_credential_pair(
-                    &prefix,
-                    &endpoint.authentication,
-                    credential,
-                    binding,
-                    &mut findings,
-                );
-            }
-            None => {
-                findings.push(finding(
+        if let Err(fault) =
+            crate::auth::endpoint_authentication_policy(&endpoint.authentication, binding)
+        {
+            let (code, member, message, action) = match fault {
+                crate::auth::EndpointAuthenticationPolicyFault::AnonymousHttpsConflict => (
+                    CheckCode::AuthAnonymousHttpsConflict,
+                    "anonymousHttps",
+                    "anonymousHttps is present without matching none authentication and an explicit none credential",
+                    "Remove anonymousHttps, or set the pack authentication and runtime credential types to none.",
+                ),
+                crate::auth::EndpointAuthenticationPolicyFault::AnonymousHttpsRequiresTls => (
+                    CheckCode::AuthAnonymousHttpsRequiresTls,
+                    "anonymousHttps",
+                    "anonymousHttps is present on a plain-HTTP source origin",
+                    "Serve the source over verified HTTPS, or remove anonymousHttps; numeric loopback remains available without it.",
+                ),
+                crate::auth::EndpointAuthenticationPolicyFault::KindMismatch => (
                     CheckCode::AuthKindMismatch,
-                    &format!("{prefix}/credential"),
-                    "the endpoint declares an authentication kind the runtime does not bind",
-                    "Bind a credential of the endpoint's kind in the runtime config.",
-                ));
+                    "credential",
+                    "the runtime credential's kind does not match the endpoint's declared kind",
+                    "Bind an explicit credential whose type equals the endpoint's authentication kind.",
+                ),
+                crate::auth::EndpointAuthenticationPolicyFault::NoneNotAdmitted => (
+                    CheckCode::AuthNoneNotLoopback,
+                    "credential",
+                    "a none credential reaches an origin without numeric-loopback, mTLS, or acknowledged HTTPS admission",
+                    "Add an mTLS client identity over TLS, use numeric loopback, or set anonymousHttps to operator-approved for a reviewed HTTPS source.",
+                ),
+            };
+            findings.push(finding(
+                code,
+                &format!("{prefix}/{member}"),
+                message,
+                action,
+            ));
+        }
+        if let Some(credential) = &binding.credential {
+            if credential.kind() == endpoint.authentication.kind() {
+                check_token_endpoint(&prefix, credential, &mut findings);
             }
         }
         if !plain_http_origin_admitted(&binding.base_url, &runtime.allowed_private_cidrs) {
@@ -4528,38 +4550,11 @@ fn is_absolute_operator_path(path: &str) -> bool {
         })
 }
 
-fn check_credential_pair(
+fn check_token_endpoint(
     prefix: &str,
-    kind: &EndpointAuthentication,
     credential: &RuntimeCredential,
-    binding: &crate::runtime::EndpointBinding,
     findings: &mut Vec<Diagnostic>,
 ) {
-    if kind.kind() != credential.kind() {
-        findings.push(finding(
-            CheckCode::AuthKindMismatch,
-            &format!("{prefix}/credential"),
-            "the runtime credential's kind does not match the endpoint's declared kind",
-            "Bind a credential whose type equals the endpoint's authentication kind.",
-        ));
-        return;
-    }
-    if let (EndpointAuthentication::None {}, RuntimeCredential::None {}) = (kind, credential) {
-        // A `none` credential leans on the transport alone: the numeric
-        // loopback keeps plain HTTP off the network, and an mTLS identity
-        // is only a credential when the handshake itself is encrypted, so
-        // plain HTTP refuses even with one bound.
-        let loopback = is_loopback_origin(&binding.base_url);
-        let identity_over_tls = binding.mtls_identity.is_some() && binding.base_url.is_https();
-        if !loopback && !identity_over_tls {
-            findings.push(finding(
-                CheckCode::AuthNoneNotLoopback,
-                &format!("{prefix}/credential"),
-                "a none credential reaches an origin that is neither numeric loopback nor https with an mTLS identity",
-                "Add an mTLS client identity over TLS, use a numeric loopback origin, or declare an authentication kind.",
-            ));
-        }
-    }
     // The token endpoint is a fixed destination the engine dials with the
     // shared secret in hand, so it answers to the same origin rule as the
     // binding's base URL (`products/adapter/CONCEPT.md` section 10.2).
@@ -10018,6 +10013,7 @@ mod tests {
                 maximum_cache_seconds: BoundedU64::<0, 86_400>::new(3600).expect("cache"),
                 assumed_lifetime_seconds: None,
             }),
+            anonymous_https: None,
             tls_trust_profile: None,
             mtls_identity: None,
             attempt_timeout_milliseconds: None,
@@ -10056,10 +10052,9 @@ mod tests {
         assert_has(&findings, CheckCode::AuthKindMismatch);
     }
 
-    /// A `none` credential leans on the transport alone: it is refused
-    /// off the numeric loopback unless the origin is `https` and an mTLS
-    /// identity is bound, and admitted on the loopback with or without
-    /// one.
+    /// A `none` credential leans on the transport alone. The named
+    /// acknowledgement admits a fixed HTTPS source, while its absence keeps
+    /// the existing numeric-loopback and mTLS-only admissions unchanged.
     #[test]
     fn runtime_refuses_none_outside_loopback_without_mtls() {
         let profile = profile_builder(vec![]);
@@ -10067,10 +10062,12 @@ mod tests {
         endpoint.authentication = EndpointAuthentication::None {};
         let pack = pack_builder(vec![endpoint], vec![]);
         let project = project_builder(&pack);
-        let none_binding = |base: &str, mtls: bool| EndpointBinding {
+        let none_binding = |base: &str, mtls: bool, anonymous_https: bool| EndpointBinding {
             endpoint: id("case-api"),
             base_url: Url::new(base).expect("url"),
             credential: Some(RuntimeCredential::None {}),
+            anonymous_https: anonymous_https
+                .then_some(crate::AnonymousHttpsAcknowledgement::OperatorApproved),
             tls_trust_profile: None,
             mtls_identity: mtls.then(|| MtlsIdentity {
                 certificate_ref: SecretReference::new("secret:env/CERT").expect("secret"),
@@ -10086,36 +10083,63 @@ mod tests {
             codes(&check_runtime(&ws, &runtime)).contains(&expected.code())
         };
         assert!(none_finds(
-            none_binding("https://cases.example.invalid", false),
+            none_binding("https://cases.example.invalid", false, false),
             CheckCode::AuthNoneNotLoopback
         ));
         assert!(none_finds(
-            none_binding("http://cases.example.invalid", true),
+            none_binding("http://cases.example.invalid", true, false),
             CheckCode::AuthNoneNotLoopback
         ));
         assert!(!none_finds(
-            none_binding("https://cases.example.invalid", true),
+            none_binding("https://cases.example.invalid", true, false),
             CheckCode::AuthNoneNotLoopback
         ));
         assert!(!none_finds(
-            none_binding("http://127.0.0.1:8081", false),
+            none_binding("http://127.0.0.1:8081", false, false),
             CheckCode::AuthNoneNotLoopback
         ));
         assert!(!none_finds(
-            none_binding("http://127.0.0.1:8081", true),
+            none_binding("http://127.0.0.1:8081", true, false),
             CheckCode::AuthNoneNotLoopback
         ));
         // An IPv6 literal carries its brackets through `host_str`, so
         // the loopback read must strip them before parsing: `[::1]` is
         // loopback, `[::2]` never is, whatever the spelling.
         assert!(!none_finds(
-            none_binding("http://[::1]:8081", false),
+            none_binding("http://[::1]:8081", false, false),
             CheckCode::AuthNoneNotLoopback
         ));
         assert!(none_finds(
-            none_binding("http://[::2]:8081", false),
+            none_binding("http://[::2]:8081", false, false),
             CheckCode::AuthNoneNotLoopback
         ));
+
+        let approved = none_binding("https://cases.example.invalid", false, true);
+        assert!(!none_finds(
+            approved.clone(),
+            CheckCode::AuthNoneNotLoopback
+        ));
+        let approved_mtls = none_binding("https://cases.example.invalid", true, true);
+        assert!(!none_finds(
+            approved_mtls,
+            CheckCode::AuthAnonymousHttpsConflict
+        ));
+        assert!(none_finds(
+            none_binding("http://127.0.0.1:8081", false, true),
+            CheckCode::AuthAnonymousHttpsRequiresTls
+        ));
+
+        let mut conflicting = oauth_binding("https://cases.example.invalid");
+        conflicting.anonymous_https = Some(crate::AnonymousHttpsAcknowledgement::OperatorApproved);
+        let runtime = runtime_builder(vec![conflicting]);
+        let oauth_pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let oauth_project = project_builder(&oauth_pack);
+        let mut oauth_ws = workspace(&profile, &oauth_pack, &oauth_project);
+        oauth_ws.runtime = Some(&runtime);
+        assert_has(
+            &check_runtime(&oauth_ws, &runtime),
+            CheckCode::AuthAnonymousHttpsConflict,
+        );
     }
 
     /// The one plain-HTTP rule (D36): a literal outside the declared

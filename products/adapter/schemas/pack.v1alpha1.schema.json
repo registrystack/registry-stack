@@ -561,7 +561,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Nothing is sent. The checks admit it only for a numeric-loopback\norigin or an endpoint with an mTLS client identity.",
+          "description": "Nothing is sent. The checks admit it only for numeric loopback, an\nendpoint with an mTLS client identity, or an explicitly acknowledged\ncredential-free HTTPS source.",
           "properties": {
             "type": {
               "const": "none",

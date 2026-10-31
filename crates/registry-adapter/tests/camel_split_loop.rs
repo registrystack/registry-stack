@@ -1240,6 +1240,7 @@ fn enrich_endpoints(
             value_ref: SecretReference::new(format!("secret:env/{key_env}"))
                 .expect("secret reference"),
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

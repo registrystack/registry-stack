@@ -24,7 +24,8 @@ use crate::auth::{
     AuthError, AuthEvent,
 };
 use registry_adapter_core::{
-    is_reserved_header_name, EndpointAuthentication, EndpointBinding, RuntimeCredential,
+    endpoint_authentication_policy, is_reserved_header_name, EndpointAuthentication,
+    EndpointAuthenticationPolicyFault, EndpointBinding, RuntimeCredential,
 };
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::valid_resource_uri;
@@ -82,6 +83,11 @@ impl AuthKind {
 /// rendering is fixed text; none carries configuration values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthPlanFault {
+    /// The anonymous-HTTPS acknowledgement is attached to a non-`none`
+    /// authentication pairing.
+    AnonymousHttpsConflict,
+    /// The anonymous-HTTPS acknowledgement is attached to plain HTTP.
+    AnonymousHttpsRequiresTls,
     /// The runtime credential's kind does not match the endpoint's
     /// declared kind, or a kind that sends a credential has none bound.
     KindMismatch,
@@ -113,6 +119,12 @@ pub enum AuthPlanFault {
 impl fmt::Display for AuthPlanFault {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AnonymousHttpsConflict => formatter.write_str(
+                "anonymousHttps requires matching none authentication and an explicit none credential",
+            ),
+            Self::AnonymousHttpsRequiresTls => {
+                formatter.write_str("anonymousHttps requires an https source origin")
+            }
             Self::KindMismatch => formatter.write_str(
                 "the runtime credential's kind does not match the endpoint's declared kind",
             ),
@@ -236,26 +248,22 @@ impl AuthPlan {
         endpoint: &EndpointAuthentication,
         binding: &EndpointBinding,
     ) -> Result<Self, AuthPlanFault> {
-        match (endpoint, binding.credential.as_ref()) {
-            (EndpointAuthentication::None {}, None | Some(RuntimeCredential::None {})) => {
-                // A `none` endpoint leans on the transport alone: numeric
-                // loopback keeps plain HTTP off the network, and an mTLS
-                // identity is only a credential when the handshake itself
-                // is encrypted, so plain HTTP refuses even with one bound.
-                let loopback = is_numeric_loopback(&binding.base_url)
-                    && (binding.base_url.is_https()
-                        || has_canonical_loopback_authority(binding.base_url.as_str()));
-                let identity_over_https = binding.mtls_identity.is_some()
-                    && binding.base_url.to_url().scheme() == "https";
-                if !loopback && !identity_over_https {
-                    return Err(AuthPlanFault::NoneNotAdmitted);
-                }
-                Ok(Self {
-                    kind: AuthKind::None,
-                    static_credential: None,
-                    token: None,
-                })
+        endpoint_authentication_policy(endpoint, binding).map_err(|fault| match fault {
+            EndpointAuthenticationPolicyFault::AnonymousHttpsConflict => {
+                AuthPlanFault::AnonymousHttpsConflict
             }
+            EndpointAuthenticationPolicyFault::AnonymousHttpsRequiresTls => {
+                AuthPlanFault::AnonymousHttpsRequiresTls
+            }
+            EndpointAuthenticationPolicyFault::KindMismatch => AuthPlanFault::KindMismatch,
+            EndpointAuthenticationPolicyFault::NoneNotAdmitted => AuthPlanFault::NoneNotAdmitted,
+        })?;
+        match (endpoint, binding.credential.as_ref()) {
+            (EndpointAuthentication::None {}, Some(RuntimeCredential::None {})) => Ok(Self {
+                kind: AuthKind::None,
+                static_credential: None,
+                token: None,
+            }),
             (
                 EndpointAuthentication::Basic {},
                 Some(RuntimeCredential::Basic {
@@ -650,67 +658,6 @@ fn validate_request_parameters(
     })
 }
 
-/// Whether an origin denotes numeric loopback, the way the concept
-/// admits a `none` endpoint and a plain-HTTP token endpoint: either IP
-/// loopback family, by address, never by name.
-fn is_numeric_loopback(url: &registry_platform_yaml::Url) -> bool {
-    let parsed = url.to_url();
-    let host = parsed.host_str().unwrap_or_default();
-    let host = host
-        .strip_prefix('[')
-        .and_then(|unbracketed| unbracketed.strip_suffix(']'))
-        .unwrap_or(host);
-    host.parse::<std::net::IpAddr>()
-        .is_ok_and(|address| address.is_loopback())
-}
-
-/// Whether the plain-HTTP loopback authority is spelled the way the
-/// address prints: a full `127` dotted quad with no leading-zero octet,
-/// or exactly `[::1]`, with any explicit port. The spelling discipline
-/// is Evidence's canonical-loopback rule, applied more widely than the
-/// credential-free boundary Evidence draws with it: Evidence's
-/// unauthenticated local mode also demands an explicit non-zero port
-/// and a pathless exact origin, where this layer admits any port and a
-/// path. The URL schema refuses a host the parser rewrites, but IPv6
-/// has several ordinary spellings of one address, and a plain-HTTP
-/// credential travels over an origin everyone reads the same way or
-/// not at all.
-fn has_canonical_loopback_authority(written: &str) -> bool {
-    let Some(rest) = written.strip_prefix("http://") else {
-        return false;
-    };
-    let authority = rest.split('/').next().unwrap_or(rest);
-    if let Some(suffix) = authority.strip_prefix("[::1]") {
-        return suffix.is_empty() || valid_port_suffix(suffix);
-    }
-    let (host, port) = authority
-        .rsplit_once(':')
-        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
-        .map_or((authority, None), |(host, port)| (host, Some(port)));
-    if port.is_some_and(|port| !valid_port(port)) {
-        return false;
-    }
-    let octets = host.split('.').collect::<Vec<_>>();
-    octets.len() == 4
-        && octets[0] == "127"
-        && octets.iter().all(|octet| {
-            !octet.is_empty()
-                && (octet == &"0" || !octet.starts_with('0'))
-                && octet.bytes().all(|byte| byte.is_ascii_digit())
-                && octet.parse::<u8>().is_ok()
-        })
-}
-
-/// One `:` followed by a usable plain-HTTP port.
-fn valid_port_suffix(value: &str) -> bool {
-    value.strip_prefix(':').is_some_and(valid_port)
-}
-
-/// A non-zero port without a leading zero, Evidence's bound.
-fn valid_port(value: &str) -> bool {
-    !value.starts_with('0') && value.parse::<u16>().is_ok_and(|port| port != 0)
-}
-
 /// Whether `scheme` is 1 to 32 HTTP token bytes.
 fn scheme_is_admissible(scheme: &str) -> bool {
     !scheme.is_empty() && scheme.len() <= 32 && scheme.bytes().all(is_token_byte)
@@ -760,6 +707,7 @@ mod tests {
             endpoint: ExternalId::new("case-api").expect("id"),
             base_url: Url::new(base_url).expect("url"),
             credential,
+            anonymous_https: None,
             tls_trust_profile: None,
             mtls_identity: None,
             attempt_timeout_milliseconds: None,
@@ -878,6 +826,11 @@ mod tests {
             AuthPlan::compile(&EndpointAuthentication::Basic {}, &missing).unwrap_err(),
             AuthPlanFault::KindMismatch
         );
+        assert_eq!(
+            AuthPlan::compile(&EndpointAuthentication::None {}, &missing).unwrap_err(),
+            AuthPlanFault::KindMismatch,
+            "none must be explicit in the runtime binding"
+        );
     }
 
     /// `none` reaches canonically spelled numeric loopback, either
@@ -916,6 +869,32 @@ mod tests {
             AuthPlan::compile(&EndpointAuthentication::None {}, &public).unwrap_err(),
             AuthPlanFault::NoneNotAdmitted
         );
+        let mut approved = public.clone();
+        approved.anonymous_https =
+            Some(registry_adapter_core::AnonymousHttpsAcknowledgement::OperatorApproved);
+        assert!(AuthPlan::compile(&EndpointAuthentication::None {}, &approved).is_ok());
+
+        let mut approved_http = binding("http://127.0.0.1:9/", Some(RuntimeCredential::None {}));
+        approved_http.anonymous_https =
+            Some(registry_adapter_core::AnonymousHttpsAcknowledgement::OperatorApproved);
+        assert_eq!(
+            AuthPlan::compile(&EndpointAuthentication::None {}, &approved_http).unwrap_err(),
+            AuthPlanFault::AnonymousHttpsRequiresTls
+        );
+
+        let mut conflicting = binding(
+            "https://cases.example.invalid",
+            Some(RuntimeCredential::Basic {
+                username_ref: secret("USER"),
+                password_ref: secret("PASS"),
+            }),
+        );
+        conflicting.anonymous_https =
+            Some(registry_adapter_core::AnonymousHttpsAcknowledgement::OperatorApproved);
+        assert_eq!(
+            AuthPlan::compile(&EndpointAuthentication::Basic {}, &conflicting).unwrap_err(),
+            AuthPlanFault::AnonymousHttpsConflict
+        );
         let mut with_mtls = binding(
             "https://cases.example.invalid",
             Some(RuntimeCredential::None {}),
@@ -925,6 +904,12 @@ mod tests {
             key_ref: secret("CLIENT_KEY"),
         });
         assert!(AuthPlan::compile(&EndpointAuthentication::None {}, &with_mtls).is_ok());
+        with_mtls.anonymous_https =
+            Some(registry_adapter_core::AnonymousHttpsAcknowledgement::OperatorApproved);
+        assert!(
+            AuthPlan::compile(&EndpointAuthentication::None {}, &with_mtls).is_ok(),
+            "the acknowledgement is redundant but not conflicting with mTLS"
+        );
         let mut plain_with_mtls = binding(
             "http://cases.example.invalid:9/",
             Some(RuntimeCredential::None {}),
@@ -935,42 +920,6 @@ mod tests {
             AuthPlanFault::NoneNotAdmitted,
             "an mTLS identity over plain http is not a credential"
         );
-    }
-
-    /// A plain-HTTP loopback authority is spelled the way the address
-    /// prints: the full dotted quad or exactly `[::1]`, never a
-    /// shorthand or an alternate IPv6 spelling a reader could parse
-    /// differently.
-    #[test]
-    fn plain_http_loopback_is_admitted_only_canonically_spelled() {
-        for written in [
-            "http://127.0.0.1:9/",
-            "http://127.0.0.1/",
-            "http://127.0.0.1",
-            "http://[::1]",
-            "http://[::1]:8080/",
-            "http://127.0.0.1/path?q=1",
-        ] {
-            assert!(
-                has_canonical_loopback_authority(written),
-                "{written} is canonical"
-            );
-        }
-        for written in [
-            "http://127.1/",
-            "http://127.0.0.01/",
-            "http://0127.0.0.1/",
-            "http://[0:0:0:0:0:0:0:1]/",
-            "http://[::1]:0/",
-            "http://[::1]:99999/",
-            "http://localhost:9/",
-            "https://127.0.0.1:9/",
-        ] {
-            assert!(
-                !has_canonical_loopback_authority(written),
-                "{written} is not canonical"
-            );
-        }
     }
 
     /// A scheme is 1 to 32 HTTP token bytes; anything else refuses.
@@ -1960,6 +1909,7 @@ mod tests {
                     maximum_cache_seconds: BoundedU64::new(3600).expect("cache"),
                     assumed_lifetime_seconds: None,
                 }),
+                anonymous_https: None,
                 tls_trust_profile: None,
                 mtls_identity: None,
                 attempt_timeout_milliseconds: None,

@@ -1168,6 +1168,7 @@ mod tests {
                     assumed_lifetime_seconds: None,
                 },
             ),
+            anonymous_https: None,
             tls_trust_profile: None,
             mtls_identity: None,
             attempt_timeout_milliseconds: None,

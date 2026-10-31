@@ -1208,14 +1208,16 @@ record types, declared in the project. No API keys, no Basic, no anonymous
 calls on the facade. The adapter inherits no authorization from any product
 and grants none to any source. The caller's token is never forwarded
 upstream: upstream calls run under the deployment's own credential for that
-source (section 10.2), and the journal records which caller asked (D19).
+source, or without a source credential only under the explicit anonymous
+HTTPS admission in section 10.2. The journal records which caller asked
+(D19).
 The runtime config's required, non-empty `allowedClients` list names the
 OAuth clients the deployment admits; a token from any other client is
 refused even when its scopes match an access profile (D33).
 
 Client admission is not record-level authorization. The facade serves
 trusted machine clients only: any admitted client with a matching scope
-sees every record the deployment's upstream credential reaches, because
+sees every record the deployment's configured source access reaches, because
 the scopes gate operations and record types, not individual records.
 Record-level authorization is planned, not built; until it is, admitting
 a client means trusting it with the full reach of the deployment
@@ -1232,7 +1234,7 @@ Evidence source configures an adapter endpoint the same way:
 
 | Kind | Sends | Typical source |
 |---|---|---|
-| `none` | Nothing; admitted only for a numeric-loopback origin (the test double) or an endpoint with an mTLS client identity | Tests, mTLS-only sources |
+| `none` | Nothing; requires an explicit runtime `credential: {type: none}` and is admitted only for numeric loopback, an endpoint with an mTLS client identity over HTTPS, or a fixed HTTPS source carrying `anonymousHttps: operator-approved` | Tests, mTLS-only sources, reviewed public APIs |
 | `basic` | `Authorization: Basic` from `usernameRef` and `passwordRef` | DHIS2 user accounts |
 | `static-authorization` | `Authorization: <scheme> <token>` from `tokenRef`, `scheme` defaulting to `Bearer` | DHIS2 personal access tokens (`ApiToken`), static bearer tokens |
 | `static-api-key` | One declared header (`headerName`) from `valueRef`; reserved header names refused | Gateways keyed by an API-key header |
@@ -1241,8 +1243,15 @@ Evidence source configures an adapter endpoint the same way:
 
 Orthogonal to the kind, the runtime config may give an endpoint a private CA
 and an mTLS client identity, which `FixedDestinationPolicy` already
-supports; mutual TLS therefore combines with any kind, and is the only way
-`none` reaches a non-loopback source. The private CA takes Evidence's shape:
+supports; mutual TLS therefore combines with any kind. A matching pack
+`authentication.type: none` and explicit runtime `credential.type: none` may
+also reach a fixed non-loopback HTTPS source only when that same binding says
+`anonymousHttps: operator-approved`. The acknowledgement is a named operator
+decision, not a boolean; omission stays closed. It is refused on HTTP or with
+any other authentication pairing. It is harmlessly redundant on an admitted
+`none` plus mTLS HTTPS binding. TLS certificate verification, the fixed
+destination policy, facade authentication, and the rule that caller tokens
+never travel upstream remain unchanged. The private CA takes Evidence's shape:
 `outboundTls.trustProfiles.<id>.caBundleFile` in the runtime config, named by
 the endpoint binding's `tlsTrustProfile` (a CA bundle is not a secret).
 Field bounds follow Evidence: `scheme` 1 to 32 HTTP token bytes,
@@ -1288,6 +1297,9 @@ Rules:
   endpoint's kind and token-request outcomes, never a value.
 - Fixture replay intercepts the token endpoint like any other send, so packs
   are replayable without a credential.
+- `none` never falls back from a failed Basic, static, or OAuth credential.
+  The acknowledgement selects no destination and supplies no credential; the
+  binding's fixed `baseUrl` and normal TLS trust remain authoritative.
 
 Not ported: Camel's NTLM and Digest methods, API keys in the query string
 (they leak into upstream and proxy access logs), and caller token exchange
@@ -1489,6 +1501,10 @@ diagnostics, and fixtures; the facade refuses a missing, expired,
 wrong-audience, or wrong-scope token. Script budgets terminate runaway loops. Response size caps are
 enforced. Diagnostics are value-free, asserted by the corpus marker. The
 idempotency store's retention sweep erases expired bodies.
+The anonymous-HTTPS proof uses a local synthetic TLS source: omission refuses
+a non-mTLS public origin, the named acknowledgement sends no source credential
+or caller-token header, and an untrusted certificate completes no HTTP
+request.
 
 ### 13.8 Quality attributes
 
@@ -1651,3 +1667,4 @@ one that decides a row.
 | D34 | A verified caller's refused call is a `callRefused` journal row; a 401 is logged only | 2026-10-30, accepted by Jeremi |
 | D35 | After the real proof (P6), the facade contract is authored as a closed subset of OpenAPI with `x-` extensions for slots and problems, as Camel's contract-first REST DSL takes OpenAPI as input; until then `AdapterProfile` stands. Confidence is medium until a real ministry or GovStack specification has been tried | 2026-10-30, accepted by Jeremi |
 | D36 | Plain HTTP to an address inside `allowedPrivateCidrs` is allowed for every authentication kind, including credential-bearing ones; the operator's explicit declaration is the consent, and `adapterctl check` agrees with the runtime load | 2026-10-30, accepted by Jeremi |
+| D37 | Beyond the existing numeric-loopback and HTTPS+mTLS admissions, a configured source may use no application credential when pack and runtime both explicitly say `none` and the fixed HTTPS binding carries `anonymousHttps: operator-approved`; absence keeps that additional path closed, TLS verification and facade authentication remain mandatory, and no failed credential kind falls back to anonymous | 2026-10-31, accepted by Jeremi |

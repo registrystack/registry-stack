@@ -68,7 +68,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 125 members.
+finding per code. The corpus holds 127 members.
 
 ### Profile members
 
@@ -213,6 +213,8 @@ These members ship `runtime.yaml`; check them with `--runtime runtime.yaml`.
 
 | Member | Defect | Expected code | Layer |
 |---|---|---|---|
+| `adapter.auth.anonymous-https-conflict` | `anonymousHttps` is present on a `basic` endpoint and credential | `adapter.auth.anonymous-https-conflict` | checks |
+| `adapter.auth.anonymous-https-requires-tls` | `anonymousHttps` is present on a plain-HTTP loopback binding | `adapter.auth.anonymous-https-requires-tls` | checks |
 | `adapter.auth.kind-mismatch` | `static-authorization` credential on a `basic` endpoint | `adapter.auth.kind-mismatch` | checks |
 | `adapter.auth.none-not-loopback` | `none` endpoint reaches a named TLS host with no mTLS identity | `adapter.auth.none-not-loopback` | checks |
 | `adapter.runtime.insecure-origin` | Binding on `http://` off the loopback exception | `adapter.runtime.insecure-origin` | checks |

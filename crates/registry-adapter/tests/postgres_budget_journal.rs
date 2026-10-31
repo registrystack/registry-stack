@@ -15,7 +15,7 @@ use registry_adapter::route::{run_route_within, EndpointRuntime, RouteContext, R
 use registry_adapter::scripts::ScriptSet;
 use registry_adapter_core::{
     AdapterRuntimeConfig, AuditRetention, Cidr, ComponentKind, Endpoint, EndpointAuthentication,
-    EndpointBinding, ErrorClass, Step,
+    EndpointBinding, ErrorClass, RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::{
@@ -139,7 +139,8 @@ async fn the_kernel_stops_before_a_send_over_the_call_budget() {
         endpoints: UniqueIdList::new(vec![EndpointBinding {
             endpoint: ExternalId::new("source").expect("endpoint id"),
             base_url: Url::new(upstream.url("/")).expect("loopback base URL"),
-            credential: None,
+            credential: Some(RuntimeCredential::None {}),
+            anonymous_https: None,
             tls_trust_profile: None,
             mtls_identity: None,
             attempt_timeout_milliseconds: None,

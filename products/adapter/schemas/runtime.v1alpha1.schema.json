@@ -1,5 +1,15 @@
 {
   "$defs": {
+    "AnonymousHttpsAcknowledgement": {
+      "description": "The one named acknowledgement that admits a credential-free HTTPS\nsource. This is a security-sensitive operator decision, not a boolean\nwhose meaning can be lost in a rendered configuration.",
+      "oneOf": [
+        {
+          "const": "operator-approved",
+          "description": "The operator reviewed and approved this fixed anonymous source.",
+          "type": "string"
+        }
+      ]
+    },
     "AuditRetention": {
       "additionalProperties": false,
       "description": "The audit journal's retention (`products/adapter/CONCEPT.md` section\n11), bounded by the platform access-log window.",
@@ -69,6 +79,10 @@
       "additionalProperties": false,
       "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions (`products/adapter/CONCEPT.md` section 10.2).",
       "properties": {
+        "anonymousHttps": {
+          "$ref": "#/$defs/AnonymousHttpsAcknowledgement",
+          "description": "The operator's explicit acknowledgement that a credential-free\nsource is intentionally served over verified HTTPS. Omission keeps\nthe credential-free policy closed outside numeric loopback and mTLS."
+        },
         "attemptTimeoutMilliseconds": {
           "description": "A lower attempt timeout than the pack declares, in milliseconds;\nabsent, the declared one applies. A value above the declared one is\nrefused when the deployment loads.",
           "format": "uint64",
@@ -215,7 +229,7 @@
     },
     "MtlsIdentity": {
       "additionalProperties": false,
-      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind (`products/adapter/CONCEPT.md` section 10.2). It is\nthe only way a `none` endpoint reaches a non-loopback source.",
+      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind (`products/adapter/CONCEPT.md` section 10.2). It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
       "properties": {
         "certificateRef": {
           "$ref": "#/$defs/SecretReference",

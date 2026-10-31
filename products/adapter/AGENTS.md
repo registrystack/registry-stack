@@ -50,7 +50,8 @@ products/adapter/scripts/test-postgres.sh
 `check-contracts.sh` runs the verification floor from `DELIVERY-PLAN.md`:
 `cargo fmt --check` over the workspace plus clippy and tests over the
 adapter crates (`-p registry-adapter -p registry-adapter-core
--p registry-adapterctl`), the generated schemas held to their generator,
+-p registry-adapterctl`), the `adapterctl verify --live` synthetic TLS proof
+under the `tls-test` feature, the generated schemas held to their generator,
 and the platform configuration-format lint. `test-postgres.sh` runs the
 adapter crates' `postgres-test` suites: without
 `ADAPTER_TEST_DATABASE_URL` it starts and removes its own loopback

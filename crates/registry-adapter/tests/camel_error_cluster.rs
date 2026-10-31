@@ -48,6 +48,7 @@ fn error_endpoints(base_url: &str, resolver: &SecretResolver) -> BTreeMap<String
             value_ref: SecretReference::new("secret:env/ERROR_CLUSTER_KEY")
                 .expect("secret reference"),
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

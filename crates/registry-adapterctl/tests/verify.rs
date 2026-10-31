@@ -348,6 +348,44 @@ fn tls_workspace(
     (root, project)
 }
 
+/// Turn the pinned TLS workspace into an explicitly approved anonymous
+/// HTTPS source, updating the project's byte pin exactly as an adopter must.
+#[cfg(feature = "tls-test")]
+fn anonymous_tls_workspace(
+    double: &TlsDouble,
+    trusted_ca: &str,
+    suffix: &str,
+) -> (tempfile::TempDir, String) {
+    let (root, project) = tls_workspace(double, trusted_ca, suffix);
+    let directory = Path::new(&project).parent().expect("project directory");
+    let pack_path = directory.join("pack.yaml");
+    let pack = std::fs::read_to_string(&pack_path)
+        .expect("pack text")
+        .replacen("      type: basic\n", "      type: none\n", 1);
+    std::fs::write(&pack_path, &pack).expect("anonymous pack");
+    let digest = registry_platform_config::sha256_uri(pack.as_bytes());
+    let project_path = directory.join("project.yaml");
+    let project_text = std::fs::read_to_string(&project_path).expect("project text");
+    let project_text = project_text.replacen(
+        "  digest: sha256:27abcf32d4b3a2fc1098b9e964f8681638560e54e0e6ada6b0c02f3a96d5343f\n",
+        &format!("  digest: {digest}\n"),
+        1,
+    );
+    std::fs::write(project_path, project_text).expect("anonymous project pin");
+
+    let runtime_path = directory.join("runtime.yaml");
+    let runtime = std::fs::read_to_string(&runtime_path).expect("runtime text");
+    let runtime = runtime.replacen(
+        &format!(
+            "    credential:\n      type: basic\n      usernameRef: secret:env/VERIFY_LIVE_USER_{suffix}\n      passwordRef: secret:env/VERIFY_LIVE_PASS_{suffix}\n"
+        ),
+        "    anonymousHttps: operator-approved\n    credential:\n      type: none\n",
+        1,
+    );
+    std::fs::write(runtime_path, runtime).expect("anonymous runtime");
+    (root, project)
+}
+
 /// Read one request, answer it with the next scripted response (a 500
 /// when the script is exhausted, a 400 when the request will not read),
 /// and record what arrived.
@@ -636,6 +674,71 @@ fn configured_private_ca_drives_a_real_https_probe() {
         thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(double.requests().len(), 1);
+}
+
+/// The named acknowledgement admits exactly the pinned HTTPS source. The
+/// real TLS probe verifies the private CA and sends no source credential or
+/// caller-token header.
+#[cfg(feature = "tls-test")]
+#[test]
+fn approved_anonymous_https_verifies_tls_without_authentication_headers() {
+    let mut answers = VecDeque::new();
+    answers.push_back(Response::json(200, r#"{"instances":[]}"#));
+    let double = TlsDouble::start(answers);
+    let (_root, project) = anonymous_tls_workspace(&double, &double.ca_pem, "TLS_ANONYMOUS");
+    let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
+
+    let (exit, report, _stderr) = run_json(&[
+        "verify",
+        "--live",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ]);
+
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["drove"], json!(1), "{report}");
+    for _ in 0..50 {
+        if !double.requests().is_empty() {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let requests = double.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].header("authorization"), None);
+    assert_eq!(requests[0].header("proxy-authorization"), None);
+    assert_eq!(requests[0].header("cookie"), None);
+}
+
+/// The acknowledgement never weakens certificate verification. Trusting an
+/// unrelated synthetic CA completes no HTTP request.
+#[cfg(feature = "tls-test")]
+#[test]
+fn approved_anonymous_https_refuses_an_untrusted_certificate() {
+    let mut answers = VecDeque::new();
+    answers.push_back(Response::json(200, r#"{"instances":[]}"#));
+    let destination = TlsDouble::start(answers);
+    let unrelated = TlsDouble::start(VecDeque::new());
+    let (_root, project) =
+        anonymous_tls_workspace(&destination, &unrelated.ca_pem, "TLS_ANON_UNTRUSTED");
+    let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
+
+    let (exit, report, _stderr) = run_json(&[
+        "verify",
+        "--live",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ]);
+
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    assert!(report["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|finding| finding["code"] == "adapterctl.verify.transport"));
+    assert!(destination.requests().is_empty());
 }
 
 #[cfg(feature = "tls-test")]

@@ -14,6 +14,11 @@ cd "$repo_root"
 PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter -p registry-adapter-core -p registry-adapterctl --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter-core -p registry-adapterctl --locked
+# The live verifier's HTTPS policy is proven against a deterministic local
+# private-CA server. Keep this feature build after the default suite so the
+# default adapterctl binary used by the product checks remains the production
+# build; the PostgreSQL gate builds its own feature binary serially later.
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapterctl --locked --features tls-test --test verify
 
 # The generated schemas are held to their generator (CFG-SCHEMA-2), and the
 # five adapter formats are held to the configuration-format convention

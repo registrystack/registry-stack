@@ -56,6 +56,7 @@ fn graphql_endpoints(
         credential: Some(RuntimeCredential::StaticApiKey {
             value_ref: SecretReference::new("secret:env/GRAPHQL_KEY").expect("secret reference"),
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

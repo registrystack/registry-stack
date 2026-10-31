@@ -46,8 +46,9 @@ pub enum CredentialPlacement {
     deny_unknown_fields
 )]
 pub enum EndpointAuthentication {
-    /// Nothing is sent. The checks admit it only for a numeric-loopback
-    /// origin or an endpoint with an mTLS client identity.
+    /// Nothing is sent. The checks admit it only for numeric loopback, an
+    /// endpoint with an mTLS client identity, or an explicitly acknowledged
+    /// credential-free HTTPS source.
     None {},
     /// `Authorization: Basic` from the runtime's `usernameRef` and
     /// `passwordRef`.
@@ -292,7 +293,9 @@ impl RuntimeCredential {
 
 /// The mTLS client identity of an endpoint, orthogonal to the
 /// authentication kind (`products/adapter/CONCEPT.md` section 10.2). It is
-/// the only way a `none` endpoint reaches a non-loopback source.
+/// one way a `none` endpoint reaches a non-loopback source. An operator may
+/// instead acknowledge a credential-free HTTPS source on its fixed runtime
+/// binding.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -301,6 +304,102 @@ pub struct MtlsIdentity {
     pub certificate_ref: SecretReference,
     /// The client private key secret reference.
     pub key_ref: SecretReference,
+}
+
+/// A value-free reason the pack authentication and runtime binding do not
+/// satisfy the shared source-authentication admission policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EndpointAuthenticationPolicyFault {
+    /// The acknowledgement is present on something other than a matching
+    /// `none` endpoint and explicit `none` runtime credential.
+    AnonymousHttpsConflict,
+    /// The acknowledgement is present on a plain-HTTP origin.
+    AnonymousHttpsRequiresTls,
+    /// The runtime credential is absent or has a different kind.
+    KindMismatch,
+    /// A matching `none` pair has neither its default loopback admission,
+    /// an mTLS identity over HTTPS, nor the named HTTPS acknowledgement.
+    NoneNotAdmitted,
+}
+
+/// Apply the one pure source-authentication admission policy used by both
+/// offline checks and runtime plan compilation.
+pub fn endpoint_authentication_policy(
+    endpoint: &EndpointAuthentication,
+    binding: &crate::runtime::EndpointBinding,
+) -> Result<(), EndpointAuthenticationPolicyFault> {
+    let acknowledged = binding.anonymous_https.is_some();
+    let matching_none = matches!(endpoint, EndpointAuthentication::None {})
+        && matches!(binding.credential, Some(RuntimeCredential::None {}));
+
+    if acknowledged && !matching_none {
+        return Err(EndpointAuthenticationPolicyFault::AnonymousHttpsConflict);
+    }
+    if acknowledged && !binding.base_url.is_https() {
+        return Err(EndpointAuthenticationPolicyFault::AnonymousHttpsRequiresTls);
+    }
+    if binding
+        .credential
+        .as_ref()
+        .is_none_or(|credential| credential.kind() != endpoint.kind())
+    {
+        return Err(EndpointAuthenticationPolicyFault::KindMismatch);
+    }
+    if matching_none && !acknowledged {
+        let loopback = is_numeric_loopback(&binding.base_url)
+            && (binding.base_url.is_https()
+                || has_canonical_loopback_authority(binding.base_url.as_str()));
+        let identity_over_https = binding.mtls_identity.is_some() && binding.base_url.is_https();
+        if !loopback && !identity_over_https {
+            return Err(EndpointAuthenticationPolicyFault::NoneNotAdmitted);
+        }
+    }
+    Ok(())
+}
+
+fn is_numeric_loopback(url: &registry_platform_yaml::Url) -> bool {
+    let parsed = url.to_url();
+    let host = parsed.host_str().unwrap_or_default();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|unbracketed| unbracketed.strip_suffix(']'))
+        .unwrap_or(host);
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
+}
+
+fn has_canonical_loopback_authority(written: &str) -> bool {
+    let Some(rest) = written.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if let Some(suffix) = authority.strip_prefix("[::1]") {
+        return suffix.is_empty() || valid_port_suffix(suffix);
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+        .map_or((authority, None), |(host, port)| (host, Some(port)));
+    if port.is_some_and(|port| !valid_port(port)) {
+        return false;
+    }
+    let octets = host.split('.').collect::<Vec<_>>();
+    octets.len() == 4
+        && octets[0] == "127"
+        && octets.iter().all(|octet| {
+            !octet.is_empty()
+                && (octet == &"0" || !octet.starts_with('0'))
+                && octet.bytes().all(|byte| byte.is_ascii_digit())
+                && octet.parse::<u8>().is_ok()
+        })
+}
+
+fn valid_port_suffix(value: &str) -> bool {
+    value.strip_prefix(':').is_some_and(valid_port)
+}
+
+fn valid_port(value: &str) -> bool {
+    !value.starts_with('0') && value.parse::<u16>().is_ok_and(|port| port != 0)
 }
 
 /// Header names the engine owns; a `static-api-key` endpoint may not
@@ -513,6 +612,41 @@ mod tests {
             serde_json::from_str::<MtlsIdentity>(&json).ok(),
             Some(identity)
         );
+    }
+
+    /// The inherited plain-HTTP exception remains limited to canonical
+    /// numeric loopback spelling; moving the helper into the shared policy
+    /// must not broaden it to names, shorthand, or alternate IPv6 text.
+    #[test]
+    fn plain_http_loopback_is_admitted_only_canonically_spelled() {
+        for written in [
+            "http://127.0.0.1:9/",
+            "http://127.0.0.1/",
+            "http://127.0.0.1",
+            "http://[::1]",
+            "http://[::1]:8080/",
+            "http://127.0.0.1/path?q=1",
+        ] {
+            assert!(
+                has_canonical_loopback_authority(written),
+                "{written} is canonical"
+            );
+        }
+        for written in [
+            "http://127.1/",
+            "http://127.0.0.01/",
+            "http://0127.0.0.1/",
+            "http://[0:0:0:0:0:0:0:1]/",
+            "http://[::1]:0/",
+            "http://[::1]:99999/",
+            "http://localhost:9/",
+            "https://127.0.0.1:9/",
+        ] {
+            assert!(
+                !has_canonical_loopback_authority(written),
+                "{written} is not canonical"
+            );
+        }
     }
 
     /// The token-request text parameters are bounded at the reader:

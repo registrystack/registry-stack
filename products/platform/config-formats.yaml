@@ -4111,6 +4111,8 @@ formats:
         whenOmitted: refused
       - pointer: /endpoints/*/credential
         whenOmitted: refused
+      - pointer: /endpoints/*/anonymousHttps
+        whenOmitted: closed
       - pointer: /allowedPrivateCidrs
         whenOmitted: closed
     restrictingMembers: [/allowedPrivateCidrs, /oidc/audience, /oidc/issuer]

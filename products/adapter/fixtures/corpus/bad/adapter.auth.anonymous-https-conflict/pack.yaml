@@ -1,0 +1,28 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+routeTemplates:
+  - id: find-case
+    parameters:
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/welfare/{{case_id}}
+            pathParameters:
+              case_id:
+                header: recordId
+capabilities: {}

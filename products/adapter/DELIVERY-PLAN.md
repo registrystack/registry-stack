@@ -132,7 +132,8 @@ engine on API shapes the two maintained packs do not cover:
   with a query body, a FHIR R4 profile (searchset Bundle with links and
   totals, `OperationOutcome` problems).
 - Upstream authentication: across the set, every kind of `CONCEPT.md` 10.2
-  at least once (`static-api-key`, both OAuth2 kinds, mTLS with `none`),
+  at least once (`static-api-key`, both OAuth2 kinds, mTLS with `none`), plus
+  the explicit anonymous-HTTPS admission over synthetic local TLS,
   so the maintained packs and the experiments together cover all six.
 
 Each experiment records what it needed: when one cannot be expressed
@@ -174,7 +175,9 @@ pins; required capabilities); `AdapterProject` (record types and fields,
 pinned pack and profile references, `templatedRoutes`, bindings, access
 profiles); `AdapterRuntimeConfig` (per-endpoint base URL, credential
 `secret:` references matching the endpoint's kind, token endpoint, optional
-CA bundle and mTLS identity); `AdapterFixture` with provenance
+CA bundle and mTLS identity, and the named `anonymousHttps:
+operator-approved` acknowledgement for a matching explicit `none` pair over
+HTTPS); `AdapterFixture` with provenance
 (`kind: captured | documented`, `upstreamVersion`, `reference`). The step
 union covers every port-table row in `CONCEPT.md` 8.10 for Increments 0 to
 3, including `idempotentConsumer` and the `graphql` endpoint kind, so the
@@ -192,7 +195,8 @@ Increment 3), refusal of `onException`/`doCatch` naming an uncatchable
 class, digest-pin shape, envelope-name validity, profile envelope checks
 (unknown slot, missing result slot, problem envelope without its code
 slot), authentication checks (runtime credentials match the endpoint kind,
-`none` only on loopback or with an mTLS identity, reserved `headerName`
+`none` only on loopback, with an mTLS identity over HTTPS, or with the named
+operator acknowledgement on HTTPS, reserved `headerName`
 refused). No type or check names a `breg-records` path, operation, or field.
 
 DoD: accept and reject unit tests for every check asserting `adapter.*`
@@ -405,7 +409,9 @@ slice of the increment, on the platform primitives of D13.
   with OIDC and access profiles, filling the profile's envelope templates;
   `src/auth/**` carries all six upstream kinds of `CONCEPT.md` 10.2 with
   the token cache, the single refresh after a 401, `credential.rejected`,
-  and mTLS identity, plus `tests/camel_http_authentication.rs` with one
+  mTLS identity, and the named acknowledgement for a matching
+  credential-free HTTPS source, plus `tests/camel_http_authentication.rs`
+  with one
   module per kind against a double token endpoint, and a marker secret
   asserted absent from journal, diagnostics, and replay output. The same
   stream owns the facade inputs of 8.11.1, the continuation codec of 8.11.2
@@ -598,6 +604,8 @@ Increment 1:
    nothing (dev-dependency only).
 7. `CARGO test --locked -p registry-adapter --test camel_http_authentication`
    runs a nonzero number of tests covering each of the six kinds.
+   `CARGO test --locked -p registry-adapterctl --features tls-test --test verify`
+   also runs a nonzero local synthetic TLS proof for acknowledged `none`.
 8. `CARGO test --locked -p registry-adapter --test adapter_continuation`
    and `--test camel_http_uri` run a nonzero number of tests.
 9. `rg -n 'CamelHttpResponseCode|source\.(not-found|unavailable|upstream-error|write-rejected|write-partial)' products/adapter/packs`

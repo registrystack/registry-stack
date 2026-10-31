@@ -35,6 +35,7 @@ fn endpoint_runtime(
             value_ref: SecretReference::new("secret:env/GRAPHQL_REPLY_KEY")
                 .expect("secret reference"),
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

@@ -307,10 +307,13 @@ runtime is a bounded port of Apache Camel concepts whose port table is
 the contract (`products/adapter/CONCEPT.md` section 8.10); `adapterctl`
 is authoring and operator tooling. The adapter inherits no authorization
 from any product and grants none to any source: upstream calls run under
-the deployment's own credential, the caller's token is never forwarded,
+the deployment's own credential, or without an application credential for
+numeric loopback, HTTPS with mTLS, or a fixed HTTPS source carrying the
+operator's explicit `anonymousHttps: operator-approved` acknowledgement.
+The caller's token is never forwarded,
 and the facade serves trusted machine clients only, because an admitted
-client with a matching scope sees every record the deployment credential
-reaches (record-level authorization is planned, not built). Its audit
+client with a matching scope sees every record the deployment's configured
+source access reaches (record-level authorization is planned, not built). Its audit
 journal records no values.
 
 The adopter demo is maintained separately in

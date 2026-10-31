@@ -53,6 +53,7 @@ fn binding(double: &UpstreamDouble, credential: Option<RuntimeCredential>) -> En
         endpoint: ExternalId::new("source").expect("id"),
         base_url: Url::new(double.url("/")).expect("url"),
         credential,
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

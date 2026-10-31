@@ -1284,6 +1284,37 @@ fn write_runtime(root: &Path, retention: &str) -> String {
     path.to_str().unwrap().to_owned()
 }
 
+/// `anonymousHttps` is a named security acknowledgement. Omission remains
+/// closed at the policy layer, while null, booleans, and unknown strings are
+/// refused by the shared configuration reader with its typed diagnostics.
+#[test]
+fn anonymous_https_acknowledgement_has_strict_reader_diagnostics() {
+    for (yaml, code) in [
+        ("    anonymousHttps: null\n", "config.null-value"),
+        ("    anonymousHttps: false\n", "config.expected-string"),
+        ("    anonymousHttps: accepted\n", "config.unknown-variant"),
+    ] {
+        let (_root, project) = mutated_project(|root| {
+            let runtime = runtime_with_expressions("90").replace(
+                "    baseUrl: https://cases.example.invalid\n",
+                &format!("    baseUrl: https://cases.example.invalid\n{yaml}"),
+            );
+            std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+        });
+        let runtime = _root.path().join("minimal").join("runtime.yaml");
+        let (exit, report, _) =
+            run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+        assert_refused(exit, &report, code);
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap();
+        assert_eq!(diagnostic["path"], "/endpoints/0/anonymousHttps");
+    }
+}
+
 /// Without `--environment` the runtime file is checked the way the runtime
 /// reads it before the environment exists: an expression is checked by
 /// syntax and position only, and the text member it fills accepts the

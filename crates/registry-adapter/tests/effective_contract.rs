@@ -187,15 +187,14 @@ fn empty_version_artifacts(
 
 fn project_with_native_update(scratch: &std::path::Path) -> std::path::PathBuf {
     let source = repo_root().join("products/adapter/examples/dhis2-tracker/project.yaml");
-    let mut project = read_yaml_value(&source, &PROJECT_FORMAT);
+    let project = read_yaml_value(&source, &PROJECT_FORMAT);
     let binding = project["bindings"]
-        .as_array_mut()
+        .as_array()
         .expect("project bindings")
-        .iter_mut()
-        .find(|binding| binding["id"] == "person-create")
-        .expect("create binding");
-    binding["id"] = Value::String("person-update".to_owned());
-    binding["operation"] = Value::String("records-update".to_owned());
+        .iter()
+        .find(|binding| binding["id"] == "person-update")
+        .expect("maintained update binding");
+    assert_eq!(binding["operation"], "records-update");
     let directory = scratch.join("project");
     fs::create_dir(&directory).expect("create update project directory");
     fs::write(

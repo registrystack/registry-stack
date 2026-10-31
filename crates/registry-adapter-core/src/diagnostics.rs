@@ -18,6 +18,8 @@ use registry_platform_yaml::Diagnostic;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CheckCode {
     // adapter.auth.*
+    AuthAnonymousHttpsConflict,
+    AuthAnonymousHttpsRequiresTls,
     AuthKindMismatch,
     AuthNoneNotLoopback,
     // adapter.envelope.*
@@ -146,6 +148,8 @@ pub enum CheckCode {
 impl CheckCode {
     /// The complete closed vocabulary, in code-string order.
     pub const ALL: &'static [Self] = &[
+        Self::AuthAnonymousHttpsConflict,
+        Self::AuthAnonymousHttpsRequiresTls,
         Self::AuthKindMismatch,
         Self::AuthNoneNotLoopback,
         Self::EnvelopeInvalidPlaceholder,
@@ -267,6 +271,8 @@ impl CheckCode {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
+            Self::AuthAnonymousHttpsConflict => "adapter.auth.anonymous-https-conflict",
+            Self::AuthAnonymousHttpsRequiresTls => "adapter.auth.anonymous-https-requires-tls",
             Self::AuthKindMismatch => "adapter.auth.kind-mismatch",
             Self::AuthNoneNotLoopback => "adapter.auth.none-not-loopback",
             Self::EnvelopeInvalidPlaceholder => "adapter.envelope.invalid-placeholder",
@@ -417,7 +423,9 @@ impl CheckCode {
     #[must_use]
     pub const fn artifact(self) -> &'static str {
         match self {
-            Self::AuthKindMismatch
+            Self::AuthAnonymousHttpsConflict
+            | Self::AuthAnonymousHttpsRequiresTls
+            | Self::AuthKindMismatch
             | Self::AuthNoneNotLoopback
             | Self::RuntimeInsecureOrigin
             | Self::RuntimeInvalidOrigin

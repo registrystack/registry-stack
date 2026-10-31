@@ -1311,12 +1311,8 @@ pub fn schema() -> Value {
             },
             "method": {
               "type": "string",
-              "enum": [
-                "GET",
-                "POST",
-                "PUT",
-                "PATCH"
-              ]
+              "description": "A case-sensitive HTTP method token from RFC 9110.",
+              "pattern": "^(GET|POST|PUT|PATCH)$"
             },
             "support": {
               "const": "unserved"

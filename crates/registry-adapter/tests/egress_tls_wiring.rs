@@ -20,8 +20,8 @@ use registry_adapter::auth::{
 };
 use registry_adapter::egress::{Egress, EgressError, OkStatusCodeRanges, SendShape};
 use registry_adapter_core::{
-    ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication, EndpointBinding,
-    ErrorClass, RuntimeCredential,
+    AnonymousHttpsAcknowledgement, ComponentKind, CredentialPlacement, Endpoint,
+    EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential,
 };
 use registry_platform_config::SecretResolver;
 use registry_platform_yaml::{
@@ -328,6 +328,7 @@ fn basic_binding(
             username_ref: secret(user_env),
             password_ref: secret(password_env),
         }),
+        anonymous_https: None,
         tls_trust_profile: Some(LocalId::new("private-ca").expect("profile id")),
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
@@ -356,6 +357,20 @@ fn oauth_binding(
             maximum_cache_seconds: BoundedU64::<0, 86_400>::new(3600).expect("cache ceiling"),
             assumed_lifetime_seconds: None,
         }),
+        anonymous_https: None,
+        tls_trust_profile: Some(LocalId::new("private-ca").expect("profile id")),
+        mtls_identity: None,
+        attempt_timeout_milliseconds: None,
+        maximum_response_bytes: None,
+    }
+}
+
+fn anonymous_binding(endpoint: &str, base_url: &str) -> EndpointBinding {
+    EndpointBinding {
+        endpoint: ExternalId::new(endpoint).expect("endpoint id"),
+        base_url: Url::new(base_url).expect("base url"),
+        credential: Some(RuntimeCredential::None {}),
+        anonymous_https: Some(AnonymousHttpsAcknowledgement::OperatorApproved),
         tls_trust_profile: Some(LocalId::new("private-ca").expect("profile id")),
         mtls_identity: None,
         attempt_timeout_milliseconds: None,
@@ -379,6 +394,48 @@ fn bundle_file(name: &str, contents: &str) -> std::path::PathBuf {
 
 const ATTEMPT: std::time::Duration = std::time::Duration::from_secs(10);
 const MAXIMUM_RESPONSE_BYTES: usize = 64 * 1024;
+
+/// An acknowledged anonymous source still uses the normal frozen TLS
+/// transport, but authorization resolves no credential and the send carries
+/// neither source-authentication nor caller-token headers.
+#[tokio::test]
+async fn acknowledged_anonymous_https_sends_no_authentication_header() {
+    let upstream = TlsDouble::start().await;
+    upstream.respond_with(vec![(200, "application/json", r#"{"tls":true}"#)]);
+    let bundle = bundle_file("anonymous", &upstream.certificate_pem);
+    let config = tls_config(anonymous_binding("tls-api", &upstream.url("/")), &bundle);
+    let endpoints = vec![pack_endpoint("tls-api", EndpointAuthentication::None {})];
+    let egress = Egress::load(&endpoints, &config, &resolver()).expect("the deployment loads");
+    let bound = egress.endpoint("tls-api").expect("the endpoint");
+
+    let mut budget = TokenBudget::new_exchange();
+    let mut events = Vec::new();
+    let credential = bound
+        .authorize(&mut budget, &resolver(), &TestSigner, &mut events)
+        .await
+        .expect("none authorization succeeds");
+    assert!(credential.is_none());
+    bound
+        .send(registry_adapter::egress::OutboundSend {
+            link: &upstream.url("/records"),
+            exchange_headers: &[],
+            shape: SendShape::Get,
+            authorization: None,
+            attempt: ATTEMPT,
+            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+            ok_status_ranges: OkStatusCodeRanges::default(),
+            throw_exception_on_failure: true,
+        })
+        .await
+        .expect("the anonymous HTTPS send succeeds");
+
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(header(&requests[0], "authorization"), None);
+    assert_eq!(header(&requests[0], "proxy-authorization"), None);
+    assert_eq!(header(&requests[0], "cookie"), None);
+    std::fs::remove_file(&bundle).expect("remove bundle");
+}
 
 /// The right CA completes both halves over real TLS: the token
 /// acquisition runs through the frozen transport against the locally

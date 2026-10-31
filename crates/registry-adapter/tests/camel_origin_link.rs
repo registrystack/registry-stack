@@ -46,6 +46,7 @@ fn link_endpoints(base_url: &str, resolver: &SecretResolver) -> BTreeMap<String,
         credential: Some(RuntimeCredential::StaticApiKey {
             value_ref: SecretReference::new("secret:env/LINK_KEY").expect("secret reference"),
         }),
+        anonymous_https: None,
         tls_trust_profile: None,
         mtls_identity: None,
         attempt_timeout_milliseconds: None,

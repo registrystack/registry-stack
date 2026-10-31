@@ -88,6 +88,11 @@ pub struct EndpointBinding {
     /// The credential; its kind must match the endpoint's declared kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<RuntimeCredential>,
+    /// The operator's explicit acknowledgement that a credential-free
+    /// source is intentionally served over verified HTTPS. Omission keeps
+    /// the credential-free policy closed outside numeric loopback and mTLS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anonymous_https: Option<AnonymousHttpsAcknowledgement>,
     /// A lower attempt timeout than the pack declares, in milliseconds;
     /// absent, the declared one applies. A value above the declared one is
     /// refused when the deployment loads.
@@ -106,6 +111,30 @@ pub struct EndpointBinding {
     /// The mTLS client identity, combinable with any authentication kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtls_identity: Option<MtlsIdentity>,
+}
+
+/// The one named acknowledgement that admits a credential-free HTTPS
+/// source. This is a security-sensitive operator decision, not a boolean
+/// whose meaning can be lost in a rendered configuration.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AnonymousHttpsAcknowledgement {
+    /// The operator reviewed and approved this fixed anonymous source.
+    OperatorApproved,
+}
+
+impl<'de> Deserialize<'de> for AnonymousHttpsAcknowledgement {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "operator-approved" => Ok(Self::OperatorApproved),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["operator-approved"],
+            )),
+        }
+    }
 }
 
 impl registry_platform_yaml::Identified for EndpointBinding {
@@ -299,10 +328,37 @@ mod tests {
                     .expect("cache"),
                 assumed_lifetime_seconds: None,
             }),
+            anonymous_https: None,
             tls_trust_profile: Some(LocalId::new("private-ca").expect("id")),
             mtls_identity: None,
             attempt_timeout_milliseconds: None,
             maximum_response_bytes: None,
+        }
+    }
+
+    /// The anonymous HTTPS relaxation is an exact named acknowledgement:
+    /// omission stays closed, the one approved spelling parses, and values
+    /// of the wrong type or outside the closed vocabulary are refused.
+    #[test]
+    fn anonymous_https_acknowledgement_is_closed_and_typed() {
+        let omitted = serde_json::to_value(binding()).expect("binding json");
+        assert!(omitted.get("anonymousHttps").is_none());
+
+        let mut approved = omitted.clone();
+        approved["anonymousHttps"] = serde_json::json!("operator-approved");
+        let approved: EndpointBinding = serde_json::from_value(approved).expect("approved value");
+        assert_eq!(
+            approved.anonymous_https,
+            Some(AnonymousHttpsAcknowledgement::OperatorApproved)
+        );
+
+        for refused in [serde_json::json!(false), serde_json::json!("approved")] {
+            let mut value = omitted.clone();
+            value["anonymousHttps"] = refused;
+            assert!(
+                serde_json::from_value::<EndpointBinding>(value).is_err(),
+                "anything except the named acknowledgement refuses"
+            );
         }
     }
 
