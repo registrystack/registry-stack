@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.non-safe-send-in-split: this artifact set must be refused with
+# exactly adapter.route.non-safe-send-in-split. A POST send sits inside a split whose stopOnException stays false.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.non-safe-send-in-split/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:e6cf6af09e106de89b9f03c988e1f20bac09cfd5b0071c2e8ba7cfd4b14e3aec
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:93bb5f34c2e3fd76eea3ecff75f9612b919a60a26ed0b7a0f7a9b19ff6522be9
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 8
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

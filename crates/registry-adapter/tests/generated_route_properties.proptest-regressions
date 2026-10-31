@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4cf536a00153e619f7b366bb5cca4e2cf583c231eca8489d1a8c692c8b112b14 # shrinks to GeneratedRoute { prefix_sends: 0, first_branch_sends: 0, second_branch_sends: 0, take_first_branch: false, loop_iterations: 1, direct_sends: 1, redeliveries: 0 }
+cc b45777e78b8959c23b434797e897d75dbcc3778af512636e443f97de3c9133bf # shrinks to [3]

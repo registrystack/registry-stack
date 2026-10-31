@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.unknown-filter-field: this artifact set must be refused with
+# exactly adapter.project.unknown-filter-field. The binding's filter names `ghost`, which the bound record type does
+# not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.unknown-filter-field/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:b12b04fc2a6b3b24e4d2de91b899d11a6d6912536d97fc924a1fd0c988db04c2
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:82d2234733d29aab62639cb6c9f6f13677c375d7fb9ed244628d2397ee9495e7
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+      - name: limit
+        type: integer
+        required: false
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-find
+    operation: cases-find
+    recordType: case
+    route: case-find
+    filters:
+      - ghost
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-find
+    recordTypes:
+      - case

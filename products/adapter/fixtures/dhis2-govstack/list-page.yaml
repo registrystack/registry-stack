@@ -1,0 +1,229 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Derived fixture: one page of the collection read through the
+# govstack-consultation profile. The upstream exchange is the captured one in
+# fixtures/dhis2-tracker/search-page.yaml; the page is page 1 of many, so
+# the route seals the next page into `pageInfo.nextCursor`. The expected value
+# is the exact opaque token produced under the replay runner's fixed synthetic
+# sealing context, not a production token. The org-unit search route takes its
+# filter from a request body; a fixture facade request can carry one, and this
+# entry exercises the collection read
+# without it, leaving the body-borne filter to the engine tests.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-govstack-list-page
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: documented
+  reference: products/adapter/fixtures/dhis2-tracker/search-page.yaml
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-list
+      path: /v1/collections/persons/records
+      query: pageSize=5
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities
+          query: order=createdAt%3Adesc&orgUnitMode=ACCESSIBLE&page=1&pageSize=5&program=qyVpUaAYv2A&totalPages=true
+        response:
+          status: 200
+          body:
+            pager:
+              page: 1
+              pageSize: 5
+              total: 19029
+              pageCount: 3806
+              nextPage: https://dhis2.example.invalid/api/tracker/trackedEntities?program=MR2vAYaiEJt&orgUnitMode=ACCESSIBLE&pageSize=5&totalPages=true&order=createdAt:desc&page=2
+            trackedEntities:
+              - trackedEntity: EeBJ3Sn9uLg
+                trackedEntityType: cQWYtUfH6Vx
+                createdAt: '2017-01-20T10:44:02.770'
+                createdAtClient: '2017-01-20T10:44:02.770'
+                updatedAt: '2017-05-26T11:46:22.372'
+                updatedAtClient: '2017-05-26T11:46:22.372'
+                orgUnit: slSrf7H9lMf
+                inactive: false
+                deleted: false
+                potentialDuplicate: false
+                attributes:
+                  - attribute: rmeJVy1Rl5V
+                    code: SYNTHETIC_CODE_01
+                    displayName: Synthetic displayName 01
+                    createdAt: '2017-05-26T11:46:22.369'
+                    updatedAt: '2017-05-26T11:46:22.369'
+                    valueType: TEXT
+                    value: Synthetic text 01
+                  - attribute: XQwFPP7o2yd
+                    displayName: Synthetic displayName 02
+                    createdAt: '2017-05-26T11:46:22.371'
+                    updatedAt: '2017-05-26T11:46:22.371'
+                    valueType: TEXT
+                    value: Synthetic text 02
+                  - attribute: gVHsLdJYICk
+                    displayName: Synthetic displayName 03
+                    createdAt: '2017-05-26T11:46:22.336'
+                    updatedAt: '2017-05-26T11:46:22.336'
+                    valueType: TEXT
+                    value: Synthetic text 03
+              - trackedEntity: NdDm4A3gVXz
+                trackedEntityType: cQWYtUfH6Vx
+                createdAt: '2017-01-20T10:40:31.623'
+                createdAtClient: '2017-01-20T10:40:31.623'
+                updatedAt: '2017-01-20T10:40:31.913'
+                orgUnit: slSrf7H9lMf
+                inactive: false
+                deleted: false
+                potentialDuplicate: false
+                attributes:
+                  - attribute: rmeJVy1Rl5V
+                    code: SYNTHETIC_CODE_01
+                    displayName: Synthetic displayName 01
+                    createdAt: '2017-01-20T10:40:31.626'
+                    updatedAt: '2017-01-20T10:40:31.626'
+                    valueType: TEXT
+                    value: Synthetic text 04
+                  - attribute: XQwFPP7o2yd
+                    displayName: Synthetic displayName 02
+                    createdAt: '2017-01-20T10:40:31.627'
+                    updatedAt: '2017-01-20T10:40:31.627'
+                    valueType: TEXT
+                    value: Synthetic text 05
+                  - attribute: gVHsLdJYICk
+                    displayName: Synthetic displayName 03
+                    createdAt: '2017-01-20T10:40:31.626'
+                    updatedAt: '2017-01-20T10:40:31.626'
+                    valueType: TEXT
+                    value: Synthetic text 03
+              - trackedEntity: z7uj4SZ7vMT
+                trackedEntityType: cQWYtUfH6Vx
+                createdAt: '2017-01-20T10:37:57.638'
+                createdAtClient: '2017-01-20T10:37:57.638'
+                updatedAt: '2017-01-20T10:41:45.624'
+                orgUnit: slSrf7H9lMf
+                inactive: false
+                deleted: false
+                potentialDuplicate: false
+                attributes:
+                  - attribute: rmeJVy1Rl5V
+                    code: SYNTHETIC_CODE_01
+                    displayName: Synthetic displayName 01
+                    createdAt: '2017-01-20T10:41:45.341'
+                    updatedAt: '2017-01-20T10:41:45.341'
+                    valueType: TEXT
+                    value: Synthetic text 06
+                  - attribute: XQwFPP7o2yd
+                    displayName: Synthetic displayName 02
+                    createdAt: '2017-01-20T10:41:45.342'
+                    updatedAt: '2017-01-20T10:41:45.342'
+                    valueType: TEXT
+                    value: Synthetic text 05
+                  - attribute: gVHsLdJYICk
+                    displayName: Synthetic displayName 03
+                    createdAt: '2017-01-20T10:41:45.335'
+                    updatedAt: '2017-01-20T10:41:45.335'
+                    valueType: TEXT
+                    value: Synthetic text 07
+              - trackedEntity: uxJIcRRlwv3
+                trackedEntityType: cQWYtUfH6Vx
+                createdAt: '2015-08-07T15:47:29.301'
+                createdAtClient: '2015-08-07T15:47:29.301'
+                updatedAt: '2015-08-07T15:47:29.301'
+                orgUnit: CXQG7JjTr0o
+                inactive: false
+                deleted: false
+                potentialDuplicate: false
+                attributes:
+                  - attribute: rmeJVy1Rl5V
+                    code: SYNTHETIC_CODE_01
+                    displayName: Synthetic displayName 01
+                    createdAt: '2016-01-12T09:10:26.986'
+                    updatedAt: '2016-01-12T09:10:35.884'
+                    valueType: TEXT
+                    value: Synthetic text 08
+                  - attribute: XQwFPP7o2yd
+                    displayName: Synthetic displayName 02
+                    createdAt: '2016-01-12T09:10:26.986'
+                    updatedAt: '2016-01-12T09:10:35.884'
+                    valueType: TEXT
+                    value: Synthetic text 09
+                  - attribute: gVHsLdJYICk
+                    displayName: Synthetic displayName 03
+                    createdAt: '2016-01-12T09:10:26.986'
+                    updatedAt: '2016-01-12T09:10:35.884'
+                    valueType: TEXT
+                    value: Synthetic text 07
+              - trackedEntity: j7uNMgnyDoY
+                trackedEntityType: cQWYtUfH6Vx
+                createdAt: '2015-08-07T15:47:29.300'
+                createdAtClient: '2015-08-07T15:47:29.300'
+                updatedAt: '2015-08-07T15:47:29.300'
+                orgUnit: wE2MqLzAinF
+                inactive: false
+                deleted: false
+                potentialDuplicate: false
+                attributes:
+                  - attribute: rmeJVy1Rl5V
+                    code: SYNTHETIC_CODE_01
+                    displayName: Synthetic displayName 01
+                    createdAt: '2016-01-12T09:10:26.986'
+                    updatedAt: '2016-01-12T09:10:35.884'
+                    valueType: TEXT
+                    value: Synthetic text 10
+                  - attribute: XQwFPP7o2yd
+                    displayName: Synthetic displayName 02
+                    createdAt: '2016-01-12T09:10:26.986'
+                    updatedAt: '2016-01-12T09:10:35.884'
+                    valueType: TEXT
+                    value: Synthetic text 11
+                  - attribute: gVHsLdJYICk
+                    displayName: Synthetic displayName 03
+                    createdAt: '2016-01-12T09:10:26.986'
+                    updatedAt: '2016-01-12T09:10:35.884'
+                    valueType: TEXT
+                    value: Synthetic text 03
+    expected:
+      type: response
+      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        items:
+          - recordId: EeBJ3Sn9uLg
+            data:
+              tracked_entity_type: cQWYtUfH6Vx
+              org_unit: slSrf7H9lMf
+              created_at: "2017-01-20T10:44:02.770"
+              updated_at: "2017-05-26T11:46:22.372"
+          - recordId: NdDm4A3gVXz
+            data:
+              tracked_entity_type: cQWYtUfH6Vx
+              org_unit: slSrf7H9lMf
+              created_at: "2017-01-20T10:40:31.623"
+              updated_at: "2017-01-20T10:40:31.913"
+          - recordId: z7uj4SZ7vMT
+            data:
+              tracked_entity_type: cQWYtUfH6Vx
+              org_unit: slSrf7H9lMf
+              created_at: "2017-01-20T10:37:57.638"
+              updated_at: "2017-01-20T10:41:45.624"
+          - recordId: uxJIcRRlwv3
+            data:
+              tracked_entity_type: cQWYtUfH6Vx
+              org_unit: CXQG7JjTr0o
+              created_at: "2015-08-07T15:47:29.301"
+              updated_at: "2015-08-07T15:47:29.301"
+          - recordId: j7uNMgnyDoY
+            data:
+              tracked_entity_type: cQWYtUfH6Vx
+              org_unit: wE2MqLzAinF
+              created_at: "2015-08-07T15:47:29.300"
+              updated_at: "2015-08-07T15:47:29.300"
+        pageInfo:
+          nextCursor: "AR-iZNpifiCYGwbA8XWnBD1HATcvY6QeFMv0_bOd6shPCQFv50lXtHVRfDJUS5U-4TkNEh04LeFioTgVJLo"

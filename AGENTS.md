@@ -21,8 +21,11 @@ an authorized caller, from a reviewed template through an operator-configured
 provider), **Registry Coordinator** (finite, reviewed workflows of product
 API calls separated by durable waits), **Document Store** (document bytes held
 in custody for an owning system, with an exact, verified version released to
-the recipient a document grant names; held out of releases), and **Registry
-Discovery** (a curated, immutable index over public provider descriptions).
+the recipient a document grant names; held out of releases), **Registry
+Discovery** (a curated, immutable index over public provider descriptions),
+and **Registry Adapter** (a governed facade exposing a standard registry API
+over a source an institution already operates, from reviewed, digest-pinned
+packs as a bounded port of Apache Camel concepts).
 Registry Manifest describes sources portably; `registry-platform-*` crates are
 shared primitives. Integration maintainers own `registry-mcp`, a supporting
 composition service over explicit product bindings and the Live Adapter HTTP
@@ -45,6 +48,10 @@ remain supporting services beside their product, not products of their own.
 | `crates/registry-documentsctl` | Document Store operator tooling and the `documentsctl` binary |
 | `crates/registry-documents-client` | Bounded Rust Document Store client over the runtime's HTTP contract |
 | `products/documents` | Document Store product contracts, starter example, generated schemas and OpenAPI document, and contributor check scripts |
+| `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks |
+| `crates/registry-adapter` | Adapter runtime: governed facade, call-plan interpreter, security surface, and audit journal |
+| `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
+| `products/adapter` | Adapter product contract (`CONCEPT.md`), delivery plan, schemas, profiles, packs, examples, fixtures, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
@@ -126,6 +133,8 @@ Before editing an area, read its owning guide:
 - `registry-coordinator*`: `products/coordinator/AGENTS.md`
 - `registry-documents*`, `registry-documentsctl`:
   `products/documents/AGENTS.md`
+- `registry-adapter*`, `registry-adapterctl`:
+  `products/adapter/AGENTS.md`
 - `registry-discovery*`, `registry-discoveryctl`:
   `products/discovery/AGENTS.md`
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
@@ -290,6 +299,23 @@ source access, trust, or native-client behavior. The clients may search,
 resolve, validate, and persist inert exact selections, but never turn catalog
 metadata into trust or credentials.
 
+**Registry Adapter** (`registry-adapter-core`, `registry-adapter`,
+`registry-adapterctl`) exposes a compiled, standard registry API over a
+source an institution already operates, from a reviewed, digest-pinned
+pack. The core is the source-neutral model and authoring checks; the
+runtime is a bounded port of Apache Camel concepts whose port table is
+the contract (`products/adapter/CONCEPT.md` section 8.10); `adapterctl`
+is authoring and operator tooling. The adapter inherits no authorization
+from any product and grants none to any source: upstream calls run under
+the deployment's own credential, or without an application credential for
+numeric loopback, HTTPS with mTLS, or a fixed HTTPS source carrying the
+operator's explicit `anonymousHttps: operator-approved` acknowledgement.
+The caller's token is never forwarded,
+and the facade serves trusted machine clients only, because an admitted
+client with a matching scope sees every record the deployment's configured
+source access reaches (record-level authorization is planned, not built). Its audit
+journal records no values.
+
 The adopter demo is maintained separately in
 [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).
 
@@ -324,6 +350,7 @@ Each owning guide lists its own gates. The entry points:
 | Coordinator | `products/coordinator/scripts/check_dependency_direction.py`, `check-schemas.sh`, `test-postgres.sh` | `products/coordinator/AGENTS.md` |
 | Document Store | `products/documents/scripts/check-checkpoint.sh`, `check-contracts.sh`, the PostgreSQL suites (`postgres_journey` also needs `REGISTRY_RENDER_BIN`) | `products/documents/AGENTS.md`, `products/documents/README.md` |
 | Discovery | `products/discovery/scripts/check-contracts.sh`, `test-http.sh` | `products/discovery/AGENTS.md` |
+| Adapter | `products/adapter/scripts/check-contracts.sh`, `check-port-table.py`, `test-postgres.sh` | `products/adapter/AGENTS.md` |
 | Clients, bindings, unified packages | per-binding `npm test` and `unittest` runs, `release/scripts/sync-registry-client-node.py --check` | `crates/CLIENTS.md` |
 | Release | `release/scripts/registry-release validate release/manifests/<current>.yaml`, `check-release-source-model.sh` | `CONTRIBUTING.md`, `release/VERIFY.md` |
 | Docs site | `npm test` and `npm run check` in `docs/site/` | `docs/site/AGENTS.md` |

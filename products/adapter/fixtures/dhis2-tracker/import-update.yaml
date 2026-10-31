@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): a synchronous update through the same
+# DHIS2 tracker import endpoint as create. The request and response use the
+# documented tracker import shape; the 2026-10-30 capture established that a
+# client-supplied UID is treated as an update and reports stats.updated 1, but
+# this exact attribute-free request was not sent to a deployed Adapter. This
+# fixture therefore proves the maintained profile, project binding, raw-domain
+# route body, recordId header, and import mapping without claiming live proof.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-import-update
+pack: dhis2-tracker
+upstreamVersion: "2.43"
+provenance:
+  type: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-243/
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-update
+      path: /v1/records/person/wk4JlTuVO9o
+      headers:
+        idempotency-key: fixture-import-update
+      body:
+        data:
+          recordIdentifier: wk4JlTuVO9o
+          domainData:
+            tracked_entity_type: cQWYtUfH6Vx
+            org_unit: qfg4XUDJtgS
+            created_at: "2026-03-01T12:00:00.000"
+            updated_at: "2026-03-02T12:00:00.000"
+    upstream:
+      - request:
+          endpoint: tracker
+          method: POST
+          path: /api/tracker
+          query: async=false
+          body:
+            trackedEntities:
+              - trackedEntity: wk4JlTuVO9o
+                trackedEntityType: cQWYtUfH6Vx
+                orgUnit: qfg4XUDJtgS
+                attributes: []
+        response:
+          status: 200
+          body:
+            status: OK
+            validationReport:
+              errorReports: []
+              warningReports: []
+            stats:
+              created: 0
+              updated: 1
+              deleted: 0
+              ignored: 0
+              total: 1
+    expected:
+      type: response
+      status: 200
+      headers:
+        cache-control: no-store
+        content-type: application/json
+      body:
+        data:
+          tracked_entity_type: cQWYtUfH6Vx
+          org_unit: qfg4XUDJtgS
+          created_at: "2026-03-01T12:00:00.000"
+          updated_at: "2026-03-02T12:00:00.000"
+        meta:
+          registryIdentifier: dhis2-tracker-registry
+          datasetIdentifier: persons
+          recordTypeIdentifier: person

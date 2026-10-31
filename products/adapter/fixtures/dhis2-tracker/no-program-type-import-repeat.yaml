@@ -1,0 +1,73 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Captured fixture: the idempotency precondition failing, from the DHIS2
+# 2.43.2.1 test server (registry test server, 2026-10-30, scrubbed).
+# "A repeat is an update" holds only while the deployment's account
+# reaches a program of the entity's tracked-entity type. For this
+# captured type the account reaches no program: the create still answers
+# 200 with created 1, but the repeat, an update, and a delete answer 409
+# E1323 and the entity reads back 404. This fixture pins the refused
+# repeat: the same report shape as any other refusal, so the pack's
+# rejection clause raises outcome.rejected and the caller sees the
+# refused-write problem instead of a false idempotent success. The facade
+# request is reconstructed from the captured pack payload, not captured from
+# a deployed Adapter.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-no-program-type-import-repeat
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: captured
+  reference: registry test server, 2026-10-30, scrubbed
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-create
+      path: /v1/records/person
+      headers:
+        idempotency-key: fixture-no-program-repeat
+      body:
+        data:
+          recordIdentifier: HOT1L0flPiI
+          domainData:
+            tracked_entity_type: QQ4aiky5Sm1
+            org_unit: qfg4XUDJtgS
+    upstream:
+      - request:
+          endpoint: tracker
+          method: POST
+          path: /api/tracker
+          query: async=false
+          body:
+            trackedEntities:
+              - trackedEntity: HOT1L0flPiI
+                trackedEntityType: QQ4aiky5Sm1
+                orgUnit: qfg4XUDJtgS
+                attributes: []
+        response:
+          status: 409
+          body:
+            status: ERROR
+            validationReport:
+              errorReports:
+                - message: 'User: `BC5UAGENy55` has no access to any program.'
+                  errorCode: E1323
+                  trackerType: TRACKED_ENTITY
+                  uid: HOT1L0flPiI
+                  args:
+                    - BC5UAGENy55
+                    - '[QQ4aiky5Sm1]'
+              warningReports: []
+            stats:
+              created: 0
+              updated: 0
+              deleted: 0
+              ignored: 1
+              total: 1
+    expected:
+      type: problem
+      class: outcome.rejected
+      code: source.write-rejected

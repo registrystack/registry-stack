@@ -194,6 +194,15 @@ SCHEMAS = {
         ("products/evidence/generated/client-profile/client-profile.schema.json", "client-profile.json"),
         ("products/evidence/generated/client-profile/client-profile.schema.json", "*.profile.json"),
     ),
+    "adapter": (
+        ("products/adapter/schemas/project.v1alpha1.schema.json", "project.yaml"),
+        ("products/adapter/schemas/profile.v1alpha1.schema.json", "profile.yaml"),
+        ("products/adapter/schemas/pack.v1alpha1.schema.json", "pack.yaml"),
+        ("products/adapter/schemas/fixture.v1alpha1.schema.json", "fixtures/**/*.yaml"),
+        ("products/adapter/schemas/fixture.v1alpha1.schema.json", "fixtures/**/*.yml"),
+        ("products/adapter/schemas/runtime.v1alpha1.schema.json", "runtime.yaml"),
+        ("products/adapter/schemas/runtime.v1alpha1.schema.json", "runtime.example.yaml"),
+    ),
     "evidence-deployment": (
         ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
         ("products/evidence/contracts/bundle.schema.yaml", "bundle/evidence.yaml"),
@@ -205,6 +214,7 @@ SCHEMAS = {
 }
 CHECKS = {
     "mcp": ("registry-mcp", "--runtime-config", "{entry}", "check"),
+    "adapter": ("adapterctl", "check", "{project}"),
     "breg": ("bregctl", "check", "{project}"),
     "breg-mcp": ("breg-mcp", "--runtime-config", "{entry}", "check"),
     "breg-review": ("breg-review", "--runtime-config", "{entry}", "check"),

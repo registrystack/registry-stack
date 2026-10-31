@@ -21,6 +21,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -464,6 +465,90 @@ class MutationTest(unittest.TestCase):
             with self.assertRaises(runner.NotApplicable):
                 runner.mutate("b: 3\n", {"boundaries": {}}, fmt)
 
+    def test_cfg_id_6_sweep_duplicates_each_schema_set_first_item(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "set": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                "plain": {"type": "array", "items": {"type": "string"}},
+                "empty": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                "flow": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tags": {"type": "array", "uniqueItems": True, "items": {"type": "string"}}
+                        },
+                    },
+                },
+            },
+        }
+        text = (
+            "set:\n  - alpha\n  - beta\nplain:\n  - alpha\nempty: []\n"
+            "flow: [x, y]\nitems:\n  - tags:\n      - x\n      - y\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            variants = runner.mutate(text, {"duplicateSetItems": {}}, fmt)
+        self.assertEqual(
+            [variant.text for variant in variants],
+            [
+                (
+                    "set:\n  - alpha\n  - beta\n  - alpha\nplain:\n  - alpha\nempty: []\n"
+                    "flow: [x, y]\nitems:\n  - tags:\n      - x\n      - y\n"
+                ),
+                (
+                    "set:\n  - alpha\n  - beta\nplain:\n  - alpha\nempty: []\n"
+                    "flow: [x, y, x]\nitems:\n  - tags:\n      - x\n      - y\n"
+                ),
+                (
+                    "set:\n  - alpha\n  - beta\nplain:\n  - alpha\nempty: []\n"
+                    "flow: [x, y]\nitems:\n  - tags:\n      - x\n      - y\n      - x\n"
+                ),
+            ],
+        )
+        self.assertEqual([variant.sites[0].values["pointer"] for variant in variants], ["/set", "/flow", "/items/0/tags"])
+        self.assertEqual([variant.sites[0].values["index"] for variant in variants], ["2", "2", "2"])
+        self.assertEqual([variant.sites[0].values["firstIndex"] for variant in variants], ["0", "0", "0"])
+        self.assertEqual(variants[0].sites[0].anchors["item"], (4, 5))
+        self.assertEqual(variants[0].sites[0].anchors["first"], (2, 5))
+
+    def test_cfg_id_6_sweep_copies_a_multi_line_item_whole(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "scripts": {
+                    "type": "array",
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}, "digest": {"type": "string"}},
+                    },
+                }
+            },
+        }
+        text = "scripts:\n  - path: a\n    digest: d1\n  - path: b\n    digest: d2\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            variants = runner.mutate(text, {"duplicateSetItems": {}}, fmt)
+        self.assertEqual(
+            [variant.text for variant in variants],
+            ["scripts:\n  - path: a\n    digest: d1\n  - path: b\n    digest: d2\n  - path: a\n    digest: d1\n"],
+        )
+        self.assertEqual(variants[0].sites[0].values["pointer"], "/scripts")
+        self.assertEqual(variants[0].sites[0].anchors["item"], (6, 5))
+        self.assertEqual(variants[0].sites[0].anchors["first"], (2, 5))
+
+    def test_duplicate_set_items_without_a_set_or_a_schema_do_not_apply(self) -> None:
+        with self.assertRaises(runner.NotApplicable):
+            runner.mutate(EXAMPLE, {"duplicateSetItems": {}}, demo_format())
+        schema = {"type": "object", "properties": {"plain": {"type": "array", "items": {"type": "string"}}}}
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            with self.assertRaises(runner.NotApplicable):
+                runner.mutate("plain:\n  - a\n  - b\n", {"duplicateSetItems": {}}, fmt)
+
     UNKNOWN_KEY = {"unknownKey": {"key": "conformanceUnknown", "value": '"{marker}"'}}
     CLOSED = {
         "type": "object",
@@ -481,6 +566,44 @@ class MutationTest(unittest.TestCase):
             "named": {"type": "object", "additionalProperties": {"$ref": "#/$defs/item"}},
             "prefixed": {"type": "object", "additionalProperties": False, "patternProperties": {"^conformance": {}}},
             "free": {"type": "object", "unevaluatedProperties": False, "additionalProperties": {"type": "string"}},
+            "tagged": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "required": ["setBody"],
+                            "additionalProperties": False,
+                            "properties": {"setBody": {"type": "object"}},
+                        },
+                        {
+                            "type": "object",
+                            "required": ["script"],
+                            "additionalProperties": False,
+                            "properties": {"script": {"type": "object"}},
+                        },
+                    ]
+                },
+            },
+            "stamped": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "required": ["type"],
+                            "additionalProperties": False,
+                            "properties": {"type": {"const": "one"}},
+                        },
+                        {
+                            "type": "object",
+                            "required": ["type"],
+                            "additionalProperties": False,
+                            "properties": {"type": {"const": "two"}},
+                        },
+                    ]
+                },
+            },
         },
         "$defs": {
             "project": {"type": "object", "additionalProperties": False, "properties": {"id": {"type": "string"}}},
@@ -508,6 +631,10 @@ prefixed: {}
 free: {}
 undescribed:
   id: fifth
+tagged:
+  - setBody: {size: one}
+stamped:
+  - type: one
 """
 
     def test_cfg_schema_8_unknown_key_goes_into_each_closed_mapping_below_the_root(self) -> None:
@@ -526,6 +653,7 @@ undescribed:
                 ("/items/0", "/items/0/conformanceUnknown", (6, 5)),
                 ("/spread", "/spread/conformanceUnknown", (11, 3)),
                 ("/named/entry", "/named/entry/conformanceUnknown", (16, 5)),
+                ("/stamped/0", "/stamped/0/conformanceUnknown", (24, 5)),
             ],
         )
         self.assertEqual(
@@ -540,6 +668,20 @@ undescribed:
         for variant in variants:
             self.assertEqual(len(variant.sites), 1)
             self.assertEqual(variant.text.count("conformanceUnknown"), 1)
+
+    def test_cfg_schema_8_skips_the_payload_of_a_member_set_union(self) -> None:
+        """A mapping whose schema picks a union branch by member set alone is
+        no cell: any extra key leaves no branch to match, and the reader
+        refuses the value, not the key. A union whose branches share a
+        discriminator, and one the reader matches by shape, keep their
+        cells."""
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, self.CLOSED)
+            variants = runner.mutate(self.NESTED, self.UNKNOWN_KEY, fmt)
+        planted = [variant.sites[0].values["mapping"] for variant in variants]
+        self.assertNotIn("/tagged/0", planted)
+        self.assertIn("/stamped/0", planted)
+        self.assertIn("/items/0", planted)
 
     def test_unknown_key_in_one_mapping_plants_there_only(self) -> None:
         mutation = {"unknownKey": dict(self.UNKNOWN_KEY["unknownKey"], **{"in": "/spread"})}
@@ -1196,12 +1338,28 @@ if args[0] == "prepare":
     with open(os.path.join(project, "prepared"), "w", encoding="utf-8") as handle:
         handle.write("prepared\n")
     raise SystemExit(0)
+if args[0] == "pin":
+    with open(os.path.join(project, "pinned"), "w", encoding="utf-8") as handle:
+        handle.write("pinned\n")
+    raise SystemExit(0)
+if args[0] == "pin-fails":
+    print("error: cannot pin", file=sys.stderr)
+    raise SystemExit(3)
 if os.path.exists(os.path.join(project, "needs-prepare")) and not os.path.exists(os.path.join(project, "prepared")):
     print("error: the project was not prepared", file=sys.stderr)
     if "--format" in args:
         print(json.dumps({"ok": False, "diagnostics": []}))
     raise SystemExit(3)
-target = os.path.join(project, "project.yaml")
+pinned_example = os.path.join(project, "pinned.yaml")
+if os.path.exists(pinned_example) and "needs-pin:" in open(pinned_example, encoding="utf-8").read():
+    if not os.path.exists(os.path.join(project, "pinned")):
+        print("error: the project was not pinned", file=sys.stderr)
+        if "--format" in args:
+            print(json.dumps({"ok": False, "diagnostics": []}))
+        raise SystemExit(3)
+target = os.path.join(project, "pinned.yaml")
+if not os.path.exists(target):
+    target = os.path.join(project, "project.yaml")
 seen = {}
 diagnostics = []
 current = None
@@ -1347,6 +1505,38 @@ CASES = {
 }
 
 HARNESS_TEXT = "formats: {}\n"
+
+# A second format whose example lives in its own staged project directory,
+# so the fake check reads `pinned.yaml` as its target. Its harness carries
+# `afterWrite`, and its case appends the member the check refuses until a
+# `pin` command has run in the work directory after the write.
+PINNED_FORMAT = """\
+  - id: demo/pinned
+    syntax: yaml
+    audience: authored
+    target: {apiVersion: id.registrystack.org/formats/demo/project/v1alpha1, kind: DemoProject}
+    schema: {id: https://example.test/demo.schema.json}
+    check: fakectl check {project}
+    example: products/demo/pinned/pinned.yaml
+    conformance: {requiredText: /project/id, optionalText: none, integer: none, boolean: none}
+"""
+PINNED_EXAMPLE = """\
+# A demo project whose artifacts are pinned.
+apiVersion: id.registrystack.org/formats/demo/project/v1alpha1
+kind: DemoProject
+project:
+  id: demo
+  version: "1"
+"""
+NEEDS_PIN_CASE = """\
+    id: needs-pin
+    rules: [CFG-CHECK-2]
+    summary: A pin refreshed after the write keeps the check green.
+    appliesTo: {formats: [demo/pinned]}
+    mutation:
+      append: "needs-pin: true\\n"
+    expect: {exit: 0, diagnostics: []}
+"""
 
 
 class LoadRegistryTest(unittest.TestCase):
@@ -1653,6 +1843,50 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("demo/project\tbaseline\tfail", stdout)
         self.assertIn("preparing with `fakectl prepare {project}`: exit status 3, expected 0: error: cannot prepare", stdout)
+
+    def stage_pinned(self, harness: dict) -> None:
+        """Stage the demo/pinned format: its own example directory, a registry
+        entry, a case whose mutation the fake check refuses until a pin has
+        run after the write, and the harness under test."""
+        pinned = self.root / "products/demo/pinned"
+        pinned.mkdir()
+        (pinned / "pinned.yaml").write_text(PINNED_EXAMPLE, encoding="utf-8")
+        (self.root / "products/platform/config-formats.yaml").write_text(
+            REGISTRY_TEXT + PINNED_FORMAT, encoding="utf-8"
+        )
+        self.write_case("needs-pin", NEEDS_PIN_CASE)
+        self.write_harness(harness)
+
+    def test_after_write_commands_run_after_the_mutation_and_before_the_check(self) -> None:
+        self.stage_pinned({"demo/pinned": {"afterWrite": ["fakectl pin {project}"]}})
+        code, stdout, _ = self.run_runner("--matrix")
+        self.assertIn("demo/pinned\tneeds-pin\tpass", stdout)
+        self.assertNotIn("demo/pinned\tneeds-pin\tfail", stdout)
+        self.assertNotIn("the project was not pinned", stdout)
+
+    def test_without_after_write_the_pin_never_happens_and_the_cell_fails(self) -> None:
+        self.stage_pinned({})
+        code, stdout, _ = self.run_runner("--matrix")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("demo/pinned\tneeds-pin\tfail", stdout)
+        self.assertIn("exit status 3, expected 0: error: the project was not pinned", stdout)
+
+    def test_a_failing_after_write_command_fails_the_cell_as_a_harness_failure(self) -> None:
+        self.stage_pinned({"demo/pinned": {"afterWrite": ["fakectl pin-fails {project}"]}})
+        code, stdout, _ = self.run_runner("--write-expected-failures")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("FAIL demo/pinned baseline", stdout)
+        self.assertIn(
+            "after write, `fakectl pin-fails {project}`: exit status 3, expected 0: error: cannot pin",
+            stdout,
+        )
+        self.assertIn(
+            "not recorded: a leak, a crash, a timeout, or a failure of the harness is never an expected failure",
+            stdout,
+        )
+        self.assertNotIn(
+            ("demo/pinned", "baseline"), runner.load_expected_failures(self.expected_path).failures
+        )
 
     def test_missing_binary_fails(self) -> None:
         (self.bin / "fakectl").unlink()
@@ -2060,6 +2294,70 @@ class CommittedCorpusTest(unittest.TestCase):
                     self.assertEqual(parent.pop(key), runner.MARKER)
                     self.assertEqual(document, yaml.safe_load(text))
         self.assertGreater(swept, 0)
+
+
+class WrapperRefusalTest(unittest.TestCase):
+    """The shell wrapper refuses to run without a usable adapterctl binary.
+
+    A repo-local target/ directory is never used: a stale binary there
+    once checked green against the wrong reader. The wrapper takes the
+    binary from --bin-dir or ADAPTERCTL_BIN, builds it under an exported
+    CARGO_TARGET_DIR, and refuses otherwise. PATH is scrubbed in every
+    case so a wrapper that reaches the corpus instead of refusing fails
+    instantly as 127 and cannot satisfy an asserted exit code."""
+
+    wrapper = Path(__file__).with_name("run-config-conformance.sh")
+
+    def run_wrapper(self, *args: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(self.wrapper), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def environment_without_binaries(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env.pop("ADAPTERCTL_BIN", None)
+        env.pop("CARGO_TARGET_DIR", None)
+        env["PATH"] = "/usr/bin:/bin"
+        return env
+
+    def test_the_wrapper_refuses_with_no_bin_dir_and_no_target(self) -> None:
+        done = self.run_wrapper(env=self.environment_without_binaries())
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("adapterctl", done.stderr)
+        for remedy in ("ADAPTERCTL_BIN", "--bin-dir", "CARGO_TARGET_DIR"):
+            self.assertIn(remedy, done.stderr)
+
+    def test_the_wrapper_refuses_an_adapterctl_bin_that_is_not_executable(self) -> None:
+        env = self.environment_without_binaries()
+        env["ADAPTERCTL_BIN"] = str(self.wrapper.parent / "no-such-adapterctl")
+        done = self.run_wrapper(env=env)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("ADAPTERCTL_BIN", done.stderr)
+
+    def test_the_wrapper_refuses_an_adapterctl_bin_with_another_name(self) -> None:
+        env = self.environment_without_binaries()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("adapterctl", "adapterctl-review"):
+                binary = root / name
+                binary.write_text("#!/bin/sh\ntouch marker\n")
+                binary.chmod(0o755)
+            env["ADAPTERCTL_BIN"] = str(root / "adapterctl-review")
+            done = self.run_wrapper(env=env)
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertIn("adapterctl-review", done.stderr)
+            self.assertFalse((root / "marker").exists(), done.stderr)
+
+    def test_the_wrapper_refuses_a_bin_dir_without_the_binary(self) -> None:
+        env = self.environment_without_binaries()
+        with tempfile.TemporaryDirectory() as directory:
+            done = self.run_wrapper("--bin-dir", directory, env=env)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("adapterctl", done.stderr)
 
 
 if __name__ == "__main__":

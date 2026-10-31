@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Bad-corpus member config.invalid-value-token-endpoint, runtime half: checked with
+# --runtime runtime.yaml. The runtime binding must be refused with
+# exactly config.invalid-value-token-endpoint. The runtime binding carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/config.invalid-value-token-endpoint/project.yaml --runtime runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: case-deployment
+endpoints:
+  - endpoint: cases
+    baseUrl: https://cases.example.invalid
+    credential:
+      type: oauth2-client-credentials
+      tokenEndpoint: not a url at all
+      clientIdRef: secret:env/CASES_CLIENT_ID
+      clientSecretRef: secret:env/CASES_CLIENT_SECRET
+      credentialPlacement: basic-header
+      maximumCacheSeconds: 300
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/DB_RUNTIME
+  migrationUrlRef: secret:env/DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: case-api
+allowedClients:
+  - registry-adapter-example-client
+audit:
+  retentionDays: 90

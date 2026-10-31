@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.parameterized-part-unbound: this artifact set must be refused with
+# exactly adapter.project.parameterized-part-unbound. The project gives the declared part registryIdentifier no value.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.parameterized-part-unbound/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:6b40e73e262478bd41ff97bd46f1ffd8c4ca2cdffa31ca57511939ccaaabae75
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:b6f92d70aeafdb16eb489e5239e7b7bc86a7d6ec2f56819b08a5737e7813383a
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases:read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

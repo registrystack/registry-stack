@@ -11,7 +11,15 @@
 # not run. The runner fails on a failing cell missing here, and with --strict
 # on an entry that no longer holds.
 
-expectedFailures: []
+expectedFailures:
+- format: coordinator/runtime
+  case: unique-list-sweep
+  reason: missing config.duplicate-item at /deployment/packages/1 39:7; unexpected coordinator.deployment.configuration at /deployment/packages/1/root 39:13 (and 1 more problem)
+  digest: 3f5b4a2719cd
+- format: evidence/bundle
+  case: unique-list-sweep
+  reason: missing config.duplicate-item at /authentication/oidc/tokenTypes/1 15:26; unexpected evidence.bundle.invalid-authentication at /authentication/oidc 12:5 (and 5 more problems)
+  digest: 20994639e080
 unreachedFormats:
 - format: breg/backup-binding
   reason: syntax json; the corpus mutates YAML text

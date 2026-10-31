@@ -1,0 +1,519 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# The dhis2-tracker pack: DHIS2 tracker export and import, ported from the
+# DHIS2 Web API documentation (https://docs.dhis2.org/en/develop/using-the-api/
+# dhis-core-version-243/) and captured from a DHIS2 2.43.2.1 test server
+# (registry test server, 2026-10-30, scrubbed). The fixtures carrying
+# those captured bytes name the same source; behavior this pack states
+# without one is documentation-derived and says so.
+#
+# Authentication (cited choices):
+#   - User accounts authenticate over `Authorization: Basic
+#     base64encode(username:password)`; the DHIS2 documentation recommends
+#     Basic only over TLS, and prefers personal access tokens for service
+#     use. The endpoint below declares `basic`; the runtime config binds
+#     usernameRef and passwordRef.
+#   - Personal access tokens authenticate over `Authorization: ApiToken
+#     <token>` (same page). A deployment that prefers a PAT swaps this
+#     endpoint's kind to `static-authorization` with `scheme: ApiToken` and
+#     binds tokenRef in the runtime config; both sides of the kind match
+#     must move together.
+#   - The DHIS2 documentation documents three OAuth2 grant types (password,
+#     refresh token, authorization code) and the pack declares no OAuth2
+#     endpoint; a deployment that needs one declares it against those
+#     grants. Whether a client-credentials client works is unsettled (the
+#     documentation lists no such grant and does not refuse one; the
+#     capture server had no OAuth2 client configured, so no grant was
+#     observed).
+#
+# Upstream responses and their declared headers: the tracker endpoints'
+# documented behavior carries no response header the facade consumes, so
+# the allowlist stays empty and the engine copies nothing.
+#
+# Idempotency basis for `tracker-import` (idempotentUpstream: true): the
+# tracker importer treats a payload object whose UID already exists as an
+# update, so repeating an import whose objects carry client-supplied UIDs
+# lands every object on the same one; the capture answers such a repeat
+# with 200 and stats.updated 1. Deployment precondition: this holds only
+# while the deployment's account reaches a program of the entity's
+# tracked-entity type. Without such a program the first import still
+# creates (200, created 1), but the repeat, an update, and a delete are
+# refused with E1323 (a 409 import report, so `outcome.rejected`) and the
+# entity reads back 404; the fixtures pin the refused repeat. On a repeat
+# the end state is the same but updatedAt moves, so the record's
+# revisionIdentifier moves with it. The project-owned `attribute_fields`
+# map controls attributes in both directions: only listed record fields
+# become attribute rows, and only listed attribute UIDs reach a record. An
+# empty map preserves the earlier empty-list payload, which updates an
+# existing entity's stamps only and changes no attribute value. A repeat
+# over the UID of a soft-deleted entity is refused with E1114, which
+# arrives as a 409 import report and so raises `outcome.rejected` through
+# the clause below (captured); recreating the entity is a deployment
+# action, not a retry. The documentation's E1002 create-strategy
+# collision refusal fires only under importStrategy=CREATE, which this
+# pack never sends; the capture never observed it. Imports without
+# client-supplied UIDs are NOT idempotent (each repeat would mint new
+# UIDs), so the claim holds only for the client-supplied-UID payload this
+# pack's to-bundle mapping produces. The profile captures that UID into the
+# validated recordId exchange header, and the script throws when the header is
+# absent.
+#
+# Rejection: a failed synchronous import is an HTTP 409. The import
+# controller answers CONFLICT with the import report as the body when the
+# report's status is ERROR, and OK or WARNING with a 200 (captured). The
+# route's first exception clause matches upstream.http whose
+# body is that report and raises `outcome.rejected`; a WebMessage error,
+# which also carries status ERROR, carries no validationReport member and
+# stays upstream.http. A 200 still has to prove full acceptance through its
+# status and stats. Mixed accepted and ignored counts raise
+# `outcome.conflict`; an unfinished or malformed summary fails validation.
+# Neither path returns the raw summary. For that bounded partial problem,
+# `imported`, `updated`, and `ignored` are the documented DHIS2 aggregate
+# `created`, `updated`, and `ignored` stats. DHIS2 2.43 declares no rejected
+# stat: `rejected` is the number of distinct (`trackerType`, `uid`) pairs in
+# the explicitly present `validationReport.errorReports` array. It is an
+# orthogonal object-error count, not another term in `stats.total`; several
+# errors for one object count once, and a missing or malformed report fails
+# closed instead of becoming zero.
+#
+# Error clauses: the pack raises the closed error classes of CONCEPT 8.7
+# and never names a profile's problem codes or writes a problem body
+# (CONCEPT 8.11.6). A clause that translates a source answer ends with
+# `throwException` carrying an `outcome.*` class (the 404 answer raises
+# `outcome.not-found`, the 409 import report raises `outcome.rejected`);
+# redelivery stays a clause of its own and every other error propagates
+# as its own class. The bound profile's `problems` list decides the
+# problem the caller sees, so the pack binds any profile; the example
+# deploys breg-records, which maps `outcome.not-found` to its 404 and
+# `outcome.rejected` to its 409.
+#
+# Code maps: a `convert` step over the source's code values returns with
+# the core convert steps (CONCEPT 8.6); this pack declares none until
+# then.
+#
+# Paging: one facade page per upstream page, the default shape of CONCEPT
+# 8.11.2 and the cheapest bound. The caller's pageSize header (a facade
+# input; the bound profile bounds it) is the DHIS2 page size, and the
+# position is the page number: the route seeds dhis2Page from the
+# AdapterContinuation property the engine restores from the caller's
+# cursor (absent on the first page), fetches that one page, and sets
+# AdapterNextContinuation to the next page number while the reply's pager
+# holds one more. Captured (2.43.2.1): the reply carries the entities
+# under `trackedEntities` and a `pager` object that is always present
+# with `page` and `pageSize`; `totalPages=true` adds `total` and
+# `pageCount`, and without it the pager carries neither. The pager also
+# carries `nextPage` and `prevPage` links, so `pageCount` is not the only
+# another-page signal; the route reads `pageCount` because the count is
+# all it needs, and it still sends `totalPages=true` (flagged expensive
+# in the documentation) so the count is present. A missing pager or
+# pageCount is an unexpected shape and throws; a pageCount of 0 is a
+# legitimate empty result with no cursor. This pack targets 2.43, tested
+# against 2.43.2.1; earlier tracker versions answered different shapes
+# and are not targeted. A pageSize above the server's
+# KeyTrackedEntityMaxLimit system setting, when that setting is non-zero,
+# is refused with a 400 (documentation; the capture kept page sizes at
+# 5, so it never answered one); the bound profile's pageSize maximum
+# must respect the deployment's setting. An absent or null
+# AdapterNextContinuation at the end of the route is the last page, so
+# the engine seals no cursor.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: dhis2-tracker
+version: "1"
+testedVersions:
+  - "2.43"
+endpoints:
+  - id: tracker
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    operations:
+      - id: tracker-export
+      - id: tracker-import
+        idempotentUpstream: true
+    testedVersions:
+      - "2.43"
+routeTemplates:
+  - id: search-tracked-entities
+    parameters:
+      - name: program
+        type: string
+        required: true
+        description: The DHIS2 program the search narrows to.
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty exposes no attributes.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: dhis2Program
+          value:
+            constant: "{{program}}"
+      - setProperty:
+          name: dhis2AttributeMap
+          value:
+            constant: "{{attribute_fields}}"
+      # The page this run fetches: the engine restores the caller's
+      # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
+      # the first page; scripts/seed-page.rhai turns that into the DHIS2
+      # page number.
+      - setProperty:
+          name: dhis2Page
+          value:
+            rhai:
+              file: scripts/seed-page.rhai
+              entrypoint: seed_page
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program:
+                exchangeProperty: dhis2Program
+              # The documentation states the default orgUnitMode is SELECTED
+              # and requires an org unit or orgUnitMode=ALL, while the
+              # captured server answers a search with no orgUnitMode 200 and
+              # the same total as ACCESSIBLE; the two disagree, so the route
+              # sends ACCESSIBLE explicitly and the search scope is a
+              # decision, not an accident.
+              orgUnitMode:
+                constant: ACCESSIBLE
+              page:
+                exchangeProperty: dhis2Page
+              # The caller's pageSize header (a facade input, CONCEPT
+              # 8.11.1; the bound profile bounds it) is the DHIS2 page
+              # size. totalPages=true adds total and pageCount to the
+              # always-present pager (which also carries nextPage and
+              # prevPage links); scripts/next-continuation.rhai reads
+              # pageCount.
+              pageSize:
+                header: pageSize
+              totalPages:
+                constant: true
+              order:
+                constant: "createdAt:desc"
+      # The continuation the engine seals into the caller's nextCursor:
+      # the next page number while pager.pageCount holds one more, absent
+      # on the last page (scripts/next-continuation.rhai). An absent or
+      # null AdapterNextContinuation at the end of the route is the last
+      # page.
+      - setProperty:
+          name: AdapterNextContinuation
+          value:
+            rhai:
+              file: scripts/next-continuation.rhai
+              entrypoint: next_continuation
+      - setBody:
+          rhai:
+            file: scripts/shape-records.rhai
+            entrypoint: shape_records
+  - id: search-tracked-entities-by-org-unit
+    parameters:
+      - name: program
+        type: string
+        required: true
+        description: The DHIS2 program the search narrows to.
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty exposes no attributes.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      # The source refuses a criteria value it cannot read (a 400 from the
+      # export): that is the caller's invalid input, not a source fault.
+      - onException:
+          exception:
+            - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/is-bad-request.rhai
+              entrypoint: is_bad_request
+          steps:
+            - throwException:
+                exceptionType: outcome.invalid-request
+                message: The source refused the search criteria.
+      - setProperty:
+          name: dhis2OrgUnit
+          value:
+            rhai:
+              file: scripts/org-unit-filter.rhai
+              entrypoint: org_unit_filter
+      - setProperty:
+          name: dhis2Program
+          value:
+            constant: "{{program}}"
+      - setProperty:
+          name: dhis2AttributeMap
+          value:
+            constant: "{{attribute_fields}}"
+      # The page this run fetches: the engine restores the caller's
+      # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
+      # the first page; scripts/seed-page.rhai turns that into the DHIS2
+      # page number.
+      - setProperty:
+          name: dhis2Page
+          value:
+            rhai:
+              file: scripts/seed-page.rhai
+              entrypoint: seed_page
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker-export
+            query:
+              program:
+                exchangeProperty: dhis2Program
+              # The search is scoped to the organisation unit the caller's
+              # org_unit filter names (scripts/org-unit-filter.rhai); the
+              # SELECTED mode restricts it to that unit.
+              orgUnits:
+                exchangeProperty: dhis2OrgUnit
+              orgUnitMode:
+                constant: SELECTED
+              page:
+                exchangeProperty: dhis2Page
+              # The caller's pageSize header (a facade input, CONCEPT
+              # 8.11.1; the bound profile bounds it) is the DHIS2 page
+              # size. totalPages=true adds total and pageCount to the
+              # always-present pager (which also carries nextPage and
+              # prevPage links); scripts/next-continuation.rhai reads
+              # pageCount.
+              pageSize:
+                header: pageSize
+              totalPages:
+                constant: true
+              order:
+                constant: "createdAt:desc"
+      # The continuation the engine seals into the caller's nextCursor:
+      # the next page number while pager.pageCount holds one more, absent
+      # on the last page (scripts/next-continuation.rhai). An absent or
+      # null AdapterNextContinuation at the end of the route is the last
+      # page.
+      - setProperty:
+          name: AdapterNextContinuation
+          value:
+            rhai:
+              file: scripts/next-continuation.rhai
+              entrypoint: next_continuation
+      - setBody:
+          rhai:
+            file: scripts/shape-records.rhai
+            entrypoint: shape_records
+  - id: fetch-tracked-entity
+    parameters:
+      - name: id
+        type: string
+        required: false
+        description: The tracked-entity identifier the lookup resolves from the request.
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty exposes no attributes.
+    steps:
+      - onException:
+          exception:
+            - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/is-not-found.rhai
+              entrypoint: is_not_found
+          steps:
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No tracked entity with that identifier exists at the source.
+      # The source refuses an identifier it cannot read (a 400 from the
+      # export): the record cannot exist, so it answers as an absent one.
+      - onException:
+          exception:
+            - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/is-bad-request.rhai
+              entrypoint: is_bad_request
+          steps:
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No tracked entity with that identifier exists at the source.
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - setProperty:
+          name: dhis2AttributeMap
+          value:
+            constant: "{{attribute_fields}}"
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities/{{id}}
+            pathParameters:
+              id:
+                header: recordId
+            operation: tracker-export
+      # Captured: a soft-deleted entity answers 404 like an absent one,
+      # so the not-found clause above already covers it; `inactive` is not
+      # a deletion and hides nothing from this route.
+      - setBody:
+          rhai:
+            file: scripts/to-record.rhai
+            entrypoint: to_record
+  - id: import-tracked-entity
+    parameters:
+      - name: attribute_fields
+        type: map
+        defaultValue: {}
+        description: >-
+          A map from record field to DHIS2 tracked-entity attribute UID.
+          Empty writes no attributes.
+    steps:
+      # A refused write is a 409 whose body is the import report; the
+      # predicate requires the report shape (status ERROR AND a
+      # validationReport member) so a WebMessage error, which also carries
+      # status ERROR, stays unmatched and propagates as upstream.http.
+      - onException:
+          exception:
+            - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/import-rejected.rhai
+              entrypoint: import_rejected
+          steps:
+            - throwException:
+                exceptionType: outcome.rejected
+                message: The source refused the write.
+      # A write is retried on transport faults only; an HTTP failure
+      # propagates (rejection above) or surfaces as its own class.
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - setProperty:
+                name: dhis2AttributeMap
+                value:
+                  constant: "{{attribute_fields}}"
+            # The send replaces the body with the import report, so the
+            # submitted record rides the exchange through the send in this
+            # property; scripts/accepted-record.rhai returns it.
+            - setProperty:
+                name: dhis2SubmittedRecord
+                value:
+                  jsonpath: "$"
+            - to:
+                uri: http:tracker
+                parameters:
+                  httpMethod: POST
+                  path: /api/tracker
+                  query:
+                    async:
+                      constant: "false"
+                  body:
+                    rhai:
+                      file: scripts/to-bundle.rhai
+                      entrypoint: to_bundle
+                  operation: tracker-import
+            # A 200 is not enough: the synchronous import summary must show
+            # full acceptance. A mixed accepted/ignored summary is a bounded
+            # conflict. Every other non-complete summary, including an
+            # unfinished one, fails the validate step. Raw source content
+            # never enters the problem.
+            - choice:
+                when:
+                  - rhai:
+                      file: scripts/import-summary.rhai
+                      entrypoint: is_partial_import
+                    steps:
+                      - throwException:
+                          exceptionType: outcome.conflict
+                          message: The source accepted only part of the write.
+                          data:
+                            rhai:
+                              file: scripts/import-summary.rhai
+                              entrypoint: partial_import_data
+                otherwise:
+                  steps:
+                    - validate:
+                        expression:
+                          rhai:
+                            file: scripts/import-summary.rhai
+                            entrypoint: is_complete_import
+                    - setBody:
+                        rhai:
+                          file: scripts/accepted-record.rhai
+                          entrypoint: accepted_record
+scripts:
+  - path: scripts/org-unit-filter.rhai
+    digest: sha256:046a19140b16378433f8afe999c633ec20a68257dffd60a216fba4ebd038ccc4
+  - path: scripts/seed-page.rhai
+    digest: sha256:3d1f10f861171fcff9f21c0e36aa7941d6bc327b5c510cf9127a7e8131c835ed
+  - path: scripts/next-continuation.rhai
+    digest: sha256:c2ebb867b498a019f6c41190890d91ea61d76833c15bb2567bb2b9d634e959bb
+  - path: scripts/import-rejected.rhai
+    digest: sha256:ddbb54a6b67c09db81952cf8c5d5c2b54db4e842cb31996ebf8072e30014b104
+  - path: scripts/is-not-found.rhai
+    digest: sha256:8f738dc51ecbd1641f8f512ff5d2edcc48408e438814179ea360cd4267dd34b0
+  - path: scripts/is-bad-request.rhai
+    digest: sha256:ed94136005f93644620028ed7338240a2faad741145f574ba00491b43e606b4b
+  - path: scripts/to-record.rhai
+    digest: sha256:b201599e891920e9263f39f5bcac51b861b6df91321b4531b01ba3630d808fbd
+  - path: scripts/shape-records.rhai
+    digest: sha256:be2330179db4cec8995e54574800a7b375ef5bbc8d1d5fef96caef5630234fa2
+  - path: scripts/to-bundle.rhai
+    digest: sha256:04a0d751f54874e4fd8b46b1360f3c1f689d1461b0a967ee6b8784e1ae37793d
+  - path: scripts/accepted-record.rhai
+    digest: sha256:37fbf1d1454e3eb3c2112991e8a80189dae40b460188a029ae47a0354e19adea
+  - path: scripts/import-summary.rhai
+    digest: sha256:0aceef8cf488ee900de1dccc465d8ed70cbd12bf6cfc8f4139e4e32c87669acd
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - header
+    - exchangeProperty
+    - jsonpath
+    - rhai
+  eips:
+    - choice
+    - idempotentConsumer
+    - onException
+    - setBody
+    - setProperty
+    - throwException
+    - to
+    - validate

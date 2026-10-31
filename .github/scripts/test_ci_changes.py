@@ -32,6 +32,7 @@ from ci_changes import (
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
     DOCUMENTS_PACKAGES,
+    ADAPTER_PACKAGES,
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
     RENDER_TUTORIAL_INPUTS,
@@ -357,6 +358,9 @@ class CiChangesTest(unittest.TestCase):
             "documents-postgres": (
                 "needs.changes.outputs.documents_postgres == 'true'"
             ),
+            "adapter-contracts": (
+                "needs.changes.outputs.adapter_contracts == 'true'"
+            ),
             "evidence-postgres": (
                 "needs.changes.outputs.evidence_postgres == 'true'"
             ),
@@ -501,6 +505,7 @@ class CiChangesTest(unittest.TestCase):
             "messaging-smtp",
             "documents-contracts",
             "documents-postgres",
+            "adapter-contracts",
             "coordinator-postgres",
             "release-tool",
             "release-tool-required",
@@ -546,6 +551,7 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-smtp",
                 "documents-contracts",
                 "documents-postgres",
+                "adapter-contracts",
                 "coordinator-postgres",
                 "config-conformance",
             ),
@@ -577,6 +583,7 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-smtp",
                 "documents-contracts",
                 "documents-postgres",
+                "adapter-contracts",
                 "coordinator-postgres",
                 "config-conformance",
                 "release-tool",
@@ -641,7 +648,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(41, len(final_needs))
+        self.assertEqual(42, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -1218,6 +1225,29 @@ class CiChangesTest(unittest.TestCase):
         unrelated = classify(self.workspace, ("crates/registry-messaging/src/lib.rs",))
         self.assertFalse(unrelated["documents_contracts"])
         self.assertFalse(unrelated["documents_postgres"])
+
+    def test_adapter_crates_and_product_select_its_shard(self) -> None:
+        for path in (
+            "products/adapter/CONCEPT.md",
+            "crates/registry-adapter-core/src/lib.rs",
+            "crates/registry-adapter/src/lib.rs",
+            "crates/registry-adapterctl/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertIn(
+                    "adapter",
+                    {row["name"] for row in outputs["rust_matrix"]["include"]},
+                )
+                self.assertTrue(outputs["adapter_contracts"])
+        product = classify(self.workspace, ("products/adapter/CONCEPT.md",))
+        self.assertLessEqual(set(ADAPTER_PACKAGES), set(product["rust_packages"]))
+        unrelated = classify(self.workspace, ("crates/registry-documents/src/lib.rs",))
+        self.assertNotIn(
+            "adapter",
+            {row["name"] for row in unrelated["rust_matrix"]["include"]},
+        )
+        self.assertFalse(unrelated["adapter_contracts"])
 
     def test_evidence_status_store_and_dependencies_select_the_postgres_job(
         self,
@@ -3702,6 +3732,7 @@ class LockfileSelectionTest(unittest.TestCase):
             change.members,
             frozenset(
                 {
+                    "registry-adapter",
                     "registry-breg",
                     "registry-coordinator",
                     "registry-evidence",

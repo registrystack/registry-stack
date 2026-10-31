@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.invalid-origin: this artifact set must be refused with
+# exactly adapter.runtime.invalid-origin. The runtime binds the endpoint to an origin that carries a query.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.runtime.invalid-origin/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:673cbf9b421fccb135bda56d1facad3fc796f40c1686b9e5845b91ba33650e04
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:bc84933da9fbc78a1ae1607cbe7d14d1101f9b674b5d8c64050b7d827fc16fa7
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

@@ -6,11 +6,11 @@ project:
 profile:
   id: breg-records
   version: "1"
-  digest: sha256:8d254a570c9864c0a5a9ebb3aa52a7889896d8631cf7e103a0966692c881c637
+  digest: sha256:b75f2c5e62d6be01f2311fe04e46b6b6a6a5629b6ff34a4a7136c608f6178d31
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:246770f1ff8eb7b7f6d841c6e6b0ea8e828483f377248f3366a4dc661b3fff72
+  digest: sha256:2eea0866fc51101a704f90a4ab00ab8e3a842946d1eccee103c2b35fc8bc08ad
 recordTypes:
   - name: facility
     fields:

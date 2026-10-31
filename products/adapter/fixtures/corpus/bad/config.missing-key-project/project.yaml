@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member config.missing-key-project: this artifact set must be refused with
+# exactly config.missing-key-project. The project document omits the project block; the reader requires project.id and project.version.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/config.missing-key-project/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:96508552f7ec01f4b550c305c730879dd17f18b96139c07b72f2e9250157c907
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:9866fcbb919279ba4766b82058613d1ef71b224793503a4f386f8a65280c41d6
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

@@ -1,0 +1,92 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.problem-data-fields-too-many: this artifact set must be refused with
+# exactly adapter.profile.problem-data-fields-too-many. The selected problem declares 17 data fields, one past the bound of 16.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.problem-data-fields-too-many/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases-get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    pathParameters:
+      - type
+      - case_id
+    recordTypeParameter: type
+    recordIdParameter: case_id
+    responseEnvelope: '{"case": {{record}}, "fetchedAt": "{{requestId}}"}'
+problems:
+  - code: cases.upstream
+    status: 502
+    title: the source could not be reached
+    classes: [upstream, breaker.open, throttle.rejected, loop.maximum-iterations-reached]
+  - code: cases.mapping
+    status: 422
+    title: the request or its mapping was refused
+    classes: [validation, conversion.unmapped, aggregation.duplicate]
+  - code: cases.exhausted
+    status: 502
+    title: the run exhausted a budget
+    classes: [script, budget.exhausted]
+  - code: cases.boundary
+    status: 500
+    title: the facade refused the call
+    classes: [disclosure.violation, egress.refused, credential.rejected, outcome, facade]
+    dataFields:
+      - name: count-0
+        type: integer
+        required: true
+      - name: count-1
+        type: integer
+        required: true
+      - name: count-2
+        type: integer
+        required: true
+      - name: count-3
+        type: integer
+        required: true
+      - name: count-4
+        type: integer
+        required: true
+      - name: count-5
+        type: integer
+        required: true
+      - name: count-6
+        type: integer
+        required: true
+      - name: count-7
+        type: integer
+        required: true
+      - name: count-8
+        type: integer
+        required: true
+      - name: count-9
+        type: integer
+        required: true
+      - name: count-10
+        type: integer
+        required: true
+      - name: count-11
+        type: integer
+        required: true
+      - name: count-12
+        type: integer
+        required: true
+      - name: count-13
+        type: integer
+        required: true
+      - name: count-14
+        type: integer
+        required: true
+      - name: count-15
+        type: integer
+        required: true
+      - name: count-16
+        type: integer
+        required: true
+problemEnvelope: '{"family": "{{problemCode}}", "data": {{?problemData}}}'
+

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.stop-on-exception-exclusive: this artifact set must be refused with
+# exactly adapter.route.stop-on-exception-exclusive. The split sets stopOnException beside errorThreshold failure accounting.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.stop-on-exception-exclusive/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:462f26c31d3d2636b16f411fad10377a74041d295772f13f39861dfc9d197ec4
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:bd4b79ba80866d5a40587e0ed5a7752de667eb67e587576916244b42e42e87a3
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 8
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

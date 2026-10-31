@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.filter-parameter-collision: this artifact set must be refused with
+# exactly adapter.project.filter-parameter-collision. The binding's filter names `limit`, which the
+# bound search operation already fills as its page-size parameter, so one caller-facing query name
+# would mean two things.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.filter-parameter-collision/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:5152a12f01abb57f283b719f14dc34b7863a6d0b79af8f8d587ab4440ed94bc9
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:9eef6e3f93697dd9e233df8ef6f23499d0de3b16d4aab9335ca5232d4037fa97
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+      - name: limit
+        type: integer
+        required: false
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-find
+    operation: cases-find
+    recordType: case
+    route: case-find
+    filters:
+      - limit
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-find
+    recordTypes:
+      - case

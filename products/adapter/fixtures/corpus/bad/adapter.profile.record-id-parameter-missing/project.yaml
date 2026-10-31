@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.record-id-parameter-missing: this artifact set must be refused with
+# exactly adapter.profile.record-id-parameter-missing. The get operation declares the path parameter `case_id` beyond the record type and names no recordIdParameter for it.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.record-id-parameter-missing/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:1da0dedd84fccd23df5bf06973715174c8b7d7e9d3f2e8098a796afd2e62536d
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:21cc4a129c0fc51599c93359710c8964a9a15f478824dee6c0280c798fc711a9
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

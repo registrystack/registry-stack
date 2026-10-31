@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Experiment runtime config: binds the FHIR endpoint and its OAuth2
+# client-credentials grant. Every secret is a reference; every origin is
+# under .example.invalid.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: fhir-r4-patient-experiment
+endpoints:
+  - endpoint: fhir
+    baseUrl: https://fhir.example.invalid/baseR4
+    credential:
+      type: oauth2-client-credentials
+      tokenEndpoint: https://auth.example.invalid/oauth2/token
+      clientIdRef: secret:env/FHIR_CLIENT_ID
+      clientSecretRef: secret:env/FHIR_CLIENT_SECRET
+      scope: system/Patient.read
+      credentialPlacement: basic-header
+      maximumCacheSeconds: 300
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter
+allowedClients:
+  - registry-adapter-example-client
+audit:
+  retentionDays: 90

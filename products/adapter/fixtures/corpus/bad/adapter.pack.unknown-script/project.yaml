@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.unknown-script: this artifact set must be refused with
+# exactly adapter.pack.unknown-script. The route body's rhai step names a file that is not in the pack's digest-pinned inventory.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.unknown-script/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:ed0d9974a6f8bfa20e2089a64fe4759fec8c1b5954806f3cf9cfd95be511beba
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:43eb7ee28adf4ee4675cf7305f9f3eab13fddf28bfd08e42d20b84e5e5b154e0
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

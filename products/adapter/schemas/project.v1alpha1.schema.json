@@ -1,0 +1,312 @@
+{
+  "$defs": {
+    "AccessProfile": {
+      "additionalProperties": false,
+      "description": "One access profile: a named binding of scopes to concrete facade\noperations and record types, reviewed deployment policy\n(`products/adapter/CONCEPT.md` section 10.1).",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The access profile name a caller identity is granted."
+        },
+        "operations": {
+          "description": "The profile operation ids the profile may call, unique (CFG-ID-6).",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "recordTypes": {
+          "description": "The record types the profile may touch, unique (CFG-ID-6).",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "scopes": {
+          "description": "The OIDC scopes the profile admits, unique (CFG-ID-6).",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "scopes",
+        "operations",
+        "recordTypes"
+      ],
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "description": "One binding of a concrete contract operation to a route\n(`products/adapter/CONCEPT.md` section 7): one concrete operation per\n(profile operation, record type) pair, with the static worst-case\nupstream-call budget the checks hold the route to.",
+      "properties": {
+        "filters": {
+          "description": "The declared fields of the bound record type a search binding\nfilters on (`products/adapter/CONCEPT.md` section 8.11.1); the\nfacade offers exactly these as typed equality query parameters.\nEvery declared filter is required: a call that leaves one out is\nrefused as an invalid field before any script runs or source is\ncalled.\nEvery entry must name a declared field, checked at the project\nchecks; the list is unique (CFG-ID-6).",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The binding identifier."
+        },
+        "maximumUpstreamCalls": {
+          "description": "The declared budget of upstream sends per exchange; the static\nworst-case count must stay within it.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "operation": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The profile operation this binding serves."
+        },
+        "recordType": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The record type the concrete operation serves."
+        },
+        "route": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The route the operation dispatches to."
+        }
+      },
+      "required": [
+        "id",
+        "operation",
+        "recordType",
+        "route",
+        "maximumUpstreamCalls"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PinnedRef": {
+      "additionalProperties": false,
+      "description": "A pinned reference to a profile or pack: plain identifier plus the\nversion and digest `adapterctl check` verifies (CFG-ID-4,\n`products/adapter/CONCEPT.md` section 6).",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "The digest the artifact's bytes must hash to."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The referenced artifact's identifier."
+        },
+        "version": {
+          "description": "The referenced artifact's version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The project identity block: the deployment's own name and version\n(`products/adapter/CONCEPT.md` section 10.1). The id is a local\nidentifier (CFG-ID-1); the version is text, the same version-as-text\nrule as profiles and packs.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The project identifier."
+        },
+        "version": {
+          "description": "The project version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "RecordField": {
+      "additionalProperties": false,
+      "description": "One declared record field, typed under CFG-VAL-9 so fixture values and\nroute outputs are checked against it.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The field name."
+        },
+        "required": {
+          "description": "Whether every record of the type carries the field.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/RecordFieldType",
+          "description": "The field's value type."
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "RecordFieldType": {
+      "description": "A record field's value type (CFG-VAL-9).",
+      "enum": [
+        "string",
+        "integer",
+        "decimal",
+        "boolean",
+        "date",
+        "date-time"
+      ],
+      "type": "string"
+    },
+    "RecordType": {
+      "additionalProperties": false,
+      "description": "One declared record type and its fields\n(`products/adapter/CONCEPT.md` section 6).",
+      "properties": {
+        "fields": {
+          "description": "The declared fields, unique by whole item.",
+          "items": {
+            "$ref": "#/$defs/RecordField"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "name": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The record type name, the `{type}` of concrete operations."
+        }
+      },
+      "required": [
+        "name",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "TemplatedRoute": {
+      "additionalProperties": false,
+      "description": "A template instantiation in a project, Camel's `templatedRoute`\n(`manual/route-template.html`). Placeholders resolve at instantiation,\nduring `adapterctl check` and at startup, never per request.",
+      "properties": {
+        "parameters": {
+          "additionalProperties": true,
+          "description": "Parameter value by parameter name; each key is a local identifier,\nthe template parameter it instantiates (CFG-ID-1).",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "routeId": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The instantiated route id; its `from` becomes `direct:<routeId>`."
+        },
+        "routeTemplate": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The pack template this instantiation references."
+        }
+      },
+      "required": [
+        "routeTemplate",
+        "routeId"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The adapter project artifact (`AdapterProject`): the declared record\nmodel, the pinned profile and pack references, the template\ninstantiations, the bindings, and the access profiles.",
+  "properties": {
+    "accessProfiles": {
+      "default": [],
+      "description": "The access profiles.",
+      "items": {
+        "$ref": "#/$defs/AccessProfile"
+      },
+      "type": "array"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/project/v1alpha1",
+      "type": "string"
+    },
+    "bindings": {
+      "default": [],
+      "description": "The bindings of contract operations to routes.",
+      "items": {
+        "$ref": "#/$defs/Binding"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "AdapterProject",
+      "type": "string"
+    },
+    "pack": {
+      "$ref": "#/$defs/PinnedRef",
+      "description": "The pinned adapter pack."
+    },
+    "parameterizedParts": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "The deployment's value for each of the profile's parameterized\nparts, keyed by part name. The engine writes each value over the\nresponse-envelope members of that name; every declared part needs\na value and no value names an undeclared part.",
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "type": "object"
+    },
+    "profile": {
+      "$ref": "#/$defs/PinnedRef",
+      "description": "The pinned facade profile."
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity",
+      "description": "The deployment's identity."
+    },
+    "recordTypes": {
+      "description": "The declared record types and fields.",
+      "items": {
+        "$ref": "#/$defs/RecordType"
+      },
+      "type": "array"
+    },
+    "templatedRoutes": {
+      "default": [],
+      "description": "The pack template instantiations, Camel's `templatedRoute`.",
+      "items": {
+        "$ref": "#/$defs/TemplatedRoute"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "pack",
+    "profile",
+    "project",
+    "recordTypes"
+  ],
+  "title": "Registry Adapter project",
+  "type": "object"
+}

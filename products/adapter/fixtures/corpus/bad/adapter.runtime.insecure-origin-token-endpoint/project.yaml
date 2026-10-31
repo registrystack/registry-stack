@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.insecure-origin-token-endpoint: this artifact set must be refused with
+# exactly adapter.runtime.insecure-origin-token-endpoint. The credential's token endpoint is plain HTTP off the loopback exception; the binding's own base URL stays https.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.runtime.insecure-origin-token-endpoint/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:06fde9cb778a3480c078ce450d824d2b1ef882dfcb932f699a1e6b1632b95e7d
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:cc1694089f992fa2d70f5738014bf3b97e8b85e77b4cf2aea4663bfd69b1dc77
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

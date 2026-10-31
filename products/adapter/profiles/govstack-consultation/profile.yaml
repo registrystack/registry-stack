@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# The govstack-consultation facade profile: the read operations of the
+# GovStack Digital Registries Consultation API (alpha-2 draft), served over
+# any upstream the bound pack reaches. The contract is the draft's field
+# and problem-code names only; nothing of its prose is restated here.
+#
+# Operations: one record by identifier, a page of the collection, one
+# record by a declared exact selector (a read over POST), and a page of a
+# declared search (a read over POST). The collection is the path's
+# `collection_id`, the record type of the bound project.
+#
+# Shapes:
+#   - A record is `recordId` beside `data`, through `itemEnvelope`; a route
+#     that returns a record without an identifier is a disclosure
+#     violation at the call.
+#   - A page is `items` and `pageInfo.nextCursor`, a string, or null on the
+#     last page (the null slot form).
+#   - A problem is `type` (the draft's problem-type URI, held as the
+#     problem's code), `title`, `status`, `detail`, and `traceId` (the
+#     request identifier, 32 hexadecimal digits).
+#
+# Request bodies of the two POST reads are closed templates the engine
+# matches against the caller's JSON: a literal must equal the body's value
+# (a selector or search name the profile does not declare is a field
+# fault), `filters` is the criteria object checked against the binding's
+# declared filters (each declared filter is required; a search that leaves
+# one out is an invalid field), `pageSize` and `cursor` are the continuation
+# controls.
+#
+# Draft features this profile does not express: the 422 problem's `errors`
+# array of `pointer` and `message` (a problem envelope has no repeated
+# member), `traceparent` propagation, field selection, `sort`, temporal
+# selection, revisions, purpose-bound reads, conditional reads, more than
+# one named search or selector per operation, and attribute-based lookup.
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: govstack-consultation
+version: "1"
+operations:
+  - id: records-get
+    method: GET
+    path: /v1/collections/{collection_id}/records/{record_id}
+    pathParameters:
+      - collection_id
+      - record_id
+    recordTypeParameter: collection_id
+    recordIdParameter: record_id
+    itemEnvelope: '{"recordId": "{{recordId}}", "data": {{record}}}'
+    responseEnvelope: '{{record}}'
+  - id: records-list
+    method: GET
+    path: /v1/collections/{collection_id}/records
+    pathParameters:
+      - collection_id
+    recordTypeParameter: collection_id
+    itemEnvelope: '{"recordId": "{{recordId}}", "data": {{record}}}'
+    responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": {{??nextCursor}}}}'
+    pagination:
+      cursorParameter: cursor
+      pageSizeParameter: pageSize
+      pageSizeMinimum: 1
+      pageSizeMaximum: 100
+      pageSizeDefault: 20
+  - id: records-lookup
+    method: POST
+    readOnly: true
+    path: /v1/collections/{collection_id}/lookup
+    pathParameters:
+      - collection_id
+    recordTypeParameter: collection_id
+    requestEnvelope: '{"selector": "byRecordId", "values": {"recordId": "{{recordId}}"}}'
+    itemEnvelope: '{"recordId": "{{recordId}}", "data": {{record}}}'
+    responseEnvelope: '{{record}}'
+  - id: records-search
+    method: POST
+    readOnly: true
+    path: /v1/collections/{collection_id}/search
+    pathParameters:
+      - collection_id
+    recordTypeParameter: collection_id
+    requestEnvelope: '{"search": "byCriteria", "criteria": {{filters}}, "pageSize": {{?pageSize}}, "cursor": {{?cursor}}}'
+    itemEnvelope: '{"recordId": "{{recordId}}", "data": {{record}}}'
+    responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": {{??nextCursor}}}}'
+    pagination:
+      cursorParameter: cursor
+      pageSizeParameter: pageSize
+      pageSizeMinimum: 1
+      pageSizeMaximum: 100
+      pageSizeDefault: 20
+problems:
+  - code: https://govstack.global/problems/digital-registries/bad-request
+    status: 400
+    title: the request is not valid
+    classes: [outcome, outcome.conflict, outcome.rejected, facade.invalid-request, facade.method-not-allowed, facade.conflict, facade.idempotency-mismatch]
+  - code: https://govstack.global/problems/digital-registries/unauthorized
+    status: 401
+    title: the request carries no valid credential
+    classes: [facade.unauthenticated]
+  - code: https://govstack.global/problems/digital-registries/forbidden
+    status: 403
+    title: the caller may not make this request
+    classes: [facade.forbidden]
+  - code: https://govstack.global/problems/digital-registries/collection-not-available
+    status: 404
+    title: the collection is not available
+    classes: [facade.not-found]
+  - code: https://govstack.global/problems/digital-registries/record-not-available
+    status: 404
+    title: the record is not available
+    classes: [outcome.not-found]
+  - code: https://govstack.global/problems/digital-registries/not-acceptable
+    status: 406
+    title: the reply cannot be given in an accepted media type
+    classes: [facade.not-acceptable]
+  - code: https://govstack.global/problems/digital-registries/content-too-large
+    status: 413
+    title: the request body is too large
+    classes: [facade.payload-too-large]
+  - code: https://govstack.global/problems/digital-registries/unsupported-media-type
+    status: 415
+    title: the request body is not in a supported media type
+    classes: [facade.unsupported-media-type]
+  - code: https://govstack.global/problems/digital-registries/invalid-field
+    status: 422
+    title: a request field is not valid
+    classes: [outcome.invalid-request, facade.invalid-field]
+  - code: https://govstack.global/problems/digital-registries/invalid-cursor
+    status: 400
+    title: the cursor is not valid
+    classes: [facade.invalid-cursor]
+  - code: https://govstack.global/problems/digital-registries/too-many-requests
+    status: 429
+    title: the source is throttling requests
+    classes: [throttle.rejected]
+  - code: https://govstack.global/problems/digital-registries/internal-error
+    status: 500
+    title: the request could not be served
+    classes: [facade, loop.maximum-iterations-reached, validation, conversion.unmapped, aggregation.duplicate, script, script.budget-exceeded, budget.exhausted, credential.rejected, disclosure.violation, egress.refused]
+  - code: https://govstack.global/problems/digital-registries/bad-gateway
+    status: 502
+    title: the source answered with an error
+    classes: [upstream]
+  - code: https://govstack.global/problems/digital-registries/service-unavailable
+    status: 503
+    title: the circuit protecting the source is open
+    classes: [breaker.open]
+  - code: https://govstack.global/problems/digital-registries/gateway-timeout
+    status: 504
+    title: the source did not answer in time
+    classes: [upstream.timeout]
+problemEnvelope: '{"type": "{{problemCode}}", "title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "traceId": "{{requestId}}"}'

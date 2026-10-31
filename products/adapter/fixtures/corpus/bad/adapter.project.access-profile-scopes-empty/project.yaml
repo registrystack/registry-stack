@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.access-profile-scopes-empty: this artifact set must be refused with
+# exactly adapter.project.access-profile-scopes-empty. The access profile declares no scopes.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.access-profile-scopes-empty/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:cab60b4b2c219939cb3e02008d243f6107e8eef6b9808859aa5927c129859f55
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:4a0d93ba66b35ce114132ec935f152c686922faa83e049dece310aabd1311bce
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes: []
+    operations:
+      - cases-get
+    recordTypes:
+      - case

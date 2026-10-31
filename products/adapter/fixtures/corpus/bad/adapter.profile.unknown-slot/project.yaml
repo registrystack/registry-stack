@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.unknown-slot: this artifact set must be refused with
+# exactly adapter.profile.unknown-slot. The response envelope names slot bogusSlot, outside the closed slot vocabulary.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.unknown-slot/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:15365e5899805dc0ed6906cc398c9d401f7a204dc4babd94e6d9f098b2890758
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:bab32a35d69315361fb8b5d1686cd3e6bbb4ca8c47a3d0b1d42dfb74d9ca39d8
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

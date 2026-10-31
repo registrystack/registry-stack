@@ -1,0 +1,37 @@
+# Bad-corpus member adapter.pack.graphql-operation-kind-mismatch. The pack carries the sole defect.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:bd6e9530cacb118321f30ab2b5dbadba4d8b6649c275ae6e0e885234393afeec
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:062c164f49b7f947c60c603819ac20e9d043691a51c97102d81e779557b668c4
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

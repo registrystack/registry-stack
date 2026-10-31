@@ -1,0 +1,48 @@
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-deployment
+  version: "1"
+profile:
+  id: case-api
+  version: 1.0.0
+  digest: sha256:2c85123e8d22c5d71aad3b23eff21ee44f5f1b95b006451fab619af5b1f7bf1a
+pack:
+  id: case-api-pack
+  version: 1.0.0
+  digest: sha256:3d269da5ad683a2f0fa1d920a87602d77f4f486adf0da285c68f3fac0dc9e9ba
+recordTypes:
+  - name: case
+    fields:
+      - name: national_id
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: fetch-page
+    routeId: fetchCases
+    parameters:
+      record-type: case
+  - routeTemplate: create-case
+    routeId: createCase
+    parameters:
+      record-type: case
+bindings:
+  - id: find-cases
+    operation: cases-get
+    recordType: case
+    route: fetchCases
+    maximumUpstreamCalls: 5
+  - id: create-case
+    operation: cases-create
+    recordType: case
+    route: createCase
+    maximumUpstreamCalls: 5
+accessProfiles:
+  - id: registry-clerk
+    scopes:
+      - records:read
+    operations:
+      - cases-get
+      - cases-create
+    recordTypes:
+      - case

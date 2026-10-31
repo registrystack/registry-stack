@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# The `adapterctl verify --live` project: pins the sibling profile and
+# pack by their real digests and instantiates the one template the
+# probe drives. The runtime binding is written at test time (its base
+# URL carries the double's port), so this workspace carries no
+# runtime.yaml.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: verify-demo
+  version: "1"
+profile:
+  id: verify-api
+  version: "1.0.0"
+  digest: sha256:c1fac07fc5e8b9234ea655d062dd689a64c6bc75fa5d758e5d8273fb0fd9216c
+pack:
+  id: verify-pack
+  version: "1.0.0"
+  digest: sha256:d4b1ed6a097dd6d452503abbf3c549de9b0d0f1ace05151c6112ccab14172c85
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-page
+    routeId: findCases
+    parameters:
+      page-size: "1"
+bindings:
+  - id: case-find
+    operation: cases-find
+    recordType: case
+    route: findCases
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: prober
+    scopes:
+      - cases:read
+    operations:
+      - cases-find
+    recordTypes:
+      - case

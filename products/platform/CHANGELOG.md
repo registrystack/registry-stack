@@ -13,6 +13,28 @@
   `require_trusted_runtime_path()`, which refuse an unsafe file with
   `platform.runtime-config.unsafe-file`.
 
+- `registry-platform-resilience` joins the platform: the retry delay
+  computation (first delay, back-off growth, collision-avoidance
+  variance, maximum cap) and a process-local circuit breaker state
+  machine over `Closed`, `Open`, and `HalfOpen` with a count-based
+  window, failure-rate and slow-call-rate thresholds, a lazy open to
+  half-open, and bounded half-open trials. Admission hands the caller a
+  `BreakerPermit`: the call's outcome is recorded through the permit, a
+  permit dropped unrecorded counts its call as failed so an abandoned
+  future cannot strand a half-open breaker, and every phase change
+  starts a new cycle an outcome from an earlier cycle cannot touch. No
+  I/O, no background task, no product vocabulary.
+- `registry-platform-ratelimit` adds `RollingWindowLimiter`: one unkeyed
+  budget of at most `limit` admissions inside a rolling `window`, the
+  limit supplied per acquire, with a refused acquire carrying the rest of
+  the oldest admission's window as `retry_after`.
+
+- `registry-platform-httputil` adds
+  `CredentialDestinationRequestTemplate::oauth2_client_credentials_form_basic`,
+  the client-credentials shape that carries the client credential as one
+  Basic authorization value beside the url-encoded grant body. The JSON
+  format stays authorization-free and a Bearer value is refused on the slot.
+
 ## 0.44.0 - 2026-10-27
 
 - Upgrade the P-256 dependency stack to use `crypto-bigint` 0.7.6, addressing

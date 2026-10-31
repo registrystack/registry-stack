@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.unresolved-path-parameter: this artifact set must be refused with
+# exactly adapter.profile.unresolved-path-parameter. The facade path carries {case_id}, which the operation's pathParameters do not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.unresolved-path-parameter/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:76e6a69b535403abc16156f7ed18792ce7c699537f2aa8322f7cecf6dc4a4cfd
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:ebd920cbff55bcf58a6358a00bc1a26007754f1de2060e8bacb4d6ed22f28589
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

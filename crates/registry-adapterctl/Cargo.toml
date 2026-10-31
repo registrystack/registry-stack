@@ -1,0 +1,45 @@
+[package]
+name = "registry-adapterctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Stack Adapter authoring and local operator tooling."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "adapterctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Enables only the platform's pinned-loopback HTTPS profile for the real TLS
+# verify tests. Default and release builds retain production address policy.
+tls-test = ["registry-platform-httputil/test-support"]
+
+[dependencies]
+base64.workspace = true
+clap.workspace = true
+graphql-parser.workspace = true
+registry-adapter.workspace = true
+registry-adapter-core = { workspace = true, features = ["schema"] }
+registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-script.workspace = true
+registry-platform-yaml.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+rcgen.workspace = true
+registry-record.workspace = true
+tempfile.workspace = true
+tokio-rustls.workspace = true

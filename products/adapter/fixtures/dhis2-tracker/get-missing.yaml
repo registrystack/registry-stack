@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Captured fixture: the source's hard not-found answer, from the DHIS2
+# 2.43.2.1 test server (registry test server, 2026-10-30, scrubbed). The
+# WebMessage envelope carries errorCode E1005 next to httpStatus,
+# httpStatusCode, status, and message. The pack's not-found clause maps
+# exactly this answer (upstream.http narrowed by scripts/is-not-found.rhai,
+# which reads the envelope's httpStatusCode) to the facade's not-found
+# problem; other upstream HTTP outcomes map to source.upstream-error.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-get-missing
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: captured
+  reference: registry test server, 2026-10-30, scrubbed
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/person/TV7SRzsjKQi
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/TV7SRzsjKQi
+        response:
+          status: 404
+          body:
+            httpStatus: Not Found
+            httpStatusCode: 404
+            status: ERROR
+            message: TrackedEntity with id TV7SRzsjKQi could not be found.
+            errorCode: E1005
+    expected:
+      type: problem
+      class: outcome.not-found
+      code: source.not-found

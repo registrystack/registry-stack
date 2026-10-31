@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.read-only-method: this artifact set must be refused with
+# exactly adapter.profile.read-only-method. readOnly is declared on a PUT operation.
+# not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.read-only-method/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:2c016dccfe98b535cf9aaf16b4280f10016773baabf4cd2b7f9078839a71082a
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:fe3c15f96e7652ae5cbbc235c4e6bf372afc103804d7ba502d477232d95cdd0d
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+      - name: limit
+        type: integer
+        required: false
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-find
+    operation: cases-find
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-find
+    recordTypes:
+      - case

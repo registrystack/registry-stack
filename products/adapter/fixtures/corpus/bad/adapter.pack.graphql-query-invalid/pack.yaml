@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.graphql-query-invalid: this artifact set must be refused with
+# exactly adapter.pack.graphql-query-invalid. The pinned query file does not parse as a GraphQL
+# document (its pin matches the broken bytes).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.graphql-query-invalid/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: graphql
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    queryFile: queries/find-cases.graphql
+    operationName: FindCases
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+              filter[region]:
+                constant: west
+queryFiles:
+  - path: queries/find-cases.graphql
+    digest: sha256:9d02fa7eada302b0eca4bc4953ecdde87b0a6482463b37b0a590dc794042feef
+capabilities: {}

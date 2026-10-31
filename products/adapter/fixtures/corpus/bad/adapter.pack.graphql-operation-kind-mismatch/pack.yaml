@@ -1,0 +1,29 @@
+# Bad-corpus member adapter.pack.graphql-operation-kind-mismatch: the pinned operation is a mutation, but the endpoint declares query.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints:
+  - id: cases
+    component: graphql
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    queryFile: queries/find-cases.graphql
+    operationName: FetchCases
+    operations:
+      - id: cases-read
+        idempotentUpstream: true
+        graphql: query
+routeTemplates:
+  - id: find-cases
+    parameters: []
+    steps:
+      - setBody:
+          constant: {}
+queryFiles:
+  - path: queries/find-cases.graphql
+    digest: sha256:522297fceb25973333d4c3a6d23de0664437d831746bf858cf80ff774d9e519e
+capabilities: {}

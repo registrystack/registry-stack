@@ -1,0 +1,16 @@
+# Relay Global Object Identification (https://relay.dev/graphql/objectidentification.htm):
+# `node(id:)` answers null, not an error, when no object has the id.
+query GetCase($id: ID!) {
+  node(id: $id) {
+    ... on Case {
+      id
+      version
+      status
+      openedOn
+      programme
+      applicant {
+        nationalId
+      }
+    }
+  }
+}

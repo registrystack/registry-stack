@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# The dhis2-govstack example deployment: the govstack-consultation facade
+# profile (the read operations of the GovStack Digital Registries
+# Consultation API, alpha-2 draft) bound to the same dhis2-tracker pack the
+# dhis2-tracker example uses, over one collection, `persons`. Only the
+# profile and this project differ from that example; the pack and the
+# runtime are the same. The program UID is the deployment's own DHIS2
+# program; every secret travels through the runtime config as a secret
+# reference, never here.
+# The same project-owned `attribute_fields` map is supplied to both search
+# routes and fetch. This example chooses the empty map, so no DHIS2 attribute
+# crosses the facade. A deployment that maps attributes also declares the
+# matching collection fields and replaces all three maps together.
+#
+# Four operations are bound:
+#   - records-get and records-lookup resolve one tracked entity by its UID
+#     (lookup takes the UID in the request body's selector values).
+#   - records-list pages the program's tracked entities.
+#   - records-search pages them narrowed to the organisation unit the
+#     body's `criteria.org_unit` names.
+#
+# Upstream-call budgets, under the worst-case rule (route body plus the
+# widest exception-clause body; every send counts one plus the widest
+# declared maximumRedeliveries; the endpoint is basic, so token requests
+# add none): every binding is 1 send x (1 + 1 redelivery) = 2; budget 4.
+#
+# The profile and pack its pins name are the maintained artifacts
+# (products/adapter/profiles/govstack-consultation/profile.yaml and
+# products/adapter/packs/dhis2-tracker/pack.yaml with its scripts/); every
+# command takes them with --profile and --pack, run from the repository
+# root:
+#   target/debug/adapterctl check products/adapter/examples/dhis2-govstack/project.yaml \
+#     --profile products/adapter/profiles/govstack-consultation/profile.yaml \
+#     --pack products/adapter/packs/dhis2-tracker/pack.yaml
+#
+# The fixtures live in their own product directory, so replay passes them
+# explicitly (products/adapter/fixtures/dhis2-govstack/*.yaml).
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: dhis2-govstack-example
+  version: "1.0.0"
+profile:
+  id: govstack-consultation
+  version: "1"
+  digest: sha256:cf7e18b8b95da078bde2950390450fab48c2e131d2981dc8cf19cc77d6651aed
+pack:
+  id: dhis2-tracker
+  version: "1"
+  digest: sha256:2eea0866fc51101a704f90a4ab00ab8e3a842946d1eccee103c2b35fc8bc08ad
+recordTypes:
+  - name: persons
+    fields:
+      - name: org_unit
+        type: string
+        required: true
+      - name: tracked_entity_type
+        type: string
+        required: true
+      # DHIS2 timestamps carry no UTC offset, so they are not RFC 3339
+      # date-times; the closed record schema holds them as plain text.
+      - name: created_at
+        type: string
+      - name: updated_at
+        type: string
+templatedRoutes:
+  - routeTemplate: search-tracked-entities
+    routeId: person-list
+    parameters:
+      program: qyVpUaAYv2A
+      attribute_fields: {}
+  - routeTemplate: search-tracked-entities-by-org-unit
+    routeId: person-search
+    parameters:
+      program: qyVpUaAYv2A
+      attribute_fields: {}
+  - routeTemplate: fetch-tracked-entity
+    routeId: person-fetch
+    parameters:
+      attribute_fields: {}
+bindings:
+  - id: person-get
+    operation: records-get
+    recordType: persons
+    route: person-fetch
+    maximumUpstreamCalls: 4
+  - id: person-lookup
+    operation: records-lookup
+    recordType: persons
+    route: person-fetch
+    maximumUpstreamCalls: 4
+  - id: person-list
+    operation: records-list
+    recordType: persons
+    route: person-list
+    maximumUpstreamCalls: 4
+  - id: person-search
+    operation: records-search
+    recordType: persons
+    route: person-search
+    filters:
+      - org_unit
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: records-reader
+    scopes:
+      - records.read
+    operations:
+      - records-get
+      - records-lookup
+      - records-list
+      - records-search
+    recordTypes:
+      - persons

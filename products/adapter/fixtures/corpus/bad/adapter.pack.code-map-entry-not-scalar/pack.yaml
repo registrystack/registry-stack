@@ -1,0 +1,20 @@
+# Bad-corpus member adapter.pack.code-map-entry-not-scalar: one code-map value is an object.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: ["1.0"]
+endpoints: []
+routeTemplates:
+  - id: find-cases
+    parameters: []
+    steps:
+      - convertBodyTo:
+          type: codeMap:statuses
+codeMaps:
+  - id: statuses
+    entries:
+      active: ACTIVE
+      nested:
+        inner: 1
+capabilities: {}

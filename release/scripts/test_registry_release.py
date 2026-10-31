@@ -2620,6 +2620,7 @@ class RegistryReleaseTest(TestCase):
                 "messaging-smtp",
                 "documents-contracts",
                 "documents-postgres",
+                "adapter-contracts",
                 "coordinator-postgres",
                 "config-conformance",
             },

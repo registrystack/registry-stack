@@ -39,6 +39,7 @@ SHARDS = {
         "registry-platform-objectstore",
         "registry-platform-oidc",
         "registry-platform-ratelimit",
+        "registry-platform-resilience",
         "registry-platform-script",
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
@@ -96,6 +97,11 @@ SHARDS = {
         "registry-documentsctl",
         "registry-documents-client",
     ),
+    "adapter": (
+        "registry-adapter-core",
+        "registry-adapter",
+        "registry-adapterctl",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -132,6 +138,7 @@ CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
 MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
 DOCUMENTS_PACKAGES = frozenset(SHARDS["documents"])
+ADAPTER_PACKAGES = frozenset(SHARDS["adapter"])
 # The Document Store PostgreSQL journey drives the real registry-render binary.
 DOCUMENTS_POSTGRES_PACKAGES = DOCUMENTS_PACKAGES | {"registry-render"}
 # The credential status ledger and the OID4VCI store run their PostgreSQL
@@ -166,6 +173,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
 CONFIG_CHECK_PACKAGES = frozenset(
     {
         "registry-coordinator",
+        "registry-adapterctl",
         "registry-breg-mcp",
         "registry-breg-review",
         "registry-bregctl",
@@ -1196,6 +1204,8 @@ def classify(
                 seeds.update(MESSAGING_PACKAGES)
             elif path.startswith("products/documents/"):
                 seeds.update(DOCUMENTS_PACKAGES)
+            elif path.startswith("products/adapter/"):
+                seeds.update(ADAPTER_PACKAGES)
             elif path.startswith("products/coordinator/"):
                 seeds.add("registry-coordinator")
             elif path.startswith("products/identifiers/"):
@@ -1607,6 +1617,7 @@ def classify(
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "documents_contracts": bool(affected & DOCUMENTS_PACKAGES),
         "documents_postgres": bool(affected & DOCUMENTS_POSTGRES_PACKAGES),
+        "adapter_contracts": bool(affected & ADAPTER_PACKAGES),
         "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

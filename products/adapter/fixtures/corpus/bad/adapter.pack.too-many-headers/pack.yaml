@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.too-many-headers: this artifact set must be refused with
+# exactly adapter.pack.too-many-headers. The endpoint allowlists 33 request headers, one past
+# the transport's 32-name bound the runtime's filter build enforces.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.too-many-headers/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    requestHeaders:
+      - x-case-header-0
+      - x-case-header-1
+      - x-case-header-2
+      - x-case-header-3
+      - x-case-header-4
+      - x-case-header-5
+      - x-case-header-6
+      - x-case-header-7
+      - x-case-header-8
+      - x-case-header-9
+      - x-case-header-10
+      - x-case-header-11
+      - x-case-header-12
+      - x-case-header-13
+      - x-case-header-14
+      - x-case-header-15
+      - x-case-header-16
+      - x-case-header-17
+      - x-case-header-18
+      - x-case-header-19
+      - x-case-header-20
+      - x-case-header-21
+      - x-case-header-22
+      - x-case-header-23
+      - x-case-header-24
+      - x-case-header-25
+      - x-case-header-26
+      - x-case-header-27
+      - x-case-header-28
+      - x-case-header-29
+      - x-case-header-30
+      - x-case-header-31
+      - x-case-header-32
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+              filter[region]:
+                constant: west
+capabilities: {}
