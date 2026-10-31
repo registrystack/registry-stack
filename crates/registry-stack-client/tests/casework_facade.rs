@@ -9,6 +9,7 @@ async fn every_casework_method_names_its_types(
     client: &CaseworkClient,
     token: &BearerToken,
     profile: &str,
+    reader_policy: &str,
     task_id: Uuid,
     request_id: Uuid,
     event_id: Uuid,
@@ -30,6 +31,8 @@ async fn every_casework_method_names_its_types(
     clock_apply: &ReviewClockRecomputeApplyRequest,
 ) -> Result<(), CaseworkClientError> {
     let auth = || CaseworkAuth::new(token, profile);
+    let delegated_auth =
+        || DelegatedStaffReadAuth::new(token, reader_policy).with_source_profile(profile);
     let _: CaseworkComplete<Description> = client.description(auth()).await?;
     let _: CaseworkComplete<Vec<ReviewPolicyClosure>> = client.review_policies(auth()).await?;
     let _: CaseworkComplete<ReviewPolicyClosure> = client.review_policy(auth(), "review").await?;
@@ -48,6 +51,12 @@ async fn every_casework_method_names_its_types(
     let _: CaseworkComplete<ReviewTask> = client.review_task(auth(), task_id).await?;
     let _: CaseworkComplete<ReviewTaskContext> =
         client.review_task_context(auth(), task_id).await?;
+    let _: CaseworkComplete<ReviewTaskPage> = client
+        .delegated_review_tasks(delegated_auth(), None, 10)
+        .await?;
+    let _: CaseworkComplete<ReviewTaskContext> = client
+        .delegated_review_task_context(delegated_auth(), task_id)
+        .await?;
     let _: CaseworkComplete<ReviewTask> = client
         .claim_review_task(auth(), task_id, revision, key)
         .await?;
