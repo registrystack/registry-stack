@@ -14,6 +14,7 @@ import {
   BRegRecoveredCreate,
   BRegProposal,
   BRegProposalGetBinding,
+  BRegProposalCollection,
   BRegPreparedProposal,
   BRegTombstoneBinding,
   AsOfListContinuation,
@@ -59,6 +60,13 @@ declare const preparedAction: BRegPreparedAction
 declare const preparedCreate: BRegPreparedCreate
 declare const proposal: BRegProposal
 declare const proposalGet: BRegProposalGetBinding
+declare const proposalCollection: BRegProposalCollection
+client.listProposalsJson(proposalCollection, '{"limit":1}')
+client.prepareProposalJson(proposal, 'edit', '{"input":{"wide":9223372036854775807}}', 'exact-key')
+// @ts-expect-error Exact Proposal methods require JSON text.
+client.prepareProposalJson(proposal, 'edit', {input: {}}, 'exact-key')
+// @ts-expect-error Exact Proposal listing requires JSON text.
+client.listProposalsJson(proposalCollection, {})
 declare const preparedProposal: BRegPreparedProposal
 declare const recoveredAction: BRegRecoveredAction
 declare const recoveredCreate: BRegRecoveredCreate

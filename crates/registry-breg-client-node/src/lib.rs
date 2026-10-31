@@ -3393,6 +3393,29 @@ impl BaseRegistryClient {
             .map_err(client_error)
     }
 
+    /// Prepare a transition from exact JSON through the same lifecycle authority.
+    #[napi]
+    pub fn prepare_proposal_json(
+        &self,
+        proposal: &Proposal,
+        operation: String,
+        body_json: String,
+        key: String,
+    ) -> Result<PreparedProposal> {
+        self.prepare_proposal(proposal, operation, exact_input(&body_json)?, key)
+    }
+
+    /// List through the same metadata-selected collection with an exact JSON query.
+    #[napi]
+    pub async fn list_proposals_json(
+        &self,
+        collection: &ProposalCollection,
+        query_json: String,
+    ) -> Result<ProposalPage> {
+        self.list_proposals(collection, exact_input(&query_json)?)
+            .await
+    }
+
     #[napi]
     pub fn recover_proposal(
         &self,

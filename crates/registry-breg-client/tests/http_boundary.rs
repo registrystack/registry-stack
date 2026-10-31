@@ -983,3 +983,28 @@ async fn redirects_with_bearer_and_oversize_bodies_are_refused_without_retry() {
         }
     ));
 }
+
+#[tokio::test]
+async fn derived_response_limits_retain_credentials_and_leave_the_original_bound_unchanged() {
+    let provider = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let (client, requests) = test_client(Mode::Happy, Some(provider.clone()), 1).await;
+    assert!(client.with_maximum_response_bytes(0).is_err());
+    assert_eq!(provider.0.load(Ordering::SeqCst), 0);
+    assert!(requests.lock().unwrap().is_empty());
+    let metadata_client = client.with_maximum_response_bytes(1024).unwrap();
+    assert!(metadata_client
+        .registry_metadata(Some("reviewer"))
+        .await
+        .is_ok());
+    assert!(matches!(
+        client.registry_metadata(Some("reviewer")).await,
+        Err(BaseRegistryClientError::Transport {
+            kind: TransportKind::ResponseTooLarge
+        })
+    ));
+    assert_eq!(provider.0.load(Ordering::SeqCst), 2);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].uri, requests[1].uri);
+    assert_eq!(requests[0].authorization, requests[1].authorization);
+}

@@ -72,6 +72,20 @@ impl BaseRegistryClient {
         }
     }
 
+    /// Derive a client with a different finite response-body limit, reusing the
+    /// same credential provider, connection pool, and source binding. The
+    /// original client and all other transport policy remain unchanged.
+    pub fn with_maximum_response_bytes(
+        &self,
+        maximum: u64,
+    ) -> Result<Self, BaseRegistryClientError> {
+        let config = self.config.clone().with_maximum_response_bytes(maximum);
+        config.validate()?;
+        let mut transport = self.transport.clone();
+        transport.maximum_response_bytes = maximum;
+        Ok(Self { config, transport })
+    }
+
     /// Unauthenticated liveness probe. Configured bearer credentials are never
     /// acquired or sent.
     pub async fn health(&self) -> Result<BRegComplete<BRegProbeStatus>, BaseRegistryClientError> {

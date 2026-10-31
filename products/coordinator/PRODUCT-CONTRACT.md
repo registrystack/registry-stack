@@ -82,6 +82,15 @@ downstream authority. Credentials are acquired for each attempt, and each receiv
 current policy. Waits, retries, restarts, and recovery never renew an approval or alter its original
 principal, resource, scopes, bounds, or deadline.
 
+BReg caller-filtered contract metadata uses the native client's separate 8 MiB
+metadata ceiling. The 64 KiB business-response budget still applies to records,
+target conditions, Action results and Proposals. The metadata-only derived
+client keeps the same credential provider, connection pool and source binding;
+it does not change the pinned Action revision, profile, prepared command or key.
+An oversized read or preparation response is a terminal `invalid-response`
+refusal. An oversized answer after dispatching a mutation remains uncertain,
+because the effect may already have committed.
+
 ## Governed Actions
 
 `breg.invoke-action/v1` imports an exact Base Registry Engine (BReg) Action using `action.contract` and `action.id`.

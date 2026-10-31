@@ -1796,7 +1796,10 @@ fn action_field_type(value: Value) -> Result<(), BRegMetadataError> {
         }
         "vocabulary-code" => {
             bounded_string(required(&mut field_type, "vocabulary")?)?;
-            let values = identifier_array(required(&mut field_type, "values")?)?;
+            let values = array(required(&mut field_type, "values")?)?
+                .into_iter()
+                .map(bounded_short_text)
+                .collect::<Result<Vec<_>, _>>()?;
             if values.is_empty() || ensure_unique(values.iter().map(String::as_str)).is_err() {
                 return Err(metadata_error(BRegMetadataErrorKind::Shape));
             }

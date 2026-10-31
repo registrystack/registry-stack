@@ -63,6 +63,10 @@ export declare class BaseRegistryClient {
   deleteProposalAttachment(proposal: BRegProposal, slot: string, key: string): Promise<BRegProposal>
   listProposals(collection: BRegProposalCollection, query: any): Promise<ProposalPage>
   prepareProposal(proposal: BRegProposal, operation: string, body: any, key: string): BRegPreparedProposal
+  /** Prepare a transition from exact JSON through the same lifecycle authority. */
+  prepareProposalJson(proposal: BRegProposal, operation: string, bodyJson: string, key: string): BRegPreparedProposal
+  /** List through the same metadata-selected collection with an exact JSON query. */
+  listProposalsJson(collection: BRegProposalCollection, queryJson: string): Promise<ProposalPage>
   recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
   executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   /** Fetch opaque target conditions for one metadata-selected action. */

@@ -8,7 +8,7 @@
 use registry_breg_client::{
     BRegActionBinding, BRegActionInvocationRequest, BRegActionMode,
     BRegActionTargetConditionsRequest, BRegIdempotencyKey, BRegPreparedAction, BRegProblemCode,
-    BaseRegistryClient, BaseRegistryClientError,
+    BaseRegistryClient, BaseRegistryClientError, TransportKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -87,6 +87,9 @@ pub(crate) fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOut
     }
     match error {
         BaseRegistryClientError::Token(error) => token_failure(&error),
+        BaseRegistryClientError::Transport {
+            kind: TransportKind::ResponseTooLarge,
+        } => refused("invalid-response"),
         BaseRegistryClientError::Transport { .. } => retryable("transport-unavailable"),
         error if error.status() == Some(429) => retryable("rate-limited"),
         BaseRegistryClientError::Problem {
@@ -113,7 +116,8 @@ async fn binding(
     operation: Operation,
     expected: &ActionContract,
 ) -> Result<BRegActionBinding, CallOutcome> {
-    let metadata = client
+    let metadata = crate::adapters::breg_metadata_client(client)
+        .map_err(|error| failure(error, false))?
         .registry_contract(Some(profile))
         .await
         .map_err(|error| failure(error, false))?;

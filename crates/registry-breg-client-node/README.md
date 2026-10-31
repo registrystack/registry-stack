@@ -296,3 +296,20 @@ cache; `await provider.bearerToken()` uses that separate client-credentials
 cache. Neither method logs or persists the returned credential. The application
 must protect it and pass it explicitly to a resource client. The resource server
 still validates the signed authority and bounds.
+
+## Exact JSON Proposal transitions and listing
+
+Use `prepareProposalJson(proposal, operation, bodyJson, key)` when an edit
+contains integers outside JavaScript's safe integer range, including nested
+values that satisfy BReg's binary64 mutation model. Exact reads retain all
+signed and unsigned 64-bit integers, while mutation preparation still refuses
+integers that model cannot represent exactly. Decimal text such as `"0.7500"` stays a string with its lexical form.
+The exact JSON decoder refuses duplicate members and lossy numeric literals.
+The structured `prepareProposal` method continues to refuse unsafe numbers.
+
+`listProposalsJson(collection, queryJson)` accepts the same query contract as
+`listProposals`, with explicit pagination and a metadata-selected collection.
+Both methods delegate to the canonical Rust client. They retain the same
+pre-I/O checks, lifecycle conditions, source binding, and caller-chosen key.
+Persist and recover the returned `BRegPreparedProposal` through
+`recoverProposal` before executing after a restart, just as for an object body.

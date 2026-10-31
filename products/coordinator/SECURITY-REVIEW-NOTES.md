@@ -553,3 +553,34 @@ feature; the Rhai version is pinned exactly (`=1.27.0`), so the unstable
 surface cannot change under a routine update. The check is an authoring aid,
 not a security boundary: the engine still refuses any name it lacks when the
 Function runs.
+
+## BReg metadata and business response budgets
+
+### Threat and enforcement
+
+Applying the 64 KiB business-response ceiling to caller-filtered BReg control
+metadata can prevent preparation for an otherwise valid Action. Treating that
+oversize answer as a transient transport error repeats an unchanged failure.
+Globally widening the response limit would instead admit larger business data.
+
+`adapters::breg_metadata_client` derives a client only for `registry_contract`
+reads, using BReg's existing `MAX_BREG_METADATA_BYTES` ceiling (8 MiB).
+`BaseRegistryClient::with_maximum_response_bytes` reuses the same immutable
+credential provider, HTTP pool and source binding; the original 64 KiB client
+still sends target-condition, record, Action and Proposal requests.
+`breg_action::failure` and `adapters::read_failure` refuse oversized reads with
+`invalid-response`. Mutation classification first preserves the BReg client's
+unknown-outcome signal, so an oversized mutation answer remains uncertain.
+No new transport retry, authority, key, condition or Action revision is created.
+
+### Tests and residuals
+
+`crates/registry-coordinator/tests/breg_action_adapter.rs` covers metadata above
+64 KiB followed by an exact prepared Action, metadata beyond the 8 MiB ceiling,
+an oversized target-condition response, and an oversized mutation answer.
+`crates/registry-breg-client/tests/http_boundary.rs` covers independent derived
+limits, unchanged credentials and original limits, and zero refusing before I/O.
+The existing Action and Proposal adapter suites cover revision, profile and
+recovery authority. These client HTTP fixtures do not establish database
+transaction or deployed service behavior. An oversized mutation answer still
+requires the existing same-command recovery or operator resolution.

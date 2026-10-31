@@ -112,6 +112,57 @@ fn action_field_type_vocabulary_accepts_every_bounded_engine_string() {
 }
 
 #[test]
+fn action_vocabulary_codes_follow_engine_code_grammar() {
+    for codes in [
+        json!(["A-report", "B-report", "C-report"]),
+        json!(["123", "two words", "สถานะ/許可"]),
+        json!(["x".repeat(128), "é".repeat(64)]),
+    ] {
+        let mut value = metadata("status");
+        value["actions"][0]["inputs"][0]["fieldType"]["values"] = codes.clone();
+        value["actions"][0]["inputs"][0]["schema"]["enum"] = codes.clone();
+        let parsed = parse(&value).unwrap();
+        let action = parsed.select_action("update-status", "writer").unwrap();
+        assert_eq!(action.inputs()[0].field_type()["values"], codes);
+        for code in codes.as_array().unwrap() {
+            crate::BRegActionInvocationRequest::new(
+                &action,
+                Map::from_iter([("status".to_owned(), code.clone())]),
+                None,
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn invalid_action_vocabulary_codes_never_promote_to_authority() {
+    for codes in [
+        json!([]),
+        json!([""]),
+        json!(["A-report", "A-report"]),
+        json!(["line one\nline two"]),
+        json!(["nul\0"]),
+        json!(["x".repeat(129)]),
+        json!(["é".repeat(65)]),
+        json!([17]),
+        json!("A-report"),
+    ] {
+        let mut value = metadata("status");
+        value["actions"][0]["inputs"][0]["fieldType"]["values"] = codes;
+        let parsed = parse(&value).unwrap();
+        assert_eq!(parsed.actions().len(), 1);
+        assert_eq!(
+            parsed
+                .select_action("update-status", "writer")
+                .unwrap_err()
+                .kind(),
+            BRegMetadataSelectionErrorKind::ContractMismatch
+        );
+    }
+}
+
+#[test]
 fn vocabulary_strings_retain_the_metadata_string_bound() {
     let maximum = "v".repeat(64 * 1024);
     let parsed = parse(&metadata(&maximum)).unwrap();
