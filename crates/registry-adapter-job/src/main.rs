@@ -142,6 +142,7 @@ async fn pass(
     if once {
         let options = PassOptions {
             refusal_limit,
+            dry_run,
             ..PassOptions::default()
         };
         let report = bounded_pass(
@@ -168,14 +169,17 @@ async fn pass(
             "the job declares no interval trigger, so the loop has no schedule; declare one interval trigger".to_string()
         })?;
     let mut hot = false;
+    let started = std::time::SystemTime::now();
     loop {
         let now = std::time::SystemTime::now();
         let state = job_state(&pool, &program.job).await?;
         let was_hot = hot;
         hot = false;
-        let rescan = !was_hot && trigger::rescan_due(&edits, &state, now);
+        // A traversal between its first page and its finite end keeps
+        // its rescan mode; the delay clock starts only when it finishes.
+        let rescan = state.rescan_active || (!was_hot && trigger::rescan_due(&edits, &state, now));
         if !was_hot && !rescan {
-            if let Some(wait) = trigger::next_due(&program.job, &state, now) {
+            if let Some(wait) = trigger::next_due(&program.job, &state, now, started) {
                 if wait > Duration::ZERO {
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
@@ -387,8 +391,11 @@ async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String
         .map_err(|error| format!("the job store refused: {error}"))?
         .unwrap_or_default();
     let state = trigger_state(&row);
-    let overdue = trigger::next_due(&job, &state, std::time::SystemTime::now())
-        .is_some_and(|due| due == Duration::ZERO);
+    // A never-run job anchors its initial delay to this read's own
+    // start, so status reports not yet due rather than overdue.
+    let now = std::time::SystemTime::now();
+    let overdue =
+        trigger::next_due(&job, &state, now, now).is_some_and(|due| due == Duration::ZERO);
     let report = serde_json::json!({
         "job": {"id": job.job.id.as_str(), "version": job.job.version},
         "items": {
@@ -502,6 +509,7 @@ fn trigger_state(row: &store::JobStateRow) -> JobState {
         last_pass_at: row.last_pass_at,
         last_pass_stop: row.last_pass_stop.clone(),
         last_rescan_at: row.last_rescan_at,
+        rescan_active: row.rescan_active,
         idle_streak: u32::try_from(row.idle_streak.max(0)).unwrap_or(u32::MAX),
         error_streak: u32::try_from(row.error_streak.max(0)).unwrap_or(u32::MAX),
     }

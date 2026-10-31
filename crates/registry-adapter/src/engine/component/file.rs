@@ -117,8 +117,18 @@ pub(crate) async fn read_page(
     let start = resume_name.as_deref().map_or(0, |name| {
         base.partition_point(|candidate| candidate.name.as_str() < name)
     });
+    // The per-poll cap is a window over the candidates that stand after
+    // the cursor, never over the directory itself: consumed files stay
+    // in place, so a cap applied before the cursor would re-read the
+    // same head forever and never reach the tail.
+    let window_end = start
+        .saturating_add(config.max_messages_per_poll as usize)
+        .min(base.len());
     let mut index = start;
-    while let Some(candidate) = base.get(index) {
+    while index < window_end {
+        let Some(candidate) = base.get(index) else {
+            break;
+        };
         if let Ok(ReadLockKind::Changed {
             timeout_milliseconds,
             check_interval_milliseconds,
@@ -258,7 +268,6 @@ fn candidates(config: &FileSourceConfig) -> Result<Vec<Candidate>, FileReadFault
         });
     }
     base.sort_by(|left, right| left.name.cmp(&right.name));
-    base.truncate(config.max_messages_per_poll as usize);
     Ok(base)
 }
 

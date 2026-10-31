@@ -23,8 +23,10 @@ use tokio_postgres::Error as PgError;
 
 /// Every schema version, in the order it is applied. Each later
 /// migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] =
-    [(100, include_str!("store/migrations/0100_job_items.sql"))];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+    (100, include_str!("store/migrations/0100_job_items.sql")),
+    (101, include_str!("store/migrations/0101_rescan_active.sql")),
+];
 
 /// The newest schema version this release applies.
 pub(crate) const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
@@ -47,6 +49,9 @@ pub enum StoreError {
     },
     /// The migration lock was not held when it was released.
     MigrationLock,
+    /// The pass's lease was no longer held when a write reached the
+    /// store: another pass owns the job, and this pass's writes stop.
+    LeaseLost,
     /// A pool or connection could not be built or reached.
     Pool(String),
     /// The driver's own account of what went wrong.
@@ -64,6 +69,10 @@ impl fmt::Display for StoreError {
                 formatter,
                 "the adapter job migration lock was not held when it was released"
             ),
+            StoreError::LeaseLost => write!(
+                formatter,
+                "the pass lease was no longer held; another pass owns the job"
+            ),
             StoreError::Pool(reason) => write!(
                 formatter,
                 "the adapter job database pool failed: {reason}"
@@ -78,9 +87,10 @@ impl fmt::Display for StoreError {
 impl std::error::Error for StoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            StoreError::SchemaNewer { .. } | StoreError::MigrationLock | StoreError::Pool(_) => {
-                None
-            }
+            StoreError::SchemaNewer { .. }
+            | StoreError::MigrationLock
+            | StoreError::LeaseLost
+            | StoreError::Pool(_) => None,
             StoreError::Query(error) => Some(error),
         }
     }
@@ -176,6 +186,11 @@ pub struct JobStoreConfig {
     #[serde(default)]
     pub test_only_plaintext: bool,
 }
+
+/// The margin the pass lease carries beside the profile's page
+/// deadline, renewed at every fenced write, so an operator sees a
+/// stalled pass in status before the lease frees.
+pub const LEASE_MARGIN_SECONDS: u64 = 60;
 
 /// Build the connection pool the way the facade's serving runtime does:
 /// the URL resolved from the operator runtime config's secret reference,
@@ -351,6 +366,9 @@ pub(crate) struct PriorRow {
     pub status: ItemStatus,
     /// The stored reference.
     pub run_id: Option<String>,
+    /// The saved reference of the last accepted hand-off, carried while
+    /// a changed delivery is pending or refused.
+    pub prior_run_id: Option<String>,
     /// Whether an earlier digest's receipt may have been lost.
     pub admitted_before: bool,
 }
@@ -415,6 +433,7 @@ pub enum StagedClassification {
 ///
 /// A failed read, write, or commit refuses; the caller treats the item
 /// as undelivered.
+#[allow(clippy::too_many_arguments)]
 pub async fn stage_item(
     client: &mut Object,
     job_id: &str,
@@ -422,8 +441,11 @@ pub async fn stage_item(
     digest: &str,
     retry_refused: bool,
     now: SystemTime,
+    token: i64,
+    ttl: Duration,
 ) -> Result<Option<StagedItem>, StoreError> {
     let tx = client.transaction().await?;
+    renew_lease(&tx, job_id, token, ttl).await?;
     let prior = read_prior(&tx, job_id, key, true).await?;
     let decision = decide(prior.as_ref(), digest, retry_refused);
     let staged = match decision {
@@ -470,7 +492,7 @@ pub async fn stage_item(
                 key: key.to_string(),
                 sequence: prior.sequence + 1,
                 digest: digest.to_string(),
-                prior_run_id: prior.run_id.clone(),
+                prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
                 admitted_before,
                 classification: StagedClassification::Changed,
             })
@@ -487,7 +509,7 @@ pub async fn stage_item(
                 key: key.to_string(),
                 sequence: prior.sequence,
                 digest: digest.to_string(),
-                prior_run_id: prior.run_id.clone(),
+                prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
                 admitted_before: prior.admitted_before,
                 classification: StagedClassification::Redelivered,
             })
@@ -529,7 +551,7 @@ pub async fn peek_item(
             key: key.to_string(),
             sequence: prior.sequence + 1,
             digest: digest.to_string(),
-            prior_run_id: prior.run_id.clone(),
+            prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
             admitted_before: prior.admitted_before
                 || matches!(prior.status, ItemStatus::Pending | ItemStatus::Acknowledged),
             classification: StagedClassification::Changed,
@@ -538,7 +560,7 @@ pub async fn peek_item(
             key: key.to_string(),
             sequence: prior.sequence,
             digest: digest.to_string(),
-            prior_run_id: prior.run_id.clone(),
+            prior_run_id: prior.run_id.clone().or_else(|| prior.prior_run_id.clone()),
             admitted_before: prior.admitted_before,
             classification: StagedClassification::Redelivered,
         }),
@@ -555,10 +577,10 @@ async fn read_prior(
     for_update: bool,
 ) -> Result<Option<PriorRow>, StoreError> {
     let query = if for_update {
-        "SELECT last_digest, sequence, status, run_id, admitted_before \
+        "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before \
          FROM adapter_job_items WHERE job_id = $1 AND item_key = $2 FOR UPDATE"
     } else {
-        "SELECT last_digest, sequence, status, run_id, admitted_before \
+        "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before \
          FROM adapter_job_items WHERE job_id = $1 AND item_key = $2"
     };
     let row = client.query_opt(query, &[&job_id, &key]).await?;
@@ -567,7 +589,8 @@ async fn read_prior(
         sequence: row.get(1),
         status: ItemStatus::from_str(row.get(2)).expect("the status check admits three values"),
         run_id: row.get(3),
-        admitted_before: row.get(4),
+        prior_run_id: row.get(4),
+        admitted_before: row.get(5),
     }))
 }
 
@@ -584,7 +607,10 @@ pub async fn record_acknowledged(
     key: &str,
     run_id: Option<&str>,
     now: SystemTime,
+    token: i64,
+    ttl: Duration,
 ) -> Result<(), StoreError> {
+    renew_lease(client, job_id, token, ttl).await?;
     client
         .execute(
             "UPDATE adapter_job_items SET status = 'acknowledged', run_id = $3, code = NULL, \
@@ -608,7 +634,10 @@ pub async fn record_refused(
     key: &str,
     code: &str,
     now: SystemTime,
+    token: i64,
+    ttl: Duration,
 ) -> Result<(), StoreError> {
+    renew_lease(client, job_id, token, ttl).await?;
     client
         .execute(
             "UPDATE adapter_job_items SET status = 'refused', code = $3, run_id = NULL, \
@@ -652,6 +681,9 @@ pub struct JobStateRow {
     pub last_pass_stop: Option<String>,
     /// When the last rescan pass ran.
     pub last_rescan_at: Option<SystemTime>,
+    /// Whether a rescan traversal is between its first page and its
+    /// finite end.
+    pub rescan_active: bool,
     /// Consecutive completed passes that read no items.
     pub idle_streak: i64,
     /// Consecutive passes that stopped before the page settled.
@@ -670,7 +702,7 @@ pub async fn read_state(
     let row = client
         .query_opt(
             "SELECT position, projection_digest, lease_expires, last_pass_at, last_pass_stop, \
-             last_rescan_at, idle_streak, error_streak \
+             last_rescan_at, rescan_active, idle_streak, error_streak \
              FROM adapter_job_state WHERE job_id = $1",
             &[&job_id],
         )
@@ -682,35 +714,87 @@ pub async fn read_state(
         last_pass_at: row.get(3),
         last_pass_stop: row.get(4),
         last_rescan_at: row.get(5),
-        idle_streak: row.get(6),
-        error_streak: row.get(7),
+        rescan_active: row.get(6),
+        idle_streak: row.get(7),
+        error_streak: row.get(8),
     }))
+}
+
+/// The state one pass leases: the fencing token the lease wrote, and
+/// the row's position and rescan marker read atomically with the grant,
+/// so the pass can never act on a position a competing pass replaced.
+pub struct LeasedState {
+    /// The lease epoch this grant took; every fenced write must still
+    /// name it. A renewal extends the expiry without moving the epoch,
+    /// and the next grant's epoch invalidates this one.
+    pub token: i64,
+    /// The opaque page cursor the lease came with.
+    pub position: Option<Value>,
+    /// Whether a rescan traversal is between its first page and its
+    /// finite end.
+    pub rescan_active: bool,
 }
 
 /// Take the job's pass lease under the database clock: one pass at a
 /// time per job. The lease refuses while another pass's lease is live
-/// and grants when it is free, expired, or absent.
+/// and grants when it is free, expired, or absent. The grant returns
+/// the row's own state, read in the same statement that wrote the
+/// lease, so the pass reads no position but its own.
 ///
 /// # Errors
 ///
-/// A failed write refuses; an error is never a held lease, which is the
-/// `false` answer.
+/// A failed write refuses; an error is never a held lease, which is
+/// the `None` answer.
 pub async fn take_lease(
     client: &impl GenericClient,
     job_id: &str,
     ttl: Duration,
-) -> Result<bool, StoreError> {
+) -> Result<Option<LeasedState>, StoreError> {
     // make_interval's secs member is double precision.
     let ttl = ttl.as_secs().min(i64::MAX as u64) as f64;
     let granted = client
         .query_opt(
-            "UPDATE adapter_job_state SET lease_expires = now() + make_interval(secs => $2) \
+            "UPDATE adapter_job_state SET lease_epoch = lease_epoch + 1, \
+             lease_expires = now() + make_interval(secs => $2) \
              WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now()) \
-             RETURNING job_id",
+             RETURNING lease_epoch, position, rescan_active",
             &[&job_id, &ttl],
         )
         .await?;
-    Ok(granted.is_some())
+    Ok(granted.map(|row| LeasedState {
+        token: row.get(0),
+        position: row.get(1),
+        rescan_active: row.get(2),
+    }))
+}
+
+/// Re-assert and renew the pass's lease: the write every fenced store
+/// call begins with, so a delivery that outlived the lease, or a lease
+/// another pass replaced, refuses before any state moves.
+///
+/// # Errors
+///
+/// [`StoreError::LeaseLost`] when the token no longer names the held
+/// lease; a failed write refuses.
+pub async fn renew_lease(
+    client: &impl GenericClient,
+    job_id: &str,
+    token: i64,
+    ttl: Duration,
+) -> Result<(), StoreError> {
+    let ttl = ttl.as_secs().min(i64::MAX as u64) as f64;
+    let renewed = client
+        .execute(
+            "UPDATE adapter_job_state SET lease_expires = now() + make_interval(secs => $3) \
+             WHERE job_id = $1 AND lease_epoch = $2 \
+             AND lease_expires IS NOT NULL AND lease_expires > now()",
+            &[&job_id, &token, &ttl],
+        )
+        .await?;
+    if renewed != 1 {
+        return Err(StoreError::LeaseLost);
+    }
+    Ok(())
 }
 
 /// Bring the state row's projection digest to the job's current one, so
@@ -745,22 +829,41 @@ pub async fn sync_projection_digest(
 pub async fn complete_pass(
     client: &impl GenericClient,
     job_id: &str,
+    token: i64,
     position: Option<&Value>,
     idle: bool,
     rescan: bool,
     now: SystemTime,
 ) -> Result<(), StoreError> {
-    client
+    // A rescan traversal stays in progress while pages remain: the
+    // marker clears and the delay clock starts only at the finite end.
+    // The two outcomes are computed here, not in the statement: a
+    // parameter that only answers IS NULL carries no type of its own.
+    let rescan_finished = rescan && position.is_none();
+    let rescan_continues = rescan && position.is_some();
+    let settled = client
         .execute(
             "UPDATE adapter_job_state SET \
              position = $2, last_pass_at = $3, last_pass_stop = NULL, lease_expires = NULL, \
              last_rescan_at = CASE WHEN $4 THEN $3 ELSE last_rescan_at END, \
-             idle_streak = CASE WHEN $5 THEN idle_streak + 1 ELSE 0 END, \
+             rescan_active = $5, \
+             idle_streak = CASE WHEN $6 THEN idle_streak + 1 ELSE 0 END, \
              error_streak = 0 \
-             WHERE job_id = $1",
-            &[&job_id, &position, &now, &rescan, &idle],
+             WHERE job_id = $1 AND lease_epoch = $7",
+            &[
+                &job_id,
+                &position,
+                &now,
+                &rescan_finished,
+                &rescan_continues,
+                &idle,
+                &token,
+            ],
         )
         .await?;
+    if settled != 1 {
+        return Err(StoreError::LeaseLost);
+    }
     Ok(())
 }
 
@@ -774,18 +877,22 @@ pub async fn complete_pass(
 pub async fn stop_pass(
     client: &impl GenericClient,
     job_id: &str,
+    token: i64,
     stop_code: &str,
     now: SystemTime,
 ) -> Result<(), StoreError> {
-    client
+    let stopped = client
         .execute(
             "UPDATE adapter_job_state SET \
-             last_pass_at = $2, last_pass_stop = $3, lease_expires = NULL, \
+             last_pass_at = $3, last_pass_stop = $4, lease_expires = NULL, \
              error_streak = error_streak + 1, idle_streak = 0 \
-             WHERE job_id = $1",
-            &[&job_id, &now, &stop_code],
+             WHERE job_id = $1 AND lease_epoch = $2",
+            &[&job_id, &token, &now, &stop_code],
         )
         .await?;
+    if stopped != 1 {
+        return Err(StoreError::LeaseLost);
+    }
     Ok(())
 }
 
@@ -798,7 +905,7 @@ pub async fn stop_pass(
 pub async fn mark_rescan_due(client: &impl GenericClient, job_id: &str) -> Result<(), StoreError> {
     client
         .execute(
-            "UPDATE adapter_job_state SET last_rescan_at = NULL WHERE job_id = $1",
+            "UPDATE adapter_job_state SET last_rescan_at = NULL, rescan_active = true \n             WHERE job_id = $1",
             &[&job_id],
         )
         .await?;

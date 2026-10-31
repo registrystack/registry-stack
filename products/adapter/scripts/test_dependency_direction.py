@@ -233,7 +233,12 @@ class DependentTests(unittest.TestCase):
         self.assertEqual(
             MODULE.ALLOWED_DEPENDENTS,
             {"registry-cli-docs": frozenset(
-                {"registry-adapter", "registry-adapter-core", "registry-adapterctl"}
+                {
+                    "registry-adapter",
+                    "registry-adapter-core",
+                    "registry-adapter-job",
+                    "registry-adapterctl",
+                }
             )},
         )
 

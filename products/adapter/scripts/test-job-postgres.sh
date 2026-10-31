@@ -73,5 +73,7 @@ else
 fi
 
 # The postgres-test feature gates the suites that need the database, so a
-# plain cargo test run never silently skips them.
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features postgres-test
+# plain cargo test run never silently skips them. The suite shares one
+# job row, whose lease serializes real passes; the tests run serially so
+# a pass under test never leases against another test's expectations.
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features postgres-test -- --test-threads=1

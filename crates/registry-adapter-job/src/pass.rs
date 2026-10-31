@@ -145,9 +145,12 @@ pub struct PassReport {
 }
 
 /// The state the pass reads once, under the lease or the dry-run's
-/// read-only glance.
+/// read-only glance. The token fences every write a leased pass makes.
 struct PassState {
     position: Option<Value>,
+    #[allow(dead_code)]
+    rescan_active: bool,
+    token: Option<i64>,
 }
 
 /// Run one bounded pass of the job against the item store and the
@@ -180,6 +183,16 @@ pub async fn run_pass(
     let Some(state) = state else {
         return report;
     };
+    // The dry run writes nothing, so it carries no token; every fenced
+    // write below runs only in a leased pass.
+    let lease_token = state.token.unwrap_or(0);
+    // A traversal the last pass left between pages keeps its rescan
+    // mode: the pass the operator named a rescan and the passes that
+    // finish it retry refused rows alike.
+    let options = PassOptions {
+        rescan: options.rescan || state.rescan_active,
+        ..options
+    };
     // Step 2: read one page, at the saved position, or at the first page
     // when this pass is a rescan.
     let cursor = if options.rescan {
@@ -193,8 +206,15 @@ pub async fn run_pass(
             result.page
         }
         Err(failure) => {
-            return finish_stopped(db, job_id, &options, report, page_failure_reason(&failure))
-                .await;
+            return finish_stopped(
+                db,
+                job_id,
+                &options,
+                lease_token,
+                report,
+                page_failure_reason(&failure),
+            )
+            .await;
         }
     };
     report.items_read = page.items.len() as u32;
@@ -212,14 +232,23 @@ pub async fn run_pass(
                 &digest,
                 options.rescan,
                 SystemTime::now(),
+                lease_token,
+                lease_ttl(program),
             )
             .await
         };
         let staged = match staged {
             Ok(staged) => staged,
             Err(error) => {
-                return finish_stopped(db, job_id, &options, report, store_refused_reason(&error))
-                    .await;
+                return finish_stopped(
+                    db,
+                    job_id,
+                    &options,
+                    lease_token,
+                    report,
+                    store_refused_reason(&error),
+                )
+                .await;
             }
         };
         let Some(staged) = staged else {
@@ -250,6 +279,8 @@ pub async fn run_pass(
                         &staged.key,
                         run_id.as_deref(),
                         SystemTime::now(),
+                        lease_token,
+                        lease_ttl(program),
                     )
                     .await
                     {
@@ -257,6 +288,7 @@ pub async fn run_pass(
                             db,
                             job_id,
                             &options,
+                            lease_token,
                             report,
                             store_refused_reason(&error),
                         )
@@ -267,16 +299,9 @@ pub async fn run_pass(
             HandOffOutcome::Refused { code } => {
                 report.items_refused += 1;
                 *report.refusals_by_code.entry(code.clone()).or_insert(0) += 1;
-                if let Some(limit_code) = consecutive.refused(code.clone()) {
-                    return finish_stopped(
-                        db,
-                        job_id,
-                        &options,
-                        report,
-                        StopReason::RefusalLimit { code: limit_code },
-                    )
-                    .await;
-                }
+                // The row records its refusal before the limit is
+                // evaluated: a pass that stops at the limit still leaves
+                // the refused row its code, and only a rescan retries it.
                 if !options.dry_run {
                     if let Err(error) = store::record_refused(
                         &client,
@@ -284,6 +309,8 @@ pub async fn run_pass(
                         &staged.key,
                         &code,
                         SystemTime::now(),
+                        lease_token,
+                        lease_ttl(program),
                     )
                     .await
                     {
@@ -291,11 +318,23 @@ pub async fn run_pass(
                             db,
                             job_id,
                             &options,
+                            lease_token,
                             report,
                             store_refused_reason(&error),
                         )
                         .await;
                     }
+                }
+                if let Some(limit_code) = consecutive.refused(code.clone()) {
+                    return finish_stopped(
+                        db,
+                        job_id,
+                        &options,
+                        lease_token,
+                        report,
+                        StopReason::RefusalLimit { code: limit_code },
+                    )
+                    .await;
                 }
             }
             HandOffOutcome::StopPass { code } => {
@@ -303,6 +342,7 @@ pub async fn run_pass(
                     db,
                     job_id,
                     &options,
+                    lease_token,
                     report,
                     StopReason::DestinationStop { code },
                 )
@@ -319,6 +359,7 @@ pub async fn run_pass(
         if let Err(error) = store::complete_pass(
             &client,
             job_id,
+            lease_token,
             next,
             report.items_read == 0,
             options.rescan,
@@ -326,8 +367,15 @@ pub async fn run_pass(
         )
         .await
         {
-            return finish_stopped(db, job_id, &options, report, store_refused_reason(&error))
-                .await;
+            return finish_stopped(
+                db,
+                job_id,
+                &options,
+                lease_token,
+                report,
+                store_refused_reason(&error),
+            )
+            .await;
         }
     }
     destination
@@ -349,12 +397,20 @@ async fn finish_stopped(
     db: &Pool,
     job_id: &str,
     options: &PassOptions,
+    token: i64,
     mut report: PassReport,
     reason: StopReason,
 ) -> PassReport {
     if !options.dry_run {
         if let Ok(client) = db.get().await {
-            let _ = store::stop_pass(&client, job_id, &reason.stop_text(), SystemTime::now()).await;
+            let _ = store::stop_pass(
+                &client,
+                job_id,
+                token,
+                &reason.stop_text(),
+                SystemTime::now(),
+            )
+            .await;
         }
     }
     report.stopped = Some(reason);
@@ -398,12 +454,16 @@ async fn read_pass_state(
     report.overdue = overdue(&row, program);
     Some(PassState {
         position: row.position,
+        rescan_active: row.rescan_active,
+        token: None,
     })
 }
 
-/// Take the lease and read the state under it: the pass's step 1.
-/// `None` means the report already carries its ending, a held lease or
-/// a refused store.
+/// Take the lease and read the state under it: the pass's step 1. The
+/// grant itself returns the position and rescan marker, read in the
+/// statement that wrote the lease, so a competing pass that finishes
+/// first can never leave this pass a stale cursor. `None` means the
+/// report already carries its ending, a held lease or a refused store.
 async fn take_pass_state(
     client: &mut deadpool_postgres::Object,
     job_id: &str,
@@ -414,32 +474,31 @@ async fn take_pass_state(
         *report = store_refused(std::mem::take(report), &error.to_string());
         return None;
     }
-    let row = match store::read_state(client, job_id).await {
-        Ok(row) => row,
+    // The overdue flag reads the state as this pass found it: on a held
+    // lease, where no pass ran at all, it is the number that matters.
+    let before = match store::read_state(client, job_id).await {
+        Ok(row) => row.unwrap_or_default(),
         Err(error) => {
             *report = store_refused(std::mem::take(report), &error.to_string());
             return None;
         }
     };
-    let row = row.unwrap_or_default();
-    // The overdue flag reads the state as this pass found it: on a held
-    // lease, where no pass ran at all, it is the number that matters.
-    report.overdue = overdue(&row, program);
-    match store::take_lease(client, job_id, lease_ttl(program)).await {
-        Ok(true) => {}
-        Ok(false) => {
-            report.stopped = Some(StopReason::LeaseHeld);
-            return None;
-        }
+    report.overdue = overdue(&before, program);
+    let leased = match store::take_lease(client, job_id, lease_ttl(program)).await {
+        Ok(leased) => leased,
         Err(error) => {
             *report = store_refused(std::mem::take(report), &error.to_string());
             return None;
         }
-    }
+    };
+    let Some(leased) = leased else {
+        report.stopped = Some(StopReason::LeaseHeld);
+        return None;
+    };
     // The state row's projection digest follows the job's current one, so
     // status can show a projection edit; the items re-flag through their
     // own digests, which a new projection changes.
-    if row.projection_digest.as_deref() != Some(program.job.projection_digest().as_str()) {
+    if before.projection_digest.as_deref() != Some(program.job.projection_digest().as_str()) {
         if let Err(error) =
             store::sync_projection_digest(client, job_id, &program.job.projection_digest()).await
         {
@@ -448,7 +507,9 @@ async fn take_pass_state(
         }
     }
     Some(PassState {
-        position: row.position,
+        position: leased.position,
+        rescan_active: leased.rescan_active,
+        token: Some(leased.token),
     })
 }
 
@@ -456,7 +517,8 @@ async fn take_pass_state(
 /// margin an operator needs to see a stalled pass before the lease
 /// frees.
 fn lease_ttl(program: &JobProgram) -> Duration {
-    Duration::from_millis(program.profile().page_deadline_milliseconds) + Duration::from_secs(60)
+    Duration::from_millis(program.profile().page_deadline_milliseconds)
+        + Duration::from_secs(store::LEASE_MARGIN_SECONDS)
 }
 
 /// The closed reason of a failed page read: the page fault's own code,
@@ -529,11 +591,14 @@ fn overdue(row: &store::JobStateRow, program: &JobProgram) -> bool {
         last_pass_at: row.last_pass_at,
         last_pass_stop: None,
         last_rescan_at: row.last_rescan_at,
+        rescan_active: false,
         idle_streak: u32::try_from(row.idle_streak.max(0)).unwrap_or(u32::MAX),
         error_streak: u32::try_from(row.error_streak.max(0)).unwrap_or(u32::MAX),
     };
-    crate::trigger::next_due(&program.job, &view, SystemTime::now())
-        .is_some_and(|due| due == Duration::ZERO)
+    // A never-run job anchors its initial delay to this pass's own
+    // start, so the schedule reads as not yet due rather than overdue.
+    let now = SystemTime::now();
+    crate::trigger::next_due(&program.job, &view, now, now).is_some_and(|due| due == Duration::ZERO)
 }
 
 #[cfg(test)]

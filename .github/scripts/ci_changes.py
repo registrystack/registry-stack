@@ -100,6 +100,8 @@ SHARDS = {
     "adapter": (
         "registry-adapter-core",
         "registry-adapter",
+        "registry-adapter-connectors",
+        "registry-adapter-job",
         "registry-adapterctl",
     ),
     "stack-client": ("registry-record", "registry-stack-client"),

@@ -28,15 +28,20 @@ use serde_json::json;
 /// value-free reason.
 #[test]
 fn the_query_compile_refuses_everything_but_one_plain_select() {
-    let refused: [(&str, &str); 9] = [
+    let refused: [(&str, &str); 11] = [
         ("INSERT INTO t VALUES (1)", "statement"),
         ("UPDATE t SET a = 1", "statement"),
         ("DELETE FROM t", "statement"),
         ("GRANT SELECT ON t TO ledger_reader", "exactly one SELECT"),
         ("COPY t TO STDOUT", "statement"),
         ("CREATE TABLE t (a int)", "statement"),
+        // A utility command that wraps a SELECT node is still no SELECT
+        // statement: the statement root decides, not a count of SELECT
+        // nodes.
+        ("CREATE TEMP TABLE x AS SELECT 1", "exactly one SELECT"),
+        ("EXPLAIN SELECT 1", "exactly one SELECT"),
         ("BEGIN", "statement"),
-        ("SELECT 1; SELECT 2", "exactly one SELECT"),
+        ("SELECT 1; SELECT 2", "exactly one statement"),
         (
             "WITH w AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM w",
             "not a plain SELECT",
@@ -59,6 +64,14 @@ fn the_query_compile_refuses_everything_but_one_plain_select() {
         compile_query("SELECT a FROM t WHERE b = $1 AND c = $3").is_err(),
         "a parameter gap refuses"
     );
+    // Nested SELECTs are subqueries and CTEs of the one root statement,
+    // not statements of their own.
+    for sql in [
+        "SELECT a FROM t WHERE b IN (SELECT x FROM u) AND c = $1",
+        "WITH w AS (SELECT 1 AS one) SELECT * FROM w WHERE one = $1",
+    ] {
+        compile_query(sql).unwrap_or_else(|refused| panic!("{sql} compiles: {refused:?}"));
+    }
 }
 
 /// The scripted client: the seam impersonated, no database. It records

@@ -37,6 +37,9 @@ pub struct JobState {
     pub last_pass_stop: Option<String>,
     /// When the last rescan pass started from the first page.
     pub last_rescan_at: Option<SystemTime>,
+    /// Whether a rescan traversal is between its first page and its
+    /// finite end; the loop keeps its rescan mode until it finishes.
+    pub rescan_active: bool,
     /// Consecutive completed passes that read no items.
     pub idle_streak: u32,
     /// Consecutive passes that stopped before the page settled.
@@ -108,20 +111,27 @@ pub fn interval_trigger(job: &AdapterJob) -> Option<&JobTrigger> {
 ///
 /// The semantics mirror the Camel port recorded on
 /// [`JobTrigger`]: the delay separates two passes; the initial delay
-/// separates now from the first pass when the job has never run one; and
-/// once the consecutive idle or error streak meets its threshold, the
-/// delay is multiplied by the backoff multiplier (the passes skipped
-/// before the next attempt) until a pass is neither idle nor an error.
-/// Greedy is not a schedule property: a greedy trigger starts again
-/// immediately after a pass that read at least one item, so the loop
-/// reads it from the finished pass's report, not from this function.
+/// separates the process's start from the first pass of a job that has
+/// never run one, so the wait the loop recomputes counts down to one
+/// fixed deadline instead of restarting with every look; and once the
+/// consecutive idle or error streak meets its threshold, the delay is
+/// multiplied by the backoff multiplier (the passes skipped before the
+/// next attempt) until a pass is neither idle nor an error. Greedy is
+/// not a schedule property: a greedy trigger starts again immediately
+/// after a pass that read at least one item, so the loop reads it from
+/// the finished pass's report, not from this function.
 #[must_use]
-pub fn next_due(job: &AdapterJob, state: &JobState, now: SystemTime) -> Option<Duration> {
+pub fn next_due(
+    job: &AdapterJob,
+    state: &JobState,
+    now: SystemTime,
+    started: SystemTime,
+) -> Option<Duration> {
     let trigger = interval_trigger(job)?;
     let Some(last_pass_at) = state.last_pass_at else {
         return Some(remaining(
             now,
-            now + Duration::from_millis(trigger.initial_delay_milliseconds),
+            started + Duration::from_millis(trigger.initial_delay_milliseconds),
         ));
     };
     let base = Duration::from_millis(trigger.delay_milliseconds);
@@ -242,14 +252,28 @@ mod tests {
     #[test]
     fn the_first_pass_is_due_after_the_initial_delay() {
         let state = JobState::default();
-        let due = next_due(&job(trigger(60_000, 5_000, 0, 0, 1)), &state, at(100));
+        let due = next_due(
+            &job(trigger(60_000, 5_000, 0, 0, 1)),
+            &state,
+            at(100),
+            at(100),
+        );
         assert_eq!(
             due,
             Some(Duration::from_secs(5)),
             "the initial delay separates now from the first pass"
         );
+        // The wait the loop recomputes counts down to the one startup
+        // deadline; it never restarts with every look.
+        let due = next_due(
+            &job(trigger(60_000, 5_000, 0, 0, 1)),
+            &state,
+            at(103),
+            at(100),
+        );
+        assert_eq!(due, Some(Duration::from_secs(2)));
         // The job default initial delay is zero: the first pass is due now.
-        let due = next_due(&job(trigger(60_000, 0, 0, 0, 1)), &state, at(100));
+        let due = next_due(&job(trigger(60_000, 0, 0, 0, 1)), &state, at(100), at(100));
         assert_eq!(due, Some(Duration::ZERO));
     }
 
@@ -259,10 +283,10 @@ mod tests {
             last_pass_at: Some(at(200)),
             ..JobState::default()
         };
-        let due = next_due(&job(trigger(60_000, 0, 0, 0, 1)), &state, at(230));
+        let due = next_due(&job(trigger(60_000, 0, 0, 0, 1)), &state, at(230), at(230));
         assert_eq!(due, Some(Duration::from_secs(30)));
         // Once the delay has passed the pass is due now, never negative.
-        let due = next_due(&job(trigger(60_000, 0, 0, 0, 1)), &state, at(500));
+        let due = next_due(&job(trigger(60_000, 0, 0, 0, 1)), &state, at(500), at(500));
         assert_eq!(due, Some(Duration::ZERO));
     }
 
@@ -280,7 +304,7 @@ mod tests {
             idle_streak: 3,
             ..JobState::default()
         };
-        let due = next_due(&job(trigger(60_000, 0, 3, 0, 4)), &state, at(230));
+        let due = next_due(&job(trigger(60_000, 0, 3, 0, 4)), &state, at(230), at(230));
         assert_eq!(
             due,
             Some(Duration::from_secs(240 - 30)),
@@ -288,12 +312,12 @@ mod tests {
         );
         // Below the threshold the base delay applies.
         state.idle_streak = 2;
-        let due = next_due(&job(trigger(60_000, 0, 3, 0, 4)), &state, at(230));
+        let due = next_due(&job(trigger(60_000, 0, 3, 0, 4)), &state, at(230), at(230));
         assert_eq!(due, Some(Duration::from_secs(30)));
         // An error streak meets its own threshold the same way.
         state.idle_streak = 0;
         state.error_streak = 3;
-        let due = next_due(&job(trigger(60_000, 0, 3, 3, 4)), &state, at(230));
+        let due = next_due(&job(trigger(60_000, 0, 3, 3, 4)), &state, at(230), at(230));
         assert_eq!(due, Some(Duration::from_secs(240 - 30)));
     }
 
@@ -303,7 +327,7 @@ mod tests {
         hook.kind = "hook".to_string();
         hook.path = Some("/hook".to_string());
         let state = JobState::default();
-        assert_eq!(next_due(&job(hook), &state, at(100)), None);
+        assert_eq!(next_due(&job(hook), &state, at(100), at(100)), None);
     }
 
     #[test]

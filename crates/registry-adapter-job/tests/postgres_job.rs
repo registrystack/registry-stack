@@ -267,13 +267,15 @@ async fn the_lease_refuses_a_second_pass_until_the_first_releases() {
     assert!(
         store::take_lease(&client, "case-daily", Duration::from_secs(60))
             .await
-            .expect("the first lease grants"),
+            .expect("the first lease grants")
+            .is_some(),
         "a fresh lease grants"
     );
     assert!(
-        !store::take_lease(&client, "case-daily", Duration::from_secs(60))
+        store::take_lease(&client, "case-daily", Duration::from_secs(60))
             .await
-            .expect("the second lease answers"),
+            .expect("the second lease answers")
+            .is_none(),
         "a live lease refuses a second grant"
     );
     // An expired lease grants again.
@@ -285,20 +287,27 @@ async fn the_lease_refuses_a_second_pass_until_the_first_releases() {
         )
         .await
         .expect("the lease expires");
-    assert!(
-        store::take_lease(&client, "case-daily", Duration::from_secs(60))
-            .await
-            .expect("the renewed lease grants"),
-        "an expired lease grants again"
-    );
-    // A completed pass releases the lease.
-    store::complete_pass(&client, "case-daily", None, false, false, SystemTime::now())
+    let held = store::take_lease(&client, "case-daily", Duration::from_secs(60))
         .await
-        .expect("the pass completes");
+        .expect("the renewed lease answers")
+        .expect("an expired lease grants again");
+    // A completed pass releases its lease under its own epoch.
+    store::complete_pass(
+        &client,
+        "case-daily",
+        held.token,
+        None,
+        false,
+        false,
+        SystemTime::now(),
+    )
+    .await
+    .expect("the pass completes");
     assert!(
         store::take_lease(&client, "case-daily", Duration::from_secs(60))
             .await
-            .expect("the released lease grants"),
+            .expect("the released lease answers")
+            .is_some(),
         "a released lease grants again"
     );
 }
@@ -387,6 +396,9 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     let page = vec![(200, reply_page())];
     let _ = page;
     let client = pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
     let items = registry_adapter::engine::job::run_job_page(&program, None)
         .await
         .expect("the page runs")
@@ -394,6 +406,13 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     let first = &items.items[0];
     let digest =
         registry_adapter_job::projection::item_digest(&program.job.projection, &first.value);
+    // A crashed holder leaves its lease to expire by time; a one-second
+    // lease stands in for the crash, so the follow-up pass waits it out
+    // instead of finding it held.
+    let lease = store::take_lease(&client, "case-daily", Duration::from_secs(1))
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
     let staged = store::stage_item(
         &mut pool.get().await.expect("a pooled client"),
         "case-daily",
@@ -401,6 +420,8 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
         &digest,
         false,
         SystemTime::now(),
+        lease.token,
+        Duration::from_secs(1),
     )
     .await
     .expect("the row stages")
@@ -413,6 +434,8 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
         ItemStatus::Pending,
         "the crash left the row pending"
     );
+    // The crashed lease expires by time; the next pass waits it out.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     // The next pass re-delivers the same identity and bytes.
     let destination =
         ScriptedDestination::script(vec![acknowledged("run-recovered"), acknowledged("run-b")]);
@@ -616,30 +639,14 @@ async fn a_rescan_retries_the_refused_item_and_skips_the_unchanged_ones() {
     );
     let first = item(&pool, "submissions/a").await.expect("the retried row");
     assert_eq!(first.status, ItemStatus::Acknowledged, "the retry settled");
-    // The completed rescan stamps its gate, so the next rescan waits for
-    // the declared delay.
+    // The rescan traversal stays in progress: this page carried a next
+    // cursor, so the marker holds and the gate stamps its time only at
+    // the finite end, where the declared delay starts.
     let row = state(&pool, "case-daily").await;
-    assert!(row.last_rescan_at.is_some(), "the rescan stamped its time");
-    let view = trigger_state(&row);
+    assert!(row.rescan_active, "the rescan traversal is in progress");
     assert!(
-        !trigger::rescan_due(
-            &Edits::Rescan {
-                delay_seconds: 3600
-            },
-            &view,
-            SystemTime::now()
-        ),
-        "inside the declared delay no rescan is due"
-    );
-    assert!(
-        trigger::rescan_due(
-            &Edits::Rescan {
-                delay_seconds: 3600
-            },
-            &view,
-            SystemTime::now() + Duration::from_secs(3601)
-        ),
-        "past the declared delay a rescan is due again"
+        !row.last_rescan_at.is_some(),
+        "the gate stamps at the finite end, not the traversal's first page"
     );
 }
 
@@ -716,6 +723,7 @@ async fn the_schedule_counts_idle_passes_and_backoff_follows_the_state() {
         &job_with_backoff,
         &trigger_state(&(state(&pool, "case-daily").await)),
         now,
+        now,
     )
     .expect("an interval trigger has a schedule");
     assert!(
@@ -728,6 +736,7 @@ async fn the_schedule_counts_idle_passes_and_backoff_follows_the_state() {
     let plain = trigger::next_due(
         &program.job,
         &trigger_state(&state(&pool, "case-daily").await),
+        now,
         now,
     )
     .expect("an interval trigger has a schedule");
@@ -809,8 +818,8 @@ async fn the_loop_schedule_reads_the_pass_state() {
     let row = state(&pool, "case-daily").await;
     let state = trigger_state(&row);
     let now = SystemTime::now();
-    let due =
-        trigger::next_due(&program.job, &state, now).expect("the job declares an interval trigger");
+    let due = trigger::next_due(&program.job, &state, now, now)
+        .expect("the job declares an interval trigger");
     assert!(
         due > Duration::ZERO && due <= Duration::from_secs(60),
         "the next pass is due within the one-minute delay, in {due:?}"
@@ -831,6 +840,7 @@ fn trigger_state(row: &store::JobStateRow) -> JobState {
         last_pass_at: row.last_pass_at,
         last_pass_stop: row.last_pass_stop.clone(),
         last_rescan_at: row.last_rescan_at,
+        rescan_active: row.rescan_active,
         idle_streak: u32::try_from(row.idle_streak.max(0)).unwrap_or(u32::MAX),
         error_streak: u32::try_from(row.error_streak.max(0)).unwrap_or(u32::MAX),
     }

@@ -617,12 +617,23 @@ async fn max_messages_per_poll_bounds_the_candidates() {
         .await
         .expect("the second read runs");
     assert_eq!(
-        second.page.next, None,
-        "the cap ends the candidate list after the second file"
+        second.page.items[0].value["name"], "b.bin",
+        "the second read reads the second file"
+    );
+    // The cap is a window after the cursor, not a wall in front of the
+    // directory: consumed files stay in place, so the tail stays
+    // reachable and the read after the window's end carries a cursor
+    // naming it.
+    let third = run_job_page(&program, second.page.next.clone())
+        .await
+        .expect("the read past the window runs");
+    assert_eq!(
+        third.page.items[0].value["name"], "c.bin",
+        "the third file is reachable past the cap"
     );
     assert_eq!(
-        second.page.items[0].value["name"], "b.bin",
-        "the cap keeps the third file invisible to this scan"
+        third.page.next, None,
+        "the scan ends at the directory's last file"
     );
 }
 

@@ -100,11 +100,28 @@ pub struct QueryRefused(pub &'static str);
 pub fn compile_query(text: &str) -> Result<PinnedQuery, QueryRefused> {
     let parsed =
         pg_query::parse(text).map_err(|_| QueryRefused("the query file is not valid SQL"))?;
+    // The statement root decides, not a count of SELECT nodes: a
+    // utility command (CREATE ... AS SELECT, EXPLAIN) wraps a SELECT
+    // node without being one, and nested SELECTs are ordinary
+    // subqueries and CTEs of the one root statement.
+    let [raw] = parsed.protobuf.stmts.as_slice() else {
+        return Err(QueryRefused(
+            "the query file must carry exactly one statement",
+        ));
+    };
+    let root = raw
+        .stmt
+        .as_ref()
+        .and_then(|statement| statement.node.as_ref());
+    if !matches!(root, Some(pg_query::protobuf::node::Node::SelectStmt(_))) {
+        return Err(QueryRefused(
+            "the query file must carry exactly one SELECT statement",
+        ));
+    }
     let mut parameter_names: Vec<Option<String>> = Vec::new();
-    let mut select_roots = 0_usize;
     for (node, _, _, _) in parsed.protobuf.nodes() {
         match node {
-            pg_query::NodeRef::SelectStmt(_) => select_roots += 1,
+            pg_query::NodeRef::SelectStmt(_) => {}
             pg_query::NodeRef::InsertStmt(_)
             | pg_query::NodeRef::UpdateStmt(_)
             | pg_query::NodeRef::DeleteStmt(_)
@@ -138,11 +155,6 @@ pub fn compile_query(text: &str) -> Result<PinnedQuery, QueryRefused> {
             }
             _ => {}
         }
-    }
-    if select_roots != 1 {
-        return Err(QueryRefused(
-            "the query file must carry exactly one SELECT statement",
-        ));
     }
     if parameter_names.iter().any(Option::is_none) {
         return Err(QueryRefused(
