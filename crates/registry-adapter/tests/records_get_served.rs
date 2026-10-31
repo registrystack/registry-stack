@@ -45,7 +45,7 @@ async fn a_found_record_comes_back_shaped_through_the_served_binary() {
             "meta": {
                 "registryIdentifier": "dhis2-tracker-registry",
                 "datasetIdentifier": "persons",
-                "entityTypeIdentifier": "person"
+                "recordTypeIdentifier": "person"
             }
         })
     );
@@ -482,7 +482,7 @@ async fn a_post_write_binding_is_served_with_its_configured_success_status() {
 
     assert_eq!(status, 201, "{body}");
     assert_eq!(body["data"]["org_unit"], "qfg4XUDJtgS");
-    assert_eq!(body["meta"]["entityTypeIdentifier"], "person");
+    assert_eq!(body["meta"]["recordTypeIdentifier"], "person");
     let requests = upstream.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].method, "POST");
@@ -600,7 +600,7 @@ async fn an_item_envelope_carries_the_record_identifier_beside_the_record() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["data"]["recordId"], "EeBJ3Sn9uLg");
     assert_eq!(body["data"]["data"]["org_unit"], "slSrf7H9lMf");
-    assert_eq!(body["meta"]["entityTypeIdentifier"], "person");
+    assert_eq!(body["meta"]["recordTypeIdentifier"], "person");
 }
 
 #[tokio::test]

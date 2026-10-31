@@ -145,7 +145,7 @@ async fn the_last_page_carries_no_cursor() {
     assert_eq!(status, 200, "{last}");
     assert_eq!(last["items"].as_array().map(Vec::len), Some(5));
     assert_eq!(last["pageInfo"], json!({}));
-    assert_eq!(last["meta"]["entityTypeIdentifier"], "person");
+    assert_eq!(last["meta"]["recordTypeIdentifier"], "person");
 }
 
 #[tokio::test]

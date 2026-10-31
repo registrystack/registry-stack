@@ -133,4 +133,4 @@ entries:
         meta:
           registryIdentifier: fhir-r4-patient-source-registry
           datasetIdentifier: records
-          entityTypeIdentifier: patient
+          recordTypeIdentifier: patient

@@ -20,10 +20,10 @@ use served_harness::{capture, Served};
 
 const CREATE_RESPONSE_ENVELOPE: &str = r#"    successStatus: 201
     requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
-    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'"#;
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'"#;
 const CREATE_RESPONSE_WITH_REQUEST_ID: &str = r#"    successStatus: 201
     requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
-    responseEnvelope: '{"data": {{record}}, "requestId": "{{requestId}}", "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'"#;
+    responseEnvelope: '{"data": {{record}}, "requestId": "{{requestId}}", "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'"#;
 const PROBLEM_ENVELOPE: &str = r#"problemEnvelope: '{"title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}", "data": {{?problemData}}}'"#;
 const PROBLEM_WITH_REQUEST_ID: &str = r#"problemEnvelope: '{"title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}", "data": {{?problemData}}, "requestId": "{{requestId}}"}'"#;
 

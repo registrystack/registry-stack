@@ -161,7 +161,7 @@ fn write_artifacts(directory: &Path, success_status: u16) {
     let update_start = source_profile
         .find("  - id: records-update\n")
         .expect("update operation");
-    let existing = r#"    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'"#;
+    let existing = r#"    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'"#;
     let relative = source_profile[update_start..]
         .find(existing)
         .expect("the update response envelope");

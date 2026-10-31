@@ -492,7 +492,7 @@ fn the_maintained_example_compiles_under_breg_records() {
         ["content"]["application/json"]["schema"]["properties"]["meta"]["properties"];
     assert_eq!(meta["registryIdentifier"], json!({"type": "string"}));
     assert_eq!(meta["datasetIdentifier"], json!({"type": "string"}));
-    assert_eq!(meta["entityTypeIdentifier"], json!({"type": "string"}));
+    assert_eq!(meta["recordTypeIdentifier"], json!({"type": "string"}));
 }
 
 /// The breg-records envelope matches the `registry-record` serialization
@@ -521,7 +521,7 @@ fn breg_records_envelopes_match_registry_record_goldens() {
     let meta = RegistryRecordMeta {
         registry_identifier: "registry.example".to_owned(),
         dataset_identifier: "directory".to_owned(),
-        entity_type_identifier: "person".to_owned(),
+        record_type_identifier: "person".to_owned(),
         extensions: BTreeMap::new(),
     };
     let single: Value = serde_json::to_value(RegistryRecordSingleResponse {
@@ -586,7 +586,7 @@ fn breg_records_envelopes_match_registry_record_goldens() {
     for key in [
         "registryIdentifier",
         "datasetIdentifier",
-        "entityTypeIdentifier",
+        "recordTypeIdentifier",
     ] {
         assert_eq!(schema_meta[key], json!({"type": "string"}));
         assert!(golden_meta[key].is_string());

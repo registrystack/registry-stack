@@ -91,4 +91,4 @@ entries:
         meta:
           registryIdentifier: rest-offset-mtls-registry
           datasetIdentifier: records
-          entityTypeIdentifier: household
+          recordTypeIdentifier: household

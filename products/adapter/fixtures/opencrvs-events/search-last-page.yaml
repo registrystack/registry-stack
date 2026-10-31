@@ -90,4 +90,4 @@ entries:
         meta:
           registryIdentifier: opencrvs-events-registry
           datasetIdentifier: births
-          entityTypeIdentifier: birth
+          recordTypeIdentifier: birth

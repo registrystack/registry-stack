@@ -73,4 +73,4 @@ entries:
         meta:
           registryIdentifier: dhis2-tracker-registry
           datasetIdentifier: persons
-          entityTypeIdentifier: person
+          recordTypeIdentifier: person

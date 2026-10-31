@@ -1180,7 +1180,7 @@
                         "datasetIdentifier": {
                           "type": "string"
                         },
-                        "entityTypeIdentifier": {
+                        "recordTypeIdentifier": {
                           "type": "string"
                         },
                         "registryIdentifier": {
@@ -1189,7 +1189,7 @@
                       },
                       "required": [
                         "datasetIdentifier",
-                        "entityTypeIdentifier",
+                        "recordTypeIdentifier",
                         "registryIdentifier"
                       ],
                       "type": "object"
@@ -1412,7 +1412,7 @@
                         "datasetIdentifier": {
                           "type": "string"
                         },
-                        "entityTypeIdentifier": {
+                        "recordTypeIdentifier": {
                           "type": "string"
                         },
                         "registryIdentifier": {
@@ -1421,7 +1421,7 @@
                       },
                       "required": [
                         "datasetIdentifier",
-                        "entityTypeIdentifier",
+                        "recordTypeIdentifier",
                         "registryIdentifier"
                       ],
                       "type": "object"

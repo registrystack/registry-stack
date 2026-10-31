@@ -6,7 +6,7 @@
 # Registry Record v1 shapes are the DTOs of `crates/registry-record`; BReg
 # serves them from `crates/registry-breg/src/record_profile.rs`: one record
 # under `data`, a collection under `items` with `pageInfo.nextCursor`, and
-# `meta` naming the registry, the dataset, and the entity type. This profile
+# `meta` naming the registry, the dataset, and the record type. This profile
 # serves the same shapes so a consumer of BReg output reads adapter output
 # unchanged.
 #
@@ -36,7 +36,7 @@ operations:
       - type
     recordTypeParameter: type
     itemEnvelope: '{"recordIdentifier": "{{recordId}}", "domainData": {{record}}}'
-    responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": "{{?nextCursor}}"}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
+    responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": "{{?nextCursor}}"}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'
     pagination:
       cursorParameter: cursor
       pageSizeParameter: limit
@@ -51,7 +51,7 @@ operations:
     recordTypeParameter: type
     recordIdParameter: record_id
     itemEnvelope: '{"recordIdentifier": "{{recordId}}", "domainData": {{record}}}'
-    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'
   - id: records-create
     method: POST
     path: /v1/records/{type}
@@ -60,7 +60,7 @@ operations:
     recordTypeParameter: type
     successStatus: 201
     requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
-    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'
   - id: records-update
     method: PUT
     path: /v1/records/{type}/{record_id}
@@ -70,7 +70,7 @@ operations:
     recordTypeParameter: type
     recordIdParameter: record_id
     requestEnvelope: '{"data": {"recordIdentifier": "{{recordId}}", "domainData": {{record}}}}'
-    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'
   - id: records-patch
     method: PATCH
     path: /v1/records/{type}/{record_id}
@@ -80,7 +80,7 @@ operations:
     recordTypeParameter: type
     recordIdParameter: record_id
     requestEnvelope: '{"data": {{record}}}'
-    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}}'
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "recordTypeIdentifier": "{{recordType}}"}}'
 problems:
   - code: source.upstream-error
     status: 502

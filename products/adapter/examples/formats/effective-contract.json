@@ -1,7 +1,7 @@
 {
   "apiVersion": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
   "kind": "AdapterEffectiveContract",
-  "digest": "sha256:b458066546bdeb86fce6afab0d4ffd231f5bdeca7bd5c1208be729a2c8b149cc",
+  "digest": "sha256:c3027aa1e8fce576c0ebecc3b62530456db509ccf371722392f82caf08d83896",
   "contract": {
     "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
     "project": {
@@ -9,7 +9,7 @@
       "version": "1.0.0"
     },
     "profileVersion": "1",
-    "artifactDeploymentDigest": "sha256:c3dcbb2c265628455da98ce852ed271b9ed2c67f96693c379d5514c6ed6efca9",
+    "artifactDeploymentDigest": "sha256:c7be9968ccb95af763ea55b78144866443b9a9de09c03095d9d649ae653006d3",
     "authentication": {
       "scheme": "bearer",
       "audience": "adapter-example",
@@ -125,7 +125,7 @@
                 "datasetIdentifier": {
                   "type": "string"
                 },
-                "entityTypeIdentifier": {
+                "recordTypeIdentifier": {
                   "type": "string"
                 },
                 "registryIdentifier": {
@@ -134,7 +134,7 @@
               },
               "required": [
                 "datasetIdentifier",
-                "entityTypeIdentifier",
+                "recordTypeIdentifier",
                 "registryIdentifier"
               ],
               "type": "object"
@@ -255,7 +255,7 @@
                 "datasetIdentifier": {
                   "type": "string"
                 },
-                "entityTypeIdentifier": {
+                "recordTypeIdentifier": {
                   "type": "string"
                 },
                 "registryIdentifier": {
@@ -264,7 +264,7 @@
               },
               "required": [
                 "datasetIdentifier",
-                "entityTypeIdentifier",
+                "recordTypeIdentifier",
                 "registryIdentifier"
               ],
               "type": "object"
