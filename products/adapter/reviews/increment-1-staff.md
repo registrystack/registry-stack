@@ -17,9 +17,10 @@ remaining read-engine definition of done.
   record is current; and the stale attribution narrative is corrected.
 - **Owning aggregate verification: PASS.** The complete Adapter contract and
   PostgreSQL gates, workspace check and Clippy, CLI catalog, CI classifier,
-  port-table milestone, generated contracts, exact-artifact source proof, and
-  matching MCP read proof are green. The three retained property-test seeds
-  were exercised by both owning gates.
+  port-table milestone, generated contracts, and exact-artifact source proof
+  are green. The three retained property-test seeds were exercised by both
+  owning gates. The earlier matching MCP proof is historical; the latest v3
+  pairing is pending and is not included in this PASS.
 - **Increment 1 acceptance: PASS with explicit workspace exceptions.** Strict
   workspace configuration conformance still has two unchanged failures owned
   by Evidence and Coordinator. `cargo deny` still reports three unchanged
@@ -169,10 +170,9 @@ these changes.
 
 ### Independently inspected
 
-- The frozen runtime source was at the expected integration checkpoint. The
-  remaining prepared changes are documentation, milestone, CLI catalog test,
-  and retained property-test evidence only; they change no Adapter runtime
-  behavior.
+- The runtime source was at the expected clean checkpoint. The later native
+  PUT, DHIS2 attribute-update, and anonymous-HTTPS changes were inspected as
+  current behavior rather than attributed to the earlier read checkpoint.
 - The product guide, `CONCEPT.md`, `DELIVERY-PLAN.md`, platform configuration
   conventions, three Camel attribution reports, and integration review were
   read.
@@ -180,10 +180,11 @@ these changes.
   validation and release, collection metadata, HTTP status handling,
   resilience wiring, the DHIS2 script, and the native experiment harness were
   inspected.
-- The complete owning logs contain 943 contract tests and 633 PostgreSQL tests,
+- The complete owning logs contain 960 contract tests and 645 PostgreSQL tests,
   with zero failures and zero ignored tests. The PostgreSQL gate includes a
-  nonempty eight-test journal suite, both served profiles, persisted security
-  negatives, problem data, idempotency, and response-identity migration.
+  nonempty journal suite, both served profiles, persisted security negatives,
+  problem data, idempotency, response-identity migration, six native PUT
+  tests, four DHIS2 pack-write tests, and eight served response-custody tests.
 - The CLI catalog correction has 24 unit and 3 snapshot tests green. Focused
   all-target Clippy is green after that test-only correction; the earlier
   workspace-wide check and all-target Clippy are also green.
@@ -206,6 +207,14 @@ these changes.
 - The five experiment directories and five native experiment cases match one
   for one. Their report distinguishes `verify --live` caller-sourced waits
   from the separate native facade transport proof.
+- The native PUT source and tests enforce authentication, scope, contract pin,
+  closed request identity, exact replay custody, mismatch without a source
+  send, and fail-closed handling after an uncertain effect. The actual 202
+  case stays spent and replays its bounded failure rather than claiming D16.
+- The anonymous-HTTPS source and nine-test CLI TLS suite keep the named
+  operator acknowledgement distinct from TLS trust and authentication. The
+  accepted path sends no source credential or caller-token header, while an
+  omitted acknowledgement or untrusted certificate remains closed.
 
 This reviewer ran no build or test command and accessed no private credential
 or harness. Read-only inspection included source, named gate logs, Git history,
@@ -217,29 +226,37 @@ The lead reports the following against one frozen feature-enabled Adapter
 executable, its matching CLI and runtime library:
 
 - the real DHIS2 read journey passed 264 of 264 checks;
-- the synchronous tagged write journey passed 16 of 16 checks, including one
-  source effect, readback, exact response bytes and original response ID on
-  replay, changed-body mismatch without a send, and ownership-verified cleanup;
+- the synchronous DHIS2 create and attribute-update journey passed 25 of 25
+  checks, including exact response bytes and the original response ID in
+  header and body on replay, changed-body mismatch without a send, readback,
+  and ownership-verified cleanup;
 - real `verify --live` executed one request with zero waits and zero
   diagnostics;
-- sensitive-output scans returned zero hits; and
-- the matching MCP/gateway native read integration passed 6 of 6, with all
-  copied artifact hashes stable.
+- the HAPI journey passed 18 recorded checks for one synthetic Patient,
+  including setup and authentication, conditional create 201, read and search
+  200, exact replay, mismatch 422, one source POST, owned delete 200, and
+  readback 410; and
+- sensitive-output scans returned zero hits, both owned-record cleanups were
+  confirmed, and the public summary records the artifact hash as unchanged.
 
 Exact local artifact identities and the private execution details remain in
 the lead's checkpoint. This report relies only on the supplied counts and
 identity readback. It does not expose credentials or private harness content.
-The matching MCP proof is integration evidence, not permission to claim MCP
-writes or broader product authority.
+The earlier 6-of-6 matching MCP proof is historical to the accepted read
+checkpoint. The latest Adapter artifact has been handed off. Its first
+six-case attempt failed during fixture digest-pin preparation, with zero cases
+passed and no runtime journey reached. Gateway fixture repair and a successful
+matching-artifact rerun remain unverified. Neither proof is permission to
+claim MCP writes or broader product authority.
 
 Three generated property-test seeds, stored in two files, were present in both
 owning runs and are retained unchanged in the final delivery set. Committing
-those exact bytes makes the 943-test and 633-test results reproducible without
+those exact bytes makes the 960-test and 645-test results reproducible without
 changing the test behavior the gates already exercised.
 
 ### Explicit workspace exceptions
 
-Strict configuration conformance is **not green**. Of 5,552 cells, 4,132 pass,
+Strict configuration conformance is **not green**. Of 5,553 cells, 4,133 pass,
 2 fail, none are stale or blocked, and 1,418 are not applicable. The failures
 are unchanged `evidence/bundle` and `coordinator/runtime` unique-list sweeps:
 their owning readers wrap the expected duplicate-item diagnostic in a domain
@@ -250,20 +267,28 @@ a workspace-wide pass or a fix to either product.
 
 `cargo deny check` is also **not green**. It reports three unchanged Wasmtime
 48.0.7 advisories: RUSTSEC-2026-0422, RUSTSEC-2026-0423, and
-RUSTSEC-2026-0424. No package version or checksum changed in the lockfile
-cleanup, the Adapter normal dependency tree does not reach Wasmtime, and bans,
-licenses, and sources checks pass. These advisories remain workspace dependency
-debt; this review adds no ignore and does not claim they are fixed.
+RUSTSEC-2026-0424. No manifest, package version, or checksum changed in this
+checkpoint, no new ignore was added, the Adapter normal dependency tree does
+not reach Wasmtime, and bans, licenses, and sources checks pass. These
+advisories remain workspace dependency debt and are not claimed fixed.
 
 ### Wider delivery limits
 
 - Passing Increment 1 marks the 30 read-engine port-table rows delivered. It
   does not deliver GraphQL, Idempotent Consumer, or the later increment
   checklist.
+- Synchronous native POST create and PUT update are served, but D16's two
+  asynchronous 202 modes, the nondefault Idempotent Consumer options, the full
+  Increment 2 conformance record, and later write resume remain undelivered.
 - Real OpenCRVS acceptance still needs the client supplied by Jeremi. The
   maintained OpenCRVS fixtures are documented evidence, not a live run.
-- The controlled FHIR experiments prove the bounded engine paths, not a live
-  HAPI integration. Public-source authentication remains a separate decision.
+- The lead-reported HAPI journey proves one live path with a synthetic Patient
+  under the named anonymous-HTTPS acknowledgement. It does not establish a
+  maintained FHIR pack or turn the documented experiment fixtures into
+  captured evidence.
+- The latest matching MCP/gateway native run is pending. The earlier paired
+  read proof is historical and native writes remain outside the gateway
+  contract.
 - Personal delegation, record and field disclosure authority, MCP writes, and
   typed non-record commands retain their own gates.
 - No push, merge, tag, release, or production deployment is claimed.
