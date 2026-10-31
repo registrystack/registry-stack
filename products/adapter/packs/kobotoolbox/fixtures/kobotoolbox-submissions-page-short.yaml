@@ -1,0 +1,2026 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real KoboToolbox
+# server): short page: cursor {offset: 200}, the last 60 of 260 submissions, no cursor back. The upstream shape follows the documented v2 data
+# endpoint ({count, next, previous, results} over
+# GET /api/v2/assets/<uid>/data/ with format, limit, start;
+# https://support.kobotoolbox.org/api.html and the kobotoolbox/docs
+# source/migrating_api.md). Every value is a made-up stand-in; the
+# reply's own `next` URL is synthetic and unread by the route. The
+# entry shape is PROVISIONAL: the maintained AdapterFixture artifact is
+# facade-shaped (a profile operation per entry), which a job route does
+# not have, so this suite keeps the stable envelope and carries the
+# job replay contract in a documented form until the engine stream's
+# job compiler defines the job-mode fixture format.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: kobotoolbox-submissions-page-short
+pack: kobotoolbox
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://support.kobotoolbox.org/api.html
+intercepts:
+- type: endpoint
+  endpoint: kobo-api
+entries:
+- jobRun:
+    cursor:
+      offset: 200
+  upstream:
+  - request:
+      endpoint: kobo-api
+      method: GET
+      path: /
+      query: format=json&limit=100&start=200
+    response:
+      status: 200
+      body:
+        count: 260
+        next: null
+        previous: null
+        results:
+        - _id: 60
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-16T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture One
+          household_size: 7
+          has_water: true
+        - _id: 59
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-15T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Ten
+          household_size: 6
+          has_water: false
+        - _id: 58
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-14T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture Nine
+          household_size: 5
+          has_water: true
+        - _id: 57
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-13T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Eight
+          household_size: 4
+          has_water: false
+        - _id: 56
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-12T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture Seven
+          household_size: 3
+          has_water: true
+        - _id: 55
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-11T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Six
+          household_size: 2
+          has_water: false
+        - _id: 54
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-10T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Five
+          household_size: 1
+          has_water: true
+        - _id: 53
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-27T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Four
+          household_size: 9
+          has_water: false
+        - _id: 52
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-26T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture Three
+          household_size: 8
+          has_water: true
+        - _id: 51
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-25T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Two
+          household_size: 7
+          has_water: false
+        - _id: 50
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-24T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture One
+          household_size: 6
+          has_water: true
+        - _id: 49
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-23T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Ten
+          household_size: 5
+          has_water: false
+        - _id: 48
+          formhub/uuid: 48c048c048c048c048c048c048c048c0
+          _uuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          _submission_time: '2026-09-22T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX48c048c048c0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:00000000-5678-ace0-f258-48c048c048c0
+          meta/rootUuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          respondent_name: Fixture Nine
+          household_size: 4
+          has_water: true
+        - _id: 47
+          formhub/uuid: f258be147ad0369cf258be147ad0369c
+          _uuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          _submission_time: '2026-09-21T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXf258be147ad0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          meta/rootUuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          respondent_name: Fixture Eight
+          household_size: 3
+          has_water: false
+        - _id: 46
+          formhub/uuid: ace02468ace02468ace02468ace02468
+          _uuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          _submission_time: '2026-09-20T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXace02468ace0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          meta/rootUuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          respondent_name: Fixture Seven
+          household_size: 2
+          has_water: true
+        - _id: 45
+          formhub/uuid: 56789abcdef0123456789abcdef01234
+          _uuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          _submission_time: '2026-09-19T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX56789abcdef0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          meta/rootUuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          respondent_name: Fixture Six
+          household_size: 1
+          has_water: false
+        - _id: 44
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-18T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture Five
+          household_size: 9
+          has_water: true
+        - _id: 43
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-17T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Four
+          household_size: 8
+          has_water: false
+        - _id: 42
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-16T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture Three
+          household_size: 7
+          has_water: true
+        - _id: 41
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-15T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Two
+          household_size: 6
+          has_water: false
+        - _id: 40
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-14T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture One
+          household_size: 5
+          has_water: true
+        - _id: 39
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-13T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Ten
+          household_size: 4
+          has_water: false
+        - _id: 38
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-12T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Nine
+          household_size: 3
+          has_water: true
+        - _id: 37
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-11T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Eight
+          household_size: 2
+          has_water: false
+        - _id: 36
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-10T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture Seven
+          household_size: 1
+          has_water: true
+        - _id: 35
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-27T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Six
+          household_size: 9
+          has_water: false
+        - _id: 34
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-26T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture Five
+          household_size: 8
+          has_water: true
+        - _id: 33
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-25T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Four
+          household_size: 7
+          has_water: false
+        - _id: 32
+          formhub/uuid: 48c048c048c048c048c048c048c048c0
+          _uuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          _submission_time: '2026-09-24T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX48c048c048c0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:00000000-5678-ace0-f258-48c048c048c0
+          meta/rootUuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          respondent_name: Fixture Three
+          household_size: 6
+          has_water: true
+        - _id: 31
+          formhub/uuid: f258be147ad0369cf258be147ad0369c
+          _uuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          _submission_time: '2026-09-23T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXf258be147ad0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          meta/rootUuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          respondent_name: Fixture Two
+          household_size: 5
+          has_water: false
+        - _id: 30
+          formhub/uuid: ace02468ace02468ace02468ace02468
+          _uuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          _submission_time: '2026-09-22T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXace02468ace0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          meta/rootUuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          respondent_name: Fixture One
+          household_size: 4
+          has_water: true
+        - _id: 29
+          formhub/uuid: 56789abcdef0123456789abcdef01234
+          _uuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          _submission_time: '2026-09-21T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX56789abcdef0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          meta/rootUuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          respondent_name: Fixture Ten
+          household_size: 3
+          has_water: false
+        - _id: 28
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-20T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture Nine
+          household_size: 2
+          has_water: true
+        - _id: 27
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-19T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Eight
+          household_size: 1
+          has_water: false
+        - _id: 26
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-18T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture Seven
+          household_size: 9
+          has_water: true
+        - _id: 25
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-17T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Six
+          household_size: 8
+          has_water: false
+        - _id: 24
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-16T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture Five
+          household_size: 7
+          has_water: true
+        - _id: 23
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-15T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Four
+          household_size: 6
+          has_water: false
+        - _id: 22
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-14T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Three
+          household_size: 5
+          has_water: true
+        - _id: 21
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-13T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Two
+          household_size: 4
+          has_water: false
+        - _id: 20
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-12T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture One
+          household_size: 3
+          has_water: true
+        - _id: 19
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-11T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Ten
+          household_size: 2
+          has_water: false
+        - _id: 18
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-10T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture Nine
+          household_size: 1
+          has_water: true
+        - _id: 17
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-27T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Eight
+          household_size: 9
+          has_water: false
+        - _id: 16
+          formhub/uuid: 48c048c048c048c048c048c048c048c0
+          _uuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          _submission_time: '2026-09-26T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX48c048c048c0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:00000000-5678-ace0-f258-48c048c048c0
+          meta/rootUuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          respondent_name: Fixture Seven
+          household_size: 8
+          has_water: true
+        - _id: 15
+          formhub/uuid: f258be147ad0369cf258be147ad0369c
+          _uuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          _submission_time: '2026-09-25T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXf258be147ad0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          meta/rootUuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          respondent_name: Fixture Six
+          household_size: 7
+          has_water: false
+        - _id: 14
+          formhub/uuid: ace02468ace02468ace02468ace02468
+          _uuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          _submission_time: '2026-09-24T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXace02468ace0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          meta/rootUuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          respondent_name: Fixture Five
+          household_size: 6
+          has_water: true
+        - _id: 13
+          formhub/uuid: 56789abcdef0123456789abcdef01234
+          _uuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          _submission_time: '2026-09-23T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX56789abcdef0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          meta/rootUuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          respondent_name: Fixture Four
+          household_size: 5
+          has_water: false
+        - _id: 12
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-22T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture Three
+          household_size: 4
+          has_water: true
+        - _id: 11
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-21T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Two
+          household_size: 3
+          has_water: false
+        - _id: 10
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-20T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture One
+          household_size: 2
+          has_water: true
+        - _id: 9
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-19T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Ten
+          household_size: 1
+          has_water: false
+        - _id: 8
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-18T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture Nine
+          household_size: 9
+          has_water: true
+        - _id: 7
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-17T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Eight
+          household_size: 8
+          has_water: false
+        - _id: 6
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-16T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Seven
+          household_size: 7
+          has_water: true
+        - _id: 5
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-15T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Six
+          household_size: 6
+          has_water: false
+        - _id: 4
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-14T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture Five
+          household_size: 5
+          has_water: true
+        - _id: 3
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-13T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Four
+          household_size: 4
+          has_water: false
+        - _id: 2
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-12T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture Three
+          household_size: 3
+          has_water: true
+        - _id: 1
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-11T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Two
+          household_size: 2
+          has_water: false
+  expected:
+    type: page
+    page:
+      items:
+      - key: '60'
+        revision: uuid:c840c840-1eb8-6420-ba98-000000000000
+        value:
+          _id: 60
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-16T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture One
+          household_size: 7
+          has_water: true
+      - key: '59'
+        revision: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+        value:
+          _id: 59
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-15T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Ten
+          household_size: 6
+          has_water: false
+      - key: '58'
+        revision: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+        value:
+          _id: 58
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-14T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture Nine
+          household_size: 5
+          has_water: true
+      - key: '57'
+        revision: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+        value:
+          _id: 57
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-13T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Eight
+          household_size: 4
+          has_water: false
+      - key: '56'
+        revision: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+        value:
+          _id: 56
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-12T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture Seven
+          household_size: 3
+          has_water: true
+      - key: '55'
+        revision: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+        value:
+          _id: 55
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-11T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Six
+          household_size: 2
+          has_water: false
+      - key: '54'
+        revision: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+        value:
+          _id: 54
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-10T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Five
+          household_size: 1
+          has_water: true
+      - key: '53'
+        revision: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+        value:
+          _id: 53
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-27T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Four
+          household_size: 9
+          has_water: false
+      - key: '52'
+        revision: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+        value:
+          _id: 52
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-26T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture Three
+          household_size: 8
+          has_water: true
+      - key: '51'
+        revision: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+        value:
+          _id: 51
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-25T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Two
+          household_size: 7
+          has_water: false
+      - key: '50'
+        revision: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+        value:
+          _id: 50
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-24T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture One
+          household_size: 6
+          has_water: true
+      - key: '49'
+        revision: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+        value:
+          _id: 49
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-23T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Ten
+          household_size: 5
+          has_water: false
+      - key: '48'
+        revision: uuid:00000000-5678-ace0-f258-48c048c048c0
+        value:
+          _id: 48
+          formhub/uuid: 48c048c048c048c048c048c048c048c0
+          _uuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          _submission_time: '2026-09-22T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX48c048c048c0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:00000000-5678-ace0-f258-48c048c048c0
+          meta/rootUuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          respondent_name: Fixture Nine
+          household_size: 4
+          has_water: true
+      - key: '47'
+        revision: uuid:ba987654-0000-5678-ace0-f258be147ad0
+        value:
+          _id: 47
+          formhub/uuid: f258be147ad0369cf258be147ad0369c
+          _uuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          _submission_time: '2026-09-21T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXf258be147ad0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          meta/rootUuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          respondent_name: Fixture Eight
+          household_size: 3
+          has_water: false
+      - key: '46'
+        revision: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+        value:
+          _id: 46
+          formhub/uuid: ace02468ace02468ace02468ace02468
+          _uuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          _submission_time: '2026-09-20T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXace02468ace0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          meta/rootUuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          respondent_name: Fixture Seven
+          household_size: 2
+          has_water: true
+      - key: '45'
+        revision: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+        value:
+          _id: 45
+          formhub/uuid: 56789abcdef0123456789abcdef01234
+          _uuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          _submission_time: '2026-09-19T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX56789abcdef0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          meta/rootUuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          respondent_name: Fixture Six
+          household_size: 1
+          has_water: false
+      - key: '44'
+        revision: uuid:c840c840-1eb8-6420-ba98-000000000000
+        value:
+          _id: 44
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-18T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture Five
+          household_size: 9
+          has_water: true
+      - key: '43'
+        revision: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+        value:
+          _id: 43
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-17T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Four
+          household_size: 8
+          has_water: false
+      - key: '42'
+        revision: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+        value:
+          _id: 42
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-16T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture Three
+          household_size: 7
+          has_water: true
+      - key: '41'
+        revision: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+        value:
+          _id: 41
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-15T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Two
+          household_size: 6
+          has_water: false
+      - key: '40'
+        revision: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+        value:
+          _id: 40
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-14T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture One
+          household_size: 5
+          has_water: true
+      - key: '39'
+        revision: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+        value:
+          _id: 39
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-13T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Ten
+          household_size: 4
+          has_water: false
+      - key: '38'
+        revision: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+        value:
+          _id: 38
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-12T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Nine
+          household_size: 3
+          has_water: true
+      - key: '37'
+        revision: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+        value:
+          _id: 37
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-11T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Eight
+          household_size: 2
+          has_water: false
+      - key: '36'
+        revision: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+        value:
+          _id: 36
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-10T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture Seven
+          household_size: 1
+          has_water: true
+      - key: '35'
+        revision: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+        value:
+          _id: 35
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-27T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Six
+          household_size: 9
+          has_water: false
+      - key: '34'
+        revision: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+        value:
+          _id: 34
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-26T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture Five
+          household_size: 8
+          has_water: true
+      - key: '33'
+        revision: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+        value:
+          _id: 33
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-25T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Four
+          household_size: 7
+          has_water: false
+      - key: '32'
+        revision: uuid:00000000-5678-ace0-f258-48c048c048c0
+        value:
+          _id: 32
+          formhub/uuid: 48c048c048c048c048c048c048c048c0
+          _uuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          _submission_time: '2026-09-24T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX48c048c048c0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:00000000-5678-ace0-f258-48c048c048c0
+          meta/rootUuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          respondent_name: Fixture Three
+          household_size: 6
+          has_water: true
+      - key: '31'
+        revision: uuid:ba987654-0000-5678-ace0-f258be147ad0
+        value:
+          _id: 31
+          formhub/uuid: f258be147ad0369cf258be147ad0369c
+          _uuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          _submission_time: '2026-09-23T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXf258be147ad0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          meta/rootUuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          respondent_name: Fixture Two
+          household_size: 5
+          has_water: false
+      - key: '30'
+        revision: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+        value:
+          _id: 30
+          formhub/uuid: ace02468ace02468ace02468ace02468
+          _uuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          _submission_time: '2026-09-22T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXace02468ace0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          meta/rootUuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          respondent_name: Fixture One
+          household_size: 4
+          has_water: true
+      - key: '29'
+        revision: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+        value:
+          _id: 29
+          formhub/uuid: 56789abcdef0123456789abcdef01234
+          _uuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          _submission_time: '2026-09-21T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX56789abcdef0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          meta/rootUuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          respondent_name: Fixture Ten
+          household_size: 3
+          has_water: false
+      - key: '28'
+        revision: uuid:c840c840-1eb8-6420-ba98-000000000000
+        value:
+          _id: 28
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-20T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture Nine
+          household_size: 2
+          has_water: true
+      - key: '27'
+        revision: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+        value:
+          _id: 27
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-19T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Eight
+          household_size: 1
+          has_water: false
+      - key: '26'
+        revision: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+        value:
+          _id: 26
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-18T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture Seven
+          household_size: 9
+          has_water: true
+      - key: '25'
+        revision: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+        value:
+          _id: 25
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-17T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Six
+          household_size: 8
+          has_water: false
+      - key: '24'
+        revision: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+        value:
+          _id: 24
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-16T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture Five
+          household_size: 7
+          has_water: true
+      - key: '23'
+        revision: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+        value:
+          _id: 23
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-15T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Four
+          household_size: 6
+          has_water: false
+      - key: '22'
+        revision: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+        value:
+          _id: 22
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-14T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Three
+          household_size: 5
+          has_water: true
+      - key: '21'
+        revision: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+        value:
+          _id: 21
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-13T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Two
+          household_size: 4
+          has_water: false
+      - key: '20'
+        revision: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+        value:
+          _id: 20
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-12T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture One
+          household_size: 3
+          has_water: true
+      - key: '19'
+        revision: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+        value:
+          _id: 19
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-11T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Ten
+          household_size: 2
+          has_water: false
+      - key: '18'
+        revision: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+        value:
+          _id: 18
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-10T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture Nine
+          household_size: 1
+          has_water: true
+      - key: '17'
+        revision: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+        value:
+          _id: 17
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-27T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Eight
+          household_size: 9
+          has_water: false
+      - key: '16'
+        revision: uuid:00000000-5678-ace0-f258-48c048c048c0
+        value:
+          _id: 16
+          formhub/uuid: 48c048c048c048c048c048c048c048c0
+          _uuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          _submission_time: '2026-09-26T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX48c048c048c0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:00000000-5678-ace0-f258-48c048c048c0
+          meta/rootUuid: uuid:00000000-5678-ace0-f258-48c048c048c0
+          respondent_name: Fixture Seven
+          household_size: 8
+          has_water: true
+      - key: '15'
+        revision: uuid:ba987654-0000-5678-ace0-f258be147ad0
+        value:
+          _id: 15
+          formhub/uuid: f258be147ad0369cf258be147ad0369c
+          _uuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          _submission_time: '2026-09-25T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXf258be147ad0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          meta/rootUuid: uuid:ba987654-0000-5678-ace0-f258be147ad0
+          respondent_name: Fixture Six
+          household_size: 7
+          has_water: false
+      - key: '14'
+        revision: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+        value:
+          _id: 14
+          formhub/uuid: ace02468ace02468ace02468ace02468
+          _uuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          _submission_time: '2026-09-24T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXace02468ace0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          meta/rootUuid: uuid:6420eca8-ba98-0000-5678-ace02468ace0
+          respondent_name: Fixture Five
+          household_size: 6
+          has_water: true
+      - key: '13'
+        revision: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+        value:
+          _id: 13
+          formhub/uuid: 56789abcdef0123456789abcdef01234
+          _uuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          _submission_time: '2026-09-23T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX56789abcdef0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          meta/rootUuid: uuid:1eb852fc-6420-ba98-0000-56789abcdef0
+          respondent_name: Fixture Four
+          household_size: 5
+          has_water: false
+      - key: '12'
+        revision: uuid:c840c840-1eb8-6420-ba98-000000000000
+        value:
+          _id: 12
+          formhub/uuid: '00000000000000000000000000000000'
+          _uuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          _submission_time: '2026-09-22T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX000000000000
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:c840c840-1eb8-6420-ba98-000000000000
+          meta/rootUuid: uuid:c840c840-1eb8-6420-ba98-000000000000
+          respondent_name: Fixture Three
+          household_size: 4
+          has_water: true
+      - key: '11'
+        revision: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+        value:
+          _id: 11
+          formhub/uuid: ba9876543210fedcba9876543210fedc
+          _uuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          _submission_time: '2026-09-21T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXba9876543210
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          meta/rootUuid: uuid:72d83e94-c840-1eb8-6420-ba9876543210
+          respondent_name: Fixture Two
+          household_size: 3
+          has_water: false
+      - key: '10'
+        revision: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+        value:
+          _id: 10
+          formhub/uuid: 6420eca86420eca86420eca86420eca8
+          _uuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          _submission_time: '2026-09-20T00:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX6420eca86420
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          meta/rootUuid: uuid:2c60a4e8-72d8-c840-1eb8-6420eca86420
+          respondent_name: Fixture One
+          household_size: 2
+          has_water: true
+      - key: '9'
+        revision: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+        value:
+          _id: 9
+          formhub/uuid: 1eb852fc9630da741eb852fc9630da74
+          _uuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          _submission_time: '2026-09-19T09:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX1eb852fc9630
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          meta/rootUuid: uuid:d6f81a3c-2c60-72d8-c840-1eb852fc9630
+          respondent_name: Fixture Ten
+          household_size: 1
+          has_water: false
+      - key: '8'
+        revision: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+        value:
+          _id: 8
+          formhub/uuid: c840c840c840c840c840c840c840c840
+          _uuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          _submission_time: '2026-09-18T08:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXc840c840c840
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          meta/rootUuid: uuid:80808080-d6f8-2c60-72d8-c840c840c840
+          respondent_name: Fixture Nine
+          household_size: 9
+          has_water: true
+      - key: '7'
+        revision: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+        value:
+          _id: 7
+          formhub/uuid: 72d83e94fa50b61c72d83e94fa50b61c
+          _uuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          _submission_time: '2026-09-17T07:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX72d83e94fa50
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          meta/rootUuid: uuid:3a18f6d4-8080-d6f8-2c60-72d83e94fa50
+          respondent_name: Fixture Eight
+          household_size: 8
+          has_water: false
+      - key: '6'
+        revision: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+        value:
+          _id: 6
+          formhub/uuid: 2c60a4e82c60a4e82c60a4e82c60a4e8
+          _uuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          _submission_time: '2026-09-16T06:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX2c60a4e82c60
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          meta/rootUuid: uuid:e4a06c28-3a18-8080-d6f8-2c60a4e82c60
+          respondent_name: Fixture Seven
+          household_size: 7
+          has_water: true
+      - key: '5'
+        revision: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+        value:
+          _id: 5
+          formhub/uuid: d6f81a3c5e7092b4d6f81a3c5e7092b4
+          _uuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          _submission_time: '2026-09-15T05:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXd6f81a3c5e70
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          meta/rootUuid: uuid:9e38d27c-e4a0-3a18-8080-d6f81a3c5e70
+          respondent_name: Fixture Six
+          household_size: 6
+          has_water: false
+      - key: '4'
+        revision: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+        value:
+          _id: 4
+          formhub/uuid: '80808080808080808080808080808080'
+          _uuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          _submission_time: '2026-09-14T04:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX808080808080
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          meta/rootUuid: uuid:48c048c0-9e38-e4a0-3a18-808080808080
+          respondent_name: Fixture Five
+          household_size: 5
+          has_water: true
+      - key: '3'
+        revision: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+        value:
+          _id: 3
+          formhub/uuid: 3a18f6d4b2907e5c3a18f6d4b2907e5c
+          _uuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          _submission_time: '2026-09-13T03:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX3a18f6d4b290
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          meta/rootUuid: uuid:f258be14-48c0-9e38-e4a0-3a18f6d4b290
+          respondent_name: Fixture Four
+          household_size: 4
+          has_water: false
+      - key: '2'
+        revision: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+        value:
+          _id: 2
+          formhub/uuid: e4a06c28e4a06c28e4a06c28e4a06c28
+          _uuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          _submission_time: '2026-09-12T02:15:30'
+          _tags: []
+          _notes: []
+          _version_: vXe4a06c28e4a0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          meta/rootUuid: uuid:ace02468-f258-48c0-9e38-e4a06c28e4a0
+          respondent_name: Fixture Three
+          household_size: 3
+          has_water: true
+      - key: '1'
+        revision: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+        value:
+          _id: 1
+          formhub/uuid: 9e38d27c16b05af49e38d27c16b05af4
+          _uuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          _submission_time: '2026-09-11T01:15:30'
+          _tags: []
+          _notes: []
+          _version_: vX9e38d27c16b0
+          _status: submitted_by_anonymous
+          _submitted_by: null
+          _geolocation: []
+          meta/instanceID: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          meta/rootUuid: uuid:56789abc-ace0-f258-48c0-9e38d27c16b0
+          respondent_name: Fixture Two
+          household_size: 2
+          has_water: false

@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# The kobotoolbox example deployment's runtime configuration, in the
+# example form: every secret is a reference into the operator's
+# provider, never a value.
+#
+# The deployment-owned scoping lives in the base URL: the endpoint
+# binding pins the origin plus the base path, and the pack's sends stay
+# under it (CONCEPT 8.11.5). Bind `kobo-api` to the data URL of the
+# deployment's own asset - origin, /api/v2/assets/<asset uid>/data, no
+# trailing slash; the pack's `path: /` supplies the documented trailing
+# slash. The asset uid below is an obviously synthetic stand-in.
+#
+# The remaining blocks (listener, database, OIDC, audit) are the
+# facade runtime's required members, which today's AdapterRuntimeConfig
+# reader carries; a job deployment reads the endpoint bindings and the
+# credential of this file. Copy the file, fill in the environment's
+# references, and keep the facade blocks at their loopback and
+# placeholder values until the job runner's own runtime profile lands.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: kobotoolbox-job-example
+endpoints:
+  - endpoint: kobo-api
+    baseUrl: https://kobo.example.invalid/api/v2/assets/aFixtureUid0000000000000000000001/data
+    tlsTrustProfile: kobo-private-ca
+    credential:
+      type: basic
+      usernameRef: secret:ref/kobo-username
+      passwordRef: secret:ref/kobo-password
+outboundTls:
+  trustProfiles:
+    kobo-private-ca:
+      # The absolute path of the bundle file on the deployment's own
+      # host; a CA bundle is not a secret, so the profile names a file.
+      caBundleFile: /etc/registry-adapter/trust/kobo-private-ca.pem
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter-example
+allowedClients:
+  - registry-adapter-example-client
+allowedPrivateCidrs:
+  # The private ranges this deployment may call upstream. The example
+  # range stands in for the deployment's own; private endpoints stay
+  # refused unless their range is listed here.
+  - 10.0.0.0/8
+audit:
+  retentionDays: 90

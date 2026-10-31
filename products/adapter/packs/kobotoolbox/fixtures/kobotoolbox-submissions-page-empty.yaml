@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real KoboToolbox
+# server): empty page: cursor {offset: 200} over a form whose total (200) is a multiple of the page size, empty results, no cursor back. The upstream shape follows the documented v2 data
+# endpoint ({count, next, previous, results} over
+# GET /api/v2/assets/<uid>/data/ with format, limit, start;
+# https://support.kobotoolbox.org/api.html and the kobotoolbox/docs
+# source/migrating_api.md). Every value is a made-up stand-in; the
+# reply's own `next` URL is synthetic and unread by the route. The
+# entry shape is PROVISIONAL: the maintained AdapterFixture artifact is
+# facade-shaped (a profile operation per entry), which a job route does
+# not have, so this suite keeps the stable envelope and carries the
+# job replay contract in a documented form until the engine stream's
+# job compiler defines the job-mode fixture format.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: kobotoolbox-submissions-page-empty
+pack: kobotoolbox
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://support.kobotoolbox.org/api.html
+intercepts:
+- type: endpoint
+  endpoint: kobo-api
+entries:
+- jobRun:
+    cursor:
+      offset: 200
+  upstream:
+  - request:
+      endpoint: kobo-api
+      method: GET
+      path: /
+      query: format=json&limit=100&start=200
+    response:
+      status: 200
+      body:
+        count: 200
+        next: null
+        previous: null
+        results: []
+  expected:
+    type: page
+    page:
+      items: []

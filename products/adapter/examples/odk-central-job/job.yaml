@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# The odk-central example job: the odk-central pack's odk-submissions
+# source route, bounded by this profile. One page per run, 100
+# submissions at most, the endpoint's 1 MiB response bound as the
+# profile's response and page bound. The read bounds carry the job
+# profile's documented members at their widest values; no pollEnrich
+# read is in this route.
+#
+# The pack pin is exact (CFG-ID-4): id, version, and the sha256 of the
+# pack document (products/adapter/packs/odk-central/pack.yaml). If the
+# pack changes, repin the digest.
+#
+# The repeat-table sketch has its own source route, `odk-repeats`: a
+# deployment that reads a repeat set copies this job, names that route,
+# and binds the endpoint base URL to the repeat entity set. Its key
+# composition is the pack README's probe question 4; treat that route
+# as unproved.
+#
+# What can check this today: nothing. `adapterctl job check` lands in
+# the parallel engine stream; until then this artifact is a reviewed
+# document. The files that check should read: this job.yaml, the
+# pack (pack.yaml with its scripts/), and the runtime config beside
+# this file.
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: odk-central-submissions-example
+  version: "1"
+source:
+  pack:
+    id: odk-central
+    version: "1"
+    digest: sha256:40cc4e61d214efc8a3629f27f97a2bfaa08eb5ce1c730d67d549a38536ab3716
+  route: odk-submissions
+profile:
+  # One route run: one send, one redelivery at most, well inside the
+  # page deadline.
+  pageDeadlineMilliseconds: 300000
+  # The endpoint declares 1048576; the profile is never tighter than a
+  # bound of an endpoint the source route reaches.
+  maximumResponseBytes: 1048576
+  # The pack's fixed page size.
+  maximumPageItems: 100
+  maximumPageBytes: 1048576
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 100
