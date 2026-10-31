@@ -843,30 +843,6 @@ exceptions:
   resolution: Permanent for the adapter job v1alpha1 trigger block; the trigger checks refuse a bound outside its range.
 - rule: CFG-NAME-2
   format: adapter/effective-contract
-  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/GET
-  class: protocol-constant
-  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
-  resolution: Permanent.
-- rule: CFG-NAME-2
-  format: adapter/effective-contract
-  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/PATCH
-  class: protocol-constant
-  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
-  resolution: Permanent.
-- rule: CFG-NAME-2
-  format: adapter/effective-contract
-  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/POST
-  class: protocol-constant
-  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
-  resolution: Permanent.
-- rule: CFG-NAME-2
-  format: adapter/effective-contract
-  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/unserved/properties/method/enum/PUT
-  class: protocol-constant
-  reason: The method value is the HTTP method as RFC 9110 spells it; the contract names the wire method, not a member name
-  resolution: Permanent.
-- rule: CFG-NAME-2
-  format: adapter/effective-contract
   location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/contract/properties/schemaDialect/const/https:~1~1json-schema.org~1draft~12020-12~1schema
   class: protocol-constant
   reason: The value is the JSON Schema 2020-12 dialect URI and is written exactly as that specification defines it
