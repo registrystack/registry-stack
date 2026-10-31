@@ -90,6 +90,11 @@ class ConfigConformanceRuntimeTests(unittest.TestCase):
         )
         artifacts.mkdir(parents=True)
         (artifacts / "libaws_lc_fips_0_14_2_crypto.dylib").touch()
+        # The wrapper refuses a bin directory without an adapterctl binary;
+        # the stub uv below never launches it.
+        adapterctl = root / "relative-target/debug/adapterctl"
+        adapterctl.touch()
+        adapterctl.chmod(0o755)
         executable_directory = root / "bin"
         executable_directory.mkdir()
         environment_log = root / "environment.json"
