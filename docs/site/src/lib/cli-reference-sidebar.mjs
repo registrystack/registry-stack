@@ -28,6 +28,8 @@ const binaries = [
   'mint',
   'evidence-oid4vci',
   'registry-render',
+  'adapter',
+  'adapterctl',
 ];
 
 /** @param {string} path */

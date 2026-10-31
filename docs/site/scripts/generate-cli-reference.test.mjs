@@ -129,7 +129,7 @@ test('wraps a docset-gated product group of the index in a DocsetProduct region'
   // no trace of it in a docset that does not publish the product.
   assert.doesNotMatch(index.replace(region[0], '\n'), /messaging/iu);
   // Only gated groups are wrapped.
-  assert.equal(index.match(/<DocsetProduct /gu).length, 4);
+  assert.equal(index.match(/<DocsetProduct /gu).length, 5);
 });
 
 test('wraps the Registry Coordinator group of the index in a DocsetProduct region', () => {
