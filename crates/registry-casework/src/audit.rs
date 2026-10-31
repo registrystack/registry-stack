@@ -175,10 +175,38 @@ pub(crate) fn request_record(
     Value::Object(record)
 }
 
+pub(crate) fn delegated_read_request_record(
+    event: &str,
+    actor: &registry_casework_core::ActorContext,
+    gateway: &registry_casework_core::IssuerPrincipal,
+    client: &str,
+    policy_id: &str,
+    identifiers: Value,
+) -> Value {
+    let mut record = request_record(event, Some(actor), &actor.profile_id, identifiers);
+    let fields = record.as_object_mut().expect("request record is an object");
+    fields.insert(
+        "gatewayActor".to_owned(),
+        json!({"issuer": gateway.issuer, "subject": gateway.subject}),
+    );
+    fields.insert("gatewayClient".to_owned(), Value::String(client.to_owned()));
+    fields.insert(
+        "readerPolicyId".to_owned(),
+        Value::String(policy_id.to_owned()),
+    );
+    fields.insert(
+        "roleMode".to_owned(),
+        Value::String("delegated-staff-read".to_owned()),
+    );
+    record
+}
+
 /// The terminal outcome of a caller-requested operation that succeeded
 /// without recording a domain event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuditOutcome {
+    /// A read completed and released its result after terminal audit.
+    Succeeded,
     /// It returned the result retained for an earlier request it repeats,
     /// such as one under the same idempotency key.
     Replayed,
@@ -193,6 +221,7 @@ pub(crate) enum AuditOutcome {
 impl AuditOutcome {
     fn as_str(self) -> &'static str {
         match self {
+            Self::Succeeded => "succeeded",
             Self::Replayed => "replayed",
             Self::Unchanged => "unchanged",
             Self::Refused => "refused",
@@ -607,6 +636,7 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         "roleMode",
         "operatorReferenceHash",
         "schemaVersionsApplied",
+        "readerPolicyId",
     ] {
         if let Some(value) = raw.get(field) {
             published.insert(field.to_owned(), value.clone());
@@ -630,6 +660,19 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         let subject = actor.get("subject").and_then(Value::as_str).ok_or(())?;
         let hash = principal_pseudonym(identifiers, issuer, subject)?;
         published.insert("principalPseudonym".to_owned(), Value::String(hash));
+    }
+    if let Some(actor) = raw.get("gatewayActor").filter(|value| !value.is_null()) {
+        let issuer = actor.get("issuer").and_then(Value::as_str).ok_or(())?;
+        let subject = actor.get("subject").and_then(Value::as_str).ok_or(())?;
+        let hash = principal_pseudonym(identifiers, issuer, subject)?;
+        published.insert("gatewayPseudonym".to_owned(), Value::String(hash));
+    }
+    if let Some(client) = raw.get("gatewayClient") {
+        let client = client.as_str().ok_or(())?;
+        let hash = identifiers
+            .audit_reference_hash("casework-client-v1", "", client)
+            .map_err(|_| ())?;
+        published.insert("clientPseudonym".to_owned(), Value::String(hash));
     }
     Ok(Value::Object(published))
 }
@@ -873,6 +916,43 @@ mod tests {
             },
             profile_id: "officer".to_owned(),
             role: CaseworkRole::Staff,
+        }
+    }
+
+    #[test]
+    fn delegated_reader_audit_pseudonymizes_person_gateway_and_client() {
+        let hasher = registry_platform_audit::AuditKeyHasher::unkeyed_dev_only();
+        let record = delegated_read_request_record(
+            "delegated-review-task-context-read",
+            &actor(),
+            &IssuerPrincipal {
+                issuer: "https://gateway.test".into(),
+                subject: "registry-mcp".into(),
+            },
+            "registry-mcp-client",
+            "assistant-reader",
+            json!({"reviewTaskId": Uuid::from_u128(7)}),
+        );
+        let published = published_audit_record(record, &hasher).unwrap();
+        assert_eq!(published["roleMode"], "delegated-staff-read");
+        assert_eq!(published["readerPolicyId"], "assistant-reader");
+        for field in [
+            "principalPseudonym",
+            "gatewayPseudonym",
+            "clientPseudonym",
+            "reviewTaskPseudonym",
+        ] {
+            assert!(published.get(field).and_then(Value::as_str).is_some());
+        }
+        let encoded = published.to_string();
+        for private in [
+            "officer-7",
+            "registry-mcp",
+            "registry-mcp-client",
+            "https://identity.example.test",
+            "https://gateway.test",
+        ] {
+            assert!(!encoded.contains(private));
         }
     }
 

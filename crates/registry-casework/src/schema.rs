@@ -213,7 +213,13 @@ fn absent_secret_provider_requirement(provider: &str, reference_pattern: &str) -
                     "additionalProperties": {
                         "properties": {
                             "clientIdRef": forbidden,
-                            "clientAssertionKeyRef": forbidden
+                            "clientAssertionKeyRef": forbidden,
+                            "delegatedDisplayExchange": {
+                                "properties": {
+                                    "clientIdRef": forbidden,
+                                    "clientAssertionKeyRef": forbidden
+                                }
+                            }
                         }
                     }
                 },
@@ -340,6 +346,71 @@ mod tests {
         let mut empty = instance;
         empty["identity"]["databaseId"] = Value::from("");
         assert!(!schema.is_valid(&empty));
+    }
+
+    #[test]
+    fn delegated_staff_reader_schema_matches_the_closed_runtime_shape() {
+        let schema = runtime_schema();
+        let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "environment");
+        instance["authentication"]["oidc"]["allowedClients"] = serde_json::json!(["registry-mcp"]);
+        instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            "registry-mcp": ["https://people.example.test"]
+        });
+        instance["authentication"]["oidc"]["delegatedStaffReaders"] = serde_json::json!({
+            "assistant-reader": {
+                "profile": "staff",
+                "client": "registry-mcp",
+                "actorIssuer": "https://identity.example.test",
+                "actorSubject": "registry-mcp",
+                "assertionIssuer": "https://people.example.test",
+                "requiredScope": "casework:staff:delegated-read",
+                "maximumTokenLifetimeSeconds": 300,
+                "sourceProfiles": ["casework-delegated-proposal-reader"]
+            }
+        });
+        assert!(schema.is_valid(&instance));
+        assert!(read(&instance).is_ok());
+
+        let mut duplicate_source_profile = instance.clone();
+        duplicate_source_profile["authentication"]["oidc"]["delegatedStaffReaders"]
+            ["assistant-reader"]["sourceProfiles"] = serde_json::json!([
+            "casework-delegated-proposal-reader",
+            "casework-delegated-proposal-reader"
+        ]);
+        assert!(
+            read(&duplicate_source_profile).is_err(),
+            "runtime accepted duplicate delegated source profile identifiers"
+        );
+        assert!(
+            !schema.is_valid(&duplicate_source_profile),
+            "schema accepted duplicate delegated source profile identifiers"
+        );
+
+        for pointer in [
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/client",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/requiredScope",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/maximumTokenLifetimeSeconds",
+        ] {
+            let mut missing = instance.clone();
+            missing
+                .pointer_mut(
+                    pointer
+                        .rsplit_once('/')
+                        .expect("member pointer")
+                        .0,
+                )
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(pointer.rsplit_once('/').unwrap().1);
+            assert!(!schema.is_valid(&missing), "schema accepted missing {pointer}");
+            assert!(read(&missing).is_err(), "runtime read missing {pointer}");
+        }
+        let mut too_long = instance;
+        too_long["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+            ["maximumTokenLifetimeSeconds"] = serde_json::json!(301);
+        assert!(!schema.is_valid(&too_long));
+        assert!(read(&too_long).is_err());
     }
 
     #[test]
@@ -732,7 +803,15 @@ mod tests {
                 "statusProfile": "casework-review-status",
                 "tokenEndpoint": "https://identity.example.test/oauth2/token",
                 "clientIdRef": "secret:file/breg-client-id",
-                "clientAssertionKeyRef": "secret:env/BREG_CLIENT_ASSERTION_KEY"
+                "clientAssertionKeyRef": "secret:env/BREG_CLIENT_ASSERTION_KEY",
+                "delegatedDisplayExchange": {
+                    "tokenEndpoint": "https://identity.example.test/oauth2/token",
+                    "clientIdRef": "secret:file/breg-delegated-client-id",
+                    "clientAssertionKeyRef": "secret:env/BREG_DELEGATED_CLIENT_ASSERTION_KEY",
+                    "resource": "urn:casework:facility-breg",
+                    "scopes": ["registry:proposal:review"],
+                    "generation": "test-generation"
+                }
             }
         });
         instance["reviewCompletionDestinations"] = serde_json::json!({
@@ -797,6 +876,8 @@ mod tests {
             "/audit/hashKeyRef",
             "/contextProviders/facility-registry/clientIdRef",
             "/contextProviders/facility-registry/clientAssertionKeyRef",
+            "/contextProviders/facility-registry/delegatedDisplayExchange/clientIdRef",
+            "/contextProviders/facility-registry/delegatedDisplayExchange/clientAssertionKeyRef",
             "/reviewCompletionDestinations/bearer/bearerTokenRef",
             "/reviewCompletionDestinations/header/auth/secretRef",
             "/taskAuthority/signingKeyRef",

@@ -75,14 +75,13 @@ pub enum ProviderConfig {
         exchange: ExchangeConfig,
         service: ServiceConfig,
     },
-    /// Reserved configuration shape for a future staff delegation contract.
-    /// The offline checker rejects this variant until Casework explicitly
-    /// admits delegated actor tokens for the named human profiles.
+    /// Assigned-task reads under the backend's explicitly opted-in delegated-reader policy.
     Casework {
+        authority: CaseworkAuthority,
         #[serde(rename = "baseUrl")]
         base_url: Url,
-        #[serde(rename = "reviewProfile")]
-        review_profile: LocalId,
+        #[serde(rename = "readerPolicy")]
+        reader_policy: LocalId,
         #[serde(rename = "sourceProfile")]
         source_profile: LocalId,
         #[serde(rename = "pageSize")]
@@ -109,6 +108,15 @@ pub enum ProviderConfig {
     },
 }
 registry_platform_yaml::tagged_union!(ProviderConfig);
+
+/// This selector declares the intended backend contract; Casework independently
+/// admits the trusted gateway and enforces current task and source authority.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum CaseworkAuthority {
+    DelegatedStaffRead,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -304,7 +312,6 @@ impl RuntimeConfig {
         };
         let mut names = BTreeSet::new();
         let mut tools = BTreeSet::new();
-        let mut casework_delegation_paths = Vec::new();
         if self.bindings.is_empty() || self.bindings.len() > 32 {
             reject(
                 "/bindings",
@@ -369,20 +376,20 @@ impl RuntimeConfig {
                     }
                 }
                 ProviderConfig::Casework {
+                    authority: CaseworkAuthority::DelegatedStaffRead,
                     base_url,
-                    review_profile,
+                    reader_policy,
                     source_profile,
                     page_size,
                     authorization,
                 } => {
-                    casework_delegation_paths.push(pointer.clone());
                     if !check_exchange(&authorization.exchange)
                         || authorization.audience.as_str() == self.resource_server.resource.as_str()
                         || authorization.scopes.is_empty()
                         || !protected_endpoint(base_url.to_url())
                         || crate::casework::CaseworkOptions::new(
                             base_url.to_url(),
-                            review_profile.to_string(),
+                            reader_policy.to_string(),
                             source_profile.to_string(),
                             *page_size,
                         )
@@ -477,14 +484,6 @@ impl RuntimeConfig {
                 }
             }
         }
-        for pointer in casework_delegation_paths {
-            result.push(Diagnostic::error(
-                "casework.mcp.delegation-unsupported",
-                pointer,
-                "Current Casework human profiles refuse delegated actor tokens.",
-                "Do not activate this binding until an explicit delegated staff-read authority contract is approved.",
-            ));
-        }
         result
     }
 }
@@ -551,10 +550,7 @@ fn semantic_report(check: &registry_platform_config::RuntimeFileCheck<RuntimeCon
                 .config
                 .findings()
                 .into_iter()
-                .filter(|finding| {
-                    finding.code == "casework.mcp.delegation-unsupported"
-                        || !check.defers_within(&finding.path)
-                })
+                .filter(|finding| !check.defers_within(&finding.path))
                 .map(|finding| {
                     check.error_at(
                         KIND,

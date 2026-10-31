@@ -1504,6 +1504,29 @@ jobs:
             | tee "${RUNNER_TEMP}/breg-native-citizen.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-native-citizen.log" || { echo "::error::expected one passing native citizen authority journey"; exit 1; }
 
+      - name: Native delegated staff MCP authority journey
+        if: matrix.lane == 'postgres:2/3'
+        shell: bash
+        env:
+          BREG_BIN: ${{ github.workspace }}/target/debug/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
+          CASEWORK_BIN: ${{ github.workspace }}/target/debug/casework
+          CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
+          REGISTRY_STACK_FIXTURES_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          export CASEWORK_MCP_TEST_DATABASE_URL="$BREG_TEST_DATABASE_URL"
+          export TMPDIR="${RUNNER_TEMP}/native-staff-mcp"
+          mkdir -p "$TMPDIR"
+          chmod 700 "$TMPDIR"
+          cargo build --locked -p registry-breg -p registry-bregctl -p registry-casework -p registry-caseworkctl \
+            --features registry-breg/postgres-test,registry-casework/postgres-test \
+            --bin breg --bin bregctl --bin casework --bin caseworkctl
+          cargo test --locked -p registry-mcp --test native_casework \
+            -- --ignored --exact native_staff_gateway_preserves_delegated_read_authority --test-threads=1 \
+            | tee "${RUNNER_TEMP}/native-staff-mcp.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/native-staff-mcp.log" || { echo "::error::expected one passing native staff authority journey"; exit 1; }
+
       # The native worker/store library and test-only startup configuration
       # need postgres-test; keep the production-feature variants in the runner.
       # External-issuer cases compile here and execute only in their opt-in runner.

@@ -923,13 +923,8 @@ async fn trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries() {
     // A token exchange copies the subject's kind into the delegated token.
     let mut copied_kind = standing_agent_claims(act.clone());
     copied_kind["registry_actor_kind"] = json!("human");
-    let accepted = harness
-        .send(
-            &agent_path,
-            &[bearer(&harness.signed_token(copied_kind, "JWT"))],
-            None,
-        )
-        .await;
+    let token = harness.signed_token(copied_kind, "JWT");
+    let accepted = harness.send(&agent_path, &[bearer(&token)], None).await;
     assert_eq!(accepted.status(), StatusCode::OK);
     assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
 
@@ -2788,6 +2783,47 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
         AuthenticationConfigError::NamedClientNotListed
     );
     verifier.allowed_clients = vec!["workflow-client".into()];
-    authenticator_with_verifier(&proposal_registry, &idp, verifier, authority_claims())
-        .expect("an admitted Proposal-only standing agent needs no trusted actor mapping");
+    authenticator_with_verifier(
+        &proposal_registry,
+        &idp,
+        verifier.clone(),
+        authority_claims(),
+    )
+    .expect("an admitted Proposal-only standing agent needs no trusted actor mapping");
+
+    proposal_source["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+        "id": "casework-context",
+        "fields": {
+            "proposedLabel": {"type": "input", "input": "label"}
+        }
+    });
+    proposal_source["accessProfiles"][0]["permissions"] = json!({
+        "proposals": [{
+            "action": "register-child",
+            "operations": ["get-review-context"],
+            "readableContextFields": ["proposedLabel"],
+            "targets": [
+                {"recordType": "parent", "rowBoundaries": "unrestricted"},
+                {"recordType": "child", "rowBoundaries": "unrestricted"}
+            ]
+        }]
+    });
+    let delegated_read_registry = compile_action_claim_source(&proposal_source);
+    assert_eq!(
+        authenticator_with_verifier(
+            &delegated_read_registry,
+            &idp,
+            verifier.clone(),
+            authority_claims(),
+        )
+        .unwrap_err(),
+        AuthenticationConfigError::InvalidClaimMapping,
+        "a delegated standing-agent disclosure client must have an exact trusted actor mapping"
+    );
+    let claims = authority_claims().with_contextual_claims(
+        ClaimNames::default(),
+        BTreeMap::from([("workflow-client".into(), ACTOR_ID.into())]),
+    );
+    authenticator_with_verifier(&delegated_read_registry, &idp, verifier, claims)
+        .expect("the delegated source reader has an exact trusted actor mapping");
 }

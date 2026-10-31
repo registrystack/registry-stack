@@ -22,6 +22,7 @@ pub fn catalog() -> Catalog {
         command_reference(registry_schedulingctl::command(), None, None),
         command_reference(registry_messaging::runtime::command(), None, None),
         command_reference(registry_messagingctl::command(), None, None),
+        command_reference(registry_mcp::command(), None, None),
         command_reference(registry_documents::runtime::command(), None, None),
         command_reference(registry_documentsctl::command(), None, None),
         command_reference(registry_manifest_cli::command(), None, None),
@@ -166,12 +167,39 @@ mod tests {
                 "manifest",
                 "messaging",
                 "messagingctl",
+                "registry-mcp",
                 "registry-render",
                 "rstack",
                 "scheduling",
                 "schedulingctl",
             ]
         );
+    }
+
+    #[test]
+    fn configurable_mcp_gateway_publishes_its_offline_check_and_runtime_commands() {
+        let catalog = catalog();
+        for invocation in ["registry-mcp check", "registry-mcp serve"] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
+        let gateway = find_command(&catalog.binaries, "registry-mcp");
+        assert!(gateway.options.iter().any(|option| {
+            option.display == "--runtime-config <FILE>"
+                && option.always_required
+                && option.description.starts_with("Runtime configuration file")
+        }));
+        let check = find_command(&catalog.binaries, "registry-mcp check");
+        assert!(check.options.iter().any(|option| {
+            option.display == "--format <FORMAT>"
+                && option.default_values == ["human"]
+                && option.possible_values == ["human", "json"]
+        }));
+        for option in ["--environment", "--deny-warnings"] {
+            assert!(check
+                .options
+                .iter()
+                .any(|argument| argument.display == option));
+        }
     }
 
     #[test]

@@ -677,6 +677,83 @@ pub struct OidcConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 7_200)))]
     pub maximum_token_lifetime_seconds: Option<u64>,
+    /// Explicitly opted-in delegated staff readers, keyed by the policy id a
+    /// dedicated read client sends. Absence disables delegated staff reads.
+    #[serde(
+        default,
+        deserialize_with = "optional_delegated_staff_readers",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Option<BTreeMap<registry_platform_yaml::LocalId, DelegatedStaffReaderConfig>>"
+        )
+    )]
+    pub delegated_staff_readers: Option<BTreeMap<String, DelegatedStaffReaderConfig>>,
+}
+
+fn optional_delegated_staff_readers<'de, D>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, DelegatedStaffReaderConfig>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    registry_casework_core::typed::local_id_keys(deserializer).map(Some)
+}
+
+/// One deployment-owned delegation ceiling. The policy id is the containing
+/// map key, never a human profile supplied by the HTTP caller.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DelegatedStaffReaderConfig {
+    #[serde(deserialize_with = "registry_casework_core::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub profile: String,
+    pub client: String,
+    #[serde(deserialize_with = "registry_casework_core::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub actor_issuer: String,
+    pub actor_subject: String,
+    #[serde(deserialize_with = "registry_casework_core::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub assertion_issuer: String,
+    pub required_scope: String,
+    #[serde(deserialize_with = "registry_casework_core::typed::bounded_u64::<_, 1, 300>")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 300)))]
+    pub maximum_token_lifetime_seconds: u64,
+    #[serde(
+        default,
+        deserialize_with = "optional_delegated_source_profiles",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<registry_platform_yaml::LocalId>",
+            length(min = 1, max = 32)
+        )
+    )]
+    pub source_profiles: Vec<String>,
+}
+
+fn optional_delegated_source_profiles<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    registry_platform_yaml::UniqueList::<registry_platform_yaml::LocalId>::deserialize(deserializer)
+        .and_then(|profiles| {
+            if profiles.is_empty() || profiles.len() > 32 {
+                return Err(serde::de::Error::custom(
+                    "sourceProfiles must contain from 1 through 32 distinct local identifiers",
+                ));
+            }
+            Ok(profiles
+                .into_iter()
+                .map(registry_platform_yaml::LocalId::into_string)
+                .collect())
+        })
 }
 
 /// An empty list is not how the file says "refuse no key" (CFG-EMPTY-2):
@@ -1045,6 +1122,22 @@ impl RuntimeConfig {
                     reference.as_str(),
                 ));
             }
+            if let Some(delegated) = &binding.delegated_display_exchange {
+                for (member, reference) in [
+                    ("clientIdRef", &delegated.client_id_ref),
+                    ("clientAssertionKeyRef", &delegated.client_assertion_key_ref),
+                ] {
+                    references.push((
+                        vec![
+                            "contextProviders",
+                            source_id.as_str(),
+                            "delegatedDisplayExchange",
+                            member,
+                        ],
+                        reference.as_str(),
+                    ));
+                }
+            }
         }
         for (destination_id, destination) in &self.review_completion_destinations {
             match (&destination.bearer_token_ref, &destination.auth) {
@@ -1227,6 +1320,90 @@ impl RuntimeConfig {
                 reason: "must differ from authentication.oidc.scopeClaim",
             });
         }
+        if let Some(readers) = &oidc.delegated_staff_readers {
+            if readers.is_empty() {
+                findings.push(delegated_staff_reader_finding(
+                    &["authentication", "oidc", "delegatedStaffReaders"],
+                    "must not be empty when written",
+                    "Delete delegatedStaffReaders to disable delegated reads, or name at least one reader policy.",
+                ));
+            }
+            for (policy, reader) in readers {
+                let base = [
+                    "authentication",
+                    "oidc",
+                    "delegatedStaffReaders",
+                    policy.as_str(),
+                ];
+                if !oidc.clients.allowed_clients.contains(&reader.client) {
+                    let mut path = base.to_vec();
+                    path.push("client");
+                    findings.push(delegated_staff_reader_finding(
+                        &path,
+                        "must be named by authentication.oidc.allowedClients",
+                        "Add this exact client to allowedClients; unrestricted client admission cannot enable delegated staff reads.",
+                    ));
+                }
+                if oidc
+                    .clients
+                    .assertion_issuers
+                    .get(&reader.client)
+                    .is_none_or(|issuers| !issuers.contains(&reader.assertion_issuer))
+                {
+                    let mut path = base.to_vec();
+                    path.push("assertionIssuer");
+                    findings.push(delegated_staff_reader_finding(
+                        &path,
+                        "must be listed for this client by authentication.oidc.assertionIssuers",
+                        "Bind the client to this exact subject-token issuer in assertionIssuers.",
+                    ));
+                }
+                if reader.actor_issuer != oidc.provider.issuer.as_str() {
+                    let mut path = base.to_vec();
+                    path.push("actorIssuer");
+                    findings.push(delegated_staff_reader_finding(
+                        &path,
+                        "must equal authentication.oidc.issuer",
+                        "Name the exact issuer that signs the delegated access token and its act identity.",
+                    ));
+                }
+                for (member, value) in [
+                    ("client", reader.client.as_str()),
+                    ("actorSubject", reader.actor_subject.as_str()),
+                ] {
+                    if registry_platform_yaml::ExternalId::new(value).is_err() {
+                        let mut path = base.to_vec();
+                        path.push(member);
+                        findings.push(delegated_staff_reader_finding(
+                            &path,
+                            "must be a bounded external identifier",
+                            "Write the exact non-empty identifier issued in the verified token.",
+                        ));
+                    }
+                }
+                if !valid_delegated_scope(&reader.required_scope) {
+                    let mut path = base.to_vec();
+                    path.push("requiredScope");
+                    findings.push(delegated_staff_reader_finding(
+                        &path,
+                        "must be one bounded OAuth scope without whitespace",
+                        "Name one distinct scope issued only for delegated staff reads.",
+                    ));
+                }
+                if oidc
+                    .maximum_token_lifetime_seconds
+                    .is_some_and(|maximum| reader.maximum_token_lifetime_seconds > maximum)
+                {
+                    let mut path = base.to_vec();
+                    path.push("maximumTokenLifetimeSeconds");
+                    findings.push(delegated_staff_reader_finding(
+                        &path,
+                        "must not exceed authentication.oidc.maximumTokenLifetimeSeconds",
+                        "Lower this delegated-reader lifetime or raise the deployment-wide bound without exceeding 300 seconds.",
+                    ));
+                }
+            }
+        }
     }
 
     fn check_database(&self, findings: &mut Vec<RuntimeConfigError>) {
@@ -1270,6 +1447,70 @@ impl RuntimeConfig {
             .any(|profile| profile.principal_claim == self.authentication.oidc.human_identity.claim)
         {
             findings.push(RuntimeConfigError::PrincipalClaimConflict);
+        }
+    }
+
+    fn check_delegated_staff_readers(
+        &self,
+        project: &CaseworkProject,
+        findings: &mut Vec<RuntimeConfigError>,
+    ) {
+        let Some(readers) = &self.authentication.oidc.delegated_staff_readers else {
+            return;
+        };
+        let mut profiles = BTreeSet::new();
+        for (policy, reader) in readers {
+            let base = [
+                "authentication",
+                "oidc",
+                "delegatedStaffReaders",
+                policy.as_str(),
+            ];
+            let Some(profile) = project
+                .access_profiles
+                .iter()
+                .find(|profile| profile.id == reader.profile)
+            else {
+                let mut path = base.to_vec();
+                path.push("profile");
+                findings.push(delegated_staff_reader_finding(
+                    &path,
+                    "must name an access profile in casework.yaml",
+                    "Name one existing Staff profile.",
+                ));
+                continue;
+            };
+            if profile.role != registry_casework_core::CaseworkRole::Staff {
+                let mut path = base.to_vec();
+                path.push("profile");
+                findings.push(delegated_staff_reader_finding(
+                    &path,
+                    "must name a Staff profile",
+                    "Use a Staff profile; delegated Supervisor, Administrator and Requester authority is refused.",
+                ));
+            }
+            if !profiles.insert(&profile.id) {
+                let mut path = base.to_vec();
+                path.push("profile");
+                findings.push(delegated_staff_reader_finding(
+                    &path,
+                    "must not be used by another delegated reader policy",
+                    "Keep one delegated reader policy per Staff profile so cursors cannot cross gateway identities.",
+                ));
+            }
+            if profile
+                .required_scopes
+                .iter()
+                .any(|scope| scope == &reader.required_scope)
+            {
+                let mut path = base.to_vec();
+                path.push("requiredScope");
+                findings.push(delegated_staff_reader_finding(
+                    &path,
+                    "must be distinct from the profile's human scopes",
+                    "Issue a separate scope used only by this delegated reader policy.",
+                ));
+            }
         }
     }
 
@@ -1531,6 +1772,7 @@ const FILE_RULES: &[FileRule] = &[
 /// The rules a runtime file satisfies against the project it binds.
 const PROJECT_RULES: &[ProjectRule] = &[
     RuntimeConfig::check_principal_claims,
+    RuntimeConfig::check_delegated_staff_readers,
     RuntimeConfig::check_task_authority,
     RuntimeConfig::check_context_provider_set,
     RuntimeConfig::check_completion_destinations_configured,
@@ -1562,6 +1804,27 @@ fn task_authority_finding(
         reason,
         action,
     }
+}
+
+fn delegated_staff_reader_finding(
+    segments: &[&str],
+    reason: &'static str,
+    action: &'static str,
+) -> RuntimeConfigError {
+    RuntimeConfigError::InvalidDelegatedStaffReader {
+        path: segments.join("."),
+        pointer: pointer_to(segments),
+        reason,
+        action,
+    }
+}
+
+fn valid_delegated_scope(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope.len() <= 256
+        && scope
+            .bytes()
+            .all(|byte| (0x21..=0x7e).contains(&byte) && byte != b'"' && byte != b'\\')
 }
 
 fn valid_review_completion_url(raw: &str) -> bool {
@@ -1902,6 +2165,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn delegated_staff_reader_requires_an_exact_client_actor_scope_and_staff_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["allowedClients"] = json!(["registry-mcp"]);
+        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+            "registry-mcp": ["https://people.example.test"]
+        });
+        value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
+            "assistant-reader": {
+                "profile": "staff",
+                "client": "registry-mcp",
+                "actorIssuer": "https://identity.example.test",
+                "actorSubject": "registry-mcp",
+                "assertionIssuer": "https://people.example.test",
+                "requiredScope": "casework:staff:delegated-read",
+                "maximumTokenLifetimeSeconds": 300,
+                "sourceProfiles": ["review-agent"]
+            }
+        });
+        let config = read_operator(&value, directory.path());
+        let (_, _, project) = referenced_policy();
+        assert!(config.findings(Some(&project)).is_empty());
+
+        let mut changed = config.clone();
+        changed
+            .authentication
+            .oidc
+            .delegated_staff_readers
+            .as_mut()
+            .unwrap()
+            .get_mut("assistant-reader")
+            .unwrap()
+            .actor_subject = "other-gateway".to_owned();
+        // A different configured actor is valid configuration; the token must
+        // match it exactly at authentication time.
+        assert!(changed.findings(Some(&project)).is_empty());
+
+        let mut changed = config.clone();
+        changed
+            .authentication
+            .oidc
+            .delegated_staff_readers
+            .as_mut()
+            .unwrap()
+            .get_mut("assistant-reader")
+            .unwrap()
+            .required_scope = "casework:staff".to_owned();
+        assert!(changed.findings(Some(&project)).iter().any(|finding| {
+            finding.code() == "casework.runtime.invalid-delegated-staff-reader"
+                && finding.pointer().ends_with("/requiredScope")
+        }));
+    }
+
     fn referenced_policy() -> (Vec<u8>, BTreeMap<String, Vec<u8>>, CaseworkProject) {
         let start = STANDALONE.find("    displaySchema:\n").unwrap();
         let end = STANDALONE[start..].find("    outcomes:\n").unwrap() + start;
@@ -2065,7 +2382,15 @@ mod tests {
         value["taskAuthority"] = json!({"issuer":"https://casework.example.test","exchangeAudience":"urn:example:exchange","signingKeyRef":"secret:file/signer","statusClients":{}});
         value["contextProviders"] = json!({"facility":{
             "baseUrl":"https://registry.example.test", "statusProfile":"review-status",
-            "tokenEndpoint":"https://identity.example.test/token", "clientIdRef":"secret:file/client-id", "clientAssertionKeyRef":"secret:file/client-key"
+            "tokenEndpoint":"https://identity.example.test/token", "clientIdRef":"secret:file/client-id", "clientAssertionKeyRef":"secret:file/client-key",
+            "delegatedDisplayExchange": {
+                "tokenEndpoint":"https://identity.example.test/token",
+                "clientIdRef":"secret:file/delegated-client-id",
+                "clientAssertionKeyRef":"secret:file/delegated-client-key",
+                "resource":"urn:casework:facility-breg",
+                "scopes":["registry:proposal:review"],
+                "generation":"test-generation"
+            }
         }});
         value["reviewCompletionDestinations"] = json!({
             "bearer":{"url":"https://completion.example.test/reviews","bearerTokenRef":"secret:file/bearer"},
@@ -2093,6 +2418,8 @@ mod tests {
                 "/taskAuthority/signingKeyRef",
                 "/contextProviders/facility/clientIdRef",
                 "/contextProviders/facility/clientAssertionKeyRef",
+                "/contextProviders/facility/delegatedDisplayExchange/clientIdRef",
+                "/contextProviders/facility/delegatedDisplayExchange/clientAssertionKeyRef",
                 "/reviewCompletionDestinations/bearer/bearerTokenRef",
                 "/reviewCompletionDestinations/header.~1receiver/auth/secretRef"
             ]
@@ -2410,6 +2737,13 @@ pub enum RuntimeConfigError {
         reason: &'static str,
         action: &'static str,
     },
+    #[error("{path} {reason}")]
+    InvalidDelegatedStaffReader {
+        path: String,
+        pointer: String,
+        reason: &'static str,
+        action: &'static str,
+    },
     #[error(
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
@@ -2478,6 +2812,7 @@ impl RuntimeConfigError {
             | Self::InvalidReviewCompletionAuth { .. }
             | Self::InvalidReviewCompletionDestination { .. }
             | Self::InvalidTaskAuthority { .. }
+            | Self::InvalidDelegatedStaffReader { .. }
             | Self::MissingIdentity
             | Self::Project(_)
             | Self::PolicyUnreadable
@@ -2499,7 +2834,8 @@ impl RuntimeConfigError {
             Self::BindingSecret { pointer, .. }
             | Self::InvalidReviewCompletionAuth { pointer, .. }
             | Self::InvalidReviewCompletionDestination { pointer, .. }
-            | Self::InvalidTaskAuthority { pointer, .. } => pointer.clone(),
+            | Self::InvalidTaskAuthority { pointer, .. }
+            | Self::InvalidDelegatedStaffReader { pointer, .. } => pointer.clone(),
             Self::MissingIdentity => "/identity".to_owned(),
             Self::Project(_)
             | Self::PolicyUnreadable
@@ -2538,6 +2874,9 @@ impl RuntimeConfigError {
             Self::PrincipalClaimConflict => "casework.runtime.principal-claim-conflict",
             Self::AllowedClientsRequired => "casework.runtime.allowed-clients-required",
             Self::InvalidTaskAuthority { .. } => "casework.runtime.invalid-task-authority",
+            Self::InvalidDelegatedStaffReader { .. } => {
+                "casework.runtime.invalid-delegated-staff-reader"
+            }
             Self::InvalidDatabaseReference => "casework.runtime.invalid-database-reference",
             Self::InvalidAuditDestination(_) => "casework.runtime.invalid-audit",
             Self::InvalidContextProviders => "casework.runtime.context-providers-mismatch",
@@ -2607,7 +2946,8 @@ impl RuntimeConfigError {
             Self::AllowedClientsRequired => {
                 "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry."
             }
-            Self::InvalidTaskAuthority { action, .. } => action,
+            Self::InvalidTaskAuthority { action, .. }
+            | Self::InvalidDelegatedStaffReader { action, .. } => action,
             Self::InvalidDatabaseReference => {
                 "Write database.runtimeUrlRef and database.migrationUrlRef as secret references."
             }

@@ -10,15 +10,24 @@ The example selects the existing BReg citizen tools explicitly.
 Its issuer, registry and review origins are placeholders; an offline pass establishes configuration validity, not access to a running service.
 Use the institution's independently operated issuer and task authority for protected BReg operations.
 
-The staff template demonstrates an authority dependency with a precise refusal:
+The staff example selects the separate delegated-read contract explicitly:
 
 ```sh
-cargo run --locked -p registry-mcp -- --runtime-config "$PWD/products/platform/examples/mcp-runtime/casework-held.example.yaml" check
+cargo run --locked -p registry-mcp -- --runtime-config "$PWD/products/platform/examples/mcp-runtime/casework.example.yaml" check
 ```
 
-Expect exit 1 and `casework.mcp.delegation-unsupported`.
-Current Casework human profiles reject delegated actor tokens.
-The template uses a distinct staff audience, client, scope and credential namespace; it does not make that missing authority available.
+Its `readerPolicy` must name an enabled Casework `delegatedStaffReaders` policy,
+with the exact trusted gateway client/actor, represented Staff profile, read
+scopes and short lifetime. Casework admits only assigned-task listing and context
+reads through dedicated routes. An offline pass validates the gateway file; the
+backend independently checks that authority on every call. Current-source reads
+also require a separate source-resource exchange and source-owned agent
+disclosure profile. The example uses a distinct staff audience, client, scope and
+credential namespace.
+
+The historical `casework-held.example.yaml` is retained as a migration refusal
+fixture. It lacks the explicit authority selector and is refused offline with
+`config.missing-key`. Use the staff example above for the delegated-read shape.
 
 ## Run the synthetic external-read workspace
 
@@ -45,3 +54,21 @@ Read the command's test count and results; an ignored test or zero selected test
 
 For the separate native citizen proof, follow the BReg `postgres` lane's `native_citizen` instructions and matching binary prerequisites.
 Synthetic authority and loopback sources prove the local composition boundaries; live institution access remains a separate deployment exercise.
+
+## Run the native staff-read proof
+
+Build matching `breg`, `bregctl`, `casework` and `caseworkctl` binaries. Set
+`BREG_BIN`, `BREGCTL_BIN`, `CASEWORK_BIN` and `CASEWORKCTL_BIN` to their absolute
+paths, `REGISTRY_STACK_FIXTURES_ROOT` to this matching source tree, and
+`CASEWORK_MCP_TEST_DATABASE_URL` to an explicitly owned disposable PostgreSQL
+administrator connection. The test creates isolated product databases/roles;
+never select an institutional or retained database. Set `TMPDIR` to a private
+task-owned directory.
+
+```sh
+cargo test --locked -p registry-mcp --test native_casework -- --ignored --nocapture
+```
+
+This executes the MCP client/router, token exchange and real product/database
+boundaries. The issuer and test records are synthetic. It does not establish
+a production issuer integration or live institutional authorization.

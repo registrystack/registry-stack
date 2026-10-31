@@ -55,6 +55,19 @@ impl Project {
             Self::BregRecords => "profiles/breg-records/profile.yaml",
         })
     }
+
+    fn operations(self) -> [(&'static str, &'static str); 2] {
+        match self {
+            Self::GovStack => [
+                (GET_TOOL, "records-get.persons"),
+                (SEARCH_TOOL, "records-search.persons"),
+            ],
+            Self::BregRecords => [
+                (GET_TOOL, "records-get.person"),
+                (SEARCH_TOOL, "records-search.person"),
+            ],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -205,6 +218,7 @@ impl NativeStack {
             "synthetic-audit-hash-key-0123456789abcdef0123456789abcdef",
         );
         let gateway_path = directory.path().join("gateway-runtime.yaml");
+        let operations = pinned_project.operations();
         write_gateway_runtime(
             &gateway_path,
             &resource,
@@ -213,10 +227,7 @@ impl NativeStack {
             &contract_path,
             expected_digest,
             directory.path(),
-            &[
-                (GET_TOOL, "records-get.persons"),
-                (SEARCH_TOOL, "records-search.persons"),
-            ],
+            &operations,
         );
         let config = RuntimeConfig::load(&gateway_path).expect("gateway runtime config loads");
         let router = runtime::build(&config)

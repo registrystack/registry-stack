@@ -340,12 +340,12 @@ mod tests {
     }
 
     #[test]
-    fn casework_shape_is_reserved_but_never_activatable() {
+    fn casework_shape_requires_the_explicit_delegated_read_contract() {
         let mut runtime = as_json(example().as_bytes());
         runtime["bindings"][0]["tools"] = json!(["list_my_review_tasks"]);
         runtime["bindings"][0]["provider"] = json!({
-            "type":"casework","baseUrl":"http://127.0.0.1:8120/",
-            "reviewProfile":"reviewer","sourceProfile":"reviewer-source","pageSize":20,
+            "type":"casework","authority":"delegated-staff-read","baseUrl":"http://127.0.0.1:8120/",
+            "readerPolicy":"reviewer","sourceProfile":"reviewer-source","pageSize":20,
             "authorization":{
                 "exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"staff-gateway","privateKeyRef":"secret:env/MCP_EXCHANGE_PRIVATE_KEY"},
                 "audience":"urn:example:casework","scopes":["casework:staff"]
@@ -353,7 +353,7 @@ mod tests {
         });
         assert!(
             validator().is_valid(&runtime),
-            "the reserved shape stays documentable"
+            "the explicit delegated-read shape is documentable"
         );
         let directory = tempfile::tempdir().unwrap();
         let path = directory
@@ -363,9 +363,11 @@ mod tests {
             .join("runtime.json");
         std::fs::write(&path, serde_json::to_vec(&runtime).unwrap()).unwrap();
         let report = crate::config::RuntimeConfig::check(&path, false);
-        assert!(report.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "casework.mcp.delegation-unsupported"
-                && diagnostic.path == "/bindings/0"
-        }));
+        assert!(!report.has_errors(), "{}", report.render_human());
+        runtime["bindings"][0]["provider"]
+            .as_object_mut()
+            .unwrap()
+            .remove("authority");
+        assert!(!validator().is_valid(&runtime));
     }
 }

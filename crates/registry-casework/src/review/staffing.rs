@@ -10,6 +10,18 @@ impl CaseworkService {
         token: &str,
         query: ReviewStaffingQuery,
     ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
+        self.review_staffing_tasks_with_delegation(actor, source_profile, token, query, None)
+            .await
+    }
+
+    pub(crate) async fn review_staffing_tasks_with_delegation(
+        &self,
+        actor: &ActorContext,
+        source_profile: Option<&str>,
+        token: &str,
+        query: ReviewStaffingQuery,
+        delegated: Option<&DelegatedCredentialContext>,
+    ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
         query.check().map_err(|_| ReviewRuntimeError::Invalid)?;
         require_human_reviewer(actor)?;
         if source_profile.is_none() {
@@ -96,7 +108,14 @@ impl CaseworkService {
                 let request_id = record.request_id;
                 let records = BTreeMap::from([(request_id, record)]);
                 observations
-                    .prepare(self, &records, source_profile, token, until, true)
+                    .prepare(
+                        self,
+                        &records,
+                        source_profile,
+                        super::inbox::InboxDisplayCredential::new(token, delegated),
+                        until,
+                        true,
+                    )
                     .await?;
                 observations.display(&records[&request_id], source_profile, true, true)?;
                 let current = self.store.review_task(actor, anchor).await?;
@@ -170,7 +189,14 @@ impl CaseworkService {
             };
             let records = self.store.inbox_records(&page.items).await?;
             observations
-                .prepare(self, &records, source_profile, token, until, false)
+                .prepare(
+                    self,
+                    &records,
+                    source_profile,
+                    super::inbox::InboxDisplayCredential::new(token, delegated),
+                    until,
+                    false,
+                )
                 .await?;
             let ids = page
                 .items

@@ -645,6 +645,24 @@ fn validate_claim_mapping(
     }) {
         return Err(AuthenticationConfigError::NamedClientNotListed);
     }
+    if registry.actions().actions.iter().any(|action| {
+        let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            return false;
+        };
+        proposal.permissions.iter().any(|profile| {
+            profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
+                && profile.task_grant.is_none()
+                && profile
+                    .operations
+                    .contains(&crate::contract::ProposalOperation::GetReviewContext)
+                && profile
+                    .requester_clients
+                    .iter()
+                    .any(|client| !claims.trusted_actors.contains_key(client))
+        })
+    }) {
+        return Err(AuthenticationConfigError::InvalidClaimMapping);
+    }
     // A recipient's client that the verifier would refuse can never read under
     // consent, so a mismatch is a configuration error, not a silent denial.
     if registry.recipients().clients().any(|client| {

@@ -26,8 +26,8 @@ pub use client::CaseworkClient;
 pub use config::CaseworkClientConfig;
 pub use error::{CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure};
 pub use model::{
-    CaseworkAuth, CaseworkComplete, OwnReviewDecisionQuery, ReviewPageQuery,
-    ReviewResultObservation, ReviewResultResponse, SupervisoryReviewTaskQuery,
+    CaseworkAuth, CaseworkComplete, DelegatedStaffReadAuth, OwnReviewDecisionQuery,
+    ReviewPageQuery, ReviewResultObservation, ReviewResultResponse, SupervisoryReviewTaskQuery,
 };
 pub use registry_casework_core::{
     submission_digest, AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest,

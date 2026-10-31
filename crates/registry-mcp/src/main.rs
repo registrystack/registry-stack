@@ -1,51 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
-use clap::{Parser, Subcommand, ValueEnum};
-use registry_mcp::{config::RuntimeConfig, runtime};
-use std::{path::PathBuf, process::ExitCode};
-
-#[derive(Parser)]
-#[command(
-    name = "registry-mcp",
-    about = "Serve explicitly configured native and adapter MCP capabilities"
-)]
-struct Cli {
-    #[arg(long, value_name = "FILE")]
-    runtime_config: PathBuf,
-    #[command(subcommand)]
-    command: Command,
-}
-#[derive(Subcommand)]
-enum Command {
-    /// Check configuration offline, without credentials, sockets or audit writes.
-    Check {
-        #[arg(long, value_enum, default_value_t=Format::Human)]
-        format: Format,
-        #[arg(long)]
-        environment: bool,
-        #[arg(long)]
-        deny_warnings: bool,
-    },
-    Serve,
-}
-#[derive(Clone, Copy, ValueEnum)]
-enum Format {
-    Human,
-    Json,
-}
+use clap::Parser;
+use registry_mcp::{
+    cli::{Cli, Command, Format},
+    config::RuntimeConfig,
+    runtime,
+};
+use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    if let Command::Check {
-        format,
-        environment,
-        deny_warnings,
-    } = cli.command
-    {
-        let (report, unavailable) = RuntimeConfig::check_status(&cli.runtime_config, environment);
-        let failed =
-            unavailable || report.has_errors() || (deny_warnings && report.warning_count() > 0);
-        match format {
+    if let Command::Check(arguments) = cli.command {
+        let (report, unavailable) =
+            RuntimeConfig::check_status(&cli.runtime_config, arguments.environment);
+        let failed = unavailable
+            || report.has_errors()
+            || (arguments.deny_warnings && report.warning_count() > 0);
+        match arguments.format {
             Format::Human => print!("{}", report.render_human()),
             Format::Json => match serde_json::to_string_pretty(
                 &serde_json::json!({"ok":!failed,"command":"check","status":if unavailable {"operational-failure"} else if failed {"domain-refusal"} else {"complete"},"apiVersion":"id.registrystack.org/formats/platform/mcp-ctl-report/v1alpha1","kind":"PlatformMcpCtlReport","version":env!("CARGO_PKG_VERSION"),"filesChecked":1,"errors":report.error_count(),"warnings":report.warning_count(),"diagnostics":report.to_json_value()}),

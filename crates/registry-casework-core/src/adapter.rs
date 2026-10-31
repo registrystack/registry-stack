@@ -25,6 +25,84 @@ pub struct HumanDisplayRequest<'a> {
     pub credential: EphemeralCredential<'a>,
 }
 
+/// A delegated staff read carries the already verified Casework credential to
+/// a provider that owns a separate, per-call source authorization decision.
+/// It is deliberately distinct from [`HumanDisplayRequest`]: a provider must
+/// never forward this bearer as though it were a direct human session.
+pub struct DelegatedDisplayRequest<'a> {
+    pub identity: &'a ReviewContextIdentity,
+    pub source_profile_id: &'a str,
+    pub credential: EphemeralCredential<'a>,
+    pub credential_context: &'a DelegatedCredentialContext,
+}
+
+/// Verified subject-token metadata needed by a provider's independent token
+/// exchange. The values come from Casework's verifier, never from request
+/// headers, and deliberately omit the delegated actor and source authority.
+#[derive(Clone, Eq, PartialEq)]
+pub struct DelegatedCredentialContext {
+    issuer: String,
+    subject: String,
+    audience: String,
+    expires_at: i64,
+}
+
+impl DelegatedCredentialContext {
+    #[must_use]
+    pub fn verified(issuer: String, subject: String, audience: String, expires_at: i64) -> Self {
+        Self {
+            issuer,
+            subject,
+            audience,
+            expires_at,
+        }
+    }
+
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    #[must_use]
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
+    #[must_use]
+    pub fn audience(&self) -> &str {
+        &self.audience
+    }
+
+    #[must_use]
+    pub const fn expires_at(&self) -> i64 {
+        self.expires_at
+    }
+}
+
+impl std::fmt::Debug for DelegatedCredentialContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DelegatedCredentialContext")
+            .field("issuer", &"<verified>")
+            .field("subject", &"<redacted>")
+            .field("audience", &"<verified>")
+            .field("expires_at", &"<verified>")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for DelegatedDisplayRequest<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DelegatedDisplayRequest")
+            .field("identity", &"<redacted>")
+            .field("source_profile_id", &"<redacted>")
+            .field("credential", &self.credential)
+            .field("credential_context", &self.credential_context)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HumanDisplayObservation {
@@ -141,6 +219,28 @@ pub trait ReviewContextProvider: Send + Sync {
         }
         results
     }
+    /// A delegated staff projection. Providers opt in explicitly and acquire
+    /// any source credential under their own resource and policy boundary.
+    async fn delegated_display(
+        &self,
+        _request: DelegatedDisplayRequest<'_>,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
+        Err(ReviewContextError::Denied)
+    }
+    /// A bounded delegated projection preserving input order and cardinality.
+    /// The default refuses every item and never falls back to human display.
+    async fn delegated_display_batch(
+        &self,
+        identities: &[ReviewContextIdentity],
+        _source_profile_id: &str,
+        _credential: EphemeralCredential<'_>,
+        _credential_context: &DelegatedCredentialContext,
+    ) -> Vec<Result<HumanDisplayObservation, ReviewContextError>> {
+        if identities.len() > 100 {
+            return vec![Err(ReviewContextError::Invalid); identities.len()];
+        }
+        vec![Err(ReviewContextError::Denied); identities.len()]
+    }
     async fn service_status(
         &self,
         identity: &ReviewContextIdentity,
@@ -163,6 +263,34 @@ pub trait ReviewContextProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RefusingProvider;
+
+    #[async_trait]
+    impl ReviewContextProvider for RefusingProvider {
+        fn provider_id(&self) -> &str {
+            "refusing"
+        }
+
+        fn capabilities(&self) -> &[crate::ReviewContextCapability] {
+            &[]
+        }
+
+        async fn human_display(
+            &self,
+            _request: HumanDisplayRequest<'_>,
+        ) -> Result<HumanDisplayObservation, ReviewContextError> {
+            Err(ReviewContextError::Denied)
+        }
+
+        async fn service_status(
+            &self,
+            _identity: &ReviewContextIdentity,
+        ) -> Result<ServiceStatusObservation, ReviewContextError> {
+            Err(ReviewContextError::Denied)
+        }
+    }
+
     #[test]
     fn service_projection_refuses_widening_or_task_substitution() {
         let digest =
@@ -213,5 +341,65 @@ mod tests {
             observation.check(&request),
             Err(ReviewContextError::Invalid)
         );
+    }
+
+    #[test]
+    fn delegated_display_is_a_distinct_default_denial() {
+        let digest =
+            registry_review_protocol::ContentDigest::parse(&format!("sha256:{}", "a".repeat(64)))
+                .unwrap();
+        let identity = ReviewContextIdentity {
+            subject: SubjectBinding {
+                source: "source".into(),
+                subject_type: "proposal".into(),
+                id: "id".into(),
+                version: "1".into(),
+                digest: digest.clone(),
+            },
+            contract: ReviewContextContract {
+                id: "urn:context".into(),
+                revision: digest.clone(),
+                schema_digest: digest,
+            },
+        };
+        let provider = RefusingProvider;
+        let context = DelegatedCredentialContext::verified(
+            "https://casework.test".into(),
+            "officer-7".into(),
+            "urn:casework".into(),
+            1,
+        );
+        assert_eq!(
+            run_ready(provider.delegated_display(DelegatedDisplayRequest {
+                identity: &identity,
+                source_profile_id: "delegated-review",
+                credential: EphemeralCredential::new("opaque"),
+                credential_context: &context,
+            })),
+            Err(ReviewContextError::Denied)
+        );
+        assert_eq!(
+            run_ready(provider.delegated_display_batch(
+                std::slice::from_ref(&identity),
+                "delegated-review",
+                EphemeralCredential::new("opaque"),
+                &context,
+            )),
+            vec![Err(ReviewContextError::Denied)]
+        );
+    }
+
+    fn run_ready<T>(future: impl std::future::Future<Output = T>) -> T {
+        struct Noop;
+        impl std::task::Wake for Noop {
+            fn wake(self: std::sync::Arc<Self>) {}
+        }
+        let waker = std::task::Waker::from(std::sync::Arc::new(Noop));
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut future = std::pin::pin!(future);
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(value) => value,
+            std::task::Poll::Pending => panic!("the default refusal must be immediately ready"),
+        }
     }
 }

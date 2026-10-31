@@ -3,7 +3,10 @@
 #![deny(unsafe_code)]
 pub mod adapter;
 pub mod casework;
+pub mod cli;
 pub mod config;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
+
+pub use cli::command;

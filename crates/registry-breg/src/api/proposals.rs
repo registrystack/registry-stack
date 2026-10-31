@@ -251,6 +251,7 @@ pub(crate) fn authorize(
             operation,
             ProposalAuthorityOperation::Start
                 | ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit)
+                | ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
         )
     {
         return None;
@@ -299,11 +300,21 @@ pub(crate) fn authorize(
                 selected.map_or(grant.default, |profile| profile == grant.profile_id)
                     && grant.operations.contains(&operation)
             })?;
-            if standing_agent && grant.ownership != Some(crate::model::ProposalOwnership::Caller) {
+            if standing_agent
+                && operation == ProposalOperation::Edit
+                && grant.ownership != Some(crate::model::ProposalOwnership::Caller)
+            {
                 return None;
             }
-            // The outer gate limits standing agents to Edit here, and the
-            // ownership check above requires the caller's own draft.
+            // A standing agent edits only its caller-owned draft. The one
+            // additional operation is current review-context disclosure, and
+            // only a verified delegated actor may use it.
+            if standing_agent
+                && operation == ProposalOperation::GetReviewContext
+                && (claims.actor_subject().is_none() || grant.requester_clients.is_empty())
+            {
+                return None;
+            }
             if !permission_matches(grant, claims, standing_agent) {
                 return None;
             }

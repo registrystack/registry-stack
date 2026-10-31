@@ -42,8 +42,8 @@ use uuid::Uuid;
 
 use crate::{
     wire::ClientResponse, CaseworkAuth, CaseworkClientConfig, CaseworkClientError,
-    CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ReviewPageQuery,
-    ReviewResultResponse, ReviewTaskDecisionRequest, SupervisoryReviewTaskQuery,
+    CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, DelegatedStaffReadAuth,
+    ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest, SupervisoryReviewTaskQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -55,6 +55,7 @@ const MAXIMUM_ABSENCES_PAGE_SIZE: usize = 1000;
 const MAXIMUM_REVIEW_IDENTITY_BYTES: usize = 64;
 const MAXIMUM_REVIEW_RECEIPT_OUTCOME_BYTES: usize = 128;
 const ORIGINAL_ATTEMPT_HEADER: &str = "registry-casework-attempt";
+const DELEGATED_READER_HEADER: &str = "registry-casework-delegated-reader";
 
 pub struct CaseworkClient {
     http: reqwest::Client,
@@ -322,6 +323,78 @@ impl CaseworkClient {
         Ok(complete)
     }
 
+    /// Lists only currently held tasks assigned to the delegated principal.
+    pub async fn delegated_review_tasks(
+        &self,
+        auth: DelegatedStaffReadAuth<'_>,
+        cursor: Option<Uuid>,
+        limit: usize,
+    ) -> Result<CaseworkComplete<ReviewTaskPage>, CaseworkClientError> {
+        validate_review_page(cursor, Some(limit))?;
+        let request = self.delegated_authorized(
+            self.http
+                .get(self.url(&["v1", "delegated-staff", "review-tasks"])?)
+                .query(&ReviewPageQuery {
+                    cursor,
+                    limit: Some(limit),
+                }),
+            &auth,
+        )?;
+        let complete: CaseworkComplete<ReviewTaskPage> =
+            self.send_json(request, StatusCode::OK).await?;
+        let query = ReviewStaffingQuery {
+            ownership: Some(registry_casework_core::ReviewTaskOwnership::AssignedToMe),
+            sort: registry_casework_core::ReviewTaskSort::Due,
+            cursor,
+            limit: Some(limit),
+            ..Default::default()
+        };
+        if !valid_staffing_page(&complete.value.items, &query)
+            || invalid_page_cursor(complete.value.status, complete.value.next_cursor)
+            || complete.value.items.iter().any(|task| {
+                task.task_id.is_nil()
+                    || task.revision < 1
+                    || !matches!(task.state, ReviewTaskState::Held { .. })
+                    || task.decided_by_caller.is_some()
+                    || task.decision_receipt.is_some()
+            })
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
+    }
+
+    /// Reads the bounded context of one task currently assigned to the
+    /// delegated principal.
+    pub async fn delegated_review_task_context(
+        &self,
+        auth: DelegatedStaffReadAuth<'_>,
+        task_id: Uuid,
+    ) -> Result<CaseworkComplete<ReviewTaskContext>, CaseworkClientError> {
+        if task_id.is_nil() {
+            return Err(CaseworkClientError::invalid_request(
+                "the review task identifier is invalid",
+            ));
+        }
+        let request = self.delegated_authorized(
+            self.http.get(self.url(&[
+                "v1",
+                "delegated-staff",
+                "review-tasks",
+                &task_id.to_string(),
+                "context",
+            ])?),
+            &auth,
+        )?;
+        let complete: CaseworkComplete<ReviewTaskContext> =
+            self.send_json(request, StatusCode::OK).await?;
+        require_review_task_context(complete, task_id)
+    }
+
     pub async fn own_review_decisions(
         &self,
         auth: CaseworkAuth<'_>,
@@ -426,21 +499,7 @@ impl CaseworkClient {
                 &[],
             )
             .await?;
-        let snapshot = &complete.value.policy_closure;
-        if snapshot.verify().is_err()
-            || complete.value.task_id != task_id
-            || snapshot.identity.id != complete.value.policy.id
-            || snapshot.identity.version != complete.value.policy.version
-            || snapshot.identity.digest != complete.value.policy.digest
-            || !review_task_context_matches_policy(&complete.value)
-        {
-            return Err(protocol(
-                StatusCode::OK,
-                CaseworkProtocolFailure::Body,
-                Some(complete.trace_id),
-            ));
-        }
-        Ok(complete)
+        require_review_task_context(complete, task_id)
     }
 
     pub async fn preview_review_task_templates(
@@ -1467,6 +1526,37 @@ impl CaseworkClient {
         Ok(request)
     }
 
+    fn delegated_authorized(
+        &self,
+        request: RequestBuilder,
+        auth: &DelegatedStaffReadAuth<'_>,
+    ) -> Result<RequestBuilder, CaseworkClientError> {
+        validate_identifier(
+            auth.reader_policy,
+            "the delegated staff reader policy is invalid",
+        )?;
+        let reader_policy = HeaderValue::from_str(auth.reader_policy).map_err(|_| {
+            CaseworkClientError::invalid_request("the delegated staff reader policy is invalid")
+        })?;
+        let mut request = request
+            .header(AUTHORIZATION, auth.token.authorization_header_value())
+            .header(
+                HeaderName::from_static(DELEGATED_READER_HEADER),
+                reader_policy,
+            )
+            .header(ACCEPT, JSON_MEDIA_TYPE);
+        if let Some(source_profile) = auth.source_profile {
+            validate_identifier(source_profile, "the selected source profile is invalid")?;
+            request = request.header(
+                HeaderName::from_static(SOURCE_PROFILE_HEADER),
+                HeaderValue::from_str(source_profile).map_err(|_| {
+                    CaseworkClientError::invalid_request("the selected source profile is invalid")
+                })?,
+            );
+        }
+        Ok(request)
+    }
+
     fn mutation_headers(
         &self,
         request: RequestBuilder,
@@ -1805,6 +1895,27 @@ fn require_review_task_id(
     {
         return Err(protocol(
             status,
+            CaseworkProtocolFailure::Body,
+            Some(complete.trace_id),
+        ));
+    }
+    Ok(complete)
+}
+
+fn require_review_task_context(
+    complete: CaseworkComplete<ReviewTaskContext>,
+    expected_task_id: Uuid,
+) -> Result<CaseworkComplete<ReviewTaskContext>, CaseworkClientError> {
+    let snapshot = &complete.value.policy_closure;
+    if snapshot.verify().is_err()
+        || complete.value.task_id != expected_task_id
+        || snapshot.identity.id != complete.value.policy.id
+        || snapshot.identity.version != complete.value.policy.version
+        || snapshot.identity.digest != complete.value.policy.digest
+        || !review_task_context_matches_policy(&complete.value)
+    {
+        return Err(protocol(
+            StatusCode::OK,
             CaseworkProtocolFailure::Body,
             Some(complete.trace_id),
         ));

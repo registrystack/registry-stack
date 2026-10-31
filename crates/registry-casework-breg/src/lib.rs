@@ -10,7 +10,157 @@ use registry_breg_client::{
     BaseRegistryClient, BaseRegistryClientError, BearerToken,
 };
 use registry_casework_core::*;
+use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::{
+    ExchangeAuthorization, ExchangeContext, PrivateKeyJwt, PrivateKeyJwtConfig, SubjectTokenType,
+    TokenProvider, UpstreamSubjectToken,
+};
 pub use served::{unserved_capabilities, SERVED_CAPABILITIES};
+use std::{sync::Arc, time::Duration};
+use url::Url;
+
+struct DelegatedDisplayExchange {
+    token_endpoint: Url,
+    client_id: String,
+    key: PrivateJwk,
+    assertion_audience: Option<String>,
+    resource: String,
+    scopes: Vec<String>,
+    generation: String,
+    actor: Arc<PrivateKeyJwt>,
+}
+
+impl DelegatedDisplayExchange {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        token_endpoint: Url,
+        client_id: String,
+        key: PrivateJwk,
+        assertion_audience: Option<String>,
+        resource: String,
+        scopes: Vec<String>,
+        generation: String,
+    ) -> Result<Self, ReviewContextError> {
+        let valid_token = |value: &str, maximum| {
+            !value.is_empty()
+                && value.len() <= maximum
+                && !value
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        };
+        if !valid_token(&resource, 2048)
+            || scopes.is_empty()
+            || scopes.len() > 128
+            || scopes.iter().any(|scope| !valid_token(scope, 512))
+            || scopes
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != scopes.len()
+            || !valid_token(&generation, 512)
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        let actor = Arc::new(
+            PrivateKeyJwt::new(Self::client_config(
+                &token_endpoint,
+                &client_id,
+                &key,
+                assertion_audience.as_deref(),
+            ))
+            .map_err(|_| ReviewContextError::Invalid)?,
+        );
+        PrivateKeyJwt::new(
+            Self::client_config(
+                &token_endpoint,
+                &client_id,
+                &key,
+                assertion_audience.as_deref(),
+            )
+            .with_resource(resource.clone())
+            .with_scopes(scopes.iter().cloned()),
+        )
+        .map_err(|_| ReviewContextError::Invalid)?;
+        Ok(Self {
+            token_endpoint,
+            client_id,
+            key,
+            assertion_audience,
+            resource,
+            scopes,
+            generation,
+            actor,
+        })
+    }
+
+    fn client_config(
+        token_endpoint: &Url,
+        client_id: &str,
+        key: &PrivateJwk,
+        assertion_audience: Option<&str>,
+    ) -> PrivateKeyJwtConfig {
+        let config = PrivateKeyJwtConfig::new(token_endpoint.clone(), client_id, key.clone())
+            .with_attempt_timeout(Duration::from_secs(30))
+            .with_connect_timeout(Duration::from_secs(10));
+        match assertion_audience {
+            Some(audience) => config.with_audience(audience),
+            None => config,
+        }
+    }
+
+    async fn bearer(
+        &self,
+        credential: EphemeralCredential<'_>,
+        context: &DelegatedCredentialContext,
+    ) -> Result<BearerToken, ReviewContextError> {
+        let exchange = PrivateKeyJwt::new(
+            Self::client_config(
+                &self.token_endpoint,
+                &self.client_id,
+                &self.key,
+                self.assertion_audience.as_deref(),
+            )
+            .with_resource(self.resource.clone())
+            .with_scopes(self.scopes.iter().cloned()),
+        )
+        .map_err(|_| ReviewContextError::Unavailable)?;
+        let exchange_context = ExchangeContext::first_party(
+            context.issuer(),
+            context.subject(),
+            context.audience(),
+            self.generation.clone(),
+            context.expires_at(),
+        )
+        .map_err(|_| ReviewContextError::Denied)?;
+        let subject = UpstreamSubjectToken::new(
+            credential.expose(),
+            SubjectTokenType::AccessToken,
+            context.expires_at(),
+        )
+        .map_err(|_| ReviewContextError::Denied)?;
+        ExchangeAuthorization::upstream(
+            exchange,
+            exchange_context,
+            subject,
+            Some(Arc::clone(&self.actor)),
+        )
+        .map_err(|_| ReviewContextError::Unavailable)?
+        .bearer_token()
+        .await
+        .map_err(|_| ReviewContextError::Unavailable)
+    }
+}
+
+impl std::fmt::Debug for DelegatedDisplayExchange {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DelegatedDisplayExchange")
+            .field("resource", &"<configured>")
+            .field("scopes", &self.scopes.len())
+            .field("generation", &"<configured>")
+            .finish_non_exhaustive()
+    }
+}
 
 pub struct BregContextProvider {
     id: String,
@@ -18,6 +168,7 @@ pub struct BregContextProvider {
     client: BaseRegistryClient,
     status_profile: String,
     task_grant_profile: Option<String>,
+    delegated_display_exchange: Option<DelegatedDisplayExchange>,
 }
 impl BregContextProvider {
     pub fn new(
@@ -36,7 +187,12 @@ impl BregContextProvider {
             client,
             status_profile,
             task_grant_profile: None,
+            delegated_display_exchange: None,
         })
+    }
+    fn with_delegated_display_exchange(mut self, exchange: DelegatedDisplayExchange) -> Self {
+        self.delegated_display_exchange = Some(exchange);
+        self
     }
     pub fn with_task_grant_profile(mut self, profile: String) -> Result<Self, ReviewContextError> {
         if !registry_casework_core::valid_profile_identifier(&profile)
@@ -54,14 +210,22 @@ impl BregContextProvider {
         profile: &str,
         display: bool,
     ) -> Result<BRegProposalReviewDocument, ReviewContextError> {
+        self.validate_identity(identity)?;
+        let binding = self.read_binding(client, profile, display).await?;
+        self.read_bound(client, identity, &binding, display).await
+    }
+
+    fn validate_identity(
+        &self,
+        identity: &ReviewContextIdentity,
+    ) -> Result<(), ReviewContextError> {
         if identity.contract != self.export.contract
             || identity.subject.source != self.export.source_namespace
             || identity.subject.subject_type != "proposal"
         {
             return Err(ReviewContextError::ContractChanged);
         }
-        let binding = self.read_binding(client, profile, display).await?;
-        self.read_bound(client, identity, &binding, display).await
+        Ok(())
     }
 
     async fn read_binding(
@@ -148,6 +312,57 @@ impl BregContextProvider {
             return Err(ReviewContextError::ContractChanged);
         }
         Ok(document)
+    }
+
+    async fn display_batch_with_client(
+        &self,
+        identities: &[ReviewContextIdentity],
+        source_profile_id: &str,
+        client: &BaseRegistryClient,
+    ) -> Vec<Result<HumanDisplayObservation, ReviewContextError>> {
+        let valid = |identity: &ReviewContextIdentity| self.validate_identity(identity).is_ok();
+        let ids = identities
+            .iter()
+            .filter(|identity| valid(identity))
+            .map(|identity| identity.subject.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let documents = match self.read_binding(client, source_profile_id, true).await {
+            Ok(binding) => client
+                .read_proposal_review_context_batch(&binding, &ids)
+                .await
+                .map(|reply| {
+                    ids.iter()
+                        .copied()
+                        .zip(reply.value)
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                })
+                .map_err(|error| match error {
+                    BaseRegistryClientError::InvalidRequest { .. } => {
+                        ReviewContextError::ContractChanged
+                    }
+                    error => map_error(error),
+                }),
+            Err(error) => Err(error),
+        };
+        identities
+            .iter()
+            .map(|identity| {
+                if !valid(identity) {
+                    return Err(ReviewContextError::ContractChanged);
+                }
+                match &documents {
+                    Ok(documents) => documents
+                        .get(identity.subject.id.as_str())
+                        .and_then(|document| document.clone())
+                        .ok_or(ReviewContextError::Concealed)
+                        .and_then(|document| self.validate_bound(identity, document))
+                        .and_then(|document| self.display_observation(identity, document)),
+                    Err(error) => Err(*error),
+                }
+            })
+            .collect()
     }
 
     fn task_projection_schema(
@@ -285,59 +500,62 @@ impl ReviewContextProvider for BregContextProvider {
             Ok(token) => token,
             Err(_) => return vec![Err(ReviewContextError::Denied); identities.len()],
         };
-        let valid = |identity: &ReviewContextIdentity| {
-            identity.contract == self.export.contract
-                && identity.subject.source == self.export.source_namespace
-                && identity.subject.subject_type == "proposal"
-        };
-        if !identities.iter().any(valid) {
+        if !identities
+            .iter()
+            .any(|identity| self.validate_identity(identity).is_ok())
+        {
             return vec![Err(ReviewContextError::ContractChanged); identities.len()];
         }
         let client = self.client.with_bearer_token(token);
         // Metadata is current and caller-visible for this invocation only.
         // Every subject still passes its own current disclosure read.
-        let ids = identities
+        self.display_batch_with_client(identities, source_profile_id, &client)
+            .await
+    }
+    async fn delegated_display(
+        &self,
+        request: DelegatedDisplayRequest<'_>,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
+        self.validate_identity(request.identity)?;
+        let exchange = self
+            .delegated_display_exchange
+            .as_ref()
+            .ok_or(ReviewContextError::Denied)?;
+        let token = exchange
+            .bearer(request.credential, request.credential_context)
+            .await?;
+        let client = self.client.with_bearer_token(token);
+        let document = self
+            .read(&client, request.identity, request.source_profile_id, true)
+            .await?;
+        self.display_observation(request.identity, document)
+    }
+    async fn delegated_display_batch(
+        &self,
+        identities: &[ReviewContextIdentity],
+        source_profile_id: &str,
+        credential: EphemeralCredential<'_>,
+        credential_context: &DelegatedCredentialContext,
+    ) -> Vec<Result<HumanDisplayObservation, ReviewContextError>> {
+        if identities.len() > 100 {
+            return vec![Err(ReviewContextError::Invalid); identities.len()];
+        }
+        if !identities
             .iter()
-            .filter(|identity| valid(identity))
-            .map(|identity| identity.subject.id.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let documents = match self.read_binding(&client, source_profile_id, true).await {
-            Ok(binding) => client
-                .read_proposal_review_context_batch(&binding, &ids)
-                .await
-                .map(|reply| {
-                    ids.iter()
-                        .copied()
-                        .zip(reply.value)
-                        .collect::<std::collections::BTreeMap<_, _>>()
-                })
-                .map_err(|error| match error {
-                    BaseRegistryClientError::InvalidRequest { .. } => {
-                        ReviewContextError::ContractChanged
-                    }
-                    error => map_error(error),
-                }),
-            Err(error) => Err(error),
+            .any(|identity| self.validate_identity(identity).is_ok())
+        {
+            return vec![Err(ReviewContextError::ContractChanged); identities.len()];
+        }
+        let Some(exchange) = self.delegated_display_exchange.as_ref() else {
+            return vec![Err(ReviewContextError::Denied); identities.len()];
         };
-        identities
-            .iter()
-            .map(|identity| {
-                if !valid(identity) {
-                    return Err(ReviewContextError::ContractChanged);
-                }
-                match &documents {
-                    Ok(documents) => documents
-                        .get(identity.subject.id.as_str())
-                        .and_then(|document| document.clone())
-                        .ok_or(ReviewContextError::Concealed)
-                        .and_then(|document| self.validate_bound(identity, document))
-                        .and_then(|document| self.display_observation(identity, document)),
-                    Err(error) => Err(*error),
-                }
-            })
-            .collect()
+        let token = match exchange.bearer(credential, credential_context).await {
+            Ok(token) => token,
+            Err(error) => return vec![Err(error); identities.len()],
+        };
+        let client = self.client.with_bearer_token(token);
+        self.display_batch_with_client(identities, source_profile_id, &client)
+            .await
     }
     async fn service_status(
         &self,
@@ -588,6 +806,7 @@ mod version_tests {
             .unwrap(),
             status_profile: "status".into(),
             task_grant_profile: None,
+            delegated_display_exchange: None,
         }
     }
 
@@ -606,6 +825,144 @@ mod version_tests {
             check_peer_version(None, "1.2.3"),
             Err(ReviewContextError::VersionUnavailable)
         );
+    }
+
+    #[tokio::test]
+    async fn delegated_exchange_uses_exact_source_authority() {
+        use registry_platform_testing::{
+            fixtures, ExchangeProfile, TestActorKind, TestAuthorizationServer, TestClient,
+        };
+        use serde_json::json;
+        use std::{collections::BTreeMap, time::SystemTime};
+
+        const CASEWORK_RESOURCE: &str = "urn:casework:test";
+        const BREG_RESOURCE: &str = "urn:breg:test";
+        const SOURCE_CLIENT: &str = "casework-source-reader";
+        const SOURCE_ACTOR: &str = "00000000-0000-4000-8000-0000000000c7";
+        let (source_key, source_public) = fixtures::ed25519_pair();
+        let server = TestAuthorizationServer::builder()
+            .exchange_profile(ExchangeProfile::IssuerQualifiedActor)
+            .client(
+                TestClient::new("casework-gateway")
+                    .with_resource(CASEWORK_RESOURCE)
+                    .with_actor_kind(TestActorKind::Human),
+            )
+            .client(
+                TestClient::new(SOURCE_CLIENT)
+                    .with_public_jwk(source_public)
+                    .with_resource(BREG_RESOURCE)
+                    .with_service_subject(SOURCE_ACTOR)
+                    .with_exchange_subject_claim("registry_principal")
+                    .with_exchange_subject_claim("registry_purpose")
+                    .with_exchange_subject_claim("jurisdiction")
+                    .with_exchange_subject_resource(CASEWORK_RESOURCE)
+                    .with_exchange_scope_grant(
+                        "casework:staff:delegated-read",
+                        "registry:proposal:review",
+                    ),
+            )
+            .start()
+            .await;
+        let expires_at = i64::try_from(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap()
+            + 60;
+        let subject = server.issue_access_token_with_claims(
+            "casework-gateway",
+            "staff-subject",
+            CASEWORK_RESOURCE,
+            "casework:staff:delegated-read",
+            expires_at,
+            BTreeMap::from([
+                ("registry_principal".into(), json!("staff-subject")),
+                ("registry_purpose".into(), json!("facility-review")),
+                ("jurisdiction".into(), json!("zone-a")),
+                ("not_allowlisted".into(), json!("must-not-propagate")),
+            ]),
+        );
+        let exchange = DelegatedDisplayExchange::new(
+            server.token_endpoint().parse().unwrap(),
+            SOURCE_CLIENT.into(),
+            source_key,
+            None,
+            BREG_RESOURCE.into(),
+            vec!["registry:proposal:review".into()],
+            "test-generation".into(),
+        )
+        .unwrap();
+        exchange
+            .bearer(
+                EphemeralCredential::new(&subject),
+                &DelegatedCredentialContext::verified(
+                    server.issuer(),
+                    "staff-subject".into(),
+                    CASEWORK_RESOURCE.into(),
+                    expires_at,
+                ),
+            )
+            .await
+            .expect("the independently authorized source exchange succeeds");
+
+        let observations = server.exchange_observations();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].client_id, SOURCE_CLIENT);
+        assert_eq!(observations[0].resource, BREG_RESOURCE);
+        assert_eq!(observations[0].scopes, ["registry:proposal:review"]);
+        assert_eq!(observations[0].subject_issuer, server.issuer());
+        assert_eq!(
+            observations[0].subject_resource.as_deref(),
+            Some(CASEWORK_RESOURCE)
+        );
+        assert_eq!(observations[0].subject, "staff-subject");
+        assert_eq!(observations[0].actor_subject.as_deref(), Some(SOURCE_ACTOR));
+        assert_eq!(
+            observations[0].actor_issuer.as_deref(),
+            Some(server.issuer().as_str())
+        );
+        assert_eq!(
+            observations[0].propagated_claims,
+            BTreeMap::from([
+                ("jurisdiction".into(), json!("zone-a")),
+                ("registry_principal".into(), json!("staff-subject")),
+                ("registry_purpose".into(), json!("facility-review")),
+            ])
+        );
+    }
+
+    #[test]
+    fn delegated_exchange_refuses_ambiguous_authority_configuration() {
+        use registry_platform_testing::fixtures;
+
+        let invalid = [
+            ("", vec!["registry:proposal:review"], "generation"),
+            (
+                "urn:breg:test",
+                vec!["registry:proposal:review", "registry:proposal:review"],
+                "generation",
+            ),
+            (
+                "urn:breg:test",
+                vec!["registry proposal review"],
+                "generation",
+            ),
+            ("urn:breg:test", vec!["registry:proposal:review"], ""),
+        ];
+        for (resource, scopes, generation) in invalid {
+            let result = DelegatedDisplayExchange::new(
+                "https://idp.example.test/token".parse().unwrap(),
+                "casework-source-reader".into(),
+                fixtures::ed25519_pair().0,
+                None,
+                resource.into(),
+                scopes.into_iter().map(str::to_owned).collect(),
+                generation.into(),
+            );
+            assert!(matches!(result, Err(ReviewContextError::Invalid)));
+        }
     }
 
     #[test]

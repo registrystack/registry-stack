@@ -151,6 +151,13 @@
       ],
       "type": "object"
     },
+    "CaseworkAuthority": {
+      "description": "This selector declares the intended backend contract; Casework independently\nadmits the trusted gateway and enforces current task and source authority.",
+      "enum": [
+        "delegated-staff-read"
+      ],
+      "type": "string"
+    },
     "DelegationConfig": {
       "additionalProperties": false,
       "properties": {
@@ -397,8 +404,11 @@
         },
         {
           "additionalProperties": false,
-          "description": "Reserved configuration shape for a future staff delegation contract.\nThe offline checker rejects this variant until Casework explicitly\nadmits delegated actor tokens for the named human profiles.",
+          "description": "Assigned-task reads under the backend's explicitly opted-in delegated-reader policy.",
           "properties": {
+            "authority": {
+              "$ref": "#/$defs/CaseworkAuthority"
+            },
             "authorization": {
               "$ref": "#/$defs/DelegationConfig"
             },
@@ -411,7 +421,7 @@
               "minimum": 1,
               "type": "integer"
             },
-            "reviewProfile": {
+            "readerPolicy": {
               "$ref": "#/$defs/LocalId"
             },
             "sourceProfile": {
@@ -424,8 +434,9 @@
           },
           "required": [
             "type",
+            "authority",
             "baseUrl",
-            "reviewProfile",
+            "readerPolicy",
             "sourceProfile",
             "pageSize",
             "authorization"

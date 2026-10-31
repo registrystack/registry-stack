@@ -643,7 +643,7 @@ impl CaseworkService {
                     self,
                     &prepared_records,
                     source_profile_id,
-                    token,
+                    inbox::InboxDisplayCredential::new(token, None),
                     deadline_at,
                     true,
                 )
@@ -928,6 +928,18 @@ impl CaseworkService {
         source_profile_id: Option<&str>,
         token: &str,
     ) -> Result<ReviewTaskContext, ReviewRuntimeError> {
+        self.review_task_context_with_delegation(actor, task_id, source_profile_id, token, None)
+            .await
+    }
+
+    pub(crate) async fn review_task_context_with_delegation(
+        &self,
+        actor: &ActorContext,
+        task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
+        delegated: Option<&DelegatedCredentialContext>,
+    ) -> Result<ReviewTaskContext, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
         let initial_task = self.store.review_task(actor, task_id).await?;
         let record = self.store.review_request_for_task(task_id).await?;
@@ -969,11 +981,29 @@ impl CaseworkService {
                     Duration::from_millis(
                         record.policy.dependencies.inbox.page_deadline_milliseconds,
                     ),
-                    provider.human_display(HumanDisplayRequest {
-                        identity: &identity,
-                        source_profile_id: profile,
-                        credential: EphemeralCredential::new(token),
-                    }),
+                    async {
+                        match delegated {
+                            Some(context) => {
+                                provider
+                                    .delegated_display(DelegatedDisplayRequest {
+                                        identity: &identity,
+                                        source_profile_id: profile,
+                                        credential: EphemeralCredential::new(token),
+                                        credential_context: context,
+                                    })
+                                    .await
+                            }
+                            None => {
+                                provider
+                                    .human_display(HumanDisplayRequest {
+                                        identity: &identity,
+                                        source_profile_id: profile,
+                                        credential: EphemeralCredential::new(token),
+                                    })
+                                    .await
+                            }
+                        }
+                    },
                 )
                 .await
                 .map_err(|_| ReviewRuntimeError::SourceUnavailable)?
@@ -2088,7 +2118,7 @@ impl PostgresStore {
             .await
     }
 
-    async fn review_task_by_activity(
+    pub(crate) async fn review_task_by_activity(
         &self,
         actor: &ActorContext,
         task_id: Uuid,

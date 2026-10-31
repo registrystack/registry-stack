@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A standing agent profile (`actorKind: agent` without a `taskGrant`) may
-//! read and author caller-owned Proposal drafts. It carries no human approval, so it
-//! can neither move a request through its lifecycle, write target records
+//! read, author caller-owned Proposal drafts, and disclose an explicitly bounded
+//! review context for a delegated staff subject. It carries no human approval,
+//! so it can neither move a request through its lifecycle, write target records
 //! directly, import records, invoke an immediate action, nor publish or
-//! withdraw a statistical release: lifecycle decisions require explicit delegated or human authority.
+//! withdraw a statistical release: lifecycle decisions require explicit human
+//! or task-grant authority.
 
 use std::collections::BTreeSet;
 
@@ -13,6 +15,7 @@ use registry_breg::{compile_project, parse_project_json, CompileFailure, Compile
 use serde_json::{json, Value};
 
 const OPERATION_FORBIDDEN: &str = "breg.proposal.standing-agent-operation-forbidden";
+const REVIEW_CLIENT_REQUIRED: &str = "breg.proposal.standing-agent-review-client-required";
 const DIRECT_MUTATION_FORBIDDEN: &str =
     "breg.access-profile.standing-agent-direct-mutation-forbidden";
 const ACTION_FORBIDDEN: &str = "breg.access-profile.standing-agent-action-forbidden";
@@ -39,7 +42,7 @@ fn project() -> Value {
                 {"id":"note-ref","apiName":"noteId","type":"reference","target":"note","required":true,"classification":"internal"},
                 {"id":"new-label","apiName":"newLabel","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"relabelled","target":{"fromInput":"note-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}},
-            {"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
+            {"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},"reviewContext":{"id":"case-review","fields":{"currentLabel":{"type":"record","input":"case-ref","field":"label"},"proposedLabel":{"type":"input","input":"new-label"}}}}},"inputs":[
                 {"id":"case-ref","type":"reference","target":"case","required":true,"classification":"internal"},
                 {"id":"new-label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
                 "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}
@@ -128,6 +131,84 @@ fn standing_agent_may_read_and_author_caller_owned_proposal_drafts() {
 }
 
 #[test]
+fn standing_agent_may_hold_only_bounded_review_context_disclosure() {
+    use registry_breg::model::{CompiledActionExecution, ProposalOperation};
+
+    let mut value = project();
+    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+        json!(["get-review-context"]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]
+        .as_object_mut()
+        .expect("proposal permission")
+        .remove("ownership");
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["currentLabel", "proposedLabel"]);
+
+    let registry = compile(&value).expect("bounded standing-agent context read compiles");
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-case")
+        .expect("compiled proposal action");
+    let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+        panic!("Proposal")
+    };
+    let permission = proposal
+        .permissions
+        .iter()
+        .find(|permission| permission.profile_id == "assistant")
+        .expect("standing-agent review permission");
+    assert_eq!(
+        permission.operations,
+        BTreeSet::from([ProposalOperation::GetReviewContext])
+    );
+    assert!(action
+        .permissions
+        .iter()
+        .all(|permission| permission.profile_id != "assistant"));
+}
+
+#[test]
+fn standing_agent_review_context_requires_an_exact_requester_client() {
+    let mut value = project();
+    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+        json!(["get-review-context"]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]
+        .as_object_mut()
+        .expect("proposal permission")
+        .remove("ownership");
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["currentLabel", "proposedLabel"]);
+    value["accessProfiles"][1]
+        .as_object_mut()
+        .expect("standing agent profile")
+        .remove("requesterClients");
+
+    let failure = refused(
+        compile(&value),
+        "a standing-agent review disclosure without an exact client",
+    );
+    assert!(codes(&failure).contains(&REVIEW_CLIENT_REQUIRED));
+}
+
+#[test]
+fn standing_agent_review_context_refuses_an_authored_empty_requester_client_list() {
+    let mut value = project();
+    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+        json!(["get-review-context"]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["currentLabel", "proposedLabel"]);
+    value["accessProfiles"][1]["requesterClients"] = json!([]);
+    let failure = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
+        .expect_err("an authored empty requesterClients list is invalid configuration");
+    assert!(codes(&failure).contains(&"config.invalid-value"));
+}
+
+#[test]
 fn human_profile_may_import_records() {
     let registry = compile(&project()).expect("a human profile keeps import authority");
     let target = &registry.entities()["case"].access_profiles["clerk"];
@@ -146,7 +227,6 @@ fn standing_agent_cannot_hold_a_proposal_lifecycle_decision() {
         "rebase",
         "retry",
         "get-review-status",
-        "get-review-context",
     ] {
         let mut value = project();
         value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"]

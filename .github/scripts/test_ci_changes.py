@@ -2592,11 +2592,17 @@ class CiChangesTest(unittest.TestCase):
                         "name": "mcp",
                         "packages": ["registry-mcp"],
                         "all_features": False,
-                    }
+                    },
+                    {
+                        "name": "developer-tools",
+                        "packages": ["registry-cli-docs"],
+                        "all_features": False,
+                    },
                 ]
             },
         )
-        self.assertFalse(runtime["breg_contracts"])
+        # The configured staff provider is now proved through real Casework/BReg.
+        self.assertTrue(runtime["breg_contracts"])
 
     def test_native_citizen_journey_inputs_select_the_existing_postgres_lane(self) -> None:
         for path in (
@@ -2659,6 +2665,35 @@ class CiChangesTest(unittest.TestCase):
             "async fn native_citizen_gateway_and_review_share_engine_owned_authority()",
             Path("crates/registry-breg-mcp/tests/native_citizen.rs").read_text(),
         )
+
+    def test_native_staff_mcp_inputs_select_real_product_postgres_proof(self) -> None:
+        for path in (
+            "crates/registry-mcp/src/casework.rs",
+            "crates/registry-mcp/tests/native_casework.rs",
+            "crates/registry-casework-client/src/client.rs",
+            "crates/registry-casework-breg/src/lib.rs",
+            "crates/registry-casework-core/src/adapter.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,), pull_request=True, ci_full=True)
+                self.assertTrue(outputs["breg_contracts"])
+                self.assertIn("postgres:2/3", outputs["breg_contracts_lanes"])
+        steps = self.workflow_jobs["breg-contracts"]["steps"]
+        step = next(item for item in steps if item.get("name") == "Native delegated staff MCP authority journey")
+        self.assertEqual(step["if"], "matrix.lane == 'postgres:2/3'")
+        self.assertEqual(step["shell"], "bash")
+        run = step["run"]
+        for token in (
+            "set -euo pipefail",
+            "registry-casework/postgres-test",
+            "CASEWORK_MCP_TEST_DATABASE_URL=",
+            "cargo test --locked -p registry-mcp --test native_casework",
+            "--ignored --exact native_staff_gateway_preserves_delegated_read_authority",
+            "test result: ok\\. 1 passed",
+        ):
+            self.assertIn(token, run)
+        for name in ("BREG_BIN", "BREGCTL_BIN", "CASEWORK_BIN", "CASEWORKCTL_BIN", "REGISTRY_STACK_FIXTURES_ROOT"):
+            self.assertIn(name, step["env"])
 
     def test_review_page_command_change_runs_the_catalog_test(self) -> None:
         # `breg-review`'s Clap tree is built in its lib.rs, which the

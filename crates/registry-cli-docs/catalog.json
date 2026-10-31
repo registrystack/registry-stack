@@ -21483,6 +21483,120 @@
       ]
     },
     {
+      "name": "registry-mcp",
+      "invocation": "registry-mcp",
+      "about": "Serve explicitly configured native and adapter MCP capabilities",
+      "long_about": null,
+      "usage": "registry-mcp --runtime-config <FILE> <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--runtime-config <FILE>",
+          "description": "Runtime configuration file",
+          "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "registry-mcp check",
+          "about": "Check configuration offline, without credentials, sockets or audit writes",
+          "long_about": null,
+          "usage": "registry-mcp --runtime-config <FILE> check [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Fill environment expressions before checking their resulting values",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Exit 1 when a warning is reported",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "serve",
+          "invocation": "registry-mcp serve",
+          "about": "Serve the configured MCP gateway until it is terminated",
+          "long_about": null,
+          "usage": "registry-mcp --runtime-config <FILE> serve",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "registry-render",
       "invocation": "registry-render",
       "about": "Governed, byte-stable PDF documents from registry data, rendered with Typst.",

@@ -117,6 +117,9 @@
         "clientIdRef": {
           "$ref": "#/$defs/SecretReference"
         },
+        "delegatedDisplayExchange": {
+          "$ref": "#/$defs/DelegatedDisplayExchangeBinding"
+        },
         "resource": {
           "type": "string"
         },
@@ -170,6 +173,94 @@
       "required": [
         "runtimeUrlRef",
         "migrationUrlRef"
+      ],
+      "type": "object"
+    },
+    "DelegatedDisplayExchangeBinding": {
+      "additionalProperties": false,
+      "description": "Dedicated per-call delegation for staff-subject source disclosure. This is\nseparate from the provider's status and task-context service credential.",
+      "properties": {
+        "clientAssertionAudience": {
+          "type": "string"
+        },
+        "clientAssertionKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "clientIdRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientIdRef",
+        "clientAssertionKeyRef",
+        "resource",
+        "scopes",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "DelegatedStaffReaderConfig": {
+      "additionalProperties": false,
+      "description": "One deployment-owned delegation ceiling. The policy id is the containing\nmap key, never a human profile supplied by the HTTP caller.",
+      "properties": {
+        "actorIssuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "actorSubject": {
+          "type": "string"
+        },
+        "assertionIssuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "client": {
+          "type": "string"
+        },
+        "maximumTokenLifetimeSeconds": {
+          "format": "uint64",
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "profile": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "requiredScope": {
+          "type": "string"
+        },
+        "sourceProfiles": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "profile",
+        "client",
+        "actorIssuer",
+        "actorSubject",
+        "assertionIssuer",
+        "requiredScope",
+        "maximumTokenLifetimeSeconds"
       ],
       "type": "object"
     },
@@ -380,6 +471,16 @@
           "maxLength": 512,
           "minLength": 1,
           "type": "string"
+        },
+        "delegatedStaffReaders": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DelegatedStaffReaderConfig"
+          },
+          "description": "Explicitly opted-in delegated staff readers, keyed by the policy id a\ndedicated read client sends. Absence disables delegated staff reads.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         },
         "humanIdentity": {
           "$ref": "#/$defs/HumanIdentityConfig"
@@ -682,6 +783,20 @@
                   "not": {
                     "pattern": "^secret:env/"
                   }
+                },
+                "delegatedDisplayExchange": {
+                  "properties": {
+                    "clientAssertionKeyRef": {
+                      "not": {
+                        "pattern": "^secret:env/"
+                      }
+                    },
+                    "clientIdRef": {
+                      "not": {
+                        "pattern": "^secret:env/"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -791,6 +906,20 @@
                 "clientIdRef": {
                   "not": {
                     "pattern": "^secret:file/"
+                  }
+                },
+                "delegatedDisplayExchange": {
+                  "properties": {
+                    "clientAssertionKeyRef": {
+                      "not": {
+                        "pattern": "^secret:file/"
+                      }
+                    },
+                    "clientIdRef": {
+                      "not": {
+                        "pattern": "^secret:file/"
+                      }
+                    }
                   }
                 }
               }

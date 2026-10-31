@@ -98,6 +98,14 @@ class ProductContractTests(unittest.TestCase):
         paths = document["paths"]
         for path in ("/v1/review-policies", "/v1/review-tasks/next", "/v1/review-tasks/holdings", "/v1/directory/caseload/preview", "/v1/directory/clocks/recompute/preview"):
             self.assertIn(path, paths)
+        delegated = paths["/v1/delegated-staff/review-tasks"]["get"]
+        header_names = {
+            parameter["name"]
+            for parameter in delegated["parameters"]
+            if parameter["in"] == "header"
+        }
+        self.assertIn("registry-casework-delegated-reader", header_names)
+        self.assertNotIn("registry-casework-profile", header_names)
         self.assertFalse(any("work-items" in path or "events/sources" in path for path in paths))
         create = document["components"]["schemas"]["ReviewCreateRequest"]
         self.assertIn("policy", create["required"])

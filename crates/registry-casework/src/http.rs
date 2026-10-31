@@ -64,6 +64,7 @@ impl HttpContract {
 
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const MAXIMUM_ABSENCE_PAGE_SIZE: usize = 1_000;
+const DELEGATED_READER_HEADER: &str = "registry-casework-delegated-reader";
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -98,6 +99,14 @@ pub fn router(state: HttpState) -> Router {
             get(review_policy_description),
         )
         .route("/v1/review-tasks", get(review_tasks))
+        .route(
+            "/v1/delegated-staff/review-tasks",
+            get(delegated_review_tasks),
+        )
+        .route(
+            "/v1/delegated-staff/review-tasks/{task_id}/context",
+            get(delegated_review_task_context),
+        )
         .route("/v1/review-tasks/next", get(next_review_task))
         .route("/v1/review-tasks/holdings", get(review_task_holdings))
         .route("/v1/review-tasks/own-decisions", get(own_review_decisions))
@@ -556,6 +565,44 @@ async fn review_tasks(
         state
             .service
             .review_staffing_tasks(&actor, source, token, query)
+            .await?,
+    ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DelegatedReviewTaskQuery {
+    cursor: Option<Uuid>,
+    limit: Option<usize>,
+}
+
+async fn delegated_review_tasks(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<DelegatedReviewTaskQuery>,
+) -> Result<Json<ReviewTaskPage>, HttpError> {
+    let limit = page_limit(&state, query.limit)?;
+    let source = source_profile_optional(&headers)?;
+    let (reader, token) = authenticate_delegated_staff_read(&state, &headers, source).await?;
+    Ok(Json(
+        state
+            .service
+            .delegated_review_tasks(&reader, source, token, query.cursor, limit)
+            .await?,
+    ))
+}
+
+async fn delegated_review_task_context(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<ReviewTaskContext>, HttpError> {
+    let source = source_profile_optional(&headers)?;
+    let (reader, token) = authenticate_delegated_staff_read(&state, &headers, source).await?;
+    Ok(Json(
+        state
+            .service
+            .delegated_review_task_context(&reader, source, token, task_id)
             .await?,
     ))
 }
@@ -1425,6 +1472,36 @@ async fn authenticate<'a>(
             AuthenticationError::Claims => HttpError::AuthenticationRefused,
         })?;
     Ok((actor, token))
+}
+
+async fn authenticate_delegated_staff_read<'a>(
+    state: &HttpState,
+    headers: &'a HeaderMap,
+    source_profile: Option<&str>,
+) -> Result<(crate::auth::delegated::DelegatedStaffReader, &'a str), HttpError> {
+    if headers.contains_key(CASEWORK_PROFILE_HEADER) {
+        return Err(HttpError::ProfileNotAuthorized);
+    }
+    let authorization = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| header_authentication_refused(state))?;
+    let token =
+        parse_bearer_token(authorization).map_err(|_| header_authentication_refused(state))?;
+    let policy = profile_header(headers, DELEGATED_READER_HEADER)?;
+    let reader = state
+        .authenticator
+        .authenticate_staff_read(token, policy, source_profile)
+        .await
+        .map_err(|error| match error {
+            AuthenticationError::Refused | AuthenticationError::Claims => {
+                HttpError::AuthenticationRefused
+            }
+            AuthenticationError::Profile | AuthenticationError::NotHuman => {
+                HttpError::ProfileNotAuthorized
+            }
+        })?;
+    Ok((reader, token))
 }
 
 fn header_authentication_refused(state: &HttpState) -> HttpError {

@@ -15,12 +15,22 @@ There is no generic URL, SQL, connector-authoring or arbitrary product-action to
 |---|---|
 | BReg | The seven existing citizen tools, with the same caller-derived targets, Proposal drafts, revisions, retry identity and browser review boundary |
 | Adapter | Explicitly served GET and read-only POST operations from a pinned effective contract, under a configured non-personal machine connection |
-| Casework | Bounded client/provider preparation; activation is refused as `casework.mcp.delegation-unsupported` because current human profiles reject delegated actors |
+| Casework | Two assigned-work reads through the dedicated delegated-reader API; the backend must explicitly admit the configured gateway and staff subject |
 
 A tool catalog is the intersection of configured bindings and the provider's executable catalog.
 It grants no authority.
 A direct call to an unconfigured name is refused before provider execution.
 Public names must be unique across the deployment.
+
+The Casework binding requires `authority: delegated-staff-read` and `readerPolicy`,
+which names one Casework `delegatedStaffReaders` policy. It does not select a human
+access profile. Each call exchanges the inbound credential for the Casework
+resource. Casework independently checks the trusted gateway, represented staff
+member, exact read scopes, credential lifetime and current assignment. It admits
+only assigned-task listing and context reads through separate read-only routes.
+Human claim, assignment, decision and administrative routes keep their existing
+authentication. Current-source context also requires an independently authorized
+source exchange and source disclosure profile.
 
 ## Check and serve
 
