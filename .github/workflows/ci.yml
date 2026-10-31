@@ -542,7 +542,7 @@ jobs:
       - name: Test MCP dependency boundaries
         run: |
           python3 -m unittest discover -s products/platform/scripts -p 'test_check_mcp_dependencies.py'
-          python3 -m unittest discover -s products/casework/scripts -p 'test_check_dependency_direction.py'
+          python3 -m unittest discover -s products/casework/scripts -p 'test_dependency_direction.py'
 
       - name: MCP dependency direction
         run: |

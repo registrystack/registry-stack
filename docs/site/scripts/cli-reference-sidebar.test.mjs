@@ -41,6 +41,7 @@ test('seats every published command page in command order', async (t) => {
   await writeFile(index, page('CLI reference'));
   await writeFile(resolve(root, 'breg.mdx'), page('breg command reference'));
   await writeFile(resolve(root, 'bregctl.mdx'), page('bregctl command reference'));
+  await writeFile(resolve(root, 'registry-mcp.mdx'), page('registry-mcp command reference'));
   await mkdir(resolve(root, 'bregctl/data'), { recursive: true });
   await writeFile(resolve(root, 'bregctl/data.mdx'), page('bregctl data command reference'));
   await writeFile(resolve(root, 'bregctl/data/import.mdx'), page('bregctl data import'));
@@ -61,6 +62,7 @@ test('seats every published command page in command order', async (t) => {
     { label: 'bregctl data', slug: 'reference/cli/bregctl/data' },
     { label: 'bregctl data export', slug: 'reference/cli/bregctl/data/export' },
     { label: 'bregctl data import', slug: 'reference/cli/bregctl/data/import' },
+    { label: 'registry-mcp', slug: 'reference/cli/registry-mcp' },
   ]);
 });
 
