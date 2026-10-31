@@ -11,15 +11,15 @@ public-tool allowlist. Selecting a tool cannot select another connection,
 audience, scope set, profile, or credential. An exchange-backed binding creates
 one opaque downstream authorization from the verified inbound caller for each
 catalog or invocation. A trusted-machine binding can use a separately configured
-token provider for an explicitly non-personal operation. Providers never receive
+token provider. Its provider and operator own source disclosure; a data-class
+label does not classify returned records. Providers never receive
 the inbound bearer. They can read the verified issuer and subject through a
 redacted identity handle where product semantics require owner or idempotency
 binding. Those claims must not be logged or returned.
 
 Providers own product contracts, target binding, schemas, revisions,
 idempotency, effect interpretation, and recovery. The edge distinguishes no
-effect, confirmed effects, accepted-pending work, and unknown outcomes for audit
-release. Tool listing is private with a zero TTL, and every provider catalog is
+effect, confirmed effects, and unknown outcomes for audit release. Tool listing is private with a zero TTL, and every provider catalog is
 intersected with the binding's static allowlist.
 
 Product wrappers own runtime configuration, secret resolution, key-source

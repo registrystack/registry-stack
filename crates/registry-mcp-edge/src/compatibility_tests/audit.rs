@@ -63,7 +63,11 @@ async fn request_and_response_are_minimized_and_share_correlation() {
 
     let entries = entries(&buffer);
     assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["schema"], "registry-breg-mcp.tool-call/v1");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
     assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[0]["correlation"], "correlation-a");
     assert_eq!(entries[0]["record"]["tool"], "get_my_details");
     assert_eq!(
         entries[0]["record"]["principalPseudonym"],
@@ -72,6 +76,7 @@ async fn request_and_response_are_minimized_and_share_correlation() {
     assert_eq!(entries[0]["record"]["clientPseudonym"], "client-pseudonym");
     assert!(entries[0]["record"].get("outcome").is_none());
     assert_eq!(entries[1]["record"]["outcome"], "ok");
+    assert!(!buffer_text(&buffer).contains("requestId"));
     for forbidden in ["subject-a", "Bearer", "registry-value"] {
         assert!(!buffer_text(&buffer).contains(forbidden));
     }
@@ -94,7 +99,11 @@ async fn a_dropped_request_writes_unfinished_with_the_same_correlation() {
 
     let entries = entries(&buffer);
     assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["schema"], "registry-breg-mcp.tool-call/v1");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
     assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[1]["correlation"], "correlation-b");
     assert_eq!(entries[1]["record"]["outcome"], "unfinished");
     assert!(entries[1]["record"].get("reason").is_none());
 }

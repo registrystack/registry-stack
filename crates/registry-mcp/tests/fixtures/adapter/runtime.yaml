@@ -1,0 +1,25 @@
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: registry-mcp-facility-contract
+endpoints:
+  - endpoint: tracker
+    baseUrl: https://tracker.example.invalid
+    credential:
+      type: basic
+      usernameRef: secret:env/ADAPTER_FIXTURE_USERNAME
+      passwordRef: secret:env/ADAPTER_FIXTURE_PASSWORD
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_FIXTURE_DATABASE
+  migrationUrlRef: secret:env/ADAPTER_FIXTURE_DATABASE
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: adapter-native-proof
+allowedClients: [synthetic-adapter-machine]
+allowedPrivateCidrs: [192.168.0.0/16]
+audit:
+  retentionDays: 90
+idempotency:
+  responseRetentionSeconds: 86400
+cursorKeyRef: secret:env/ADAPTER_FIXTURE_CURSOR_KEY

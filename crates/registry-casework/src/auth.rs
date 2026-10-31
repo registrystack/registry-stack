@@ -135,10 +135,11 @@ impl CaseworkAuthenticator {
             .map_err(|_| AuthenticationError::Refused)?;
         if self.delegated_staff_readers.values().any(|reader| {
             matched_client == Some(reader.client.as_str())
-                && verified
-                    .scopes
-                    .iter()
-                    .any(|scope| scope == &reader.required_scope)
+                && (verified.claims.extra.contains_key("act")
+                    || verified
+                        .scopes
+                        .iter()
+                        .any(|scope| scope == &reader.required_scope))
         }) {
             return Err(AuthenticationError::Refused);
         }
@@ -394,6 +395,10 @@ mod tests {
         object.entry("aud").or_insert(json!(AUDIENCE));
         object.entry("iat").or_insert(json!(now));
         object.entry("exp").or_insert(json!(now + 300));
+        signed_token(claims)
+    }
+
+    fn signed_token(claims: Value) -> String {
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some("test".to_owned());
         header.typ = Some("at+jwt".to_owned());
@@ -491,7 +496,6 @@ mod tests {
                     crate::DelegatedStaffReaderConfig {
                         profile: "staff".to_owned(),
                         client: CLIENT.to_owned(),
-                        actor_issuer: ISSUER.to_owned(),
                         actor_subject: "registry-mcp".to_owned(),
                         assertion_issuer: assertion_issuer.to_owned(),
                         required_scope: "casework:staff:delegated-read".to_owned(),
@@ -504,7 +508,6 @@ mod tests {
                     crate::DelegatedStaffReaderConfig {
                         profile: "staff".to_owned(),
                         client: CLIENT.to_owned(),
-                        actor_issuer: ISSUER.to_owned(),
                         actor_subject: "registry-mcp".to_owned(),
                         assertion_issuer: assertion_issuer.to_owned(),
                         required_scope: "casework:other-delegated-read".to_owned(),
@@ -552,6 +555,14 @@ mod tests {
             auth.authenticate(&credential, "requester-overlap").await,
             Err(AuthenticationError::Refused)
         ));
+        let delegated_actor_without_reader_scope = delegated_token(json!({
+            "scope": "casework:staff"
+        }));
+        assert!(matches!(
+            auth.authenticate(&delegated_actor_without_reader_scope, "requester-overlap")
+                .await,
+            Err(AuthenticationError::Refused)
+        ));
         let second_policy = delegated_token(json!({
             "scope": "casework:staff casework:other-delegated-read"
         }));
@@ -579,6 +590,15 @@ mod tests {
     async fn delegated_staff_read_refuses_changed_actor_scope_lifetime_and_source_profile() {
         let auth = delegated_authenticator();
         let now = Utc::now().timestamp();
+        auth.authenticate_staff_read(
+            &delegated_token(json!({
+                "scope":"openid casework:staff casework:staff:delegated-read casework:unrelated"
+            })),
+            "staff-mcp",
+            Some("review-agent"),
+        )
+        .await
+        .expect("unrelated extra scopes grant no delegated route authority and are accepted");
         for (claims, expected) in [
             (
                 json!({"act":{"iss":ISSUER,"sub":"other"}}),
@@ -589,7 +609,15 @@ mod tests {
                 AuthenticationError::Refused,
             ),
             (
-                json!({"scope":"casework:staff casework:staff:delegated-read casework:write"}),
+                json!({"scope":"casework:staff:delegated-read"}),
+                AuthenticationError::Profile,
+            ),
+            (
+                json!({"scope":"casework:staff"}),
+                AuthenticationError::Profile,
+            ),
+            (
+                json!({"scope":"casework:staff casework:staff casework:staff:delegated-read"}),
                 AuthenticationError::Profile,
             ),
             (
@@ -620,6 +648,187 @@ mod tests {
             Err(AuthenticationError::Profile)
         ));
     }
+
+    #[tokio::test]
+    async fn delegated_staff_reader_accepts_rfc_actor_and_rejects_actor_substitution() {
+        let auth = delegated_authenticator();
+        for act in [
+            json!({"sub":"registry-mcp"}),
+            json!({"iss":ISSUER,"sub":"registry-mcp"}),
+            json!({"sub":"registry-mcp","client_id":"registry-mcp"}),
+        ] {
+            auth.authenticate_staff_read(
+                &delegated_token(json!({"act":act})),
+                "staff-mcp",
+                Some("review-agent"),
+            )
+            .await
+            .expect("the current actor is identified without requiring a nonstandard shape");
+        }
+        for act in [
+            json!({"iss":"https://other-issuer.example.test","sub":"registry-mcp"}),
+            json!({"sub":"other-gateway"}),
+            json!({"sub":"registry-mcp","act":{"sub":"prior-gateway"}}),
+        ] {
+            assert!(matches!(
+                auth.authenticate_staff_read(
+                    &delegated_token(json!({"act":act})),
+                    "staff-mcp",
+                    Some("review-agent"),
+                )
+                .await,
+                Err(AuthenticationError::Refused)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn delegated_staff_read_negative_cases_have_value_free_stage_diagnostics() {
+        use registry_platform_testing::CapturedDiagnosticLogs;
+        use tracing::instrument::WithSubscriber;
+
+        struct NegativeCase {
+            name: &'static str,
+            credential: String,
+            policy: &'static str,
+            source_profile: Option<&'static str>,
+            expected_error: AuthenticationError,
+            expected_stage: &'static str,
+            default_off: bool,
+        }
+
+        let now = Utc::now().timestamp();
+        let without_act = token(json!({
+            "azp": CLIENT,
+            "sub": "canary-human-without-act",
+            "scope": "casework:staff casework:staff:delegated-read",
+            "registry_actor_kind": "human",
+            "registry_assertion_issuer": "https://people.example.test"
+        }));
+        let missing_iat = signed_token(json!({
+            "iss": ISSUER,
+            "aud": AUDIENCE,
+            "azp": CLIENT,
+            "sub": "canary-missing-iat",
+            "exp": now + 300,
+            "scope": "casework:staff casework:staff:delegated-read",
+            "registry_actor_kind": "human",
+            "registry_assertion_issuer": "https://people.example.test",
+            "act": {"iss": ISSUER, "sub": "registry-mcp"}
+        }));
+        let cases = vec![
+            NegativeCase {
+                name: "human credential without delegated actor",
+                credential: without_act,
+                policy: "staff-mcp",
+                source_profile: Some("review-agent"),
+                expected_error: AuthenticationError::Refused,
+                expected_stage: "client",
+                default_off: false,
+            },
+            NegativeCase {
+                name: "wrong client",
+                credential: delegated_token(json!({"azp": "canary-wrong-client"})),
+                policy: "staff-mcp",
+                source_profile: Some("review-agent"),
+                expected_error: AuthenticationError::Refused,
+                expected_stage: "client",
+                default_off: false,
+            },
+            NegativeCase {
+                name: "wrong assertion issuer",
+                credential: delegated_token(json!({
+                    "registry_assertion_issuer": "https://canary-wrong-assertion.example.test"
+                })),
+                policy: "staff-mcp",
+                source_profile: Some("review-agent"),
+                expected_error: AuthenticationError::Refused,
+                expected_stage: "client",
+                default_off: false,
+            },
+            NegativeCase {
+                name: "non-human credential",
+                credential: delegated_token(json!({"registry_actor_kind": "service"})),
+                policy: "staff-mcp",
+                source_profile: Some("review-agent"),
+                expected_error: AuthenticationError::NotHuman,
+                expected_stage: "profile",
+                default_off: false,
+            },
+            NegativeCase {
+                name: "missing issued-at time",
+                credential: missing_iat,
+                policy: "staff-mcp",
+                source_profile: Some("review-agent"),
+                expected_error: AuthenticationError::Refused,
+                expected_stage: "time",
+                default_off: false,
+            },
+            NegativeCase {
+                name: "unknown delegated reader policy",
+                credential: delegated_token(json!({"sub": "canary-unknown-policy"})),
+                policy: "canary-unknown-policy",
+                source_profile: Some("review-agent"),
+                expected_error: AuthenticationError::Profile,
+                expected_stage: "profile",
+                default_off: false,
+            },
+            NegativeCase {
+                name: "unconfigured delegated reader",
+                credential: delegated_token(json!({"sub": "canary-default-off"})),
+                policy: "staff-mcp",
+                source_profile: Some("review-agent"),
+                expected_error: AuthenticationError::Profile,
+                expected_stage: "profile",
+                default_off: true,
+            },
+            NegativeCase {
+                name: "unlisted source profile",
+                credential: delegated_token(json!({"sub": "canary-source-profile"})),
+                policy: "staff-mcp",
+                source_profile: Some("canary-unlisted-source"),
+                expected_error: AuthenticationError::Profile,
+                expected_stage: "profile",
+                default_off: false,
+            },
+        ];
+
+        for case in cases {
+            let mut auth = delegated_authenticator();
+            if case.default_off {
+                auth = auth.with_delegated_staff_readers(BTreeMap::new());
+            }
+            let captured = CapturedDiagnosticLogs::default();
+            let result = auth
+                .authenticate_staff_read(&case.credential, case.policy, case.source_profile)
+                .with_subscriber(captured.subscriber())
+                .await;
+            assert_eq!(result.unwrap_err(), case.expected_error, "{}", case.name);
+            let rendered = captured.text();
+            let entries = rendered
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
+                .collect::<Vec<_>>();
+            assert_eq!(entries.len(), 1, "{}: {rendered}", case.name);
+            assert_eq!(
+                entries[0]["fields"]["message"], "Casework delegated staff authentication refused",
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                entries[0]["fields"]["stage"], case.expected_stage,
+                "{}",
+                case.name
+            );
+            assert!(!rendered.contains("canary"), "{}: {rendered}", case.name);
+            assert!(
+                !rendered.contains(&case.credential),
+                "{}: credential reached diagnostic",
+                case.name
+            );
+        }
+    }
+
     #[tokio::test]
     async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
         use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};

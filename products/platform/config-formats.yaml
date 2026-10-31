@@ -157,6 +157,14 @@ formats:
         whenOmitted: refused
       - pointer: /bindings/*/tools
         whenOmitted: refused
+      - pointer: /bindings/*/provider/registry/accessProfile
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/readerPolicy
+        whenOmitted: refused
+      - pointer: /bindings/*/provider/sourceProfile
+        whenOmitted: closed
+      - pointer: /bindings/*/provider/authorization/exchange/clientId
+        whenOmitted: refused
       - pointer: /bindings/*/provider/registry/scopes
         whenOmitted: refused
       - pointer: /bindings/*/provider/authorization/scopes

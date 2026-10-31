@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::{
     body::Body,
@@ -13,7 +17,7 @@ use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     access_token_typ_set, is_access_token_typ_pair, Claims, JwksFetcher, JwksFetcherConfig,
-    VerifiedToken,
+    OidcError, VerifiedToken,
 };
 use registry_platform_testing::{TestAuthorizationServer, TestClient};
 use serde_json::{json, Value};
@@ -22,7 +26,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
-    inbound::{metadata_url, require_caller},
+    inbound::{metadata_url, require_caller, retry_after_seconds, Refusal},
     token_verifier, AccessTokenAlgorithm, RateLimitOptions, ResourceServer, ResourceServerOptions,
     TokenBucketOptions, VerifiedCaller,
 };
@@ -31,6 +35,37 @@ const RESOURCE: &str = "https://gateway.example.test/mcp";
 const CHAT_HOST: &str = "chat-host";
 const SCOPE: &str = "address-correction:self";
 const METADATA: &str = "https://gateway.example.test/.well-known/oauth-protected-resource/mcp";
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+impl Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("log buffer lock")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
+    type Writer = Self;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl CapturedLogs {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().expect("log buffer lock").clone()).expect("UTF-8 logs")
+    }
+}
 
 fn now() -> i64 {
     i64::try_from(
@@ -244,7 +279,10 @@ async fn a_token_for_another_audience_is_refused_as_invalid() {
         auth.issue_access_token(CHAT_HOST, "citizen-a", "urn:elsewhere", SCOPE, now() + 300);
     let response = call(&router_for(&auth, 10, 10), Some(&token)).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert!(challenge(&response).contains("invalid_token"));
+    assert_eq!(
+        challenge(&response),
+        format!("Bearer error=\"invalid_token\", resource_metadata=\"{METADATA}\"")
+    );
 }
 
 #[tokio::test]
@@ -286,7 +324,12 @@ async fn a_token_without_the_required_scope_is_forbidden() {
     let token = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, "openid", now() + 300);
     let response = call(&router_for(&auth, 10, 10), Some(&token)).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert!(challenge(&response).contains("insufficient_scope"));
+    assert_eq!(
+        challenge(&response),
+        format!(
+            "Bearer error=\"insufficient_scope\", scope=\"{SCOPE}\", resource_metadata=\"{METADATA}\""
+        )
+    );
 }
 
 #[tokio::test]
@@ -388,38 +431,89 @@ fn inbound_tokens_are_verified_under_both_rfc_9068_type_spellings() {
 #[tokio::test]
 async fn every_refusal_is_a_problem_document() {
     let auth = authorization_server().await;
-    let router = router_for(&auth, 1, 1);
-    let valid = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
-    let wrong_scope =
-        auth.issue_access_token(CHAT_HOST, "citizen-b", RESOURCE, "wrong", now() + 300);
+    let server = resource_server_for(&auth, 10, 10);
     let cases = [
-        call(&router, None).await,
-        call(&router, Some("not-a-token")).await,
-        call(&router, Some(&wrong_scope)).await,
-        {
-            let _ = call(&router, Some(&valid)).await;
-            call(&router, Some(&valid)).await
-        },
+        (Refusal::Missing, 401, "Unauthorized", "unauthorized", true),
+        (
+            Refusal::InvalidToken,
+            401,
+            "Unauthorized",
+            "invalid-token",
+            true,
+        ),
+        (
+            Refusal::InsufficientScope,
+            403,
+            "Forbidden",
+            "insufficient-scope",
+            true,
+        ),
+        (
+            Refusal::KeySource,
+            503,
+            "Service Unavailable",
+            "temporarily-unavailable",
+            false,
+        ),
+        (
+            Refusal::Unavailable,
+            503,
+            "Service Unavailable",
+            "temporarily-unavailable",
+            false,
+        ),
+        (
+            Refusal::RateLimited {
+                retry_after_seconds: 7,
+            },
+            429,
+            "Too Many Requests",
+            "rate-limited",
+            false,
+        ),
     ];
-    for response in cases {
+    for (refusal, status, title, code, challenged) in cases {
+        let response = server.refusal_response(refusal);
+        assert_eq!(response.status().as_u16(), status, "{code}");
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE),
-            Some(&HeaderValue::from_static("application/problem+json"))
+            Some(&HeaderValue::from_static("application/problem+json")),
+            "{code}"
         );
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL),
-            Some(&HeaderValue::from_static("no-store"))
+            Some(&HeaderValue::from_static("no-store")),
+            "{code}"
+        );
+        assert_eq!(
+            response.headers().contains_key(header::WWW_AUTHENTICATE),
+            challenged,
+            "{code}"
+        );
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER).is_some(),
+            status == 429,
+            "{code}"
         );
         let value = body(response).await;
-        assert_eq!(value["type"], "about:blank");
-        assert!(value["status"].is_number());
-        assert!(value["code"].as_str().is_some_and(|code| !code.is_empty()));
-        assert!(value["detail"].is_string());
+        assert_eq!(value["type"], "about:blank", "{code}");
+        assert_eq!(value["title"], title, "{code}");
+        assert_eq!(value["status"], status, "{code}");
+        assert_eq!(value["code"], code, "{code}");
+        assert!(value["detail"].is_string(), "{code}");
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn an_unreachable_key_set_is_the_operators_failure() {
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(logs.clone())
+        .finish();
+    let _capture = tracing::subscriber::set_default(subscriber);
     let auth = authorization_server().await;
     let token = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -463,6 +557,13 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
         call(&router, Some(&token)).await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
+    let logs = logs.text();
+    assert!(
+        logs.contains("the access-token key set is unavailable"),
+        "{logs}"
+    );
+    assert!(!logs.contains("citizen-a"), "{logs}");
+    assert!(!logs.contains(&token), "{logs}");
 }
 
 #[tokio::test]
@@ -474,30 +575,30 @@ async fn a_production_key_set_on_a_loopback_address_is_refused_before_any_fetch(
         JwksFetcherConfig::defaults(),
         FetchUrlPolicy::strict(),
     ));
-    assert!(token_verifier(&options(&auth), fetcher)
+    let error = token_verifier(&options(&auth), fetcher)
         .verify(&token)
         .await
-        .is_err());
-}
-
-#[tokio::test]
-async fn retry_after_rounds_up_to_whole_seconds() {
-    let auth = authorization_server().await;
-    let router = router_for(&auth, 1, 10);
-    let token = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
-    let _ = call(&router, Some(&token)).await;
-    let response = call(&router, Some(&token)).await;
-    assert!(response
-        .headers()
-        .get(header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .is_some_and(|seconds| seconds >= 1));
+        .expect_err("a loopback key set is refused");
+    assert!(matches!(error, OidcError::FetchUrl(_)), "{error:?}");
 }
 
 #[test]
-fn the_key_set_policy_is_strict_outside_development() {
-    assert_ne!(FetchUrlPolicy::strict(), FetchUrlPolicy::dev());
+fn retry_after_rounds_up_to_whole_seconds() {
+    assert_eq!(retry_after_seconds(Duration::ZERO), 1);
+    assert_eq!(retry_after_seconds(Duration::from_millis(1)), 1);
+    assert_eq!(retry_after_seconds(Duration::from_secs(1)), 1);
+    assert_eq!(retry_after_seconds(Duration::from_millis(1_001)), 2);
+    assert_eq!(retry_after_seconds(Duration::from_millis(2_400)), 3);
+    assert_eq!(retry_after_seconds(Duration::from_secs(7)), 7);
+}
+
+#[tokio::test]
+async fn localhost_is_a_development_loopback_resource_and_issuer() {
+    let auth = authorization_server().await;
+    let mut options = options(&auth);
+    options.resource = "http://localhost:8095/mcp".to_owned();
+    options.issuer = "http://localhost:8096".to_owned();
+    assert_eq!(options.validate(), Ok(()));
 }
 
 #[tokio::test]

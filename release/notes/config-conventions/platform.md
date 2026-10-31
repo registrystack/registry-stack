@@ -285,3 +285,14 @@ token request. Each product fragment names the members its own client sets.
 
 No file an adopter writes changes. To migrate, change what a consumer of one
 of these words compares it with.
+
+### Configurable MCP supporting service (source build)
+
+`registry-mcp` reads `PlatformMcpRuntimeConfig` using
+`id.registrystack.org/formats/platform/mcp-runtime/v1alpha1` and emits
+`PlatformMcpCtlReport` with `mcp-ctl-report/v1alpha1`. It is source-build-only;
+there is no released installer or image. Existing citizen operators should keep
+`breg-mcp`. Optional conversion changes the envelope, uses `perPrincipal`, and
+moves BReg blocks into an explicit binding. The generic audit schema, event and
+pseudonym namespaces differ. Preserve the audit key for retry correlation.
+See [the design record](../../../products/platform/MCP-GATEWAY.md).

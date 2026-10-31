@@ -17,6 +17,24 @@
       ],
       "type": "string"
     },
+    "AdapterToolBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "description"
+      ],
+      "type": "object"
+    },
     "ApplicationConfig": {
       "additionalProperties": false,
       "description": "The proposal-mode Action and its target input, resolved by the gateway.",
@@ -416,6 +434,7 @@
               "$ref": "#/$defs/Url"
             },
             "pageSize": {
+              "default": 25,
               "format": "uint",
               "maximum": 100,
               "minimum": 1,
@@ -437,8 +456,6 @@
             "authority",
             "baseUrl",
             "readerPolicy",
-            "sourceProfile",
-            "pageSize",
             "authorization"
           ],
           "type": "object"
@@ -471,7 +488,7 @@
             },
             "operations": {
               "additionalProperties": {
-                "type": "string"
+                "$ref": "#/$defs/AdapterToolBinding"
               },
               "maxProperties": 128,
               "minProperties": 1,

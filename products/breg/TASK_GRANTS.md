@@ -56,11 +56,14 @@ closed `contextual` object.
 A standing agent without a task grant may read, Start an authorized Proposal,
 edit its own draft, and use `get-review-context` when an explicit agent profile
 independently grants that bounded disclosure. This is agent disclosure, not
-human viewing or approval. It requires the profile's exact client, purpose,
-scope, Record rows, readable Record fields, Proposal targets, and readable
-context fields. The token must carry a verified trusted actor, and BReg does
-not attach a human identity to it. The agent still cannot commit immediate
-effects or acquire submitted lifecycle authority. A separately authorized
+human viewing or approval. BReg requires an exact nonempty requester-client
+ceiling and a verified trusted actor. The profile independently determines
+readable fields, Record rows, Proposal targets, scopes and purposes where
+configured. Missing or unrestricted constraints do not become an intersection
+with the represented person's own BReg permissions. This read may disclose a
+submitted Proposal; it grants no submitted lifecycle decision or mutation.
+Institutions must approve the profile's reviewer population and disclosure
+ceiling before enabling it. The agent still cannot commit immediate effects. A separately authorized
 human confirms the draft. Start, Proposal draft management, disclosure, and
 committed transitions remain separate grants; `permissions.actions` and
 `permissions.proposals` never confer direct record CRUD. Modules remain subject

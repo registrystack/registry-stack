@@ -651,6 +651,10 @@ jobs:
       - name: Test affected packages
         run: python3 .github/scripts/run_cargo_packages.py test
 
+      - name: Test the synthetic authorization server
+        if: matrix.name == 'platform' && contains(matrix.packages, 'registry-platform-testing')
+        run: cargo test --locked -p registry-platform-testing --features test-authorization-server --test test_authorization_server
+
       - name: Check Casework schemas against their generators
         if: matrix.name == 'casework'
         run: products/casework/scripts/check-schemas.sh

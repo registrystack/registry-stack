@@ -983,7 +983,7 @@ class GateInventoryTest(unittest.TestCase):
                     ),
                 )
 
-    def test_unconditional_casework_guard_covers_a_disabled_checkpoint_guard(self) -> None:
+    def test_selected_casework_guard_covers_a_disabled_checkpoint_guard(self) -> None:
         snippet = "python3 products/casework/scripts/check_dependency_direction.py"
         self.assertIn(snippet, self.workflow)
         runner = self.casework_checkpoint_runner.replace(snippet, "true # disabled", 1)

@@ -7,6 +7,7 @@ pub use source::{fixture_response, Reply, Source};
 use registry_mcp::{config::RuntimeConfig, runtime};
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use registry_platform_testing::{TestActorKind, TestAuthorizationServer, TestClient};
+use registry_platform_yaml::Reader;
 use rmcp::{
     model::{CallToolRequestParams, CallToolResult},
     service::RunningService,
@@ -25,8 +26,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-pub const GET_TOOL: &str = "get_registry_person";
-pub const SEARCH_TOOL: &str = "search_registry_people";
+pub const GET_TOOL: &str = "get_facility";
+pub const SEARCH_TOOL: &str = "search_facilities";
 pub const ADAPTER_AUDIENCE: &str = "adapter-native-proof";
 const MACHINE_CLIENT: &str = "synthetic-adapter-machine";
 const CHAT_CLIENT: &str = "synthetic-chat-host";
@@ -37,36 +38,166 @@ const CURSOR_KEY: &str = "synthetic-cursor-key-0123456789!";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Project {
-    GovStack,
-    BregRecords,
+    GovStackFacilities,
+    BregFacilities,
+    BregWriteExample,
 }
 
 impl Project {
     fn project_directory(self, root: &Path) -> PathBuf {
-        root.join(match self {
-            Self::GovStack => "examples/dhis2-govstack",
-            Self::BregRecords => "examples/dhis2-tracker",
-        })
+        match self {
+            Self::GovStackFacilities => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/adapter/govstack-facilities"),
+            Self::BregFacilities => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/adapter/breg-facilities"),
+            Self::BregWriteExample => root.join("examples/dhis2-tracker"),
+        }
     }
 
     fn profile(self, root: &Path) -> PathBuf {
         root.join(match self {
-            Self::GovStack => "profiles/govstack-consultation/profile.yaml",
-            Self::BregRecords => "profiles/breg-records/profile.yaml",
+            Self::GovStackFacilities => "profiles/govstack-consultation/profile.yaml",
+            Self::BregFacilities | Self::BregWriteExample => "profiles/breg-records/profile.yaml",
         })
     }
 
-    fn operations(self) -> [(&'static str, &'static str); 2] {
+    fn operations(self) -> [(&'static str, &'static str, &'static str); 2] {
         match self {
-            Self::GovStack => [
-                (GET_TOOL, "records-get.persons"),
-                (SEARCH_TOOL, "records-search.persons"),
+            Self::GovStackFacilities => [
+                (
+                    GET_TOOL,
+                    "records-get.facilities",
+                    "Read one configured facility.",
+                ),
+                (
+                    SEARCH_TOOL,
+                    "records-search.facilities",
+                    "Search configured facilities by service area.",
+                ),
             ],
-            Self::BregRecords => [
-                (GET_TOOL, "records-get.person"),
-                (SEARCH_TOOL, "records-search.person"),
+            Self::BregFacilities => [
+                (
+                    GET_TOOL,
+                    "records-get.facility",
+                    "Read one configured facility through the Registry Record facade.",
+                ),
+                (
+                    SEARCH_TOOL,
+                    "records-search.facility",
+                    "List configured facilities through the Registry Record facade.",
+                ),
+            ],
+            Self::BregWriteExample => [
+                (
+                    GET_TOOL,
+                    "records-get.person",
+                    "Read one configured record.",
+                ),
+                (
+                    SEARCH_TOOL,
+                    "records-search.person",
+                    "List configured records.",
+                ),
             ],
         }
+    }
+
+    fn fixture_name(self) -> &'static str {
+        match self {
+            Self::GovStackFacilities => "govstack-facilities",
+            Self::BregFacilities => "breg-facilities",
+            Self::BregWriteExample => "breg-write-example",
+        }
+    }
+
+    fn prepare(self, root: &Path, scratch: &Path) -> PreparedProject {
+        let profile = self.profile(root);
+        let pack = root.join("packs/dhis2-tracker/pack.yaml");
+        let profile_digest = registry_platform_config::sha256_uri(
+            &std::fs::read(&profile).expect("read immutable Adapter profile fixture"),
+        );
+        let pack_digest = registry_platform_config::sha256_uri(
+            &std::fs::read(&pack).expect("read immutable Adapter pack fixture"),
+        );
+        let source = self.project_directory(root).join("project.yaml");
+        let project = std::fs::read(source).expect("read native Adapter project fixture");
+        let project = project_with_current_pins(&project, &profile_digest, &pack_digest);
+        let directory = scratch
+            .join("prepared-adapter-projects")
+            .join(self.fixture_name());
+        std::fs::create_dir_all(&directory).expect("create prepared Adapter project directory");
+        std::fs::write(directory.join("project.yaml"), project)
+            .expect("write prepared Adapter project copy");
+        PreparedProject {
+            directory,
+            profile,
+            pack,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PreparedProject {
+    directory: PathBuf,
+    profile: PathBuf,
+    pack: PathBuf,
+}
+
+fn project_with_current_pins(project: &[u8], profile_digest: &str, pack_digest: &str) -> String {
+    let mut prepared = Reader::new("native Adapter project fixture")
+        .scan(project)
+        .expect("native Adapter project fixture is valid YAML")
+        .expect("native Adapter project fixture is not empty")
+        .to_json_value();
+    *prepared
+        .pointer_mut("/profile/digest")
+        .expect("project fixture carries a profile digest pin") =
+        Value::String(profile_digest.to_owned());
+    *prepared
+        .pointer_mut("/pack/digest")
+        .expect("project fixture carries a pack digest pin") =
+        Value::String(pack_digest.to_owned());
+    let mut rendered =
+        serde_json::to_string_pretty(&prepared).expect("serialize prepared Adapter project");
+    rendered.push('\n');
+    rendered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_project(project: &[u8]) -> Value {
+        Reader::new("project transformation test")
+            .scan(project)
+            .expect("test project is valid YAML")
+            .expect("test project is not empty")
+            .to_json_value()
+    }
+
+    #[test]
+    fn prepared_project_changes_only_the_profile_and_pack_digest_members() {
+        let source = br#"apiVersion: test.example/project/v1
+kind: TestProject
+profile:
+  id: profile
+  digest: sha256:old-profile
+  nested:
+    digest: sha256:keep-profile-nested
+pack:
+  id: pack
+  digest: sha256:old-pack
+metadata:
+  digest: sha256:keep-metadata
+"#;
+        let mut expected = parse_project(source);
+        expected["profile"]["digest"] = json!("sha256:current-profile");
+        expected["pack"]["digest"] = json!("sha256:current-pack");
+
+        let prepared =
+            project_with_current_pins(source, "sha256:current-profile", "sha256:current-pack");
+
+        assert_eq!(parse_project(prepared.as_bytes()), expected);
     }
 }
 
@@ -138,23 +269,17 @@ impl NativeStack {
         let adapter_port = free_port();
         let runtime_path = directory.path().join("adapter-runtime.yaml");
         write_adapter_runtime(&runtime_path, adapter_port, &source.origin, &authorization);
-        let exported = export_contract(
-            &adapter_bin,
-            &adapter_root,
-            pinned_project,
-            &runtime_path,
-            &database,
-        );
+        let pinned_prepared = pinned_project.prepare(&adapter_root, directory.path());
+        let runtime_prepared = if runtime_project == pinned_project {
+            pinned_prepared.clone()
+        } else {
+            runtime_project.prepare(&adapter_root, directory.path())
+        };
+        let exported = export_contract(&adapter_bin, &pinned_prepared, &runtime_path, &database);
         let runtime_export = if runtime_project == pinned_project {
             exported.clone()
         } else {
-            export_contract(
-                &adapter_bin,
-                &adapter_root,
-                runtime_project,
-                &runtime_path,
-                &database,
-            )
+            export_contract(&adapter_bin, &runtime_prepared, &runtime_path, &database)
         };
         let machine_token = authorization.issue_access_token(
             MACHINE_CLIENT,
@@ -165,8 +290,7 @@ impl NativeStack {
         );
         let adapter = AdapterProcess::start(
             &adapter_bin,
-            &adapter_root,
-            runtime_project,
+            &runtime_prepared,
             &runtime_path,
             &database,
             adapter_port,
@@ -270,24 +394,32 @@ impl NativeStack {
     }
 
     pub fn export(&self, project: Project) -> Value {
+        let prepared = project.prepare(&self.adapter_root, self.directory.path());
         export_contract(
             &required_absolute_path("ADAPTER_BIN"),
-            &self.adapter_root,
-            project,
+            &prepared,
             &self.directory.path().join("adapter-runtime.yaml"),
             &self.database,
         )
     }
 
-    pub async fn unserved_write_binding_error(&self) -> String {
-        let breg = self.export(Project::BregRecords);
+    pub async fn write_binding_error(&self) -> String {
+        let breg = self.export(Project::BregWriteExample);
+        let write_operation = breg["contract"]["unserved"]
+            .as_array()
+            .expect("BReg example exports unserved operations")
+            .iter()
+            .find(|operation| operation["support"] == "unserved" && operation["effect"] == "write")
+            .and_then(|operation| operation["operationId"].as_str())
+            .expect("BReg example exports an unserved write operation")
+            .to_owned();
         let path = self.directory.path().join("breg-effective-contract.json");
         std::fs::write(
             &path,
             serde_json::to_vec_pretty(&breg).expect("serialize BReg adapter contract"),
         )
         .expect("write BReg adapter contract");
-        let runtime_path = self.directory.path().join("unserved-write-gateway.yaml");
+        let runtime_path = self.directory.path().join("write-operation-gateway.yaml");
         write_gateway_runtime(
             &runtime_path,
             &self.resource,
@@ -296,12 +428,16 @@ impl NativeStack {
             &path,
             breg["digest"].as_str().expect("BReg contract digest"),
             self.directory.path(),
-            &[("create_registry_person", "records-create.person")],
+            &[(
+                "create_registry_person",
+                write_operation.as_str(),
+                "Create is outside this read-only gateway.",
+            )],
         );
         match RuntimeConfig::load(&runtime_path) {
             Ok(config) => runtime::build(&config)
                 .await
-                .expect_err("an unserved write cannot build a provider")
+                .expect_err("a producer-declared write cannot build a read-only provider")
                 .to_string(),
             Err(error) => error,
         }
@@ -379,7 +515,7 @@ impl NativeStack {
     ) -> reqwest::Response {
         let mut request = reqwest::Client::new()
             .get(format!(
-                "{}/v1/collections/persons/records/{record_id}",
+                "{}/v1/collections/facilities/records/{record_id}",
                 self.adapter_origin
             ))
             .bearer_auth(&self.machine_token)
@@ -442,15 +578,14 @@ struct AdapterProcess {
 impl AdapterProcess {
     async fn start(
         binary: &Path,
-        adapter_root: &Path,
-        project: Project,
+        project: &PreparedProject,
         runtime: &Path,
         database: &str,
         port: u16,
         log_path: PathBuf,
     ) -> Self {
         let log = std::fs::File::create(&log_path).expect("create Adapter operational log");
-        let mut command = adapter_command(binary, adapter_root, project, runtime, "serve");
+        let mut command = adapter_command(binary, project, runtime, "serve");
         command
             .env("TEST_DB_URL", database)
             .env("TEST_UPSTREAM_USERNAME", UPSTREAM_USERNAME)
@@ -501,12 +636,11 @@ impl Drop for AdapterProcess {
 
 fn export_contract(
     binary: &Path,
-    adapter_root: &Path,
-    project: Project,
+    project: &PreparedProject,
     runtime: &Path,
     database: &str,
 ) -> Value {
-    let mut command = adapter_command(binary, adapter_root, project, runtime, "effective-contract");
+    let mut command = adapter_command(binary, project, runtime, "effective-contract");
     let output = command
         .env("TEST_DB_URL", database)
         .env("TEST_UPSTREAM_USERNAME", UPSTREAM_USERNAME)
@@ -524,8 +658,7 @@ fn export_contract(
 
 fn adapter_command(
     binary: &Path,
-    adapter_root: &Path,
-    project: Project,
+    project: &PreparedProject,
     runtime: &Path,
     subcommand: &str,
 ) -> Command {
@@ -535,11 +668,11 @@ fn adapter_command(
         .arg("--runtime-config")
         .arg(runtime)
         .arg("--project")
-        .arg(project.project_directory(adapter_root))
+        .arg(&project.directory)
         .arg("--profile")
-        .arg(project.profile(adapter_root))
+        .arg(&project.profile)
         .arg("--pack")
-        .arg(adapter_root.join("packs/dhis2-tracker/pack.yaml"));
+        .arg(&project.pack);
     command
 }
 
@@ -599,16 +732,20 @@ fn write_gateway_runtime(
     contract_file: &Path,
     digest: &str,
     scratch: &Path,
-    operations: &[(&str, &str)],
+    operations: &[(&str, &str, &str)],
 ) {
     let tools = operations
         .iter()
-        .map(|(tool, _)| format!("      - {tool}"))
+        .map(|(tool, _, _)| format!("      - {tool}"))
         .collect::<Vec<_>>()
         .join("\n");
     let operation_map = operations
         .iter()
-        .map(|(tool, operation)| format!("        {tool}: {operation}"))
+        .map(|(tool, operation, description)| {
+            format!(
+                "        {tool}:\n          operation: {operation}\n          description: {description}"
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(

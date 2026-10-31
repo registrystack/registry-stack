@@ -10,7 +10,7 @@ impl CaseworkService {
         token: &str,
         query: ReviewStaffingQuery,
     ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
-        self.review_staffing_tasks_with_delegation(actor, source_profile, token, query, None)
+        self.review_staffing_tasks_with_delegation(actor, source_profile, token, query, None, None)
             .await
     }
 
@@ -21,7 +21,11 @@ impl CaseworkService {
         token: &str,
         query: ReviewStaffingQuery,
         delegated: Option<&DelegatedCredentialContext>,
+        delegated_reader_policy: Option<&str>,
     ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
+        if delegated.is_some() != delegated_reader_policy.is_some() {
+            return Err(ReviewRuntimeError::Invalid);
+        }
         query.check().map_err(|_| ReviewRuntimeError::Invalid)?;
         require_human_reviewer(actor)?;
         if source_profile.is_none() {
@@ -60,7 +64,13 @@ impl CaseworkService {
             + Duration::from_millis(self.project.inbox.page_deadline_milliseconds);
         let mut context = query.clone();
         context.cursor = None;
-        let context_digest = review_request_hash(&(source_profile, context))?;
+        // Ordinary cursors retain their existing digest contract. Delegated
+        // cursors additionally bind the operator-selected reader policy so a
+        // cursor cannot cross gateway identities during client rotation.
+        let context_digest = match delegated_reader_policy {
+            Some(policy) => review_request_hash(&(source_profile, context, policy))?,
+            None => review_request_hash(&(source_profile, context))?,
+        };
         let mut after = if ordinary {
             if let Some(cursor) = query.cursor {
                 let client = self.store.client().await?;

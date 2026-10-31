@@ -269,7 +269,7 @@ fn standing_agent_cannot_use_an_untyped_immediate_profile() {
 }
 
 #[tokio::test]
-async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_owned_drafts() {
+async fn proposal_task_scopes_and_standing_agent_draft_and_context_permissions_are_exact() {
     use crate::{model::ProposalOperation, postgres::ProposalAuthorityOperation};
     let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
     let mut proposed = project.actions[0].clone();

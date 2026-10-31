@@ -19,6 +19,7 @@ workspace = true
 # Derives the runtime configuration JSON Schema the generator below writes.
 schema = [
     "dep:schemars",
+    "registry-mcp-edge/schema",
     "registry-platform-audit/schema",
     "registry-platform-config/schema",
     "registry-platform-yaml/schema",

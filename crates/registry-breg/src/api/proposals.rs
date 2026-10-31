@@ -308,7 +308,9 @@ pub(crate) fn authorize(
             }
             // A standing agent edits only its caller-owned draft. The one
             // additional operation is current review-context disclosure, and
-            // only a verified delegated actor may use it.
+            // only a verified delegated actor may use it. CompiledRegistry is
+            // also a public deserializable type, so retain the empty-client
+            // refusal as a runtime defense for malformed compiled input.
             if standing_agent
                 && operation == ProposalOperation::GetReviewContext
                 && (claims.actor_subject().is_none() || grant.requester_clients.is_empty())

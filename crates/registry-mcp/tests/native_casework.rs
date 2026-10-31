@@ -53,8 +53,10 @@ async fn native_staff_gateway_preserves_delegated_read_authority() {
     let bob_page = structured(&bob_page);
     assert!(stack.task_ids(&bob_page).is_empty());
 
+    let before_context_audit = stack.casework_audit_entry_count();
     let context = stack.context(&alice, stack.alice_zone_a_task()).await;
     assert_eq!(context.is_error, Some(false), "{context:?}");
+    stack.assert_one_context_success_since(before_context_audit);
     let context = structured(&context);
     assert_eq!(
         context.pointer("/caseworkData/value/taskId"),
@@ -64,15 +66,24 @@ async fn native_staff_gateway_preserves_delegated_read_authority() {
         context.pointer("/caseworkData/value/context/projection/display/currentAddressLine"),
         Some(&json!("1 Synthetic Road"))
     );
+    assert!(context.pointer("/caseworkData/value/policy").is_some());
+    assert!(context
+        .pointer("/caseworkData/value/policyClosure")
+        .is_none());
 
     let before_cross_subject = stack.exchange_count();
-    assert_eq!(
-        error_code(&stack.context(&bob, stack.alice_zone_a_task()).await),
-        "casework-read-unavailable"
-    );
+    let concealed = stack.context(&bob, stack.alice_zone_a_task()).await;
+    assert_eq!(error_code(&concealed), "casework-task-not-found");
+    let concealed = structured(&concealed);
+    let trace = concealed
+        .pointer("/error/traceId")
+        .and_then(serde_json::Value::as_str)
+        .expect("concealed Casework trace is preserved");
+    assert_eq!(trace.len(), 32);
+    assert!(trace.bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert_eq!(
         error_code(&stack.context(&bob, stack.bob_zone_a_task()).await),
-        "casework-read-unavailable"
+        "casework-task-not-found"
     );
     assert_eq!(
         stack.exchange_count(),
@@ -82,14 +93,14 @@ async fn native_staff_gateway_preserves_delegated_read_authority() {
 
     assert_eq!(
         error_code(&stack.context(&alice, stack.alice_zone_b_task()).await),
-        "casework-read-unavailable",
+        "casework-task-not-found",
         "the BReg row boundary must conceal a currently assigned foreign-jurisdiction proposal"
     );
 
     stack.transfer_zone_a_to_bob().await;
     assert_eq!(
         error_code(&stack.context(&alice, stack.bob_zone_a_task()).await),
-        "casework-read-unavailable",
+        "casework-task-not-found",
         "the previous holder loses access immediately after assignment transfer"
     );
     let transferred = stack.context(&bob, stack.bob_zone_a_task()).await;
@@ -127,7 +138,7 @@ async fn native_staff_gateway_preserves_delegated_read_authority() {
     stack.revoke_alice_membership().await;
     let revoked_page = stack.list(&alice).await;
     if revoked_page.is_error == Some(true) {
-        assert_eq!(error_code(&revoked_page), "casework-read-unavailable");
+        assert_eq!(error_code(&revoked_page), "casework-access-refused");
     } else {
         assert!(
             stack.task_ids(&structured(&revoked_page)).is_empty(),
@@ -136,7 +147,7 @@ async fn native_staff_gateway_preserves_delegated_read_authority() {
     }
     assert_eq!(
         error_code(&stack.context(&alice, stack.alice_zone_a_task()).await),
-        "casework-read-unavailable"
+        "casework-task-not-found"
     );
 
     stack.assert_exchange_chain();

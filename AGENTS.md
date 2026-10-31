@@ -24,9 +24,12 @@ in custody for an owning system, with an exact, verified version released to
 the recipient a document grant names; held out of releases), and **Registry
 Discovery** (a curated, immutable index over public provider descriptions).
 Registry Manifest describes sources portably; `registry-platform-*` crates are
-shared primitives; `registry-mcp`, `registry-breg-mcp`, `registry-breg-review`, and
-`registry-evidence-oid4vci` are supporting services beside a product, not
-products of their own.
+shared primitives. Integration maintainers own `registry-mcp`, a supporting
+composition service over explicit product bindings and the Live Adapter HTTP
+contract. Platform owns its neutral `registry-mcp-edge` primitive; product
+maintainers own each provider's authority and disclosure semantics.
+`registry-breg-mcp`, `registry-breg-review`, and `registry-evidence-oid4vci`
+remain supporting services beside their product, not products of their own.
 
 ## Repository map
 
@@ -54,7 +57,7 @@ products of their own.
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-mcp-edge` | Product-neutral MCP transport, verified caller, per-binding authorization and fail-closed audit |
-| `crates/registry-mcp` | Configurable MCP supporting service over explicit native and adapter bindings; no inherited product authority |
+| `crates/registry-mcp` | Integration-owned MCP supporting service over explicit native product and Live Adapter bindings; no inherited product authority |
 | `crates/registry-breg-mcp` | Citizen-facing MCP gateway beside the Base Registry Engine and the `breg-mcp` binary |
 | `crates/registry-breg-review` | Server-rendered citizen review page for BReg Proposal drafts and the `breg-review` binary |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |

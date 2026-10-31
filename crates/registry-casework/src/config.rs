@@ -712,9 +712,6 @@ pub struct DelegatedStaffReaderConfig {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub profile: String,
     pub client: String,
-    #[serde(deserialize_with = "registry_casework_core::typed::url")]
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
-    pub actor_issuer: String,
     pub actor_subject: String,
     #[serde(deserialize_with = "registry_casework_core::typed::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
@@ -1358,15 +1355,6 @@ impl RuntimeConfig {
                         "Bind the client to this exact subject-token issuer in assertionIssuers.",
                     ));
                 }
-                if reader.actor_issuer != oidc.provider.issuer.as_str() {
-                    let mut path = base.to_vec();
-                    path.push("actorIssuer");
-                    findings.push(delegated_staff_reader_finding(
-                        &path,
-                        "must equal authentication.oidc.issuer",
-                        "Name the exact issuer that signs the delegated access token and its act identity.",
-                    ));
-                }
                 for (member, value) in [
                     ("client", reader.client.as_str()),
                     ("actorSubject", reader.actor_subject.as_str()),
@@ -1458,7 +1446,6 @@ impl RuntimeConfig {
         let Some(readers) = &self.authentication.oidc.delegated_staff_readers else {
             return;
         };
-        let mut profiles = BTreeSet::new();
         for (policy, reader) in readers {
             let base = [
                 "authentication",
@@ -1489,15 +1476,6 @@ impl RuntimeConfig {
                     "Use a Staff profile; delegated Supervisor, Administrator and Requester authority is refused.",
                 ));
             }
-            if !profiles.insert(&profile.id) {
-                let mut path = base.to_vec();
-                path.push("profile");
-                findings.push(delegated_staff_reader_finding(
-                    &path,
-                    "must not be used by another delegated reader policy",
-                    "Keep one delegated reader policy per Staff profile so cursors cannot cross gateway identities.",
-                ));
-            }
             if profile
                 .required_scopes
                 .iter()
@@ -1509,6 +1487,62 @@ impl RuntimeConfig {
                     &path,
                     "must be distinct from the profile's human scopes",
                     "Issue a separate scope used only by this delegated reader policy.",
+                ));
+            }
+            let current_source_deployments = project
+                .review_policies
+                .iter()
+                .filter(|review_policy| {
+                    review_policy.stages.iter().any(|stage| {
+                        stage
+                            .deciding_profiles
+                            .iter()
+                            .any(|candidate| candidate == &reader.profile)
+                    })
+                })
+                .filter_map(|review_policy| {
+                    let registry_casework_core::ReviewContextPolicy::CurrentSource {
+                        provider, ..
+                    } = &review_policy.context
+                    else {
+                        return None;
+                    };
+                    project
+                        .context_providers
+                        .iter()
+                        .find(|candidate| candidate.id == provider.as_str())
+                        .map(|provider| provider.deployment_ref.as_str())
+                })
+                .collect::<BTreeSet<_>>();
+            if reader.source_profiles.is_empty() && !current_source_deployments.is_empty() {
+                let mut path = base.to_vec();
+                path.push("sourceProfiles");
+                findings.push(delegated_staff_reader_finding(
+                    &path,
+                    "is required when this Staff profile can decide current-source review work",
+                    "List the source disclosure profiles this reader may use, or remove this Staff profile from every current-source review stage it must not read.",
+                ));
+            } else if let Some(deployment_ref) =
+                current_source_deployments
+                    .iter()
+                    .copied()
+                    .find(|deployment_ref| {
+                        !reader.source_profiles.is_empty()
+                            && self
+                                .context_providers
+                                .get(*deployment_ref)
+                                .is_some_and(|binding| binding.delegated_display_exchange.is_none())
+                    })
+            {
+                let path = [
+                    "contextProviders",
+                    deployment_ref,
+                    "delegatedDisplayExchange",
+                ];
+                findings.push(delegated_staff_reader_finding(
+                    &path,
+                    "is required when a delegated reader authorizes source profiles for current-source work through this provider",
+                    "Configure the provider's delegatedDisplayExchange, or remove the reader's sourceProfiles after removing its Staff profile from current-source review stages.",
                 ));
             }
         }
@@ -2177,7 +2211,6 @@ mod tests {
             "assistant-reader": {
                 "profile": "staff",
                 "client": "registry-mcp",
-                "actorIssuer": "https://identity.example.test",
                 "actorSubject": "registry-mcp",
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
@@ -2217,6 +2250,156 @@ mod tests {
             finding.code() == "casework.runtime.invalid-delegated-staff-reader"
                 && finding.pointer().ends_with("/requiredScope")
         }));
+    }
+
+    #[test]
+    fn delegated_staff_reader_allows_client_rotation_for_one_staff_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["allowedClients"] =
+            json!(["registry-mcp-blue", "registry-mcp-green"]);
+        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+            "registry-mcp-blue": ["https://people.example.test"],
+            "registry-mcp-green": ["https://people.example.test"]
+        });
+        value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
+            "assistant-reader-blue": {
+                "profile": "staff",
+                "client": "registry-mcp-blue",
+                "actorSubject": "registry-mcp-blue",
+                "assertionIssuer": "https://people.example.test",
+                "requiredScope": "casework:staff:delegated-read",
+                "maximumTokenLifetimeSeconds": 300,
+                "sourceProfiles": ["review-agent"]
+            },
+            "assistant-reader-green": {
+                "profile": "staff",
+                "client": "registry-mcp-green",
+                "actorSubject": "registry-mcp-green",
+                "assertionIssuer": "https://people.example.test",
+                "requiredScope": "casework:staff:delegated-read",
+                "maximumTokenLifetimeSeconds": 300,
+                "sourceProfiles": ["review-agent"]
+            }
+        });
+        let config = read_operator(&value, directory.path());
+        let (_, _, project) = referenced_policy();
+
+        assert!(config.findings(Some(&project)).is_empty());
+    }
+
+    #[test]
+    fn delegated_reader_source_profiles_require_exchange_on_reachable_configured_provider() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["allowedClients"] = json!(["registry-mcp"]);
+        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+            "registry-mcp": ["https://people.example.test"]
+        });
+        value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
+            "assistant-reader": {
+                "profile": "staff",
+                "client": "registry-mcp",
+                "actorSubject": "registry-mcp",
+                "assertionIssuer": "https://people.example.test",
+                "requiredScope": "casework:staff:delegated-read",
+                "maximumTokenLifetimeSeconds": 300,
+                "sourceProfiles": ["review-agent"]
+            }
+        });
+        value["contextProviders"] = json!({
+            "facility": {
+                "baseUrl": "https://registry.example.test",
+                "statusProfile": "review-status",
+                "tokenEndpoint": "https://identity.example.test/token",
+                "clientIdRef": "secret:file/client-id",
+                "clientAssertionKeyRef": "secret:file/client-key"
+            }
+        });
+        let mut project = referenced_policy().2;
+        project.context_providers = vec![registry_casework_core::ReviewContextProviderPolicy {
+            id: "facility-context".to_owned(),
+            description: None,
+            capabilities: vec![
+                registry_casework_core::ReviewContextCapability::HumanDisplay,
+                registry_casework_core::ReviewContextCapability::ServiceStatus,
+            ],
+            source_namespace: "facility-registry".to_owned(),
+            deployment_ref: "facility".to_owned(),
+            service_profiles: BTreeMap::from([(
+                registry_casework_core::ReviewContextCapability::ServiceStatus,
+                "review-status".to_owned(),
+            )]),
+        }];
+        project.review_policies[0].context =
+            registry_casework_core::ReviewContextPolicy::CurrentSource {
+                provider: "facility-context".to_owned(),
+                contract: registry_casework_core::ReviewContextContract {
+                    id: "urn:test:facility-context".to_owned(),
+                    revision: registry_casework_core::ContentDigest::for_bytes(b"revision"),
+                    schema_digest: registry_casework_core::ContentDigest::for_bytes(b"schema"),
+                },
+            };
+
+        let config = read_operator(&value, directory.path());
+        let mut findings = Vec::new();
+        config.check_delegated_staff_readers(&project, &mut findings);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(
+            findings[0].pointer(),
+            "/contextProviders/facility/delegatedDisplayExchange"
+        );
+
+        value["contextProviders"]["facility"]["delegatedDisplayExchange"] = json!({
+            "tokenEndpoint": "https://identity.example.test/token",
+            "clientIdRef": "secret:file/delegated-client-id",
+            "clientAssertionKeyRef": "secret:file/delegated-client-key",
+            "resource": "urn:casework:facility-registry",
+            "scopes": ["registry:proposal:review"],
+            "generation": "test-generation"
+        });
+        let configured = read_operator(&value, directory.path());
+        let mut findings = Vec::new();
+        configured.check_delegated_staff_readers(&project, &mut findings);
+        assert!(findings.is_empty(), "{findings:?}");
+
+        value["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sourceProfiles");
+        let missing_source_profiles = read_operator(&value, directory.path());
+        let mut findings = Vec::new();
+        missing_source_profiles.check_delegated_staff_readers(&project, &mut findings);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(
+            findings[0].pointer(),
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/sourceProfiles"
+        );
+    }
+
+    #[test]
+    fn submitted_only_delegated_reader_may_omit_source_profiles() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["allowedClients"] = json!(["registry-mcp"]);
+        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+            "registry-mcp": ["https://people.example.test"]
+        });
+        value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
+            "assistant-reader": {
+                "profile": "staff",
+                "client": "registry-mcp",
+                "actorSubject": "registry-mcp",
+                "assertionIssuer": "https://people.example.test",
+                "requiredScope": "casework:staff:delegated-read",
+                "maximumTokenLifetimeSeconds": 300
+            }
+        });
+        let config = read_operator(&value, directory.path());
+        let project = referenced_policy().2;
+        let mut findings = Vec::new();
+        config.check_delegated_staff_readers(&project, &mut findings);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     fn referenced_policy() -> (Vec<u8>, BTreeMap<String, Vec<u8>>, CaseworkProject) {

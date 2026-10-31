@@ -206,6 +206,10 @@ async fn proxy(State(state): State<ProxyState>, request: Request) -> AxumRespons
         .expect("proxy adapter call");
     let status = response.status();
     let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
+    let request_id = response
+        .headers()
+        .get(header::HeaderName::from_static("x-registry-request-id"))
+        .cloned();
     let mut bytes = response
         .bytes()
         .await
@@ -223,6 +227,12 @@ async fn proxy(State(state): State<ProxyState>, request: Request) -> AxumRespons
         answer
             .headers_mut()
             .insert(header::CONTENT_TYPE, content_type);
+    }
+    if let Some(request_id) = request_id {
+        answer.headers_mut().insert(
+            header::HeaderName::from_static("x-registry-request-id"),
+            request_id,
+        );
     }
     answer
 }

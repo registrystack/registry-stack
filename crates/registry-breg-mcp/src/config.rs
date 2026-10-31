@@ -12,28 +12,24 @@
 //! loader, so its envelope, size bound, path rules, `${VAR}` substitution,
 //! and secret provider declarations match every other runtime.
 
-use std::{
-    fmt,
-    hash::Hash,
-    path::{Path, PathBuf},
-};
+use std::{fmt, path::Path};
 
-use registry_platform_audit::{
-    AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
-    MIN_AUDIT_ROTATE_BYTES,
+use registry_mcp_edge::config::{bounded_restricting_list, ResourceServerConfigError};
+pub use registry_mcp_edge::config::{
+    AccessTokenAlgorithm, AuditConfig, ExchangeConfig, LimitsConfig, LogLevel, RateLimitConfig,
+    ResourceServerConfig, ResourceUri, ScopeToken,
 };
+use registry_platform_audit::AuditDestinationError;
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, JwksSource, LoadedRuntimeConfig,
-    PrivateListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
-    SecretReference, TlsTermination,
+    ConfigBlockError, ConfigBlockErrorKind, LoadedRuntimeConfig, PrivateListenerConfig, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig, TlsTermination,
 };
-use registry_platform_httputil::{valid_resource_uri, valid_scope_token};
 use registry_platform_yaml::{
-    escape_pointer_segment, BoundedU32, BoundedU64, Diagnostic, ExternalId, Invalid, LocalId,
-    Report, RetiredApiVersion, UniqueList, Url,
+    escape_pointer_segment, BoundedU64, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
+    UniqueList, Url,
 };
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer};
 use url::Host;
 
 /// apiVersion of the gateway runtime configuration document.
@@ -43,50 +39,15 @@ pub const RUNTIME_KIND: &str = "BRegMcpRuntimeConfig";
 /// The single path the MCP endpoint is served at.
 pub const MCP_PATH: &str = "/mcp";
 
-/// The operational log level. The vocabulary is closed so configuration
-/// cannot turn on debug output or dependency logging.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Error,
-    Warn,
-    #[default]
-    Info,
-}
-
-impl LogLevel {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Error => "error",
-            Self::Warn => "warn",
-            Self::Info => "info",
-        }
-    }
-}
-
 const fn default_log_level() -> LogLevel {
     LogLevel::Info
 }
 
 /// The most characters a citizen-facing service text may hold.
 const MAXIMUM_SERVICE_TEXT_CHARS: usize = 4096;
-/// The most items a client, scope, or algorithm list may hold.
-const MAXIMUM_LIST_ITEMS: usize = 128;
-/// The longest scope token or registry audience, in bytes.
-const MAXIMUM_TOKEN_BYTES: usize = 512;
-/// The longest access-token lifetime the gateway accepts: one day.
-const MAXIMUM_TOKEN_LIFETIME_SECONDS: u64 = 86_400;
 /// The shortest and longest wait for one registry call.
 const MINIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 100;
 const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 120_000;
-/// The request body ceiling no runtime may raise past: 1 MiB.
-const MAXIMUM_REQUEST_BYTES: u64 = 1024 * 1024;
-/// The most requests a rate limit may admit per minute or in one burst.
-const MAXIMUM_RATE: u32 = 1_000_000;
-/// The largest `audit.rotateBytes` the shared audit writer accepts.
-const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
 
 const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: RUNTIME_API_VERSION,
@@ -156,91 +117,6 @@ pub struct RuntimeConfig {
     pub limits: LimitsConfig,
 }
 
-/// The inbound half: how a chat host's access token is verified.
-#[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ResourceServerConfig {
-    /// This gateway's resource identifier: the exact URL of its MCP endpoint,
-    /// which every accepted token must name as its audience. An https URL
-    /// whose path is `/mcp`, with no query or fragment; plain http is
-    /// accepted only on a loopback host under `development-loopback`.
-    pub resource: Url,
-    /// The exact issuer accepted in access-token `iss` claims. An https URL
-    /// with no query or fragment; plain http is accepted only on a loopback
-    /// host under `development-loopback`.
-    pub issuer: Url,
-    /// Where the issuer's signing keys come from. Omitted, they are read
-    /// through the issuer's OpenID Connect discovery document.
-    #[serde(default)]
-    pub jwks_source: JwksSource,
-    /// Permit plain HTTP beyond loopback to the declared issuer and to a JWKS
-    /// URI declared in `jwksSource`.
-    #[serde(default)]
-    pub allow_insecure_http: bool,
-    /// The asymmetric signature algorithms an accepted token may use.
-    #[serde(deserialize_with = "bounded_list")]
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
-    pub algorithms: UniqueList<AccessTokenAlgorithm>,
-    /// The chat-host clients whose tokens the gateway accepts.
-    #[serde(deserialize_with = "bounded_list")]
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
-    pub allowed_clients: UniqueList<ExternalId>,
-    /// Scopes every accepted token must carry. There is no sentinel for
-    /// "any scope": a gateway that acts for a citizen always names the
-    /// scope that consent was given for.
-    #[serde(deserialize_with = "bounded_list")]
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
-    pub required_scopes: UniqueList<ScopeToken>,
-    /// The access-token claim that carries the granted scopes.
-    #[serde(default = "default_scope_claim")]
-    pub scope_claim: ExternalId,
-    /// The longest lifetime an accepted access token may declare, from its
-    /// `iat` to its `exp`, in seconds.
-    #[serde(default = "default_maximum_token_lifetime")]
-    pub maximum_token_lifetime_seconds: BoundedU64<1, MAXIMUM_TOKEN_LIFETIME_SECONDS>,
-}
-
-impl ResourceServerConfig {
-    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.allow_insecure_http.then_some(
-            "resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-        )
-    }
-}
-
-fn default_scope_claim() -> ExternalId {
-    ExternalId::new("scope").expect("the default scope claim is an external identifier")
-}
-
-fn default_maximum_token_lifetime() -> BoundedU64<1, MAXIMUM_TOKEN_LIFETIME_SECONDS> {
-    BoundedU64::new(3600).expect("the default token lifetime is within its bounds")
-}
-
-/// An asymmetric access-token signature algorithm.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub enum AccessTokenAlgorithm {
-    RS256,
-    RS384,
-    ES256,
-    ES384,
-    EdDSA,
-}
-
-impl AccessTokenAlgorithm {
-    #[must_use]
-    pub const fn jsonwebtoken(self) -> jsonwebtoken::Algorithm {
-        match self {
-            Self::RS256 => jsonwebtoken::Algorithm::RS256,
-            Self::RS384 => jsonwebtoken::Algorithm::RS384,
-            Self::ES256 => jsonwebtoken::Algorithm::ES256,
-            Self::ES384 => jsonwebtoken::Algorithm::ES384,
-            Self::EdDSA => jsonwebtoken::Algorithm::EdDSA,
-        }
-    }
-}
-
 /// The outbound half: the registry the gateway acts on.
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -255,7 +131,7 @@ pub struct RegistryConfig {
     /// The registry's token audience, requested as the exchange resource.
     pub audience: ResourceUri,
     /// The scopes requested for the delegated registry token.
-    #[serde(deserialize_with = "bounded_list")]
+    #[serde(deserialize_with = "bounded_restricting_list")]
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
     pub scopes: UniqueList<ScopeToken>,
     /// How long one registry call may take before it is abandoned, in
@@ -268,33 +144,6 @@ pub struct RegistryConfig {
 fn default_attempt_timeout(
 ) -> BoundedU64<MINIMUM_ATTEMPT_TIMEOUT_MILLISECONDS, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS> {
     BoundedU64::new(10_000).expect("the default attempt timeout is within its bounds")
-}
-
-/// The gateway's own client identity, used only to exchange a verified
-/// inbound token for a delegated registry token.
-#[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExchangeConfig {
-    /// The authorization server's token endpoint. An https URL with no query
-    /// or fragment; plain http is accepted only on a loopback host under
-    /// `development-loopback`.
-    pub token_endpoint: Url,
-    /// The gateway's client identifier at the authorization server. It may
-    /// not also be one of `resourceServer.allowedClients`.
-    pub client_id: ExternalId,
-    /// Secret reference to the private JWK the gateway signs its client
-    /// assertions with, under a declared provider.
-    pub private_key_ref: SecretReference,
-    /// The client-assertion audience, when the authorization server expects
-    /// one other than its token endpoint. Omitted, the assertion names the
-    /// token endpoint.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "ExternalId", skip_serializing_if = "Option::is_none")
-    )]
-    pub assertion_audience: Option<ExternalId>,
 }
 
 /// The authored service a citizen is told about, and the registry entities
@@ -335,62 +184,6 @@ pub struct ApplicationConfig {
     pub target_input: LocalId,
 }
 
-/// The audit block every Registry Stack product shares: the hash key, then a
-/// `file` (the default) or `stdout` destination, with rotation and retention
-/// for a file.
-#[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuditConfig {
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/audit-key"))]
-    #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub key: AuditKeyConfig,
-    /// Where audit lines go: `file` or `stdout`.
-    #[serde(default)]
-    pub destination: AuditDestinationKind,
-    /// The absolute path of the active audit file. Required for a `file`
-    /// destination, and refused with `stdout`.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "PathBuf", skip_serializing_if = "Option::is_none")
-    )]
-    pub path: Option<PathBuf>,
-    /// Size at which the active file rotates, in bytes, for a `file`
-    /// destination. Default: 100 MiB.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(
-            with = "BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>",
-            skip_serializing_if = "Option::is_none"
-        )
-    )]
-    pub rotate_bytes: Option<BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>>,
-    /// Days a rotated file is kept, for a `file` destination. Default: 90.
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(
-            with = "BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>",
-            skip_serializing_if = "Option::is_none"
-        )
-    )]
-    pub retention_days: Option<BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>>,
-}
-
-impl AuditConfig {
-    /// The destination the shared audit writer opens.
-    pub fn destination(&self) -> Result<AuditDestination, AuditDestinationError> {
-        AuditDestination::from_settings(
-            self.destination,
-            self.path.clone(),
-            self.rotate_bytes.map(BoundedU64::get),
-            self.retention_days.map(BoundedU32::get),
-        )
-    }
-}
-
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -399,46 +192,6 @@ pub struct RateLimitsConfig {
     pub per_citizen: RateLimitConfig,
     /// The limit each chat-host client's requests share.
     pub per_client: RateLimitConfig,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RateLimitConfig {
-    /// Requests admitted per minute, on average.
-    pub requests_per_minute: BoundedU32<1, MAXIMUM_RATE>,
-    /// Requests admitted at once before the average applies.
-    pub burst: BoundedU32<1, MAXIMUM_RATE>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LimitsConfig {
-    /// Largest request body the MCP endpoint reads, in bytes.
-    #[serde(default = "default_maximum_request_bytes")]
-    pub maximum_request_bytes: BoundedU64<1, MAXIMUM_REQUEST_BYTES>,
-}
-
-impl LimitsConfig {
-    /// `maximumRequestBytes` as a length. The bound is 1 MiB, which fits
-    /// `usize` on every target the workspace builds for.
-    #[must_use]
-    pub fn request_bytes(&self) -> usize {
-        usize::try_from(self.maximum_request_bytes.get()).expect("the request bound fits usize")
-    }
-}
-
-impl Default for LimitsConfig {
-    fn default() -> Self {
-        Self {
-            maximum_request_bytes: default_maximum_request_bytes(),
-        }
-    }
-}
-
-fn default_maximum_request_bytes() -> BoundedU64<1, MAXIMUM_REQUEST_BYTES> {
-    BoundedU64::new(64 * 1024).expect("the default request ceiling is within its bounds")
 }
 
 /// Text checked by one rule, refused with one [`Invalid`] that names the
@@ -485,31 +238,6 @@ macro_rules! checked_text {
 }
 
 checked_text!(
-    /// An RFC 6749 scope token: 1 to 512 bytes of printable ASCII other than
-    /// space, `"`, and `\`, checked with the platform's own scope grammar.
-    ScopeToken,
-    |text| text.len() <= MAXIMUM_TOKEN_BYTES && valid_scope_token(text),
-    Invalid::expected(
-        "an RFC 6749 scope token of 1 to 512 printable ASCII characters, without spaces, quotes, \
-         or backslashes",
-        "Write the scope as one token, exactly as the authorization server issues it."
-    )
-);
-
-checked_text!(
-    /// An RFC 8707 resource indicator of at most 512 bytes: an absolute URI
-    /// without a fragment or user information, checked with the platform's
-    /// own resource grammar.
-    ResourceUri,
-    |text| text.len() <= MAXIMUM_TOKEN_BYTES && valid_resource_uri(text),
-    Invalid::expected(
-        "an absolute URI of at most 512 characters, without a fragment or user information",
-        "Write the registry's token audience as an absolute URI, such as a urn: name or an \
-         https URL, without a fragment or credentials."
-    )
-);
-
-checked_text!(
     /// Text a citizen reads: not blank, at most 4096 characters.
     ServiceText,
     |text| !text.trim().is_empty() && text.chars().count() <= MAXIMUM_SERVICE_TEXT_CHARS,
@@ -518,21 +246,6 @@ checked_text!(
         "Write the sentence the citizen reads, in at most 4096 characters."
     )
 );
-
-/// A set of 1 to 128 items: a client, scope, or algorithm list restricts
-/// what the gateway accepts or requests, so an empty one is refused rather
-/// than read as "none" or "any".
-fn bounded_list<'de, D, T>(deserializer: D) -> Result<UniqueList<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de> + Eq + Hash,
-{
-    let list = UniqueList::<T>::deserialize(deserializer)?;
-    if list.is_empty() || list.len() > MAXIMUM_LIST_ITEMS {
-        return Err(de::Error::invalid_length(list.len(), &"1 to 128 items"));
-    }
-    Ok(list)
-}
 
 /// Why the runtime configuration was refused: every finding, each
 /// positioned in the file and naming its fix, never a value from it.
@@ -692,11 +405,6 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
             "exchange.privateKeyRef",
             config.exchange.private_key_ref.as_str(),
         ),
-        config.resource_server.jwks_source.check_with_insecure_http(
-            "resourceServer.jwksSource",
-            config.development_loopback(),
-            config.resource_server.allow_insecure_http,
-        ),
     ];
     findings.extend(
         blocks
@@ -704,14 +412,21 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
             .filter_map(|result| result.as_ref().err())
             .map(block_finding),
     );
-    if let Some(document_ref) = config.resource_server.jwks_source.document_ref() {
-        if let Err(error) = config
-            .secret_providers
-            .check_reference("resourceServer.jwksSource.documentRef", document_ref)
-        {
-            findings.push(block_finding(&error));
-        }
-    }
+    findings.extend(
+        config
+            .resource_server
+            .validate(config.development_loopback(), &config.secret_providers)
+            .iter()
+            .filter(|error| {
+                !defers("/listener/tlsTermination")
+                    || !matches!(
+                        error,
+                        ResourceServerConfigError::InsecureResource
+                            | ResourceServerConfigError::InsecureIssuer
+                    )
+            })
+            .map(resource_server_finding),
+    );
     endpoint_findings(config, defers, &mut findings);
     cross_member_findings(config, defers, &mut findings);
     if let Err(error) = config.audit.destination() {
@@ -730,19 +445,13 @@ fn endpoint_findings(
     let termination_known = !defers("/listener/tlsTermination");
     let development = config.development_loopback();
     let endpoints = [
-        ("/resourceServer/resource", &config.resource_server.resource),
-        ("/resourceServer/issuer", &config.resource_server.issuer),
         ("/registry/baseUrl", &config.registry.base_url),
         ("/exchange/tokenEndpoint", &config.exchange.token_endpoint),
         ("/service/reviewBaseUrl", &config.service.review_base_url),
     ];
     for (pointer, endpoint) in endpoints {
         let url = endpoint.to_url();
-        let issuer_http_opt_in =
-            pointer == "/resourceServer/issuer" && config.resource_server.allow_insecure_http;
-        let secure = url.scheme() == "https"
-            || (development && loopback_host(&url))
-            || (issuer_http_opt_in && url.scheme() == "http");
+        let secure = url.scheme() == "https" || (development && loopback_host(&url));
         if termination_known && !secure {
             findings.push(Finding::new(
                 "breg.mcp-runtime.plain-http-endpoint",
@@ -750,7 +459,7 @@ fn endpoint_findings(
                 "the endpoint uses plain http, which is accepted only on a loopback host under \
                  listener.tlsTermination development-loopback",
                 "Write an https URL, run on loopback with listener.tlsTermination \
-                 development-loopback, or set resourceServer.allowInsecureHttp: true for the issuer.",
+                 development-loopback.",
             ));
         } else if url.query().is_some() || url.fragment().is_some() {
             findings.push(Finding::new(
@@ -760,14 +469,6 @@ fn endpoint_findings(
                 "Remove the query and the fragment from the URL.",
             ));
         }
-    }
-    if config.resource_server.resource.to_url().path() != MCP_PATH {
-        findings.push(Finding::new(
-            "breg.mcp-runtime.resource-not-mcp-endpoint",
-            "/resourceServer/resource",
-            "resourceServer.resource does not name the /mcp endpoint this gateway serves",
-            "Write the URL of this gateway's /mcp endpoint, as chat hosts reach it.",
-        ));
     }
     // The review page serves its pages at the root of its publicOrigin.
     if config.service.review_base_url.to_url().path() != "/" {
@@ -860,6 +561,43 @@ fn pointer_of(dotted: &str) -> String {
         .split('.')
         .map(|segment| format!("/{}", escape_pointer_segment(segment)))
         .collect()
+}
+
+fn resource_server_finding(error: &ResourceServerConfigError) -> Finding {
+    match error {
+        ResourceServerConfigError::InvalidResource => Finding::new(
+            "breg.mcp-runtime.endpoint-query-or-fragment",
+            "/resourceServer/resource",
+            "the endpoint carries a query or a fragment",
+            "Remove the query and the fragment from the URL.",
+        ),
+        ResourceServerConfigError::ResourceNotMcpEndpoint => Finding::new(
+            "breg.mcp-runtime.resource-not-mcp-endpoint",
+            "/resourceServer/resource",
+            "resourceServer.resource does not name the /mcp endpoint this gateway serves",
+            "Write the URL of this gateway's /mcp endpoint, as chat hosts reach it.",
+        ),
+        ResourceServerConfigError::InsecureResource => Finding::new(
+            "breg.mcp-runtime.plain-http-endpoint",
+            "/resourceServer/resource",
+            "the endpoint uses plain http, which is accepted only on a loopback host under listener.tlsTermination development-loopback",
+            "Write an https URL, or run on loopback with listener.tlsTermination development-loopback.",
+        ),
+        ResourceServerConfigError::InvalidIssuer => Finding::new(
+            "breg.mcp-runtime.endpoint-query-or-fragment",
+            "/resourceServer/issuer",
+            "the endpoint carries a query or a fragment",
+            "Remove the query and the fragment from the URL.",
+        ),
+        ResourceServerConfigError::InsecureIssuer => Finding::new(
+            "breg.mcp-runtime.plain-http-endpoint",
+            "/resourceServer/issuer",
+            "the endpoint uses plain http, which is accepted only on a loopback host under listener.tlsTermination development-loopback",
+            "Write an https URL, run on loopback with listener.tlsTermination development-loopback, or set resourceServer.allowInsecureHttp: true for the issuer.",
+        ),
+        ResourceServerConfigError::JwksSource(error)
+        | ResourceServerConfigError::JwksDocumentReference(error) => block_finding(error),
+    }
 }
 
 /// The code and fix for a shared block refusal.
@@ -972,39 +710,7 @@ mod schema_impls {
 
     use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 
-    use super::{ResourceUri, ScopeToken, ServiceText};
-
-    impl JsonSchema for ScopeToken {
-        fn schema_name() -> Cow<'static, str> {
-            Cow::Borrowed("ScopeToken")
-        }
-
-        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-            json_schema!({
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "pattern": "^[!#-\\[\\]-~]+$",
-                "description": "An RFC 6749 scope token: printable ASCII other than space, `\"`, and `\\`.",
-            })
-        }
-    }
-
-    impl JsonSchema for ResourceUri {
-        fn schema_name() -> Cow<'static, str> {
-            Cow::Borrowed("ResourceUri")
-        }
-
-        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-            json_schema!({
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$",
-                "description": "An RFC 8707 resource indicator: an absolute URI without a fragment. The reader also refuses user information and a URI it cannot parse.",
-            })
-        }
-    }
+    use super::ServiceText;
 
     impl JsonSchema for ServiceText {
         fn schema_name() -> Cow<'static, str> {
@@ -1025,7 +731,10 @@ mod schema_impls {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::fs;
+    use std::{fs, path::PathBuf};
+
+    use registry_platform_config::{JwksSource, SecretReference};
+    use registry_platform_yaml::ExternalId;
 
     use super::*;
 

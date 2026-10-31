@@ -12,12 +12,21 @@ from pathlib import Path
 
 EDGE = "registry-mcp-edge"
 RUNTIME = "registry-mcp"
-# The generic runtime composes product-owned providers and maintained clients.
-# Stop at those public boundaries; their own dependency gates inspect what is
-# behind them without coupling this product-neutral check to product internals.
+# The generic service composes reviewed providers and maintained clients.
+# Check both the public entry points and their permitted source closure so an
+# implementation dependency cannot hide behind a client or provider name.
 PROVIDER_BOUNDARIES = frozenset({"registry-breg-mcp"})
 CLIENT_BOUNDARIES = frozenset({"registry-casework-client"})
 REVIEWED_BOUNDARIES = PROVIDER_BOUNDARIES | CLIENT_BOUNDARIES
+
+BOUNDARY_PRODUCTS = {
+    "registry-breg-mcp": frozenset({
+        EDGE, "registry-breg-client", "registry-record", "registry-review-protocol",
+    }),
+    "registry-casework-client": frozenset({
+        "registry-casework-core", "registry-review-client", "registry-review-protocol",
+    }),
+}
 
 
 def package_graph(
@@ -116,6 +125,36 @@ def violations(metadata: dict) -> list[str]:
             f"{RUNTIME} reaches product runtime, core, or tooling package(s) "
             f"outside a maintained client/provider boundary: {', '.join(runtime_products)}"
         )
+    for boundary, allowed in BOUNDARY_PRODUCTS.items():
+        for boundary_id in ids_by_name.get(boundary, []):
+            unexpected = sorted({
+                names[package]
+                for package in closure(boundary_id, linked, linked)
+                if names[package].startswith("registry-")
+                and not names[package].startswith("registry-platform-")
+                and names[package] not in allowed
+            })
+            if unexpected:
+                failures.append(
+                    f"{boundary} reaches packages outside its reviewed source closure: "
+                    + ", ".join(unexpected)
+                )
+
+    for package_id, name in names.items():
+        if (not name.startswith("registry-")
+                or name.startswith("registry-platform-")
+                or name in {EDGE, RUNTIME, "registry-cli-docs"}
+                or name in PROVIDER_BOUNDARIES):
+            continue
+        upstream = sorted({
+            names[dependency]
+            for dependency in closure(package_id, linked, linked)
+            if names[dependency] in {EDGE, RUNTIME}
+        })
+        if upstream:
+            failures.append(
+                f"{name} reaches MCP supporting code: " + ", ".join(upstream)
+            )
     return failures
 
 

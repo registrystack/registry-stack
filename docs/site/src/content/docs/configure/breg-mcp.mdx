@@ -67,7 +67,7 @@ The review page re-reads the draft and its target under the citizen's token befo
 form and at submit. An unreadable target gets the same 404 as a missing draft, and a changed draft
 is shown again with a notice.
 
-{/* Evidence: crates/registry-breg-mcp/src/server.rs, NeverSessionManager;
+{/* Evidence: crates/registry-mcp-edge/src/server.rs, NeverSessionManager;
     crates/registry-breg-mcp/src/tools.rs, start_input_schema, update_input_schema, parse_start,
     MAXIMUM_EDITS, a_smuggled_target_argument_is_refused_before_any_call;
     crates/registry-breg-mcp/src/gateway.rs, resolve_own, owned_application, application_summary,
@@ -128,10 +128,15 @@ accessProfiles:
                   operator: equals
 ```
 
-The gateway needs Proposal Get to prepare a review and report status. Without `taskGrant`, an agent
-profile may only Start and Edit, and the project check refuses any other Proposal operation with
-`breg.proposal.standing-agent-operation-forbidden`. A task-grant profile must name
-`requesterClients` and `requiredPurposes`, and may not write Records directly.
+The citizen gateway needs Proposal Get to prepare a review and report status, so its profile
+uses `taskGrant`. A task-grant profile must name `requesterClients` and `requiredPurposes`,
+and may not write Records directly. A standing agent without a task grant can Start and edit
+its own draft. An institution may separately grant `get-review-context`, including for a
+submitted Proposal, to an exact requester client with a verified trusted actor. That agent
+profile defines source disclosure; it does not inherit the represented person's BReg
+permissions. Other submitted lifecycle operations remain refused with
+`breg.proposal.standing-agent-operation-forbidden`. Keep review-context disclosure disabled
+until the institution approves its reviewer population and field/row ceiling.
 
 The review page's profile, `citizen-review` here, uses `actorKind: human`, its own client, and no
 task grant. It adds `submit` and `cancel` on the Proposal.
@@ -226,9 +231,10 @@ For the review page, the issuer must offer OpenID Connect discovery, the code fl
 tokens are signed with EdDSA, ES256, ES384, RS256, or PS256. The registry token carries
 `registry_actor_kind` set to `human`.
 
-{/* Evidence: crates/registry-breg-mcp/src/inbound.rs, verifier_config;
+{/* Evidence: crates/registry-mcp-edge/src/inbound.rs, verifier_config;
     crates/registry-breg-mcp/src/config.rs, AccessTokenAlgorithm;
-    crates/registry-breg-mcp/src/outbound.rs, ExchangeAuthorization,
+    crates/registry-mcp-edge/src/authorization.rs, Delegation;
+    crates/registry-mcp-edge/src/compatibility_tests/authorization.rs,
     the_actor_token_is_requested_for_the_gateway_not_the_registry,
     the_exchanged_token_names_the_citizen_and_the_gateway_as_actor;
     crates/registry-breg/src/auth.rs, optional_actor_subject, bounded_identity;
@@ -319,7 +325,8 @@ The table below gives each key. Rules that span keys or services:
 
 {/* Evidence: crates/registry-breg-mcp/src/config.rs, RuntimeConfig, REMOVED_KEYS, findings,
     cross_member_findings, audience-reused, exchange-client-admitted-inbound;
-    crates/registry-breg-mcp/src/inbound.rs, jwks_fetch_policy, METADATA_PREFIX;
+    crates/registry-platform-oidc/src/lib.rs, declared_jwks_fetch_policy;
+    crates/registry-mcp-edge/src/server.rs, METADATA_PREFIX;
     crates/registry-breg-mcp/src/gateway.rs, prepare_review;
     crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig. */}
 
@@ -428,8 +435,8 @@ Neither service terminates TLS. Your proxy forwards plain HTTP to the private li
 while the audit journal is writable, and 503 `{"status":"not-ready"}` otherwise. Neither probe
 calls BReg or the issuer.
 
-{/* Evidence: crates/registry-breg-mcp/src/server.rs, require_resource_host, forbidden, health, ready;
-    crates/registry-breg-mcp/src/inbound.rs, authenticate;
+{/* Evidence: crates/registry-mcp-edge/src/server.rs, require_resource_host, forbidden, health, ready;
+    crates/registry-mcp-edge/src/inbound.rs, authenticate;
     crates/registry-breg-review/src/lib.rs, health, ready;
     crates/registry-breg-review/src/config.rs, default_global_sign_in. */}
 
@@ -468,7 +475,7 @@ change it, restart with no retry outstanding and write to a fresh `audit.path`.
 
 {/* Evidence: crates/registry-platform-config/src/blocks.rs, SecretProvidersConfig,
     InvalidSecretReference; crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
-    crates/registry-breg-mcp/src/inbound.rs, uri_fetcher;
+    crates/registry-breg-mcp/src/runtime.rs, assemble;
     crates/registry-platform-oidc/src/lib.rs, JwksFetcher. */}
 
 ### Keep the audit journal
@@ -487,7 +494,8 @@ refuses an entry, the gateway answers `service-unavailable` and the review page 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, AuditWriter;
     crates/registry-breg-mcp/src/gateway.rs, call;
     crates/registry-breg-mcp/src/problems.rs, after_mutation;
-    crates/registry-breg-mcp/src/inbound.rs, PRINCIPAL_CLASS;
+    crates/registry-breg-mcp/src/runtime.rs, assemble;
+    crates/registry-mcp-edge/src/inbound.rs, authenticate;
     crates/registry-breg-review/src/journal.rs, PRINCIPAL_CLASS;
     crates/registry-breg-review/src/pages.rs, AuditUnavailable. */}
 
@@ -512,7 +520,7 @@ Neither service logs a token, secret, cookie, or field value.
 {/* Evidence: crates/registry-breg-mcp/src/main.rs, LOG_VARIABLE, main;
     crates/registry-breg-review/src/main.rs, LOG_VARIABLE;
     crates/registry-breg-mcp/src/gateway.rs, call;
-    crates/registry-breg-mcp/src/inbound.rs, authenticate;
+    crates/registry-mcp-edge/src/inbound.rs, authenticate;
     crates/registry-breg-review/src/pages.rs, review, submit;
     crates/registry-breg-review/src/lib.rs, Problem. */}
 
@@ -525,7 +533,7 @@ one, because every limit counts per instance. After a registry package changes t
 review page answers older drafts with 409 `action-changed`.
 
 {/* Evidence: crates/registry-breg-mcp/src/main.rs, shutdown_signal;
-    crates/registry-breg-mcp/src/server.rs, NeverSessionManager;
+    crates/registry-mcp-edge/src/server.rs, NeverSessionManager;
     crates/registry-breg-review/src/lib.rs, SIGTERM;
     crates/registry-breg-review/src/registry.rs, ActionChanged, load. */}
 
@@ -577,8 +585,8 @@ A request refused before any tool runs gets an RFC 9457 problem:
     crates/registry-breg-mcp/src/gateway/tests.rs,
     terminal_retries_keep_the_attempt_and_a_fresh_attempt_opens_an_identical_draft;
     crates/registry-breg-mcp/src/idempotency.rs; crates/registry-breg/src/idempotency.rs;
-    crates/registry-breg-mcp/src/server.rs, require_resource_host, forbidden;
-    crates/registry-breg-mcp/src/inbound.rs, require_caller. */}
+    crates/registry-mcp-edge/src/server.rs, require_resource_host, forbidden;
+    crates/registry-mcp-edge/src/inbound.rs, require_caller. */}
 
 ## What the design guarantees
 
@@ -600,7 +608,7 @@ Whatever the chat host does:
     crates/registry-breg/src/compiler.rs, task-grant-direct-mutation-forbidden;
     crates/registry-breg/src/postgres/proposal_context.rs, ProposalAuthority, authorizes_snapshot,
     install_target; crates/registry-breg/src/postgres/context.rs, snapshot_matches_boundaries;
-    crates/registry-breg-mcp/src/outbound.rs, delegated, authorization_with_actor;
+    crates/registry-mcp-edge/src/authorization.rs, authorize, authorization_with_actor;
     crates/registry-platform-httputil/src/client/exchange_authorization.rs,
     an_upstream_token_is_not_held_past_the_subject_token_expiry;
     crates/registry-breg/src/mutation.rs, check_task_authority;

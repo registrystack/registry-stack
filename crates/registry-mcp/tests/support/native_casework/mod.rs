@@ -11,9 +11,7 @@ use database::NativeDatabases;
 use registry_mcp::{config::RuntimeConfig, runtime};
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm, PrivateJwk};
 use registry_platform_httputil::client::BearerToken;
-use registry_platform_testing::{
-    ExchangeProfile, TestActorKind, TestAuthorizationServer, TestClient,
-};
+use registry_platform_testing::{TestActorKind, TestAuthorizationServer, TestClient};
 use rmcp::{
     model::{CallToolRequestParams, CallToolResult, ErrorCode},
     service::RunningService,
@@ -41,6 +39,8 @@ const PRODUCER_CLIENT: &str = "facility-registry";
 const SOURCE_CLIENT: &str = "casework-source-reader";
 const STATUS_CLIENT: &str = "casework-service";
 const SOURCE_ACTOR_SUBJECT: &str = "00000000-0000-4000-8000-0000000000c7";
+const HUMAN_IDENTITY_CLAIM: &str = "registry_subject_actor_kind";
+const HUMAN_IDENTITY_VALUE: &str = "human";
 const ALICE: &str = "synthetic-staff-alice";
 const BOB: &str = "synthetic-staff-bob";
 const SUPERVISOR: &str = "synthetic-staff-supervisor";
@@ -96,7 +96,12 @@ impl NativeCaseworkStack {
             "http://{}/mcp",
             gateway_listener.local_addr().expect("gateway address")
         );
-        let propagated = ["registry_principal", "registry_purpose", "jurisdiction"];
+        let propagated = [
+            "registry_principal",
+            "registry_purpose",
+            "jurisdiction",
+            HUMAN_IDENTITY_CLAIM,
+        ];
         let exchange_client = |id: &str,
                                key: &PrivateJwk,
                                subject_resource: &str,
@@ -119,7 +124,6 @@ impl NativeCaseworkStack {
                 generate_private_jwk(GeneratedKeyAlgorithm::Es256)
                     .expect("generate synthetic issuer key"),
             )
-            .exchange_profile(ExchangeProfile::IssuerQualifiedActor)
             .client(TestClient::new(CHAT_CLIENT).with_resource(&resource))
             .client(
                 TestClient::new(HUMAN_CLIENT)
@@ -264,6 +268,7 @@ impl NativeCaseworkStack {
                 ("registry_principal".to_owned(), json!(subject)),
                 ("registry_purpose".to_owned(), json!("facility-review")),
                 ("jurisdiction".to_owned(), json!("zone-a")),
+                (HUMAN_IDENTITY_CLAIM.to_owned(), json!(HUMAN_IDENTITY_VALUE)),
             ])
         };
         let gateway_scopes = "casework:read casework:staff casework:staff:delegated-read";
@@ -431,12 +436,13 @@ impl NativeCaseworkStack {
                 && row.subject_issuer == issuer
                 && row.subject_resource.as_deref() == Some(self.resource.as_str())
                 && row.actor_subject.as_deref() == Some(GATEWAY_CLIENT)
-                && row.actor_issuer.as_deref() == Some(issuer.as_str())
+                && row.actor_issuer.is_none()
                 && row.propagated_claims
                     == BTreeMap::from([
                         ("jurisdiction".to_owned(), json!("zone-a")),
                         ("registry_principal".to_owned(), json!(ALICE)),
                         ("registry_purpose".to_owned(), json!("facility-review")),
+                        (HUMAN_IDENTITY_CLAIM.to_owned(), json!(HUMAN_IDENTITY_VALUE)),
                     ])
         }));
         assert!(observations.iter().any(|row| {
@@ -452,12 +458,13 @@ impl NativeCaseworkStack {
                 && row.subject_issuer == issuer
                 && row.subject_resource.as_deref() == Some(CASEWORK_AUDIENCE)
                 && row.actor_subject.as_deref() == Some(SOURCE_ACTOR_SUBJECT)
-                && row.actor_issuer.as_deref() == Some(issuer.as_str())
+                && row.actor_issuer.is_none()
                 && row.propagated_claims
                     == BTreeMap::from([
                         ("jurisdiction".to_owned(), json!("zone-a")),
                         ("registry_principal".to_owned(), json!(ALICE)),
                         ("registry_purpose".to_owned(), json!("facility-review")),
+                        (HUMAN_IDENTITY_CLAIM.to_owned(), json!(HUMAN_IDENTITY_VALUE)),
                     ])
         }));
     }
@@ -513,6 +520,33 @@ impl NativeCaseworkStack {
                 && record["gatewayPseudonym"].as_str().is_some()
                 && record["clientPseudonym"].as_str().is_some()
         }));
+        assert!(!casework_entries.iter().any(|entry| {
+            entry["record"]["event"] == json!("casework.delegated-review-task-context-read")
+                && entry["record"]["outcome"] == json!("failed")
+        }));
+    }
+    pub fn casework_audit_entry_count(&self) -> usize {
+        std::fs::read_to_string(&self.casework.as_ref().expect("Casework running").audit_path)
+            .expect("Casework audit")
+            .lines()
+            .count()
+    }
+    pub fn assert_one_context_success_since(&self, before: usize) {
+        let entries =
+            std::fs::read_to_string(&self.casework.as_ref().expect("Casework running").audit_path)
+                .expect("Casework audit")
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("Casework audit JSON"))
+                .collect::<Vec<_>>();
+        let context = &entries[before..];
+        assert_eq!(context.len(), 2, "one context read writes one audit pair");
+        assert_eq!(context[0]["phase"], json!("request"));
+        assert_eq!(
+            context[0]["record"]["event"],
+            json!("casework.delegated-review-task-context-read")
+        );
+        assert_eq!(context[1]["phase"], json!("response"));
+        assert_eq!(context[1]["record"]["outcome"], json!("succeeded"));
     }
     pub async fn finish(mut self) {
         self.gateway.abort();
@@ -558,6 +592,7 @@ fn bearer(
             ("registry_principal".to_owned(), json!(subject)),
             ("registry_purpose".to_owned(), json!("facility-review")),
             ("jurisdiction".to_owned(), json!(jurisdiction)),
+            (HUMAN_IDENTITY_CLAIM.to_owned(), json!(HUMAN_IDENTITY_VALUE)),
         ]),
     ))
     .expect("synthetic bearer token")
@@ -588,6 +623,7 @@ fn human_source_bearer(
             ("registry_principal".to_owned(), json!(subject)),
             ("registry_purpose".to_owned(), json!("facility-review")),
             ("jurisdiction".to_owned(), json!(jurisdiction)),
+            (HUMAN_IDENTITY_CLAIM.to_owned(), json!(HUMAN_IDENTITY_VALUE)),
         ]),
     ))
     .expect("synthetic setup-only human bearer token")

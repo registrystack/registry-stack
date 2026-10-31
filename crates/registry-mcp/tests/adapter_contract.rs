@@ -1,10 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
-use registry_mcp::adapter::{contract_digest, AdapterContract, InvalidAdapterContract};
+use registry_mcp::adapter::{
+    contract_digest, AdapterContract, AdapterContractLoadError, AdapterToolBinding,
+    InvalidAdapterContract,
+};
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 const API_VERSION: &str = "id.registrystack.org/formats/adapter/effective-contract/v1alpha1";
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+const PRODUCER_GOLDEN: &[u8] =
+    include_bytes!("fixtures/adapter/govstack-facilities/effective-contract.json");
+const PRODUCER_GOLDEN_DIGEST: &str =
+    "sha256:ac04bfe127bd5b32018771a2e0909887259bf210176d07b3d6f2721677532d5f";
+const PRODUCER_GOLDEN_BYTES_DIGEST: &str =
+    "sha256:2097153d7ef6d97d5ffe26d6a3ee312df4a0e46fb49003ee3733e932e79ef7eb";
+const OPTIONAL_PAGINATION_GOLDEN: &[u8] =
+    include_bytes!("fixtures/adapter/optional-pagination/effective-contract.json");
+const OPTIONAL_PAGINATION_DIGEST: &str =
+    "sha256:cff127c172f42dd32192f24ec0afebf95e243368198d6c1661136e0130f89a65";
+const OPTIONAL_PAGINATION_BYTES_DIGEST: &str =
+    "sha256:fe0f3e0f88a3e78e2586f772de47c978b9c972b132a02d2cf55438fbd6659710";
 
 fn document() -> Value {
     let empty = json!({"type":"object","additionalProperties":false,"properties":{}});
@@ -115,6 +131,394 @@ fn parse(document: &Value) -> Result<AdapterContract, InvalidAdapterContract> {
     )
 }
 
+fn binding(operation: &str, description: &str) -> AdapterToolBinding {
+    AdapterToolBinding {
+        operation: operation.to_owned(),
+        description: description.to_owned(),
+    }
+}
+
+fn selected(operations: &[&str]) -> BTreeSet<String> {
+    operations
+        .iter()
+        .map(|operation| (*operation).to_owned())
+        .collect()
+}
+
+#[test]
+fn producer_generated_facility_contract_matches_fixed_bytes_and_parses() {
+    assert_eq!(
+        registry_platform_config::sha256_uri(PRODUCER_GOLDEN),
+        PRODUCER_GOLDEN_BYTES_DIGEST
+    );
+    let selected = selected(&["records-get.facilities", "records-search.facilities"]);
+    let contract = AdapterContract::parse_bound(PRODUCER_GOLDEN, PRODUCER_GOLDEN_DIGEST, &selected)
+        .expect("the exact Adapter 8c43e6ce6 facility export remains compatible");
+    let bindings = [
+        (
+            "get_facility".to_owned(),
+            binding("records-get.facilities", "Read one configured facility."),
+        ),
+        (
+            "search_facilities".to_owned(),
+            binding("records-search.facilities", "Search configured facilities."),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    contract
+        .validate_binding(&bindings, "adapter-native-proof")
+        .expect("the golden facility GET and read-only POST operations remain bindable");
+}
+
+#[test]
+fn producer_optional_pagination_presence_schema_is_anchored_and_executable() {
+    assert_eq!(
+        registry_platform_config::sha256_uri(OPTIONAL_PAGINATION_GOLDEN),
+        OPTIONAL_PAGINATION_BYTES_DIGEST
+    );
+    let contract = AdapterContract::parse_bound(
+        OPTIONAL_PAGINATION_GOLDEN,
+        OPTIONAL_PAGINATION_DIGEST,
+        &selected(&["records-search.facilities"]),
+    )
+    .expect("the producer's optional-pagination read-only POST schema is compatible");
+    let baseline = json!({
+        "path":{},
+        "query":{},
+        "body":{
+            "search":"byCriteria",
+            "criteria":{"org_unit":"synthetic-service-area"}
+        }
+    });
+    assert!(
+        contract
+            .validate_arguments("records-search.facilities", &baseline)
+            .is_err(),
+        "the producer requires cursor or pageSize when it has no default"
+    );
+    for member in [json!({"pageSize":5}), json!({"cursor":"synthetic_cursor"})] {
+        let mut arguments = baseline.clone();
+        arguments["body"]
+            .as_object_mut()
+            .unwrap()
+            .extend(member.as_object().unwrap().clone());
+        contract
+            .validate_arguments("records-search.facilities", &arguments)
+            .expect("either producer-declared pagination presence branch is valid");
+    }
+}
+
+#[test]
+fn bound_parser_ignores_unselected_future_schema_but_preserves_identity_checks() {
+    let mut document: Value = serde_json::from_slice(PRODUCER_GOLDEN).unwrap();
+    let operations = document["contract"]["operations"].as_array_mut().unwrap();
+    let unselected = operations
+        .iter_mut()
+        .find(|operation| operation["id"] == "records-search.facilities")
+        .unwrap();
+    unselected["method"] = json!("PATCH");
+    unselected["effect"] = json!("future-effect");
+    unselected["output"] = json!({"$ref":"https://future.example.invalid/schema"});
+    unselected["futureMetadata"] = json!({"shape":"unknown-to-this-consumer"});
+    rehash(&mut document);
+    let bytes = serde_json::to_vec(&document).unwrap();
+
+    AdapterContract::parse_bound(
+        &bytes,
+        document["digest"].as_str().unwrap(),
+        &selected(&["records-get.facilities"]),
+    )
+    .expect("unselected future operation metadata and schema are outside this binding");
+    assert!(
+        AdapterContract::parse(&bytes, document["digest"].as_str().unwrap()).is_err(),
+        "the whole-contract compatibility wrapper still compiles every operation"
+    );
+
+    let operations = document["contract"]["operations"].as_array_mut().unwrap();
+    let duplicate = operations[2]["id"].clone();
+    operations[1]["id"] = duplicate;
+    rehash(&mut document);
+    assert!(
+        AdapterContract::parse_bound(
+            &serde_json::to_vec(&document).unwrap(),
+            document["digest"].as_str().unwrap(),
+            &selected(&["records-get.facilities"]),
+        )
+        .is_err(),
+        "duplicate identities remain invalid even when both operations are unselected"
+    );
+}
+
+#[test]
+fn configured_operation_cap_does_not_cap_the_producer_catalog() {
+    let mut document = document();
+    let template = document["contract"]["operations"][0].clone();
+    let operations = document["contract"]["operations"].as_array_mut().unwrap();
+    for index in 1..129 {
+        let mut operation = template.clone();
+        operation["id"] = json!(format!("records.unselected.{index}"));
+        operations.push(operation);
+    }
+    rehash(&mut document);
+    let bytes = serde_json::to_vec(&document).unwrap();
+    AdapterContract::parse_bound(
+        &bytes,
+        document["digest"].as_str().unwrap(),
+        &selected(&["records.list"]),
+    )
+    .expect("one selected operation remains valid in a larger producer catalog");
+    assert!(
+        AdapterContract::parse(&bytes, document["digest"].as_str().unwrap()).is_err(),
+        "the explicit whole-contract wrapper retains the configured 128-operation cap"
+    );
+}
+
+#[test]
+fn selected_operation_metadata_and_direct_descriptions_remain_closed() {
+    let mut document = document();
+    let digest = document["digest"].as_str().unwrap().to_owned();
+    let selected_set = selected(&["records.list"]);
+    let contract = AdapterContract::parse_bound(
+        &serde_json::to_vec(&document).unwrap(),
+        &digest,
+        &selected_set,
+    )
+    .unwrap();
+    let empty_description = [("read_records".to_owned(), binding("records.list", ""))]
+        .into_iter()
+        .collect();
+    assert!(contract
+        .validate_binding(&empty_description, "adapter-example")
+        .is_err());
+    for invalid in [
+        binding("", "List configured records."),
+        binding("records.list", "contains\ncontrol"),
+        binding("records.list", &"a".repeat(4097)),
+    ] {
+        assert!(contract
+            .validate_binding(
+                &[('x'.to_string(), invalid)].into_iter().collect(),
+                "adapter-example",
+            )
+            .is_err());
+    }
+    assert!(AdapterContract::parse_bound(
+        &serde_json::to_vec(&document).unwrap(),
+        &digest,
+        &selected(&["records.missing"]),
+    )
+    .is_err());
+
+    document["contract"]["operations"][0]["effect"] = json!("write");
+    rehash(&mut document);
+    assert!(
+        AdapterContract::parse_bound(
+            &serde_json::to_vec(&document).unwrap(),
+            document["digest"].as_str().unwrap(),
+            &selected_set,
+        )
+        .is_err(),
+        "selected operation read metadata remains enforced"
+    );
+}
+
+#[test]
+fn empty_path_and_query_containers_are_optional_until_their_schema_requires_children() {
+    let baseline = document();
+    let contract = parse(&baseline).expect("baseline contract");
+    contract
+        .validate_arguments("records.list", &json!({}))
+        .expect("empty path and query containers are optional");
+
+    let mut required_path = baseline;
+    required_path["contract"]["operations"][0]["path"] = json!("/records/{record_id}");
+    required_path["contract"]["operations"][0]["input"]["path"] = json!({
+        "type":"object",
+        "additionalProperties":false,
+        "properties":{"record_id":{"type":"string"}},
+        "required":["record_id"]
+    });
+    rehash(&mut required_path);
+    let contract = parse(&required_path).expect("required path contract");
+    assert!(contract
+        .validate_arguments("records.list", &json!({}))
+        .is_err());
+    contract
+        .validate_arguments(
+            "records.list",
+            &json!({"path":{"record_id":"synthetic-record"}}),
+        )
+        .expect("query remains optional when only path has required children");
+}
+
+#[test]
+fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let selected_set = selected(&["records.list"]);
+    let missing = directory.path().join("missing.json");
+    assert_eq!(
+        AdapterContract::load_bound_checked(&missing, "sha256:unused", &selected_set)
+            .err()
+            .expect("missing contract is refused"),
+        AdapterContractLoadError::Unreadable
+    );
+
+    let malformed = directory.path().join("malformed.json");
+    std::fs::write(
+        &malformed,
+        br#"{"apiVersion":"id.registrystack.org/formats/adapter/effective-contract/v1alpha1","apiVersion":"duplicate","kind":"AdapterEffectiveContract"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        AdapterContract::load_bound_checked(&malformed, "sha256:unused", &selected_set)
+            .err()
+            .expect("malformed contract is refused"),
+        AdapterContractLoadError::Malformed
+    );
+
+    let document = document();
+    let valid = directory.path().join("valid.json");
+    std::fs::write(&valid, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+    assert_eq!(
+        AdapterContract::load_bound_checked(
+            &valid,
+            &format!("sha256:{}", "0".repeat(64)),
+            &selected_set,
+        )
+        .err()
+        .expect("reviewed digest mismatch is refused"),
+        AdapterContractLoadError::DigestMismatch
+    );
+    assert_eq!(
+        AdapterContract::load_bound_checked(
+            &valid,
+            document["digest"].as_str().unwrap(),
+            &selected(&["records.missing"]),
+        )
+        .err()
+        .expect("absent selected operation is refused"),
+        AdapterContractLoadError::SelectionMismatch
+    );
+
+    let mut malformed_selection = document.clone();
+    malformed_selection["contract"]["problemSchema"] =
+        json!({"$ref":"https://invalid.example/schema"});
+    rehash(&mut malformed_selection);
+    let malformed_selection_path = directory.path().join("malformed-selection.json");
+    std::fs::write(
+        &malformed_selection_path,
+        serde_json::to_vec_pretty(&malformed_selection).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        AdapterContract::load_bound_checked(
+            &malformed_selection_path,
+            malformed_selection["digest"].as_str().unwrap(),
+            &selected(&["records.missing"]),
+        )
+        .err()
+        .expect("malformed contract takes precedence over selection mismatch"),
+        AdapterContractLoadError::Malformed
+    );
+
+    let mut unserved_write = document.clone();
+    unserved_write["contract"]["unserved"] = json!([{
+        "operationId":"records.create",
+        "version":"1",
+        "bindingId":"create",
+        "profileOperationId":"create",
+        "method":"POST",
+        "support":"unserved",
+        "effect":"write",
+        "reasonCode":"adapter.operation.gateway-write-disabled",
+        "reason":"the external gateway contract does not expose write operations"
+    }]);
+    rehash(&mut unserved_write);
+    let unserved_write_path = directory.path().join("unserved-write.json");
+    std::fs::write(
+        &unserved_write_path,
+        serde_json::to_vec_pretty(&unserved_write).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        AdapterContract::load_bound_checked(
+            &unserved_write_path,
+            unserved_write["digest"].as_str().unwrap(),
+            &selected(&["records.create"]),
+        )
+        .err()
+        .expect("selected producer-declared unserved write is refused precisely"),
+        AdapterContractLoadError::UnsupportedSelection
+    );
+
+    let mut unsupported_selection = document.clone();
+    unsupported_selection["contract"]["operations"][0]["effect"] = json!("write");
+    unsupported_selection["contract"]["operations"][0]["method"] = json!("POST");
+    unsupported_selection["contract"]["operations"][0]["successStatus"] = json!(201);
+    unsupported_selection["contract"]["operations"][0]["input"]["body"] = json!({
+        "type":"object",
+        "additionalProperties":false,
+        "properties":{}
+    });
+    rehash(&mut unsupported_selection);
+    let unsupported_selection_path = directory.path().join("unsupported-selection.json");
+    std::fs::write(
+        &unsupported_selection_path,
+        serde_json::to_vec_pretty(&unsupported_selection).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        AdapterContract::load_bound_checked(
+            &unsupported_selection_path,
+            unsupported_selection["digest"].as_str().unwrap(),
+            &selected_set,
+        )
+        .err()
+        .expect("selected write operation is refused"),
+        AdapterContractLoadError::UnsupportedSelection
+    );
+
+    let mut malformed_write = unsupported_selection;
+    malformed_write["contract"]["protocolProblems"] = json!({});
+    rehash(&mut malformed_write);
+    let malformed_write_path = directory.path().join("malformed-write.json");
+    std::fs::write(
+        &malformed_write_path,
+        serde_json::to_vec_pretty(&malformed_write).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        AdapterContract::load_bound_checked(
+            &malformed_write_path,
+            malformed_write["digest"].as_str().unwrap(),
+            &selected_set,
+        )
+        .err()
+        .expect("malformed shared protocol takes precedence over unsupported selection"),
+        AdapterContractLoadError::Malformed
+    );
+
+    let mut inconsistent = document;
+    inconsistent["digest"] = json!(format!("sha256:{}", "1".repeat(64)));
+    let inconsistent_path = directory.path().join("inconsistent.json");
+    std::fs::write(
+        &inconsistent_path,
+        serde_json::to_vec_pretty(&inconsistent).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        AdapterContract::load_bound_checked(
+            &inconsistent_path,
+            inconsistent["digest"].as_str().unwrap(),
+            &selected_set,
+        )
+        .err()
+        .expect("internally inconsistent digest is refused"),
+        AdapterContractLoadError::DigestMismatch
+    );
+}
+
 #[test]
 fn adapter_contract_is_pinned_and_only_effective_reads_can_be_bound() {
     let document = document();
@@ -139,9 +543,12 @@ fn adapter_contract_is_pinned_and_only_effective_reads_can_be_bound() {
 fn adapter_contract_accepts_only_bounded_opaque_oidc_audiences() {
     let baseline = document();
     let parsed = parse(&baseline).expect("the producer's opaque OIDC audience is valid");
-    let bindings = [("Adapter.Record_Read".to_owned(), "records.list".to_owned())]
-        .into_iter()
-        .collect();
+    let bindings = [(
+        "Adapter.Record_Read".to_owned(),
+        binding("records.list", "List configured records."),
+    )]
+    .into_iter()
+    .collect();
     assert!(parsed
         .validate_binding(&bindings, "adapter-example")
         .is_ok());

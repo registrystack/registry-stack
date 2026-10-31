@@ -241,6 +241,10 @@ pub fn build_provider(
             .map_err(|_| ReviewContextError::Unavailable)?;
         let delegated_client_id = std::str::from_utf8(delegated_client_id.expose_secret())
             .map_err(|_| ReviewContextError::Invalid)?;
+        // Keep the OAuth clients distinct so the authorization server can
+        // grant subject delegation without granting it to the unattended
+        // service-status identity. This is policy separation, not a claim
+        // that the configured key material is necessarily different.
         if delegated_client_id.is_empty()
             || delegated_client_id.len() > 512
             || delegated_client_id == client_id

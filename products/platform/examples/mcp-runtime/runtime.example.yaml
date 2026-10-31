@@ -6,6 +6,7 @@ logLevel: info
 listener:
   bind: 127.0.0.1:8110
   tlsTermination: development-loopback
+  # Listener stays on loopback; any upstream proxy must enforce its own boundary.
   networkExposure: private-address
 secretProviders:
   environment: {}
@@ -15,6 +16,7 @@ resourceServer:
   jwksSource:
     type: static
     documentRef: secret:env/MCP_JWKS
+  # Enable only for an explicitly isolated local fixture, never to bypass TLS.
   allowInsecureHttp: false
   algorithms: [EdDSA]
   allowedClients: [chat-host]

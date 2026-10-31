@@ -124,7 +124,7 @@ traceability:
   - {id: BREG-SEC-120, state: enforced, negativeId: BREG-NEG-120, negativeTest: {path: crates/registry-breg/tests/support/hook_activation.rs, name: retained_hook_refusal_audit_failures_preserve_ready_state}}
   - {id: BREG-SEC-121, state: enforced, negativeId: BREG-NEG-121, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_an_operator_reference_is_recorded_only_as_its_keyed_hash}}
   - {id: BREG-SEC-122, state: enforced, negativeId: BREG-NEG-122, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing}}
-  - {id: BREG-SEC-123, state: enforced, negativeId: BREG-NEG-123, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_a_proposal_lifecycle_decision}}
+  - {id: BREG-SEC-123, state: enforced, negativeId: BREG-NEG-123, negativeTest: {path: crates/registry-breg/src/api/tests/immediate_action_tests.rs, name: delegated_standing_agent_reads_only_its_bounded_review_context}}
   - {id: BREG-SEC-124, state: enforced, negativeId: BREG-NEG-124, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_a_direct_target_mutation}}
   - {id: BREG-SEC-125, state: enforced, negativeId: BREG-NEG-125, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: standing_agent_actor_may_name_only_the_verified_token_issuer}}
   - {id: BREG-SEC-126, state: enforced, negativeId: BREG-NEG-126, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries}}

@@ -11,8 +11,8 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::Router;
 use registry_mcp_edge::{
     router, token_verifier, AccessTokenAlgorithm as EdgeAlgorithm, AuditOptions, GatewayCore,
-    GatewayInfo, ProviderBinding, RateLimitOptions, ResourceServer, ResourceServerOptions,
-    ServerOptions, TokenBucketOptions, ToolAuditLog,
+    GatewayInfo, ProviderBinding, RateLimitOptions, ResourceServer, ResourceServerError,
+    ResourceServerOptions, ServerOptions, TokenBucketOptions, ToolAuditLog,
 };
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
 use registry_platform_config::{JwksSource, ProtectedSecret, SecretResolver};
@@ -65,6 +65,16 @@ impl From<AuditError> for StartupError {
 struct Parts {
     resource_server: ResourceServer,
     binding: ProviderBinding,
+}
+
+fn resource_server_failure(error: ResourceServerError) -> StartupError {
+    let description = match error {
+        ResourceServerError::RateLimit("perPrincipal") => {
+            "rate limit perCitizen is invalid".to_owned()
+        }
+        other => other.to_string(),
+    };
+    StartupError::ResourceServer(description)
 }
 
 fn resolver(config: &RuntimeConfig) -> Result<SecretResolver, StartupError> {
@@ -186,7 +196,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
             },
         },
     )
-    .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
+    .map_err(resource_server_failure)?;
     let private_key = resolve(
         &secrets,
         "exchange.privateKeyRef",
@@ -273,4 +283,17 @@ where
         .with_graceful_shutdown(shutdown)
         .await
         .map_err(StartupError::Serve)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn neutral_principal_rate_limit_uses_breg_public_name() {
+        let error = resource_server_failure(ResourceServerError::RateLimit("perPrincipal"));
+        let description = error.to_string();
+        assert!(description.contains("perCitizen"), "{description}");
+        assert!(!description.contains("perPrincipal"), "{description}");
+    }
 }

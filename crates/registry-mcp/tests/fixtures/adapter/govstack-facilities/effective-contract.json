@@ -1,0 +1,631 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
+  "kind": "AdapterEffectiveContract",
+  "digest": "sha256:ac04bfe127bd5b32018771a2e0909887259bf210176d07b3d6f2721677532d5f",
+  "contract": {
+    "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
+    "project": {
+      "id": "synthetic-facility-directory-govstack",
+      "version": "1"
+    },
+    "profileVersion": "1",
+    "artifactDeploymentDigest": "sha256:e51f7a8004ea0d0aaa4c8b9bbc1be1f38b680d7cb0616c3f77fced2706db171a",
+    "authentication": {
+      "scheme": "bearer",
+      "audience": "adapter-native-proof",
+      "clientAdmission": "allowlist"
+    },
+    "authority": {
+      "callerMode": "trusted-machine",
+      "representedSubject": "unsupported",
+      "personalDelegation": "unsupported",
+      "targetBinding": "unsupported",
+      "rowDisclosureAuthority": "not-granted",
+      "fieldDisclosureAuthority": "not-granted"
+    },
+    "operations": [
+      {
+        "id": "records-get.facilities",
+        "version": "1",
+        "bindingId": "facility-get",
+        "profileOperationId": "records-get",
+        "method": "GET",
+        "path": "/v1/collections/facilities/records/{record_id}",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {
+              "record_id": {
+                "minLength": 1,
+                "not": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        ".",
+                        ".."
+                      ]
+                    },
+                    {
+                      "pattern": "[/\\\\?;:%\\u{0000}-\\u{001f}\\u{007f}-\\u{009f}\\u{00ad}\\u{034f}\\u{061c}\\u{180e}\\u{200b}-\\u{200f}\\u{2028}-\\u{202e}\\u{2060}-\\u{206f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0001}\\u{e0020}-\\u{e007f}]"
+                    }
+                  ]
+                },
+                "type": "string"
+              }
+            },
+            "required": [
+              "record_id"
+            ],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": false,
+              "properties": {
+                "created_at": {
+                  "type": "string"
+                },
+                "facility_category": {
+                  "type": "string"
+                },
+                "facility_code": {
+                  "type": "string"
+                },
+                "facility_name": {
+                  "type": "string"
+                },
+                "org_unit": {
+                  "type": "string"
+                },
+                "tracked_entity_type": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "facility_code",
+                "facility_name",
+                "org_unit",
+                "tracked_entity_type"
+              ],
+              "type": "object"
+            },
+            "recordId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "recordId"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "records-lookup.facilities",
+        "version": "1",
+        "bindingId": "facility-lookup",
+        "profileOperationId": "records-lookup",
+        "method": "POST",
+        "path": "/v1/collections/facilities/lookup",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "requestMaximumBytes": 16384,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "body": {
+            "additionalProperties": false,
+            "properties": {
+              "selector": {
+                "const": "byRecordId",
+                "type": "string"
+              },
+              "values": {
+                "additionalProperties": false,
+                "properties": {
+                  "recordId": {
+                    "minLength": 1,
+                    "not": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            ".",
+                            ".."
+                          ]
+                        },
+                        {
+                          "pattern": "[/\\\\?;:%\\u{0000}-\\u{001f}\\u{007f}-\\u{009f}\\u{00ad}\\u{034f}\\u{061c}\\u{180e}\\u{200b}-\\u{200f}\\u{2028}-\\u{202e}\\u{2060}-\\u{206f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0001}\\u{e0020}-\\u{e007f}]"
+                        }
+                      ]
+                    },
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "recordId"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "selector",
+              "values"
+            ],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": false,
+              "properties": {
+                "created_at": {
+                  "type": "string"
+                },
+                "facility_category": {
+                  "type": "string"
+                },
+                "facility_code": {
+                  "type": "string"
+                },
+                "facility_name": {
+                  "type": "string"
+                },
+                "org_unit": {
+                  "type": "string"
+                },
+                "tracked_entity_type": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "facility_code",
+                "facility_name",
+                "org_unit",
+                "tracked_entity_type"
+              ],
+              "type": "object"
+            },
+            "recordId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "recordId"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "records-list.facilities",
+        "version": "1",
+        "bindingId": "facility-list",
+        "profileOperationId": "records-list",
+        "method": "GET",
+        "path": "/v1/collections/facilities/records",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "maxLength": 2796,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string",
+                "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
+              },
+              "pageSize": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "data": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "facility_category": {
+                        "type": "string"
+                      },
+                      "facility_code": {
+                        "type": "string"
+                      },
+                      "facility_name": {
+                        "type": "string"
+                      },
+                      "org_unit": {
+                        "type": "string"
+                      },
+                      "tracked_entity_type": {
+                        "type": "string"
+                      },
+                      "updated_at": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "facility_code",
+                      "facility_name",
+                      "org_unit",
+                      "tracked_entity_type"
+                    ],
+                    "type": "object"
+                  },
+                  "recordId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "data",
+                  "recordId"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "pageInfo": {
+              "additionalProperties": false,
+              "properties": {
+                "nextCursor": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "nextCursor"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "items",
+            "pageInfo"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "records-search.facilities",
+        "version": "1",
+        "bindingId": "facility-search",
+        "profileOperationId": "records-search",
+        "method": "POST",
+        "path": "/v1/collections/facilities/search",
+        "support": "served",
+        "effect": "read",
+        "successStatus": 200,
+        "requestMaximumBytes": 16384,
+        "input": {
+          "path": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "body": {
+            "additionalProperties": false,
+            "properties": {
+              "criteria": {
+                "additionalProperties": false,
+                "properties": {
+                  "org_unit": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "org_unit"
+                ],
+                "type": "object"
+              },
+              "cursor": {
+                "maxLength": 2796,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string",
+                "x-registry-runtime-validation": "The Adapter verifies authenticated cursor bytes and their caller, operation, deployment, filter, and expiry bindings."
+              },
+              "pageSize": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "search": {
+                "const": "byCriteria",
+                "type": "string"
+              }
+            },
+            "required": [
+              "criteria",
+              "search"
+            ],
+            "type": "object"
+          }
+        },
+        "output": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "data": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "facility_category": {
+                        "type": "string"
+                      },
+                      "facility_code": {
+                        "type": "string"
+                      },
+                      "facility_name": {
+                        "type": "string"
+                      },
+                      "org_unit": {
+                        "type": "string"
+                      },
+                      "tracked_entity_type": {
+                        "type": "string"
+                      },
+                      "updated_at": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "facility_code",
+                      "facility_name",
+                      "org_unit",
+                      "tracked_entity_type"
+                    ],
+                    "type": "object"
+                  },
+                  "recordId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "data",
+                  "recordId"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "pageInfo": {
+              "additionalProperties": false,
+              "properties": {
+                "nextCursor": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "nextCursor"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "items",
+            "pageInfo"
+          ],
+          "type": "object"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "allScopes": [
+                "records.read"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "unserved": [],
+    "problemSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "traceId": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "title",
+        "traceId",
+        "type"
+      ],
+      "type": "object"
+    },
+    "protocolProblems": {
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "adapter.contract.precondition-failed"
+              },
+              "requestId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "status": {
+                "const": 412
+              },
+              "title": {
+                "const": "Effective contract precondition failed"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title",
+              "requestId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "adapter.contract.unavailable"
+              },
+              "requestId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "status": {
+                "const": 503
+              },
+              "title": {
+                "const": "Effective contract unavailable"
+              }
+            },
+            "required": [
+              "code",
+              "status",
+              "title",
+              "requestId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "problems": [
+        {
+          "code": "adapter.contract.precondition-failed",
+          "status": 412,
+          "title": "Effective contract precondition failed"
+        },
+        {
+          "code": "adapter.contract.unavailable",
+          "status": 503,
+          "title": "Effective contract unavailable"
+        }
+      ]
+    }
+  }
+}

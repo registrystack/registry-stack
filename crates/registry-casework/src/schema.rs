@@ -360,7 +360,6 @@ mod tests {
             "assistant-reader": {
                 "profile": "staff",
                 "client": "registry-mcp",
-                "actorIssuer": "https://identity.example.test",
                 "actorSubject": "registry-mcp",
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",

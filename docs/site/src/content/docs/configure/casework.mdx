@@ -279,6 +279,34 @@ next call. Leave it running.
 
 {/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, stop, InputsChanged. */}
 
+## Enable a delegated staff reader
+
+A separately operated assistant can list its represented staff member's assigned
+ReviewTasks and read context through the default-off delegated-reader routes.
+Enable a named `authentication.delegatedStaffReaders` policy in the Casework
+runtime, admitting the exact gateway, represented Staff profile, read scope,
+assertion issuer and short token lifetime. The source-built `registry-mcp`
+service selects that policy through `readerPolicy`.
+
+Casework checks the current holder and assignment before release. These
+credentials do not admit ordinary producer, decision or administration routes.
+Submitted context uses the retained task material. Current-source context also
+needs an admitted source profile and `delegatedDisplayExchange` on its provider;
+Casework exchanges to the source resource rather than forwarding its own bearer.
+The institution must approve the source agent profile's disclosure ceiling.
+That service profile does not automatically inherit the staff member's human
+Base Registry Engine (BReg) permissions.
+
+Follow [the staff configuration example](https://github.com/registrystack/registry-stack/blob/main/products/platform/examples/mcp-runtime/README.md)
+for settings that must match and issuer requirements. `registry-mcp` is currently
+source-build-only. Its native drill uses a synthetic issuer, so check your IdP's
+exchange support before enabling the policy.
+
+{/* Evidence: crates/registry-casework/src/auth/delegated.rs, authenticate_staff_read;
+    crates/registry-casework/src/config.rs, DelegatedStaffReaderConfig;
+    crates/registry-casework/src/review.rs, review_task_context;
+    crates/registry-mcp/src/casework.rs, CaseworkProvider. */}
+
 ## Configuration reference
 
 <ConfigurationFormatChecks product="casework" />

@@ -1,0 +1,85 @@
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: synthetic-facility-directory-govstack
+  version: "1"
+profile:
+  id: govstack-consultation
+  version: "1"
+  digest: sha256:cf7e18b8b95da078bde2950390450fab48c2e131d2981dc8cf19cc77d6651aed
+pack:
+  id: dhis2-tracker
+  version: "1"
+  digest: sha256:246770f1ff8eb7b7f6d841c6e6b0ea8e828483f377248f3366a4dc661b3fff72
+recordTypes:
+  - name: facilities
+    fields:
+      - name: facility_code
+        type: string
+        required: true
+      - name: facility_name
+        type: string
+        required: true
+      - name: facility_category
+        type: string
+      - name: org_unit
+        type: string
+        required: true
+      - name: tracked_entity_type
+        type: string
+        required: true
+      - name: created_at
+        type: string
+      - name: updated_at
+        type: string
+templatedRoutes:
+  - routeTemplate: search-tracked-entities
+    routeId: facility-list
+    parameters:
+      program: qyVpUaAYv2A
+      attribute_fields:
+        facility_code: rmeJVy1Rl5V
+        facility_name: XQwFPP7o2yd
+        facility_category: gVHsLdJYICk
+  - routeTemplate: search-tracked-entities-by-org-unit
+    routeId: facility-search
+    parameters:
+      program: qyVpUaAYv2A
+      attribute_fields:
+        facility_code: rmeJVy1Rl5V
+        facility_name: XQwFPP7o2yd
+        facility_category: gVHsLdJYICk
+  - routeTemplate: fetch-tracked-entity
+    routeId: facility-fetch
+    parameters:
+      attribute_fields:
+        facility_code: rmeJVy1Rl5V
+        facility_name: XQwFPP7o2yd
+        facility_category: gVHsLdJYICk
+bindings:
+  - id: facility-get
+    operation: records-get
+    recordType: facilities
+    route: facility-fetch
+    maximumUpstreamCalls: 4
+  - id: facility-lookup
+    operation: records-lookup
+    recordType: facilities
+    route: facility-fetch
+    maximumUpstreamCalls: 4
+  - id: facility-list
+    operation: records-list
+    recordType: facilities
+    route: facility-list
+    maximumUpstreamCalls: 4
+  - id: facility-search
+    operation: records-search
+    recordType: facilities
+    route: facility-search
+    filters: [org_unit]
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: facility-reader
+    scopes: [records.read]
+    operations: [records-get, records-lookup, records-list, records-search]
+    recordTypes: [facilities]

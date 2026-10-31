@@ -96,6 +96,10 @@ fn constrain_named_members(schema: &mut Value) {
         let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) else {
             return;
         };
+        if let Some(source_profile) = properties.get_mut("sourceProfile") {
+            // Omission selects retained Submitted context; authored null is refused.
+            *source_profile = json!({"$ref": "#/$defs/LocalId"});
+        }
         if let Some(tools) = properties.get_mut("tools").and_then(Value::as_object_mut) {
             if let Some(items) = tools.get_mut("items").and_then(Value::as_object_mut) {
                 items.insert(
@@ -360,7 +364,7 @@ mod tests {
             "dataClass":"non-personal",
             "audience":"adapter-example",
             "machineTokenRef":"secret:env/MCP_ADAPTER_TOKEN",
-            "operations":{(PUBLIC_TOOL):"records.list"}
+            "operations":{(PUBLIC_TOOL):{"operation":"records.list","description":"List the configured facility records."}}
         });
         let runtime_file = directory
             .path()
@@ -403,7 +407,8 @@ mod tests {
             "a bounded opaque Adapter audience should remain structurally valid"
         );
 
-        runtime["bindings"][0]["provider"]["operations"][PUBLIC_TOOL] = json!("records.missing");
+        runtime["bindings"][0]["provider"]["operations"][PUBLIC_TOOL]["operation"] =
+            json!("records.missing");
         std::fs::write(&runtime_file, serde_json::to_vec(&runtime).unwrap()).unwrap();
         let report = crate::config::RuntimeConfig::check(&runtime_file, false);
         assert!(
@@ -411,11 +416,32 @@ mod tests {
             "an operation absent from the pin was accepted"
         );
         assert!(report.diagnostics().iter().any(|diagnostic| {
-            diagnostic.path == "/bindings/0/provider"
-                && diagnostic.code == "platform.mcp-runtime.invalid-binding"
+            diagnostic.path == "/bindings/0/provider/operations"
+                && diagnostic.code == "platform.mcp-runtime.adapter-operation-missing"
         }));
     }
 
+    #[test]
+    fn omitted_staff_defaults_match_the_reader_and_null_is_refused() {
+        let mut runtime = as_json(example().as_bytes());
+        runtime["bindings"][0]["tools"] = json!(["list_my_review_tasks"]);
+        runtime["bindings"][0]["provider"] = json!({
+            "type":"casework", "authority":"delegated-staff-read",
+            "baseUrl":"http://127.0.0.1:8120/", "readerPolicy":"reviewer",
+            "authorization": {"exchange": {"tokenEndpoint":"http://127.0.0.1:8111/token",
+                "clientId":"staff-gateway", "privateKeyRef":"secret:env/MCP_KEY"},
+                "audience":"urn:fixture:casework", "scopes":["casework:assistant-read"]}
+        });
+        assert!(validator().is_valid(&runtime));
+        let generated: Value =
+            serde_json::from_str(&schema_documents().unwrap()[RUNTIME_SCHEMA_FILE]).unwrap();
+        assert_eq!(
+            generated["$defs"]["ProviderConfig"]["oneOf"][1]["properties"]["pageSize"]["default"],
+            25
+        );
+        runtime["bindings"][0]["provider"]["sourceProfile"] = Value::Null;
+        assert!(!validator().is_valid(&runtime));
+    }
     #[test]
     fn casework_shape_requires_the_explicit_delegated_read_contract() {
         let mut runtime = as_json(example().as_bytes());

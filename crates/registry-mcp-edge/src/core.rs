@@ -7,9 +7,14 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::{
-    audit::ToolAudit, AuditOptions, AuthorizationFactory, EffectCertainty, Invocation, Provider,
-    ProviderFailure, ProviderOutcome, ResolvedTool, ToolAuditLog, VerifiedCaller,
+    audit::ToolAudit, AuditOptions, AuthorizationError, AuthorizationFactory, EffectCertainty,
+    Invocation, Provider, ProviderFailure, ProviderOutcome, ResolvedTool, ToolAuditLog,
+    VerifiedCaller,
 };
+
+const MAXIMUM_IMPLEMENTATION_NAME_BYTES: usize = 4096;
+const MAXIMUM_SERVICE_NAME_BYTES: usize = 16 * 1024;
+const MAXIMUM_INSTRUCTIONS_BYTES: usize = 64 * 1024;
 
 /// Display and MCP implementation identity supplied by a product wrapper.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,13 +35,9 @@ impl GatewayInfo {
             service_name: service_name.into(),
             instructions: instructions.into(),
         };
-        if [
-            &info.implementation_name,
-            &info.service_name,
-            &info.instructions,
-        ]
-        .into_iter()
-        .any(|value| !valid_text(value))
+        if !valid_text(&info.implementation_name, MAXIMUM_IMPLEMENTATION_NAME_BYTES)
+            || !valid_text(&info.service_name, MAXIMUM_SERVICE_NAME_BYTES)
+            || !valid_text(&info.instructions, MAXIMUM_INSTRUCTIONS_BYTES)
         {
             return Err(GatewayBuildError::Info);
         }
@@ -59,9 +60,9 @@ impl GatewayInfo {
     }
 }
 
-fn valid_text(value: &str) -> bool {
+fn valid_text(value: &str, maximum_bytes: usize) -> bool {
     !value.is_empty()
-        && value.len() <= 4096
+        && value.len() <= maximum_bytes
         && !value
             .chars()
             .any(|character| character.is_control() && !matches!(character, '\t' | '\n' | '\r'))
@@ -124,27 +125,23 @@ pub enum GatewayBuildError {
     DuplicateTool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CatalogError {
     #[error("the provider catalog is unavailable")]
-    Provider,
+    Provider(ProviderFailure),
     #[error("the provider catalog does not match the configured tool ceiling")]
     Contract,
 }
 
 impl CatalogError {
-    pub(crate) fn to_value(self) -> Value {
-        let (code, message) = match self {
-            Self::Provider => (
-                "service-unavailable",
-                "The service catalog is not available right now.",
-            ),
-            Self::Contract => (
-                "catalog-invalid",
-                "The service catalog does not match its configured capabilities.",
-            ),
-        };
-        json!({"error": {"code": code, "message": message}})
+    pub(crate) fn to_value(&self) -> Value {
+        match self {
+            Self::Provider(failure) => failure.to_value(),
+            Self::Contract => json!({"error": {
+                "code": "catalog-invalid",
+                "message": "The service catalog does not match its configured capabilities."
+            }}),
+        }
     }
 }
 
@@ -218,22 +215,44 @@ impl GatewayCore {
 
     pub async fn list_tools(&self, caller: &VerifiedCaller) -> Result<Vec<Tool>, CatalogError> {
         let mut catalog = BTreeMap::<String, Tool>::new();
-        for binding in &self.bindings {
-            let authorization = binding
-                .authorization
-                .authorization(caller)
-                .map_err(|_| CatalogError::Provider)?;
-            let tools = binding
-                .provider
-                .list_tools(caller, authorization)
-                .await
-                .map_err(|failure| {
-                    if failure.valid() {
-                        CatalogError::Provider
-                    } else {
-                        CatalogError::Contract
+        let mut completed = 0usize;
+        let mut last_failure = None;
+        for (binding_index, binding) in self.bindings.iter().enumerate() {
+            let authorization = match binding.authorization.authorization(caller) {
+                Ok(authorization) => authorization,
+                Err(AuthorizationError::Unavailable) => {
+                    tracing::warn!(
+                        binding = binding_index,
+                        stage = "authorization",
+                        reason = authorization_catalog_reason(AuthorizationError::Unavailable),
+                        "provider catalog binding unavailable"
+                    );
+                    if last_failure.is_none() {
+                        last_failure = Some(ProviderFailure::new(
+                            "catalog-authorization-failed",
+                            "The provider catalog authorization is not available right now.",
+                            EffectCertainty::NoEffect,
+                        ));
                     }
-                })?;
+                    continue;
+                }
+                Err(AuthorizationError::Configuration) => return Err(CatalogError::Contract),
+            };
+            let tools = match binding.provider.list_tools(caller, authorization).await {
+                Ok(tools) => tools,
+                Err(failure) if failure.valid() => {
+                    tracing::warn!(
+                        binding = binding_index,
+                        stage = "provider",
+                        reason = "provider-unavailable",
+                        "provider catalog binding unavailable"
+                    );
+                    last_failure = Some(failure);
+                    continue;
+                }
+                Err(_) => return Err(CatalogError::Contract),
+            };
+            completed += 1;
             for tool in tools {
                 let name = tool.name.as_ref();
                 let Some(configured) = binding.tools.get(name) else {
@@ -245,6 +264,11 @@ impl GatewayCore {
                     return Err(CatalogError::Contract);
                 }
             }
+        }
+        if completed == 0 {
+            return Err(CatalogError::Provider(last_failure.expect(
+                "a configured binding that did not complete has a failure",
+            )));
         }
         Ok(catalog.into_values().collect())
     }
@@ -268,12 +292,20 @@ impl GatewayCore {
             client_pseudonym: caller.client_pseudonym(),
         };
         let request_id = Uuid::new_v4();
-        let Ok(mut audit_request) = self
+        let mut audit_request = match self
             .audit
             .begin(request_id.to_string(), &self.audit_options, &audit_record)
             .await
-        else {
-            return service_unavailable();
+        {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::error!(
+                    request_id = %request_id,
+                    reason = ?error.reason(),
+                    "tool audit request refused"
+                );
+                return service_unavailable();
+            }
         };
         let binding = &self.bindings[route.binding];
         let outcome = match binding.authorization.authorization(caller) {
@@ -298,17 +330,22 @@ impl GatewayCore {
             )),
         };
         let (result, audit_outcome, reason) = result_and_audit(outcome);
-        if audit_request
+        if let Err(error) = audit_request
             .respond(audit_record.response(self.audit_options.event(), audit_outcome, reason))
             .await
-            .is_err()
         {
+            tracing::error!(
+                request_id = %request_id,
+                reason = ?error.reason(),
+                "tool audit response refused"
+            );
             return service_unavailable();
         }
         tracing::info!(
             request_id = %request_id,
             tool = route.tool.public_name(),
             outcome = audit_outcome,
+            reason = call_log_reason(audit_outcome),
             "tool call"
         );
         result
@@ -323,18 +360,21 @@ fn result_and_audit(
             EffectCertainty::NoEffect | EffectCertainty::Confirmed => {
                 (CallToolResult::structured(value), "ok", None)
             }
-            EffectCertainty::AcceptedPending => {
-                (CallToolResult::structured(value), "accepted", None)
-            }
             EffectCertainty::Unknown => {
                 (service_unavailable(), "unfinished", Some("effect-unknown"))
             }
         },
-        ProviderOutcome::Failure(failure) if !failure.valid() => (
-            service_unavailable(),
-            "refused",
-            Some("service-unavailable"),
-        ),
+        ProviderOutcome::Failure(failure) if !failure.valid() => {
+            if failure.effect() == EffectCertainty::Unknown {
+                (service_unavailable(), "unfinished", Some("effect-unknown"))
+            } else {
+                (
+                    service_unavailable(),
+                    "refused",
+                    Some("service-unavailable"),
+                )
+            }
+        }
         ProviderOutcome::Failure(failure) => {
             let audit_outcome = if failure.effect() == EffectCertainty::Unknown {
                 "unfinished"
@@ -344,6 +384,21 @@ fn result_and_audit(
             let reason = failure.code();
             (failure_result(&failure), audit_outcome, Some(reason))
         }
+    }
+}
+
+fn call_log_reason(audit_outcome: &str) -> &'static str {
+    match audit_outcome {
+        "ok" => "none",
+        "unfinished" => "effect-unknown",
+        _ => "provider-refused",
+    }
+}
+
+const fn authorization_catalog_reason(error: AuthorizationError) -> &'static str {
+    match error {
+        AuthorizationError::Unavailable => "authorization-unavailable",
+        AuthorizationError::Configuration => "authorization-configuration",
     }
 }
 
