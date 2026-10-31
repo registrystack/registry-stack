@@ -4893,18 +4893,23 @@ fn worst_body(
     total
 }
 
-/// Runtime checks (`products/adapter/CONCEPT.md` sections 10.2 and
-/// 13.7): endpoint coverage, credential-kind match, `none` confined to
-/// the numeric loopback or `https` with an mTLS identity, and the
-/// plain-HTTP confinement to the loopback exception and the declared
-/// private CIDRs (decision D36), the rule load's own destination
-/// policy enforces on resolved addresses.
+/// The endpoint-binding checks every mode runs
+/// (`products/adapter/CONCEPT.md` sections 10.2 and 17): endpoint
+/// coverage, credential-kind match, `none` confined to the numeric
+/// loopback or `https` with an mTLS identity, and the plain-HTTP
+/// confinement to the loopback exception and the declared private CIDRs
+/// (decision D36), the rule load's own destination policy enforces on
+/// resolved addresses. The facade's runtime check adds its own members
+/// to these findings.
 #[must_use]
-pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
+pub fn check_endpoint_bindings(
+    workspace: &Workspace<'_>,
+    bindings: &crate::runtime::AdapterEndpointBindings,
+) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     let pack = workspace.pack;
 
-    for (index, binding) in runtime.endpoints.iter().enumerate() {
+    for (index, binding) in bindings.endpoints.iter().enumerate() {
         let prefix = format!("/endpoints/{index}");
         let endpoint = pack.endpoints.get(binding.endpoint.as_str());
         if endpoint.is_none() {
@@ -4958,7 +4963,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
                 check_token_endpoint(&prefix, credential, &mut findings);
             }
         }
-        if !plain_http_origin_admitted(&binding.base_url, &runtime.allowed_private_cidrs) {
+        if !plain_http_origin_admitted(&binding.base_url, &bindings.allowed_private_cidrs) {
             findings.push(finding(
                 CheckCode::RuntimeInsecureOrigin,
                 &format!("{prefix}/baseUrl"),
@@ -4975,7 +4980,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             ));
         }
         if let Some(profile) = &binding.tls_trust_profile {
-            if !runtime
+            if !bindings
                 .outbound_tls
                 .as_ref()
                 .is_some_and(|tls| tls.trust_profiles.contains_key(profile.as_str()))
@@ -4990,7 +4995,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
         }
     }
     for endpoint in pack.endpoints.iter() {
-        if runtime.endpoints.get(endpoint.id.as_str()).is_none() {
+        if bindings.endpoints.get(endpoint.id.as_str()).is_none() {
             findings.push(finding(
                 CheckCode::RuntimeMissingEndpoint,
                 "/endpoints",
@@ -4999,7 +5004,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             ));
         }
     }
-    if runtime.allowed_private_cidrs.len() > crate::naming::MAX_ALLOWED_PRIVATE_CIDRS {
+    if bindings.allowed_private_cidrs.len() > crate::naming::MAX_ALLOWED_PRIVATE_CIDRS {
         findings.push(finding(
             CheckCode::RuntimeInsecureOrigin,
             "/allowedPrivateCidrs",
@@ -5007,7 +5012,17 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             "Reduce the allowlist to the platform bound.",
         ));
     }
-    check_outbound_tls(runtime, &mut findings);
+    check_outbound_tls(bindings, &mut findings);
+    findings
+}
+
+/// Runtime checks (`products/adapter/CONCEPT.md` sections 10.2 and
+/// 13.7): the endpoint-binding checks every mode runs, plus the OIDC
+/// issuer block that authenticates facade callers, which the facade
+/// alone configures.
+#[must_use]
+pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
+    let mut findings = check_endpoint_bindings(workspace, &runtime.endpoint_bindings());
     if let Err(error) = runtime.oidc.check("oidc", true) {
         findings.push(finding(
             CheckCode::RuntimeInvalidOrigin,
@@ -5023,8 +5038,11 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
 /// own (`registry-evidence` `OutboundTlsConfig`): at most the shared
 /// bound of named profiles, and each profile's `caBundleFile` an
 /// absolute operator path the runtime may read.
-fn check_outbound_tls(runtime: &AdapterRuntimeConfig, findings: &mut Vec<Diagnostic>) {
-    let Some(tls) = &runtime.outbound_tls else {
+fn check_outbound_tls(
+    bindings: &crate::runtime::AdapterEndpointBindings,
+    findings: &mut Vec<Diagnostic>,
+) {
+    let Some(tls) = &bindings.outbound_tls else {
         return;
     };
     if tls.trust_profiles.len() > crate::naming::MAX_TLS_TRUST_PROFILES {

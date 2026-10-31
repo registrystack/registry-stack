@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The operator runtime configuration (`AdapterRuntimeConfig`), the
+//! The operator runtime configuration (`AdapterRuntimeConfig`) and the
+//! endpoint bindings (`AdapterEndpointBindings`) every mode shares, the
 //! environment bindings of one deployment (`products/adapter/CONCEPT.md`
-//! sections 6, 10.2, and 12): endpoint base URLs and TLS, credential
-//! secret references, the private-CIDR allowlist, and the platform shared
-//! blocks. Authored artifacts carry no environment values; substitution
-//! and secrets live here and only here.
+//! sections 6, 10.2, 12, and 17): endpoint base URLs and TLS, credential
+//! secret references, and the private-CIDR allowlist. The facade's
+//! configuration carries those bindings beside its own members (listener,
+//! database, OIDC issuer, admitted clients, audit, idempotency, cursor
+//! custody); a job's runtime document carries the bindings alone.
+//! Authored artifacts carry no environment values; substitution and
+//! secrets live here and only here.
 
 use crate::auth::{MtlsIdentity, RuntimeCredential};
 use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey};
@@ -201,6 +205,35 @@ pub struct IdempotencyRetention {
     pub response_retention_seconds: BoundedU64<1, 31_536_000>,
 }
 
+/// The endpoint bindings of one deployment: the runtime members every
+/// mode shares (`products/adapter/CONCEPT.md` sections 10.2 and 17).
+/// The ingestion job's runtime document states these members alone; the
+/// facade's document states them beside the facade-only members
+/// (`listener`, `database`, `oidc`, `allowedClients`, `audit`,
+/// `idempotency`, and the cursor custody), which
+/// [`AdapterRuntimeConfig::endpoint_bindings`] sets aside.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdapterEndpointBindings {
+    /// The deployment this binding configures.
+    pub id: LocalId,
+    /// One binding per configured endpoint.
+    pub endpoints: UniqueIdList<EndpointBinding>,
+    /// The private CAs endpoints may trust beside the system roots;
+    /// absent, every endpoint trusts the system roots alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound_tls: Option<OutboundTls>,
+    /// The private ranges egress may reach, at least one and at most the
+    /// platform bound (CFG-EMPTY-2).
+    #[serde(deserialize_with = "at_least_one_cidr")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "at_least_one_cidr_schema")
+    )]
+    pub allowed_private_cidrs: UniqueList<Cidr>,
+}
+
 /// The operator runtime configuration artifact (`AdapterRuntimeConfig`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
@@ -254,6 +287,21 @@ pub struct AdapterRuntimeConfig {
     /// 900.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_ttl_seconds: Option<BoundedU64<60, 86_400>>,
+}
+
+impl AdapterRuntimeConfig {
+    /// The endpoint bindings this facade configuration carries, in the
+    /// shape the engine consumes and a job's runtime document states
+    /// alone. The facade-only members stay outside it.
+    #[must_use]
+    pub fn endpoint_bindings(&self) -> AdapterEndpointBindings {
+        AdapterEndpointBindings {
+            id: self.id.clone(),
+            endpoints: self.endpoints.clone(),
+            outbound_tls: self.outbound_tls.clone(),
+            allowed_private_cidrs: self.allowed_private_cidrs.clone(),
+        }
+    }
 }
 
 /// The allowlist cannot be empty: an egress policy admitting no private
@@ -598,5 +646,94 @@ mod tests {
         let range = Cidr::new("10.0.0.0/8").expect("cidr");
         assert!(range.contains("10.1.2.3".parse().expect("addr")));
         assert!(!range.contains("203.0.113.5".parse().expect("addr")));
+    }
+
+    /// A runtime document with the endpoint bindings alone reads: no
+    /// listener, database, OIDC issuer, admitted clients, audit,
+    /// idempotency, or cursor custody is stated (`products/adapter/`
+    /// `CONCEPT.md` section 17).
+    #[test]
+    fn endpoint_bindings_read_a_document_without_facade_members() {
+        let json = format!(
+            r#"{{
+                "id": "case-deployment",
+                "endpoints": [{}],
+                "outboundTls": {{
+                    "trustProfiles": {{
+                        "private-ca": {{
+                            "caBundleFile": "/etc/registry-adapter/trust/private-ca.pem"
+                        }}
+                    }}
+                }},
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
+            }}"#,
+            serde_json::to_string(&binding()).expect("binding json"),
+        );
+        let read = serde_json::from_str::<AdapterEndpointBindings>(&json).expect("bindings");
+        assert_eq!(read.id, LocalId::new("case-deployment").expect("id"));
+        assert_eq!(read.endpoints.into_vec(), vec![binding()]);
+        assert!(read.outbound_tls.is_some());
+        assert_eq!(read.allowed_private_cidrs.len(), 1);
+    }
+
+    /// The bindings reader refuses every facade member: a document that
+    /// states one of them is a facade document, not a binding.
+    #[test]
+    fn endpoint_bindings_refuse_the_facade_members() {
+        let base = r#"{
+                "id": "case-deployment",
+                "endpoints": [],
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
+            }"#;
+        let members = [
+            r#""listener": { "bind": "127.0.0.1:8080" }"#,
+            r#""database": { "runtimeUrlRef": "secret:env/DB_RUNTIME", "migrationUrlRef": "secret:env/DB_MIGRATION" }"#,
+            r#""oidc": { "issuer": "https://issuer.example.invalid", "audience": "case-api" }"#,
+            r#""allowedClients": ["case-portal"]"#,
+            r#""audit": { "retentionDays": 90 }"#,
+            r#""idempotency": { "responseRetentionSeconds": 86400 }"#,
+            r#""cursorKeyRef": "secret:env/CURSOR_KEY""#,
+        ];
+        for member in members {
+            let with_member = base.replace(
+                r#""allowedPrivateCidrs": ["10.0.0.0/8"]"#,
+                &format!(r#""allowedPrivateCidrs": ["10.0.0.0/8"], {member}"#),
+            );
+            assert!(
+                serde_json::from_str::<AdapterEndpointBindings>(&with_member).is_err(),
+                "the bindings reader accepted a facade member: {member}"
+            );
+        }
+        assert!(serde_json::from_str::<AdapterEndpointBindings>(base).is_ok());
+    }
+
+    /// The facade configuration's binding view equals the bindings read
+    /// from the same members alone.
+    #[test]
+    fn endpoint_bindings_view_matches_the_standalone_reader() {
+        let facade = r#"{
+                "id": "case-deployment",
+                "endpoints": [],
+                "allowedPrivateCidrs": ["10.0.0.0/8"],
+                "listener": { "bind": "127.0.0.1:8080" },
+                "database": {
+                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                    "migrationUrlRef": "secret:env/DB_MIGRATION"
+                },
+                "oidc": {
+                    "issuer": "https://issuer.example.invalid",
+                    "audience": "case-api"
+                },
+                "allowedClients": ["case-portal"],
+                "audit": { "retentionDays": 90 }
+            }"#;
+        let alone = r#"{
+                "id": "case-deployment",
+                "endpoints": [],
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
+            }"#;
+        let facade = serde_json::from_str::<AdapterRuntimeConfig>(facade).expect("facade");
+        let alone = serde_json::from_str::<AdapterEndpointBindings>(alone).expect("bindings");
+        assert_eq!(facade.endpoint_bindings(), alone);
     }
 }
