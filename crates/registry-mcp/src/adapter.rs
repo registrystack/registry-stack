@@ -15,11 +15,20 @@ use registry_platform_yaml::Reader;
 use rmcp::model::{Tool, ToolAnnotations};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 use url::Url;
 
 pub const CONTRACT_PATH: &str = ".well-known/registry-adapter/effective-contract";
 const MAXIMUM_CONTRACT_BYTES: u64 = 1024 * 1024;
+const API_VERSION: &str = "id.registrystack.org/formats/adapter/effective-contract/v1alpha1";
+const KIND: &str = "AdapterEffectiveContract";
+const DIGEST_DOMAIN: &str = "registry-adapter/effective-contract/v1alpha1";
+const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+const PIN_PROBLEM_CODE: &str = "adapter.contract.precondition-failed";
+const UNAVAILABLE_PROBLEM_CODE: &str = "adapter.contract.unavailable";
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 #[error("the adapter contract, binding, or response is invalid; re-export and explicitly pin its effective contract")]
@@ -53,6 +62,7 @@ struct Operation {
     path: String,
     support: String,
     effect: String,
+    success_status: u16,
     #[serde(default)]
     request_maximum_bytes: Option<u64>,
     input: Input,
@@ -68,7 +78,13 @@ struct Input {
 }
 
 pub fn contract_digest(contract: &Value) -> Result<String, InvalidAdapterContract> {
-    let bytes = canonicalize_json(contract).map_err(|_| InvalidAdapterContract)?;
+    let envelope = json!({
+        "domain": DIGEST_DOMAIN,
+        "apiVersion": API_VERSION,
+        "kind": KIND,
+        "contract": contract,
+    });
+    let bytes = canonicalize_json(&envelope).map_err(|_| InvalidAdapterContract)?;
     Ok(registry_platform_config::sha256_uri(&bytes))
 }
 
@@ -77,10 +93,12 @@ pub struct AdapterContract {
     operations: BTreeMap<String, Operation>,
     input_schemas: BTreeMap<String, JSONSchema>,
     output_schemas: BTreeMap<String, JSONSchema>,
+    problem_schema: JSONSchema,
+    protocol_problem_schema: JSONSchema,
 }
 
 fn compile_schema(schema: &Value) -> Result<JSONSchema, InvalidAdapterContract> {
-    fn inspect(schema: &Value) -> bool {
+    fn inspect(schema: &Value, closed_object: Option<&BTreeSet<String>>) -> bool {
         let Some(object) = schema.as_object() else {
             return false;
         };
@@ -93,12 +111,52 @@ fn compile_schema(schema: &Value) -> Result<JSONSchema, InvalidAdapterContract> 
             return false;
         }
         let Some(kind) = object.get("type") else {
-            return ["anyOf", "oneOf", "allOf"].iter().any(|key| {
-                object
-                    .get(*key)
-                    .and_then(Value::as_array)
-                    .is_some_and(|branches| !branches.is_empty() && branches.iter().all(inspect))
-            });
+            if object.len() == 1 {
+                if object.get("const").is_some_and(|value| {
+                    matches!(
+                        value,
+                        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+                    )
+                }) {
+                    return true;
+                }
+                if let (Some(properties), Some(required)) = (
+                    closed_object,
+                    object.get("required").and_then(Value::as_array),
+                ) {
+                    let names = required
+                        .iter()
+                        .map(Value::as_str)
+                        .collect::<Option<BTreeSet<_>>>();
+                    return names.is_some_and(|names| {
+                        !names.is_empty()
+                            && names.len() == required.len()
+                            && names.iter().all(|name| properties.contains(*name))
+                    });
+                }
+            }
+            if object
+                .keys()
+                .any(|key| !matches!(key.as_str(), "$schema" | "anyOf" | "oneOf" | "allOf"))
+                || object
+                    .get("$schema")
+                    .is_some_and(|dialect| dialect.as_str() != Some(JSON_SCHEMA_DIALECT))
+            {
+                return false;
+            }
+            let mut composition = false;
+            for key in ["anyOf", "oneOf", "allOf"] {
+                if let Some(branches) = object.get(key) {
+                    composition = true;
+                    if !branches.as_array().is_some_and(|branches| {
+                        !branches.is_empty()
+                            && branches.iter().all(|branch| inspect(branch, closed_object))
+                    }) {
+                        return false;
+                    }
+                }
+            }
+            return composition;
         };
         let kinds: Vec<&str> = match kind {
             Value::String(kind) => vec![kind.as_str()],
@@ -121,6 +179,7 @@ fn compile_schema(schema: &Value) -> Result<JSONSchema, InvalidAdapterContract> 
         {
             return false;
         }
+        let mut object_properties = None;
         if kinds.contains(&"object") {
             if object.get("additionalProperties") != Some(&Value::Bool(false))
                 || object.contains_key("patternProperties")
@@ -130,19 +189,26 @@ fn compile_schema(schema: &Value) -> Result<JSONSchema, InvalidAdapterContract> 
             let Some(properties) = object.get("properties").and_then(Value::as_object) else {
                 return false;
             };
-            if !properties.values().all(inspect) {
+            if !properties.values().all(|member| inspect(member, None)) {
                 return false;
             }
+            object_properties = Some(properties.keys().cloned().collect::<BTreeSet<_>>());
         }
-        if kinds.contains(&"array") && !object.get("items").is_some_and(inspect) {
+        if kinds.contains(&"array")
+            && !object
+                .get("items")
+                .is_some_and(|items| inspect(items, None))
+        {
             return false;
         }
         for key in ["anyOf", "oneOf", "allOf"] {
             if let Some(branches) = object.get(key) {
-                if !branches
-                    .as_array()
-                    .is_some_and(|branches| !branches.is_empty() && branches.iter().all(inspect))
-                {
+                if !branches.as_array().is_some_and(|branches| {
+                    !branches.is_empty()
+                        && branches
+                            .iter()
+                            .all(|branch| inspect(branch, object_properties.as_ref()))
+                }) {
                     return false;
                 }
             }
@@ -161,7 +227,7 @@ fn compile_schema(schema: &Value) -> Result<JSONSchema, InvalidAdapterContract> 
             _ => false,
         }
     }
-    if contains_reference(schema) || !inspect(schema) {
+    if contains_reference(schema) || !inspect(schema, None) {
         return Err(InvalidAdapterContract);
     }
     JSONSchema::options()
@@ -230,9 +296,8 @@ impl AdapterContract {
             .map_err(|_| InvalidAdapterContract)?;
         let document: Document =
             serde_json::from_slice(bytes).map_err(|_| InvalidAdapterContract)?;
-        if document.api_version
-            != "id.registrystack.org/formats/adapter/effective-contract/v1alpha1"
-            || document.kind != "AdapterEffectiveContract"
+        if document.api_version != API_VERSION
+            || document.kind != KIND
             || document.digest != expected_digest
             || document.digest != contract_digest(&document.contract)?
             || document.readiness.as_ref().is_some_and(|ready| {
@@ -241,11 +306,45 @@ impl AdapterContract {
         {
             return Err(InvalidAdapterContract);
         }
+        if !exact_object_keys(
+            &document.contract,
+            &[
+                "schemaDialect",
+                "project",
+                "profileVersion",
+                "artifactDeploymentDigest",
+                "authentication",
+                "authority",
+                "operations",
+                "unserved",
+                "problemSchema",
+                "protocolProblems",
+            ],
+        ) || document
+            .contract
+            .get("schemaDialect")
+            .and_then(Value::as_str)
+            != Some(JSON_SCHEMA_DIALECT)
+            || !valid_project_metadata(&document.contract)
+            || !document
+                .contract
+                .get("artifactDeploymentDigest")
+                .and_then(Value::as_str)
+                .is_some_and(registry_platform_config::is_sha256_label)
+            || document.contract.get("authority") != Some(&machine_only_authority())
+            || !document
+                .contract
+                .get("unserved")
+                .is_some_and(Value::is_array)
+        {
+            return Err(InvalidAdapterContract);
+        }
         let authentication = document
             .contract
             .get("authentication")
             .ok_or(InvalidAdapterContract)?;
-        if authentication.get("scheme").and_then(Value::as_str) != Some("bearer")
+        if !exact_object_keys(authentication, &["scheme", "audience", "clientAdmission"])
+            || authentication.get("scheme").and_then(Value::as_str) != Some("bearer")
             || authentication
                 .get("clientAdmission")
                 .and_then(Value::as_str)
@@ -274,6 +373,7 @@ impl AdapterContract {
             if operation.support != "served"
                 || operation.effect != "read"
                 || !matches!(operation.method.as_str(), "GET" | "POST")
+                || !(200..=299).contains(&operation.success_status)
                 || operation.id.is_empty()
                 || operation.version.is_empty()
                 || operation.binding_id.is_empty()
@@ -301,10 +401,22 @@ impl AdapterContract {
                 return Err(InvalidAdapterContract);
             }
         }
-        compile_schema(
+        let problem_schema = compile_schema(
             document
                 .contract
                 .get("problemSchema")
+                .ok_or(InvalidAdapterContract)?,
+        )?;
+        let protocol_problems = document
+            .contract
+            .get("protocolProblems")
+            .ok_or(InvalidAdapterContract)?;
+        if !valid_protocol_problems(protocol_problems) {
+            return Err(InvalidAdapterContract);
+        }
+        let protocol_problem_schema = compile_schema(
+            protocol_problems
+                .get("schema")
                 .ok_or(InvalidAdapterContract)?,
         )?;
         Ok(Self {
@@ -312,6 +424,8 @@ impl AdapterContract {
             operations,
             input_schemas,
             output_schemas,
+            problem_schema,
+            protocol_problem_schema,
         })
     }
 
@@ -330,6 +444,145 @@ impl AdapterContract {
         }
         Ok(())
     }
+}
+
+fn exact_object_keys(value: &Value, keys: &[&str]) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
+    })
+}
+
+fn valid_project_metadata(contract: &Value) -> bool {
+    contract.get("project").is_some_and(|project| {
+        exact_object_keys(project, &["id", "version"])
+            && project
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+            && project.get("version").is_some_and(Value::is_string)
+    }) && contract.get("profileVersion").is_some_and(Value::is_string)
+}
+
+fn machine_only_authority() -> Value {
+    json!({
+        "callerMode": "trusted-machine",
+        "representedSubject": "unsupported",
+        "personalDelegation": "unsupported",
+        "targetBinding": "unsupported",
+        "rowDisclosureAuthority": "not-granted",
+        "fieldDisclosureAuthority": "not-granted",
+    })
+}
+
+fn valid_protocol_problems(protocol: &Value) -> bool {
+    if !exact_object_keys(protocol, &["schema", "problems"]) {
+        return false;
+    }
+    let Some(problems) = protocol.get("problems").and_then(Value::as_array) else {
+        return false;
+    };
+    if !contains_each_protocol_tuple(problems, |problem| protocol_tuple(problem)) {
+        return false;
+    }
+    let Some(schema) = protocol.get("schema") else {
+        return false;
+    };
+    if !exact_object_keys(schema, &["$schema", "oneOf"])
+        || schema.get("$schema").and_then(Value::as_str) != Some(JSON_SCHEMA_DIALECT)
+    {
+        return false;
+    }
+    let Some(branches) = schema.get("oneOf").and_then(Value::as_array) else {
+        return false;
+    };
+    contains_each_protocol_tuple(branches, protocol_schema_tuple)
+}
+
+fn contains_each_protocol_tuple<'a>(
+    values: &'a [Value],
+    tuple: impl Fn(&'a Value) -> Option<(&'a str, u64, &'a str)>,
+) -> bool {
+    if values.len() != 2 {
+        return false;
+    }
+    let tuples = values.iter().map(tuple).collect::<Option<Vec<_>>>();
+    tuples.is_some_and(|tuples| {
+        [
+            (
+                PIN_PROBLEM_CODE,
+                412,
+                "Effective contract precondition failed",
+            ),
+            (
+                UNAVAILABLE_PROBLEM_CODE,
+                503,
+                "Effective contract unavailable",
+            ),
+        ]
+        .iter()
+        .all(|expected| tuples.iter().filter(|found| *found == expected).count() == 1)
+    })
+}
+
+fn protocol_tuple(value: &Value) -> Option<(&str, u64, &str)> {
+    exact_object_keys(value, &["code", "status", "title"]).then_some((
+        value.get("code")?.as_str()?,
+        value.get("status")?.as_u64()?,
+        value.get("title")?.as_str()?,
+    ))
+}
+
+fn protocol_schema_tuple(value: &Value) -> Option<(&str, u64, &str)> {
+    if !exact_object_keys(
+        value,
+        &["type", "properties", "required", "additionalProperties"],
+    ) || value.get("type").and_then(Value::as_str) != Some("object")
+        || value.get("additionalProperties") != Some(&Value::Bool(false))
+        || !string_array_is_set(
+            value.get("required")?,
+            &["code", "status", "title", "requestId"],
+        )
+    {
+        return None;
+    }
+    let properties = value.get("properties")?;
+    if !exact_object_keys(properties, &["code", "status", "title", "requestId"])
+        || properties.get("requestId")
+            != Some(&json!({
+                "type": "string",
+                "minLength": 32,
+                "maxLength": 32,
+                "pattern": "^[0-9a-f]{32}$",
+            }))
+    {
+        return None;
+    }
+    let constant = |member: &str| {
+        let schema = properties.get(member)?;
+        exact_object_keys(schema, &["const"])
+            .then(|| schema.get("const"))
+            .flatten()
+    };
+    Some((
+        constant("code")?.as_str()?,
+        constant("status")?.as_u64()?,
+        constant("title")?.as_str()?,
+    ))
+}
+
+fn string_array_is_set(value: &Value, expected: &[&str]) -> bool {
+    let Some(values) = value.as_array() else {
+        return false;
+    };
+    let found = values
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<BTreeSet<_>>>();
+    found.is_some_and(|found| {
+        found.len() == values.len()
+            && found.len() == expected.len()
+            && expected.iter().all(|member| found.contains(member))
+    })
 }
 
 fn valid_path(path: &str) -> bool {
@@ -392,7 +645,12 @@ impl AdapterProvider {
             .send()
             .await
             .map_err(|_| refused())?;
-        let bytes = response_bytes(response, MAXIMUM_CONTRACT_BYTES).await?;
+        let (_, bytes) = response_bytes(
+            response,
+            MAXIMUM_CONTRACT_BYTES,
+            Some(reqwest::StatusCode::OK),
+        )
+        .await?;
         let current =
             AdapterContract::parse(&bytes, &self.contract.document.digest).map_err(|_| drift())?;
         if current.document.readiness.is_none() {
@@ -447,10 +705,6 @@ impl AdapterProvider {
         };
         let response = request
             .header(
-                "x-registry-correlation-id",
-                invocation.request_id.to_string(),
-            )
-            .header(
                 "x-registry-adapter-contract",
                 &self.contract.document.digest,
             )
@@ -459,14 +713,29 @@ impl AdapterProvider {
             .send()
             .await
             .map_err(|_| refused())?;
-        let trace = response
-            .headers()
-            .get("x-registry-request-id")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|value| uuid::Uuid::parse_str(value).ok())
-            .ok_or_else(refused)?;
-        let bytes = response_bytes(response, self.maximum_response_bytes).await?;
+        let (trace, raw_trace) = adapter_request_id(response.headers()).ok_or_else(refused)?;
+        let (status, bytes) = response_bytes(response, self.maximum_response_bytes, None).await?;
         let value = decode_response_value(&bytes)?;
+        let expected_status =
+            reqwest::StatusCode::from_u16(operation.success_status).map_err(|_| refused())?;
+        if status != expected_status {
+            let protocol_code = value
+                .get("code")
+                .and_then(Value::as_str)
+                .is_some_and(|code| matches!(code, PIN_PROBLEM_CODE | UNAVAILABLE_PROBLEM_CODE));
+            let valid_problem = if protocol_code {
+                self.contract.protocol_problem_schema.is_valid(&value)
+                    && value.get("status").and_then(Value::as_u64)
+                        == Some(u64::from(status.as_u16()))
+                    && value.get("requestId").and_then(Value::as_str) == Some(raw_trace.as_str())
+            } else {
+                self.contract.problem_schema.is_valid(&value)
+            };
+            if !valid_problem {
+                return Err(drift());
+            }
+            return Err(refused());
+        }
         if !self
             .contract
             .output_schemas
@@ -531,18 +800,40 @@ fn operation_url(
 async fn response_bytes(
     response: reqwest::Response,
     maximum: u64,
-) -> Result<Vec<u8>, ProviderFailure> {
+    expected_status: Option<reqwest::StatusCode>,
+) -> Result<(reqwest::StatusCode, Vec<u8>), ProviderFailure> {
+    let status = response.status();
+    let expected_content_type = if status.is_success() {
+        "application/json"
+    } else {
+        "application/problem+json"
+    };
     if registry_platform_httputil::validate_response_headers(response.headers()).is_err()
-        || response.status() != reqwest::StatusCode::OK
+        || expected_status.is_some_and(|expected| status != expected)
         || response
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .is_none_or(|text| text.split(';').next().map(str::trim) != Some("application/json"))
+            .is_none_or(|text| text.split(';').next().map(str::trim) != Some(expected_content_type))
     {
         return Err(refused());
     }
-    read_bounded(response, maximum).await.map_err(|_| refused())
+    let bytes = read_bounded(response, maximum)
+        .await
+        .map_err(|_| refused())?;
+    Ok((status, bytes))
+}
+
+fn adapter_request_id(headers: &reqwest::header::HeaderMap) -> Option<(uuid::Uuid, String)> {
+    let value = headers.get("x-registry-request-id")?.to_str().ok()?;
+    if value.len() != 32
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    Some((uuid::Uuid::parse_str(value).ok()?, value.to_owned()))
 }
 fn refused() -> ProviderFailure {
     ProviderFailure::new("adapter-read-refused", "The adapter could not authorize or validate this read. Check its readiness, machine credential and effective operation contract.", EffectCertainty::NoEffect)

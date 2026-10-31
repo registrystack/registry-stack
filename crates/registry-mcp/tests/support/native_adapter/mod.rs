@@ -338,7 +338,10 @@ impl NativeStack {
             .expect("connect native adapter journal");
         tokio::spawn(connection);
         client
-            .query("SELECT detail::text FROM adapter_journal_events", &[])
+            .query(
+                "SELECT row_to_json(events)::text FROM adapter_journal_events AS events",
+                &[],
+            )
             .await
             .expect("read native adapter journal")
             .iter()
@@ -352,20 +355,42 @@ impl NativeStack {
         record_id: &str,
         correlation: &str,
     ) -> reqwest::Response {
-        reqwest::Client::new()
+        self.direct_get(
+            record_id,
+            self.exported["digest"].as_str().expect("contract digest"),
+            Some(correlation),
+        )
+        .await
+    }
+
+    pub async fn direct_get_with_contract_pin(
+        &self,
+        record_id: &str,
+        pin: &str,
+    ) -> reqwest::Response {
+        self.direct_get(record_id, pin, None).await
+    }
+
+    async fn direct_get(
+        &self,
+        record_id: &str,
+        pin: &str,
+        correlation: Option<&str>,
+    ) -> reqwest::Response {
+        let mut request = reqwest::Client::new()
             .get(format!(
                 "{}/v1/collections/persons/records/{record_id}",
                 self.adapter_origin
             ))
             .bearer_auth(&self.machine_token)
-            .header(
-                "x-registry-adapter-contract",
-                self.exported["digest"].as_str().expect("contract digest"),
-            )
-            .header("x-registry-correlation-id", correlation)
+            .header("x-registry-adapter-contract", pin);
+        if let Some(correlation) = correlation {
+            request = request.header("x-registry-correlation-id", correlation);
+        }
+        request
             .send()
             .await
-            .expect("direct native Adapter correlation probe")
+            .expect("direct native Adapter contract probe")
     }
 
     pub fn adapter_is_running(&mut self) -> bool {
