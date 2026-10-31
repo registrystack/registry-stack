@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack.v1alpha1.schema.json
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
 #
 # The `adapterctl verify --live` pack: one basic-auth http endpoint and
 # one route template whose send is filled from constants and the

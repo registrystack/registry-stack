@@ -367,7 +367,7 @@ fn anonymous_tls_workspace(
     let project_path = directory.join("project.yaml");
     let project_text = std::fs::read_to_string(&project_path).expect("project text");
     let project_text = project_text.replacen(
-        "  digest: sha256:27abcf32d4b3a2fc1098b9e964f8681638560e54e0e6ada6b0c02f3a96d5343f\n",
+        "  digest: sha256:d4b1ed6a097dd6d452503abbf3c549de9b0d0f1ace05151c6112ccab14172c85\n",
         &format!("  digest: {digest}\n"),
         1,
     );

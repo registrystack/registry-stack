@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://id.registrystack.org/formats/adapter/project/v1alpha1.schema.json
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
 # Bad-corpus member adapter.route.http-uri-members: this artifact set must be refused with
 # exactly adapter.route.http-uri-members. The send carries `httpUri` beside `path`, and a query beside it; an http send carries exactly one of path and httpUri, and no query beside httpUri.

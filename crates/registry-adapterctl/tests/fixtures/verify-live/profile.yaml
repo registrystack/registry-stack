@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile.v1alpha1.schema.json
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
 #
 # The `adapterctl verify --live` workspace: one search-shaped read
 # operation whose route's first send is constant-determined, so the

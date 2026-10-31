@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project.v1alpha1.schema.json
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
 # The `adapterctl verify --live` project: pins the sibling profile and
 # pack by their real digests and instantiates the one template the
@@ -13,11 +13,11 @@ project:
 profile:
   id: verify-api
   version: "1.0.0"
-  digest: sha256:73d036097970541fa617bb675dd9f15add80d30e71d1e7ec09103d492b75a845
+  digest: sha256:c1fac07fc5e8b9234ea655d062dd689a64c6bc75fa5d758e5d8273fb0fd9216c
 pack:
   id: verify-pack
   version: "1.0.0"
-  digest: sha256:27abcf32d4b3a2fc1098b9e964f8681638560e54e0e6ada6b0c02f3a96d5343f
+  digest: sha256:d4b1ed6a097dd6d452503abbf3c549de9b0d0f1ace05151c6112ccab14172c85
 recordTypes:
   - name: case
     fields:
