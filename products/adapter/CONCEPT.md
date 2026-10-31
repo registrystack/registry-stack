@@ -1,7 +1,7 @@
 # Adapter: Live Translation Facade
 
-Status: concept, direction accepted 2026-10-30; engine model revised the same
-night into a bounded port of Apache Camel (decisions D7 to D15; section 16
+Status: concept, direction accepted 2026-10-30; engine model then revised
+into a bounded port of Apache Camel (decisions D7 to D15; section 16
 records the status of each). The engine exists and serves the read
 operations of the `breg-records` profile (search, get, and read-only POST
 reads) over the compiled contract, with wrapped cursors and the value-free
@@ -869,8 +869,8 @@ delivers the row.
 | Event Notifier | `manual/event-notifier.html` | The audit journal's event kinds (section 11) | Synchronous, value-free, before the response | 1 |
 | Testing: mock, intercept | `components/next/mock-component.html`, `manual/advice-with.html`, `components/next/eips/intercept.html` | Fixture replay intercepts `http` and `graphql` sends | Test harness only | 0 |
 
-Each reference is a path under `https://camel.apache.org/`; the stream that
-writes a row's conformance test confirms the page and corrects the path here
+Each reference is a path under `https://camel.apache.org/`; the change that
+adds a row's conformance test confirms the page and corrects the path here
 if Camel has moved it.
 
 Not ported, deliberately: Java and XML DSLs, the code-first REST DSL, Simple,
@@ -886,8 +886,8 @@ one later is a port-table row and a conformance test, not an invention.
 
 Sections 7 and 8.2 say what may enter and leave an exchange; this section
 says exactly where, so that a pack written against it runs under any
-profile. The API transformation experiments
-(`products/adapter/experiments/FINDINGS.md`) found that without it a pack
+profile. The source-shape fixtures
+(`products/adapter/fixtures/source-shapes/`) showed that without it a pack
 could pass `check` and still not be executable: it had to guess where the
 caller's inputs sit, how a page hands back a cursor, what a script
 receives, and how to report a not-found without naming a profile's codes.
@@ -1517,8 +1517,7 @@ request.
 
 ## 14. Delivery increments and definition of done
 
-`DELIVERY-PLAN.md` decomposes each increment into streams with runnable
-acceptance commands.
+The Adapter lands in increments, each with runnable acceptance commands.
 
 - Increment 0, formats and the route model: the platform registration and
   CFG-EMBED-1 amendment; the core model for profiles, packs (endpoints,
@@ -1546,14 +1545,14 @@ acceptance commands.
   write property tests.
 - Increment 3, the second system: the `graphql` component; write resume; the
   `opencrvs` pack, reads first, then writes (draft, declare). Before this
-  increment starts, the stream confirms which API the current OpenCRVS
-  release exposes; if it is not GraphQL, the `graphql` component waits for a
-  system that needs it (two-system rule) and the pack uses `http`.
+  increment starts, the current OpenCRVS release's API is confirmed; if it
+  is not GraphQL, the `graphql` component waits for a system that needs it
+  (two-system rule) and the pack uses `http`.
 - Later: the GovStack profile and conformance mode; the WASM rung when a
   real pack needs it.
 
-Definition of done for the program, every item verified by a command in
-`DELIVERY-PLAN.md`, never by assertion:
+Definition of done for the program, every item verified by a command,
+never by assertion:
 
 1. Every port-table row marked for Increments 0 to 3 has its conformance
    module, green, and `check-port-table.py` passes.
@@ -1567,25 +1566,21 @@ Definition of done for the program, every item verified by a command in
 4. Every gate in 13.1 exists and is green from a clean shell; every property
    test in 13.5 runs in the default suite (or the PostgreSQL suite for the
    stores); the security tests in 13.7 run in `check-contracts.sh`.
-5. Every fixture carries honest provenance; the morning report states how
-   many are `captured` and how many `documented`.
+5. Every fixture carries honest provenance, and the count of `captured` and
+   `documented` fixtures is reported.
 6. The exposed API is configuration: the test profile of section 13.6
    serves over the `dhis2-tracker` pack with no Rust change and no pack
    change, errors included (the pack names no profile problem code), and
    no adapter crate names a `breg-records` path, operation, or field
    outside tests.
-7. A review report per increment and a final multi-expert review are
-   recorded under `products/adapter/reviews/`, with every finding either
-   fixed or listed as open.
-8. Every upstream authentication kind of section 10.2 has a conformance
-   test over the double, and the maintained packs and experiments between
-   them use at least four distinct kinds (DHIS2 `basic` and
+7. Every upstream authentication kind of section 10.2 has a conformance
+   test over the double, and the maintained packs and source-shape fixtures
+   between them use at least four distinct kinds (DHIS2 `basic` and
    `static-authorization`, OpenCRVS's confirmed kind, and the OAuth2 kinds
-   in experiments).
-9. Every experiment under `products/adapter/experiments/` passes `check`,
-   and each one whose constructs have landed replays its fixtures; its
-   `FINDINGS.md` lists every gap as resolved, scheduled to a named
-   increment, or a recorded divergence.
+   in the source-shape fixtures).
+8. Every source-shape fixture under `products/adapter/fixtures/source-shapes/`
+   passes `check`, holds its committed contract under `compile --check`, and
+   replays its fixtures.
 
 ## 15. Credit and licensing
 
@@ -1610,7 +1605,7 @@ the product documentation credits Camel and the EIP book regardless.
 
 ## 16. Recorded decisions
 
-Jeremi accepted these principles on 2026-10-30; the status column names the
+These principles were accepted on 2026-10-30; the status column names the
 one that decides a row.
 
 - P1, Camel behaviour, our format: port Camel's semantics and names exactly;
@@ -1637,34 +1632,34 @@ one that decides a row.
 | D4 | Source-native identifiers pass through; no correlation store in v1 | 2026-10-30, accepted |
 | D5 | Product name and token: `Adapter`, `adapter` (`AdapterPack`, `AdapterProject`, `AdapterRuntimeConfig`, `adapter.*` codes) | 2026-10-30, accepted |
 | D6 | The generated OpenAPI contains only bound operations; a conformance mode arrives with the GovStack profile | 2026-10-30, accepted |
-| D7 | The engine is a bounded port of Camel's route model: authored YAML DSL routes, Camel EIP names, options, defaults, and semantics; it replaces the earlier bespoke call-plan vocabulary (`call`, `map`, `normalize`, `paginate`, `iterate`) | 2026-10-30, accepted by Jeremi (P1) |
-| D8 | Packs are Kamelet-style catalogs of route templates; projects instantiate them with `templatedRoutes`; a deployment writes no routes | 2026-10-30, accepted by Jeremi (P1) |
-| D9 | The facade is Camel's contract-first REST DSL over the generated OpenAPI, with validation always on and `missingOperation` fail only | 2026-10-30, accepted by Jeremi (P1) |
-| D10 | Expression languages are `constant`, `header`, `exchangeProperty`, `jsonpath` (RFC 9535, inline, via a CFG-EMBED-1 amendment), and `rhai` (files only), which replaces Simple | 2026-10-30, accepted by Jeremi |
-| D11 | Camel semantics, platform spelling: CFG-NAME wins on key spelling, Camel names are kept where they conform, exchange property names stay verbatim | 2026-10-30, accepted by Jeremi (P1) |
-| D12 | The idempotency store retains the exact facade response for a deployment-configured retention window, separate from the value-free audit journal (BReg precedent); security review note required | 2026-10-30, accepted by Jeremi |
-| D13 | The generic mechanisms under redelivery, circuit breaker, and throttle are built in platform crates from the start: the rolling-window limiter in `registry-platform-ratelimit`, the breaker state machine and redelivery delay computation in `registry-platform-resilience`. The processors and the redelivery loop stay in the adapter | 2026-10-30, accepted by Jeremi (P5) |
-| D14 | Write resume is an addition, deferred to Increment 3 where OpenCRVS needs it; until then a write route with more than one non-safe send is refused | 2026-10-30, accepted by Jeremi (P5) |
-| D15 | Fixture provenance distinguishes `captured` from `documented`; overnight fixtures are `documented` unless a real instance was run | 2026-10-30, accepted by Jeremi (P6) |
-| D16 | A write the source accepted but has not completed answers a 202 with a status link or a bounded wait, chosen by configuration; the keys and the bound's expiry are settled in Increment 2 | 2026-10-30, accepted by Jeremi |
-| D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted by Jeremi |
-| D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, accepted by Jeremi (P2) |
-| D19 | The facade caller's token is never forwarded or exchanged upstream; upstream calls use the deployment's per-source credential, and per-user upstream authority waits for a source that requires it | 2026-10-30, accepted by Jeremi (P2) |
-| D20 | The exchange contract (section 8.11) is part of the format: facade inputs arrive under closed, profile-neutral names; no caller header enters except `Idempotency-Key` on writes; scripts receive a read-only `#{body, headers, properties}` view and return per slot | 2026-10-30, accepted by Jeremi (P2) |
-| D21 | Packs raise error classes and never name problem codes; an `outcome` branch and Camel's `throwException` carry source meaning; the profile's `problems` list maps every class, uncatchable and facade classes included, to exactly one problem; a handled clause answers with a success body | 2026-10-30, accepted by Jeremi (P3) |
-| D22 | The facade cursor is engine-owned authenticated encryption under a runtime-config key (`cursorKeyRef`), bound to operation, binding, caller, filters, and expiry; the route sees only `AdapterContinuation` and sets `AdapterNextContinuation`; security review note required | 2026-10-30, accepted by Jeremi (P4) |
-| D23 | Sources that page by URL use `httpUri`, an origin-pinned and base-path-pinned link checked at send time (`egress.refused` otherwise); `toD` stays not ported | 2026-10-30, accepted by Jeremi (P2) |
-| D24 | Request headers leave only through the endpoint's `requestHeaders` allowlist; credential, cookie, host, and hop-by-hop headers are never allowlistable; credentials are injected after filtering | 2026-10-30, accepted by Jeremi (P2) |
-| D25 | `direct:` shares the exchange and its sends are not redelivered; `enrich` runs on a copy and only strategy-named `properties` come back | 2026-10-30, accepted by Jeremi (P1) |
-| D26 | A `POST` counts as safe only under a reviewed `safeUpstream: true` operation claim; a GraphQL send's safety comes from its parsed operation type | 2026-10-30, accepted by Jeremi (P2) |
+| D7 | The engine is a bounded port of Camel's route model: authored YAML DSL routes, Camel EIP names, options, defaults, and semantics; it replaces the earlier bespoke call-plan vocabulary (`call`, `map`, `normalize`, `paginate`, `iterate`) | 2026-10-30, accepted (P1) |
+| D8 | Packs are Kamelet-style catalogs of route templates; projects instantiate them with `templatedRoutes`; a deployment writes no routes | 2026-10-30, accepted (P1) |
+| D9 | The facade is Camel's contract-first REST DSL over the generated OpenAPI, with validation always on and `missingOperation` fail only | 2026-10-30, accepted (P1) |
+| D10 | Expression languages are `constant`, `header`, `exchangeProperty`, `jsonpath` (RFC 9535, inline, via a CFG-EMBED-1 amendment), and `rhai` (files only), which replaces Simple | 2026-10-30, accepted |
+| D11 | Camel semantics, platform spelling: CFG-NAME wins on key spelling, Camel names are kept where they conform, exchange property names stay verbatim | 2026-10-30, accepted (P1) |
+| D12 | The idempotency store retains the exact facade response for a deployment-configured retention window, separate from the value-free audit journal (BReg precedent); security review note required | 2026-10-30, accepted |
+| D13 | The generic mechanisms under redelivery, circuit breaker, and throttle are built in platform crates from the start: the rolling-window limiter in `registry-platform-ratelimit`, the breaker state machine and redelivery delay computation in `registry-platform-resilience`. The processors and the redelivery loop stay in the adapter | 2026-10-30, accepted (P5) |
+| D14 | Write resume is an addition, deferred to Increment 3 where OpenCRVS needs it; until then a write route with more than one non-safe send is refused | 2026-10-30, accepted (P5) |
+| D15 | Fixture provenance distinguishes `captured` from `documented`; fixtures are `documented` unless a real instance was run | 2026-10-30, accepted (P6) |
+| D16 | A write the source accepted but has not completed answers a 202 with a status link or a bounded wait, chosen by configuration; the keys and the bound's expiry are settled in Increment 2 | 2026-10-30, accepted |
+| D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted |
+| D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, accepted (P2) |
+| D19 | The facade caller's token is never forwarded or exchanged upstream; upstream calls use the deployment's per-source credential, and per-user upstream authority waits for a source that requires it | 2026-10-30, accepted (P2) |
+| D20 | The exchange contract (section 8.11) is part of the format: facade inputs arrive under closed, profile-neutral names; no caller header enters except `Idempotency-Key` on writes; scripts receive a read-only `#{body, headers, properties}` view and return per slot | 2026-10-30, accepted (P2) |
+| D21 | Packs raise error classes and never name problem codes; an `outcome` branch and Camel's `throwException` carry source meaning; the profile's `problems` list maps every class, uncatchable and facade classes included, to exactly one problem; a handled clause answers with a success body | 2026-10-30, accepted (P3) |
+| D22 | The facade cursor is engine-owned authenticated encryption under a runtime-config key (`cursorKeyRef`), bound to operation, binding, caller, filters, and expiry; the route sees only `AdapterContinuation` and sets `AdapterNextContinuation`; security review note required | 2026-10-30, accepted (P4) |
+| D23 | Sources that page by URL use `httpUri`, an origin-pinned and base-path-pinned link checked at send time (`egress.refused` otherwise); `toD` stays not ported | 2026-10-30, accepted (P2) |
+| D24 | Request headers leave only through the endpoint's `requestHeaders` allowlist; credential, cookie, host, and hop-by-hop headers are never allowlistable; credentials are injected after filtering | 2026-10-30, accepted (P2) |
+| D25 | `direct:` shares the exchange and its sends are not redelivered; `enrich` runs on a copy and only strategy-named `properties` come back | 2026-10-30, accepted (P1) |
+| D26 | A `POST` counts as safe only under a reviewed `safeUpstream: true` operation claim; a GraphQL send's safety comes from its parsed operation type | 2026-10-30, accepted (P2) |
 | D27 | Exception matching uses the closest declared ancestor of the single `RouteFailure` class, with declaration order breaking equal-specificity ties; uncatchable classes fire no clause. The absence of Camel's cause-chain walk is a bounded divergence | 2026-10-30, corrected 2026-10-31 to the delivered single-class failure model (P1) |
-| D28 | `AdapterProject` carries a `project` block (`id`, `version`) as CFG-ENV-6 requires, rather than a top-level `id` | 2026-10-30, accepted by Jeremi (P1) |
-| D29 | Increment 1's parallel leaf streams pause once C4a and C4c land; the `records-get` route is built end to end first, then the leaves resume over it | 2026-10-30, accepted by Jeremi (P6) |
-| D30 | Increment 1's gate requires `captured` DHIS2 fixtures for get, missing, and search page, taken from a real server | 2026-10-30, accepted by Jeremi (P6) |
-| D31 | Circuit breaker and throttle stay in Increment 1 as its last slice | 2026-10-30, accepted by Jeremi (P6) |
-| D32 | No declarative field map until a real source needs one; field mapping stays in routes and scripts | 2026-10-30, accepted by Jeremi (P5) |
-| D33 | The runtime config requires a non-empty `allowedClients` list on the facade, as Messaging does; scopes alone leave the issuer's mint policy as the only client gate | 2026-10-30, accepted by Jeremi |
-| D34 | A verified caller's refused call is a `callRefused` journal row; a 401 is logged only | 2026-10-30, accepted by Jeremi |
-| D35 | After the real proof (P6), the facade contract is authored as a closed subset of OpenAPI with `x-` extensions for slots and problems, as Camel's contract-first REST DSL takes OpenAPI as input; until then `AdapterProfile` stands. Confidence is medium until a real ministry or GovStack specification has been tried | 2026-10-30, accepted by Jeremi |
-| D36 | Plain HTTP to an address inside `allowedPrivateCidrs` is allowed for every authentication kind, including credential-bearing ones; the operator's explicit declaration is the consent, and `adapterctl check` agrees with the runtime load | 2026-10-30, accepted by Jeremi |
-| D37 | Beyond the existing numeric-loopback and HTTPS+mTLS admissions, a configured source may use no application credential when pack and runtime both explicitly say `none` and the fixed HTTPS binding carries `anonymousHttps: operator-approved`; absence keeps that additional path closed, TLS verification and facade authentication remain mandatory, and no failed credential kind falls back to anonymous | 2026-10-31, accepted by Jeremi |
+| D28 | `AdapterProject` carries a `project` block (`id`, `version`) as CFG-ENV-6 requires, rather than a top-level `id` | 2026-10-30, accepted (P1) |
+| D29 | Increment 1 builds the `records-get` route end to end first; the remaining read features then build over it | 2026-10-30, accepted (P6) |
+| D30 | Increment 1's gate requires `captured` DHIS2 fixtures for get, missing, and search page, taken from a real server | 2026-10-30, accepted (P6) |
+| D31 | Circuit breaker and throttle stay in Increment 1 as its last slice | 2026-10-30, accepted (P6) |
+| D32 | No declarative field map until a real source needs one; field mapping stays in routes and scripts | 2026-10-30, accepted (P5) |
+| D33 | The runtime config requires a non-empty `allowedClients` list on the facade, as Messaging does; scopes alone leave the issuer's mint policy as the only client gate | 2026-10-30, accepted |
+| D34 | A verified caller's refused call is a `callRefused` journal row; a 401 is logged only | 2026-10-30, accepted |
+| D35 | After the real proof (P6), the facade contract is authored as a closed subset of OpenAPI with `x-` extensions for slots and problems, as Camel's contract-first REST DSL takes OpenAPI as input; until then `AdapterProfile` stands. Confidence is medium until a real ministry or GovStack specification has been tried | 2026-10-30, accepted |
+| D36 | Plain HTTP to an address inside `allowedPrivateCidrs` is allowed for every authentication kind, including credential-bearing ones; the operator's explicit declaration is the consent, and `adapterctl check` agrees with the runtime load | 2026-10-30, accepted |
+| D37 | Beyond the existing numeric-loopback and HTTPS+mTLS admissions, a configured source may use no application credential when pack and runtime both explicitly say `none` and the fixed HTTPS binding carries `anonymousHttps: operator-approved`; absence keeps that additional path closed, TLS verification and facade authentication remain mandatory, and no failed credential kind falls back to anonymous | 2026-10-31, accepted |
