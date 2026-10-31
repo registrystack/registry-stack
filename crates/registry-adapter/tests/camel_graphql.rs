@@ -454,6 +454,7 @@ fn pack_pinning(directory: &std::path::Path, text: &str, path: &str) -> AdapterP
         endpoints: UniqueIdList::new(Vec::new()).expect("empty"),
         route_templates: UniqueIdList::new(Vec::new()).expect("empty"),
         routes: UniqueIdList::new(Vec::new()).expect("empty"),
+        source_routes: UniqueIdList::new(Vec::new()).expect("empty"),
         code_maps: UniqueIdList::new(Vec::new()).expect("empty"),
         scripts: UniqueList::new(Vec::new()).expect("empty"),
         query_files: UniqueList::new(vec![registry_adapter_core::ScriptReference {

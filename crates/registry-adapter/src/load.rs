@@ -81,6 +81,11 @@ pub(crate) enum UnservedReason {
     SourceComponentMismatch,
     SourceUnbound,
     RecordSchemaUnavailable,
+    /// A job-only component send sits in a bound route: the authoring
+    /// checks raise `adapter.job.send-component-refused`, and the loader
+    /// holds the same refusal so a pack assembled without them never
+    /// serves.
+    JobComponentSend,
 }
 
 impl UnservedReason {
@@ -109,6 +114,7 @@ impl UnservedReason {
             Self::SourceComponentMismatch => "adapter.operation.source-component-mismatch",
             Self::SourceUnbound => "adapter.operation.source-unbound",
             Self::RecordSchemaUnavailable => "adapter.operation.record-schema-unavailable",
+            Self::JobComponentSend => registry_adapter_core::JobCode::SendComponentRefused.code(),
         }
     }
 }
@@ -890,40 +896,54 @@ fn compile_binding(
     let mut script_uses: Vec<(String, String)> = Vec::new();
     let mut strategy_uses: Vec<(String, String)> = Vec::new();
     registry_adapter_core::walk_steps(&steps, &mut |step, _pointer| {
-        if let Step::To(to) = step {
-            // A direct send resolves against the route table, not the
-            // endpoints; every other send goes to a bound endpoint.
-            if to.uri.component == SendComponent::Direct {
-                if !routes.contains_key(&to.uri.id) {
+        // A direct send resolves against the route table, not the
+        // endpoints; every other send goes to a bound endpoint.
+        let destination = match step {
+            Step::To(to) => Some(&to.uri),
+            Step::Enrich(enrich) => Some(&enrich.uri),
+            _ => None,
+        };
+        if let Some(uri) = destination {
+            if uri.component == SendComponent::Direct {
+                if !routes.contains_key(&uri.id) {
                     refusal.get_or_insert((
                         UnservedReason::DirectRouteMissing,
                         format!(
                             "the direct route {} is declared by no route in the deployment",
-                            to.uri.id
+                            uri.id
                         ),
                     ));
                 }
-            } else if let Some((reason, detail)) = endpoint_refusals.get(&to.uri.id) {
-                refusal.get_or_insert((*reason, format!("endpoint {}: {detail}", to.uri.id)));
-            } else if let Some(endpoint) = endpoints.get(&to.uri.id) {
+            } else if matches!(
+                uri.component,
+                SendComponent::Postgres | SendComponent::File | SendComponent::Sftp
+            ) {
+                // A job component is never a facade send destination or
+                // enrich resource: a file or sftp source is read through
+                // the pollEnrich step and a postgres source send is
+                // served in a source route only.
+                refusal.get_or_insert((UnservedReason::JobComponentSend, String::new()));
+            } else if let Some((reason, detail)) = endpoint_refusals.get(&uri.id) {
+                refusal.get_or_insert((*reason, format!("endpoint {}: {detail}", uri.id)));
+            } else if let Some(endpoint) = endpoints.get(&uri.id) {
                 // A send reaches an endpoint of its own component: a
                 // graphql send posts the endpoint's pinned query, an
                 // http send never does (section 8.8).
-                if to.uri.component == SendComponent::GraphQl && endpoint.graphql.is_none() {
+                if uri.component == SendComponent::GraphQl && endpoint.graphql.is_none() {
                     refusal.get_or_insert((
                         UnservedReason::SourceComponentMismatch,
-                        format!("endpoint {} is not a graphql endpoint", to.uri.id),
+                        format!("endpoint {} is not a graphql endpoint", uri.id),
                     ));
-                } else if to.uri.component == SendComponent::Http && endpoint.graphql.is_some() {
+                } else if uri.component == SendComponent::Http && endpoint.graphql.is_some() {
                     refusal.get_or_insert((
                         UnservedReason::SourceComponentMismatch,
-                        format!("endpoint {} is not an http endpoint", to.uri.id),
+                        format!("endpoint {} is not an http endpoint", uri.id),
                     ));
                 }
             } else {
                 refusal.get_or_insert((
                     UnservedReason::SourceUnbound,
-                    format!("endpoint {} is not bound by the runtime", to.uri.id),
+                    format!("endpoint {} is not bound by the runtime", uri.id),
                 ));
             }
         }

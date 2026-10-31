@@ -215,6 +215,7 @@ fn pack(case: &GeneratedRoute) -> AdapterPack {
             route("shared", case.direct_steps()),
         ])
         .expect("unique routes"),
+        source_routes: UniqueIdList::new(Vec::new()).expect("empty source routes"),
         code_maps: UniqueIdList::new(Vec::new()).expect("empty maps"),
         scripts: UniqueList::new(Vec::new()).expect("empty scripts"),
         query_files: UniqueList::new(Vec::new()).expect("empty queries"),

@@ -42,6 +42,14 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &EnrichStep) -> Result<Flow
         SendComponent::Direct | SendComponent::GraphQl => {
             return Err(RouteFailure::of(ErrorClass::EgressRefused));
         }
+        // The job-only components are never facade enrich resources: a
+        // file or sftp endpoint is read through the pollEnrich step and
+        // a postgres endpoint is a job source send. The authoring
+        // checks refuse the pair; the runtime holds the same line so a
+        // hand-built context cannot slip past it.
+        SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => {
+            return Err(RouteFailure::of(ErrorClass::EgressRefused));
+        }
     };
     let strategy = step
         .aggregation_strategy

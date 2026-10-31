@@ -187,6 +187,7 @@ fn pack(case: &RouteCase) -> AdapterPack {
         endpoints: UniqueIdList::new(vec![endpoint()]).expect("unique endpoints"),
         route_templates: UniqueIdList::new(Vec::new()).expect("empty templates"),
         routes: UniqueIdList::new(routes).expect("unique routes"),
+        source_routes: UniqueIdList::new(Vec::new()).expect("empty source routes"),
         code_maps: UniqueIdList::new(Vec::new()).expect("empty maps"),
         scripts: UniqueList::new(Vec::new()).expect("empty scripts"),
         query_files: UniqueList::new(Vec::new()).expect("empty queries"),

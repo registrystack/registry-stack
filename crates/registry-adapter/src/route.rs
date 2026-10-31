@@ -87,6 +87,13 @@ fn check_steps(steps: &[Step], in_clause: bool) -> Result<(), String> {
     for step in steps {
         match step {
             Step::To(to) => check_to(to)?,
+            // The poll is a job-only read step (section 17.2): the facade
+            // never serves it, so a bound route carrying one is left
+            // unserved by name. The job compiler holds the same line in
+            // reverse, refusing a facade-only step a source route names.
+            Step::PollEnrich(_) => {
+                return Err("a pollEnrich step is served in a job source route only".to_owned())
+            }
             Step::SetBody(expression) => check_expression("setBody", expression)?,
             Step::Transform(expression) => check_expression("transform", expression)?,
             Step::SetHeader(header) => {
@@ -717,6 +724,13 @@ impl EndpointRuntime {
                 .graphql
                 .as_ref()
                 .is_some_and(|query| query.kind == Some(GraphQlOperationKind::Query)),
+            // The read-only postgres source send repeats safely: one
+            // parameterized SELECT under a read-only transaction. The
+            // job-only file and sftp sources are never sends, so a send
+            // that reaches one is not a safe data send (the loader
+            // refuses it before any run).
+            SendComponent::Postgres => true,
+            SendComponent::File | SendComponent::Sftp => false,
         }
     }
 }
@@ -1416,6 +1430,17 @@ impl Run<'_, '_> {
             Step::IdempotentConsumer(idempotent) => {
                 Box::pin(processor::idempotent_consumer::run(self, idempotent)).await
             }
+            // A job-only read step. A route that reaches the interpreter
+            // with one was never checked: the facade loader refuses the
+            // step by name and the job compiler serves it, so the
+            // runtime holds the boundary, uncatchably, before anything
+            // reads a source.
+            Step::PollEnrich(_) => Err(RouteFailure {
+                class: ErrorClass::EgressRefused,
+                message: Some("a pollEnrich step is served in a job source route only".to_owned()),
+                data: None,
+                auth: None,
+            }),
             // Configuration the runner collected before the first step;
             // in the body it runs nothing.
             Step::ErrorHandler(_) | Step::OnException(_) => Ok(Flow::Continue),
@@ -1525,6 +1550,32 @@ impl Run<'_, '_> {
     async fn send(&mut self, to: &ToStep) -> Result<Flow, RouteFailure> {
         if to.uri.component == SendComponent::Direct {
             return self.direct(to).await;
+        }
+        // The job-only sources are never send destinations: a file or
+        // sftp endpoint is read through the pollEnrich step, and the
+        // postgres source is a job send served by the job compiler's
+        // own component state. The runtime holds the line before any
+        // endpoint lookup, uncatchably, the way the origin pin does.
+        match to.uri.component {
+            SendComponent::File | SendComponent::Sftp => {
+                return Err(RouteFailure {
+                    class: ErrorClass::EgressRefused,
+                    message: Some("a job source endpoint is read through the pollEnrich step only, never sent to".to_owned()),
+                    data: None,
+                    auth: None,
+                });
+            }
+            SendComponent::Postgres => {
+                return Err(RouteFailure {
+                    class: ErrorClass::EgressRefused,
+                    message: Some(
+                        "a postgres source send is served in a job source route only".to_owned(),
+                    ),
+                    data: None,
+                    auth: None,
+                });
+            }
+            SendComponent::Direct | SendComponent::Http | SendComponent::GraphQl => {}
         }
         // A graphql send names its variables in `body`, so its parameters
         // are optional; every other send carries them.
