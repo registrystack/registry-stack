@@ -74,6 +74,7 @@ pub(crate) const JOB_PAGE_DECODE_FAULTS_EVENT: &str = "jobPageDecodeFaults";
 pub const JOB_ENGINE_CODES: &[&str] = &[
     "adapter.job.component-unavailable",
     "adapter.job.decoder-row",
+    "adapter.job.direct-unknown",
     "adapter.job.postgres-query-refused",
     "adapter.job.read-bound",
 ];
@@ -409,11 +410,16 @@ pub fn compile_job(
         )]));
     };
     let steps = Arc::new(source.steps.clone());
-    check_job_route_graph(&steps, &authored.routes).map_err(|reason| {
-        runtime_error(&format!(
-            "the source route names a step this engine does not serve: {reason}"
-        ))
-    })?;
+    let route_index = pack
+        .source_routes
+        .iter()
+        .position(|route| route.id.as_str() == job.source.route)
+        .unwrap_or_default();
+    let reached_bodies = check_job_route_graph(
+        &steps,
+        &authored.routes,
+        &format!("/sourceRoutes/{route_index}/steps"),
+    )?;
 
     let mut scripts = authored.scripts;
     compile_source_scripts(&pack, &pack_directory, &steps, &mut scripts).map_err(|error| {
@@ -421,7 +427,15 @@ pub fn compile_job(
     })?;
     ensure_sends_resolve(&endpoints, &steps, &authored.routes)?;
 
-    let resilience = ResilienceRuntime::compile(&steps);
+    // The resilience state covers the source steps and every internal
+    // route body a direct send can reach: the processors key their
+    // breaker and throttle nodes by the step's address in these very
+    // lists, so a body the compile never absorbed would fail its first
+    // lookup at page run.
+    let mut resilience = ResilienceRuntime::compile(&steps);
+    for body in &reached_bodies {
+        resilience.absorb(body);
+    }
     Ok(JobProgram {
         job,
         steps,
@@ -543,37 +557,60 @@ fn unavailable(declared: &registry_adapter_core::Endpoint, reason: &str) -> JobE
 
 /// Hold the served-shape walk over the source route and every route its
 /// `direct:` sends can reach: the job compiler serves the pollEnrich
-/// read step where the facade never does, and a poll hidden behind a
+/// read step where the facade never does, so a poll hidden behind a
 /// direct hop is held to the same shape as one on the source route
-/// itself. The direct graph is acyclic and every target resolves (the
-/// table check refused the rest), so the visited set is a guard, not
-/// the bound.
-fn check_job_route_graph(steps: &[Step], routes: &RouteTable) -> Result<(), String> {
-    let mut bodies: Vec<&[Step]> = vec![steps];
+/// itself; a direct target the pack declares no body for refuses under
+/// `adapter.job.direct-unknown` (the route table check a facade load
+/// runs covers its bound routes' bodies, and a job's source entry steps
+/// reach it through no binding); and the walk returns the bodies it
+/// reached, so the resilience state can absorb them. The direct graph is
+/// acyclic and every resolved target names a body, so the visited set is
+/// a guard, not the bound.
+fn check_job_route_graph(
+    steps: &[Step],
+    routes: &RouteTable,
+    pointer_base: &str,
+) -> Result<Vec<Arc<Vec<Step>>>, JobError> {
+    let mut bodies: Vec<Arc<Vec<Step>>> = Vec::new();
     let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    let mut queue: Vec<&str> = direct_targets(steps);
-    while let Some(name) = queue.pop() {
+    let mut queue: Vec<(&str, String)> = direct_targets(steps, pointer_base);
+    while let Some((name, pointer)) = queue.pop() {
         if !visited.insert(name) {
             continue;
         }
-        let Some(body) = routes.get(name).map(|steps| steps.as_slice()) else {
-            // The table check refused an unresolved target already.
-            continue;
+        let Some(body) = routes.get(name) else {
+            return Err(job_error(vec![job_finding(
+                "adapter.job.direct-unknown",
+                ADAPTER_PACK_KIND,
+                &pointer,
+                "the source route sends to a direct route the pack declares no body for",
+                "Declare the direct route in the pack's routes, or send to a declared route id.",
+            )]));
         };
-        queue.extend(direct_targets(body));
-        bodies.push(body);
+        // A body inside the table is a pack route or an instantiated
+        // template, so its own direct targets carry the route's pointer.
+        let body_base = format!("{pointer_base}/direct:{name}");
+        queue.extend(direct_targets(body, &body_base));
+        bodies.push(Arc::clone(body));
     }
-    for body in bodies {
-        check_job_servable(body)?;
+    let unserved = |reason: String| {
+        runtime_error(&format!(
+            "the source route names a step this engine does not serve: {reason}"
+        ))
+    };
+    check_job_servable(steps).map_err(unserved)?;
+    for body in &bodies {
+        check_job_servable(body).map_err(unserved)?;
     }
-    Ok(())
+    Ok(bodies)
 }
 
 /// The `direct:` route ids one body sends to, through `to:` and
-/// `enrich:` steps.
-fn direct_targets(steps: &[Step]) -> Vec<&str> {
+/// `enrich:` steps, each with the step's pointer under `base` for a
+/// value-free refusal path.
+fn direct_targets<'a>(steps: &'a [Step], base: &str) -> Vec<(&'a str, String)> {
     let mut targets = Vec::new();
-    registry_adapter_core::walk_steps(steps, &mut |step, _pointer| {
+    registry_adapter_core::walk_steps(steps, &mut |step, pointer| {
         for uri in [
             match step {
                 Step::To(sent) => Some(&sent.uri),
@@ -588,7 +625,7 @@ fn direct_targets(steps: &[Step]) -> Vec<&str> {
         .flatten()
         {
             if uri.component == registry_adapter_core::SendComponent::Direct {
-                targets.push(uri.id.as_str());
+                targets.push((uri.id.as_str(), format!("{base}{pointer}")));
             }
         }
     });

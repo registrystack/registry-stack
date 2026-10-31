@@ -584,10 +584,20 @@ capabilities: {{}}
 /// route the job runs: profile and project beside it, the job, and the
 /// operator runtime config.
 fn write_pack_fixture(pack_text: &str, route: &str) -> Fixture {
+    write_pack_fixture_with_runtime(pack_text, route, &runtime_yaml_without_bindings())
+}
+
+/// The same fixture with a caller-supplied runtime config text, for the
+/// jobs whose pack carries a bound endpoint.
+fn write_pack_fixture_with_runtime(pack_text: &str, route: &str, runtime_text: &str) -> Fixture {
     let double = upstream::UpstreamDouble::start();
     let directory = tempfile::tempdir().expect("a scratch workspace");
     let root = directory.path().to_path_buf();
     std::fs::create_dir_all(root.join("queries")).expect("the queries directory");
+    std::fs::create_dir_all(root.join("scripts")).expect("the scripts directory");
+    // A pack that pins scripts/page.rhai reads this exact file; a pack
+    // that inventories no scripts leaves it unread beside the pack.
+    std::fs::write(root.join("scripts/page.rhai"), PAGE_SCRIPT).expect("the page script");
     std::fs::write(root.join("pack.yaml"), pack_text).expect("the pack");
     std::fs::write(root.join("profile.yaml"), PROFILE_YAML).expect("the profile");
     let profile_digest = sha256_uri(PROFILE_YAML.as_bytes());
@@ -600,7 +610,7 @@ fn write_pack_fixture(pack_text: &str, route: &str) -> Fixture {
     let job = root.join("job.yaml");
     std::fs::write(&job, job_yaml(&pack_digest, route, 60_000)).expect("the job");
     let runtime = root.join("runtime.yaml");
-    std::fs::write(&runtime, runtime_yaml_without_bindings()).expect("the runtime config");
+    std::fs::write(&runtime, runtime_text).expect("the runtime config");
     Fixture {
         _directory: directory,
         pack: root.join("pack.yaml"),
@@ -644,5 +654,128 @@ fn the_default_build_refuses_a_postgres_job() {
             && diagnostic.path == "/endpoints/ledger"),
         "the refusal names the postgres endpoint: {:?}",
         error.diagnostics
+    );
+}
+
+/// A source route that sends to a `direct:` route the pack declares no
+/// body for refuses at compile under `adapter.job.direct-unknown`, with
+/// the sending step's pointer, instead of failing the first page run.
+#[test]
+fn compile_refuses_a_source_route_to_an_undeclared_direct_route() {
+    let pack = r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: []
+endpoints:
+  - id: submissions
+    component: http
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 65536
+sourceRoutes:
+  - id: submissions-page
+    scan: finite
+    nextRecovery: exact-replay
+    edits: ordered
+    steps:
+      - to:
+          uri: direct:nowhere
+capabilities: {}
+"#;
+    let fixture = write_pack_fixture_with_runtime(pack, "submissions-page", "");
+    let runtime = runtime_yaml(&fixture.double.url("/"));
+    std::fs::write(&fixture.runtime, runtime).expect("the runtime config");
+    let error = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
+        .expect_err("an undeclared direct route refuses");
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "adapter.job.direct-unknown"
+                && diagnostic.path == "/sourceRoutes/0/steps/0"),
+        "the refusal names the sending step: {:?}",
+        error.diagnostics
+    );
+}
+
+/// The job's resilience state covers every internal route the source
+/// route reaches: a throttle behind a `direct:` send paces the page
+/// runs, so the first run passes and the second rejects inside the
+/// throttle's period instead of failing on a pacer the compile never
+/// built.
+#[tokio::test]
+async fn a_page_run_keeps_the_reached_internal_routes_pacer() {
+    let pack = format!(
+        r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions: []
+endpoints:
+  - id: submissions
+    component: http
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 65536
+routes:
+  - id: paced
+    from:
+      uri: direct:paced
+    steps:
+      - throttle:
+          limit:
+            constant: 1
+          timePeriodMilliseconds: 3600000
+          rejectExecution: true
+          steps:
+            - to:
+                uri: http:submissions
+                parameters:
+                  httpMethod: GET
+                  path: /v1/submissions
+sourceRoutes:
+  - id: submissions-page
+    scan: finite
+    nextRecovery: exact-replay
+    edits: ordered
+    steps:
+      - to:
+          uri: direct:paced
+      - setProperty:
+          name: jobNext
+          value:
+            jsonpath: $.nextCursor
+      - setBody:
+          rhai:
+            file: scripts/page.rhai
+            entrypoint: page
+scripts:
+  - path: scripts/page.rhai
+    digest: {digest}
+capabilities: {{}}
+"#,
+        digest = sha256_uri(PAGE_SCRIPT.as_bytes())
+    );
+    let fixture = write_pack_fixture_with_runtime(&pack, "submissions-page", "");
+    let runtime = runtime_yaml(&fixture.double.url("/"));
+    std::fs::write(&fixture.runtime, runtime).expect("the runtime config");
+    let program = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
+        .expect("the throttled job compiles");
+    let page = upstream::Response::json(200, &reply_page().to_string());
+    fixture.double.respond_with(vec![page.clone()]);
+    run_job_page(&program, None)
+        .await
+        .expect("the first page run passes the throttle");
+    fixture.double.respond_with(vec![page]);
+    let failure = run_job_page(&program, None)
+        .await
+        .expect_err("the second page run inside the throttle period rejects");
+    assert_eq!(
+        failure.class.map(|class| class.class().to_owned()),
+        Some("throttle.rejected".to_owned()),
+        "the reached internal route's pacer rejected the second run"
     );
 }
