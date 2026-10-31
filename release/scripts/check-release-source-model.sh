@@ -73,6 +73,8 @@ require_path "registry-breg client crate" "${stack_root}/crates/registry-breg-cl
 require_path "registry-breg Node client binding" "${stack_root}/crates/registry-breg-client-node"
 require_path "registry-breg Python client binding" "${stack_root}/crates/registry-breg-client-py"
 require_path "registry-breg-mcp gateway crate" "${stack_root}/crates/registry-breg-mcp"
+require_path "registry-mcp shared edge crate" "${stack_root}/crates/registry-mcp-edge"
+require_path "registry-mcp source-build-only service crate" "${stack_root}/crates/registry-mcp"
 require_path "registry-breg-review page crate" "${stack_root}/crates/registry-breg-review"
 require_path "registry-casework core crate" "${stack_root}/crates/registry-casework-core"
 require_path "registry-casework BReg source adapter crate" "${stack_root}/crates/registry-casework-breg"

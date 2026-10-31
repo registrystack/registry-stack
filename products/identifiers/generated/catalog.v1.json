@@ -707,7 +707,7 @@
       "description": "Choose cover assignments that do not return to an earlier person during a shared period.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "absence.cover-cycle",
@@ -726,7 +726,7 @@
       "description": "Set until later than from.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "absence.invalid-period",
@@ -745,7 +745,7 @@
       "description": "Adjust the period so this person has no overlapping absence.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "absence.overlap",
@@ -764,7 +764,7 @@
       "description": "Choose a different staff member as cover.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "absence.self-cover",
@@ -783,7 +783,7 @@
       "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "authentication.refused",
@@ -802,7 +802,7 @@
       "description": "Create a new recompute preview and review it before applying.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "clock.recompute-preview-expired",
@@ -821,7 +821,7 @@
       "description": "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "cursor.expired",
@@ -840,7 +840,7 @@
       "description": "The cursor is invalid for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "cursor.invalid",
@@ -859,7 +859,7 @@
       "description": "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -878,7 +878,7 @@
       "description": "This idempotency key was used for a different request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -897,7 +897,7 @@
       "description": "Your current Casework authority does not allow this operation.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -916,7 +916,7 @@
       "description": "The item or directory changed since you loaded it. Reload and try again.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "precondition.failed",
@@ -935,7 +935,7 @@
       "description": "This mutation requires the revision that you loaded.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "precondition.required",
@@ -954,7 +954,7 @@
       "description": "The selected Casework profile does not authorize this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "profile.not-authorized",
@@ -973,7 +973,7 @@
       "description": "This action is reserved for a human session.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "profile.not-human",
@@ -992,7 +992,7 @@
       "description": "The request body exceeds the one MiB limit.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -1011,7 +1011,7 @@
       "description": "The Casework request is invalid.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "request.invalid",
@@ -1030,7 +1030,7 @@
       "description": "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "request.limit-out-of-range",
@@ -1049,7 +1049,7 @@
       "description": "This route does not accept that HTTP method.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -1068,7 +1068,7 @@
       "description": "The requested Casework route does not exist.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "request.not-found",
@@ -1087,7 +1087,7 @@
       "description": "The request body does not match the Casework contract.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -1106,7 +1106,7 @@
       "description": "Send a JSON request body with Content-Type application/json.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -1125,7 +1125,7 @@
       "description": "Each approval in this stage must be supplied by a different reviewer.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.distinct-approver-required",
@@ -1144,7 +1144,7 @@
       "description": "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.initiator-excluded",
@@ -1163,7 +1163,7 @@
       "description": "This review policy excludes the person who submitted the request, so the request must name its initiator.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.initiator-required",
@@ -1182,7 +1182,7 @@
       "description": "The expected review policy binding does not match the active policy.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.policy-mismatch",
@@ -1201,7 +1201,7 @@
       "description": "Narrow the queue or exact subject query to complete it within the configured read budget.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.query-too-broad",
@@ -1220,7 +1220,7 @@
       "description": "The retained review result is no longer available. Reconcile through the producer's retained source correlation.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.result-expired",
@@ -1239,7 +1239,7 @@
       "description": "The same producer, source subject, version, and policy were already submitted with different canonical content.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.submission-conflict",
@@ -1258,7 +1258,7 @@
       "description": "Claim the review task before deciding it, and decide only while the claim remains current.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "review.task-not-held",
@@ -1277,7 +1277,7 @@
       "description": "Casework could not complete the request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "runtime.failure",
@@ -1296,7 +1296,7 @@
       "description": "Casework storage is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "service.unavailable",
@@ -1315,7 +1315,7 @@
       "description": "Omit the Registry-Source-Profile header for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "source-profile.not-applicable",
@@ -1334,7 +1334,7 @@
       "description": "Send the Registry-Source-Profile header to select the source profile for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "source-profile.required",
@@ -1353,7 +1353,7 @@
       "description": "The source returned a response that does not match its registered contract.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "source.bad-gateway",
@@ -1372,7 +1372,7 @@
       "description": "Deploy the same Registry Stack version for Casework and its source.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "source.version-mismatch",
@@ -1391,7 +1391,7 @@
       "description": "The source did not report its engine version. Deploy matching Registry Stack versions.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "75ab90463f5a52c121fd0a2afea9fc831d6c3273f3164ac95572c378d535ddba"
+        "sha256": "8b2aaba85085213b11c8cf01338197b0f78c6a1c1c32a328bcfb9b105b4bd98a"
       },
       "problem": {
         "code": "source.version-unavailable",
@@ -4686,11 +4686,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "0e260ef7b277b4fbc67ee96a4d24f897c5ca05df5ff85a743792d7173ca677e5"
+        "sha256": "0ee141c5dc879b2c3437985df4e55f9eb129fb1c5afbce36174f602b95acadcd"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "6c882b720eddc7f0b3bcdb8d6229fd36bbad82c7f96586c8db99370751af9be0",
+        "sha256": "e7bf3ebd0d8705938c1cb2bf38b3bc8aa5883eac35479abfeb15fc352f681e1f",
         "mediaType": "application/schema+json"
       }
     },
@@ -5357,6 +5357,24 @@
       "artifact": {
         "path": "crates/registry-cli-api/schema/connections.schema.json",
         "sha256": "5ea2b8f0276de7b574efc392e72672179ce8e1ccea923dc62f10cbb115274099",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/mcp-runtime/mcp-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Registry Stack configurable MCP gateway runtime configuration",
+      "description": "Configurable Registry Stack MCP gateway runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-mcp/src/schema.rs",
+        "sha256": "2cfea729296c16b07d3d50af34f24cd3d765bdba4841acfb74f43e692897a888"
+      },
+      "artifact": {
+        "path": "products/platform/generated/mcp-runtime/mcp-runtime.schema.json",
+        "sha256": "bdcd0f52ce8d9cfd012096fc1fb72e4d4319a4e76a4097e4bc529f54632de155",
         "mediaType": "application/schema+json"
       }
     },
