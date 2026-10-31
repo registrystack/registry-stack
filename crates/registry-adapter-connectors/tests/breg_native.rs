@@ -17,10 +17,10 @@ use registry_adapter_connectors::operation::{
     CommandKey, ConnectorFault, Observable, Operation, OutcomeCategory,
 };
 use registry_breg_client::StaticToken;
+use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use registry_platform_testing::{
     fixtures, TestActorKind, TestAuthorizationServer, TestAuthorizationServerBuilder, TestClient,
 };
-use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 const PROFILE: &str = "writer";
@@ -47,7 +47,10 @@ async fn issuer() -> TestAuthorizationServer {
     builder.start().await
 }
 
-async fn connector(service: &breg_service::Breg, issuer: &TestAuthorizationServer) -> Arc<BregConnector> {
+async fn connector(
+    service: &breg_service::Breg,
+    issuer: &TestAuthorizationServer,
+) -> Arc<BregConnector> {
     let token = issuer.issue_access_token(
         "application-reader",
         SUBJECT,
@@ -73,12 +76,7 @@ async fn connector(service: &breg_service::Breg, issuer: &TestAuthorizationServe
 }
 
 /// One created item through the connector, returning its identifier.
-fn create_item(
-    connector: &Arc<BregConnector>,
-    step: &str,
-    owner: &str,
-    label: &str,
-) -> String {
+fn create_item(connector: &Arc<BregConnector>, step: &str, owner: &str, label: &str) -> String {
     let prepared = connector
         .record_create()
         .prepare(
@@ -86,8 +84,15 @@ fn create_item(
             key(&format!("create-{step}")),
         )
         .expect("create prepares");
-    let outcome = connector.record_create().send(&prepared).expect("create sends");
-    assert_eq!(outcome.category, OutcomeCategory::Completed, "create: {outcome:?}");
+    let outcome = connector
+        .record_create()
+        .send(&prepared)
+        .expect("create sends");
+    assert_eq!(
+        outcome.category,
+        OutcomeCategory::Completed,
+        "create: {outcome:?}"
+    );
     outcome.correlation.expect("the created record id")
 }
 
@@ -112,8 +117,7 @@ fn observe_item(connector: &Arc<BregConnector>, record_identifier: &str) -> Obse
             .expect("a read carries the strong etag")
             .as_str()
             .to_owned(),
-        domain: serde_json::to_value(&read.value.data.domain_data)
-            .expect("domain data serializes"),
+        domain: serde_json::to_value(&read.value.data.domain_data).expect("domain data serializes"),
     }
 }
 
@@ -141,7 +145,10 @@ async fn direct_create_and_patch_honor_preconditions() {
             key("patch"),
         )
         .expect("patch prepares");
-    let outcome = connector.record_patch().send(&prepared).expect("patch sends");
+    let outcome = connector
+        .record_patch()
+        .send(&prepared)
+        .expect("patch sends");
     assert_eq!(outcome.category, OutcomeCategory::Completed);
 
     // Observation reads the effect back.
@@ -170,13 +177,18 @@ async fn direct_create_and_patch_honor_preconditions() {
         .send(&prepared)
         .expect("refusal is an outcome");
     assert_eq!(outcome.category, OutcomeCategory::Refused);
-    assert_eq!(outcome.native_problem.as_deref(), Some("precondition.failed"));
+    assert_eq!(
+        outcome.native_problem.as_deref(),
+        Some("precondition.failed")
+    );
 
     // Read family: list and revisions against the live deployment.
     let page = connector
         .reads()
         .list_page(
-            &registry_breg_client::BRegListRequest::default().top(10).expect("page"),
+            &registry_breg_client::BRegListRequest::default()
+                .top(10)
+                .expect("page"),
             10,
         )
         .expect("list answers");
@@ -204,7 +216,10 @@ async fn immediate_action_invokes_once_and_recovery_proves_no_duplicate() {
             key("invoke"),
         )
         .expect("invoke prepares");
-    let first = connector.action_invoke().send(&prepared).expect("invoke sends");
+    let first = connector
+        .action_invoke()
+        .send(&prepared)
+        .expect("invoke sends");
     assert_eq!(first.category, OutcomeCategory::Completed);
     let correlation = first.correlation.expect("application correlation");
 
@@ -344,11 +359,7 @@ async fn proposal_start_submit_and_observe_through_the_connector() {
     assert_eq!(state.state, "submitted");
     // The manual-application proposal holds the submission for a reviewer;
     // the application progress, where already derived, is a review wait.
-    if let Some((_, application)) = state
-        .details
-        .iter()
-        .find(|(name, _)| name == "application")
-    {
+    if let Some((_, application)) = state.details.iter().find(|(name, _)| name == "application") {
         assert!(
             application == "awaiting-review" || application == "pending",
             "unexpected application progress {application}"
@@ -373,11 +384,18 @@ async fn proposal_start_submit_and_observe_through_the_connector() {
         .send(&settled)
         .expect("settled submit answers");
     assert_eq!(settled.category, OutcomeCategory::Completed);
-    assert!(settled.note.is_some_and(|note| note.contains("already holds")));
+    assert!(settled
+        .note
+        .is_some_and(|note| note.contains("already holds")));
 
     // The spent key under different request bytes is a typed conflict: a
     // second proposal submitted under the first's spent key never runs.
-    let record_two = create_item(&proposal_connector, "second-target", SUBJECT, "Second target");
+    let record_two = create_item(
+        &proposal_connector,
+        "second-target",
+        SUBJECT,
+        "Second target",
+    );
     let started_two = proposal_connector
         .proposal_start()
         .prepare(
@@ -447,7 +465,12 @@ async fn automatic_proposal_recovery_reads_the_observed_state() {
             .expect("the proposal connector resolves"),
         )
     };
-    let record = create_item(&proposal_connector, "recovery-target", SUBJECT, "Recovery target");
+    let record = create_item(
+        &proposal_connector,
+        "recovery-target",
+        SUBJECT,
+        "Recovery target",
+    );
     let started = proposal_connector
         .proposal_start()
         .prepare(
@@ -529,7 +552,10 @@ async fn batch_commits_create_and_patch_atomically() {
             key("batch"),
         )
         .expect("batch prepares");
-    let outcome = connector.batch_records().send(&prepared).expect("batch sends");
+    let outcome = connector
+        .batch_records()
+        .send(&prepared)
+        .expect("batch sends");
     assert_eq!(outcome.category, OutcomeCategory::Completed);
     let snapshot = outcome.correlation.expect("snapshot correlation");
     // Observation reads the receipt's snapshot back.

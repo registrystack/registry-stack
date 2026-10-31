@@ -19,9 +19,7 @@ use serde_json::{json, Value};
 
 fn binary(variable: &str) -> PathBuf {
     let path = PathBuf::from(std::env::var_os(variable).unwrap_or_else(|| {
-        panic!(
-            "{variable} is required; run products/adapter/scripts/test-connector-native.py"
-        )
+        panic!("{variable} is required; run products/adapter/scripts/test-connector-native.py")
     }));
     assert!(
         path.is_file(),
@@ -116,8 +114,9 @@ impl Breg {
                 .unwrap();
             let mut url = url::Url::parse(&service.admin_url).unwrap();
             url.set_path(&format!("/{database}"));
-            let (owner, connection) =
-                tokio_postgres::connect(url.as_str(), tokio_postgres::NoTls).await.unwrap();
+            let (owner, connection) = tokio_postgres::connect(url.as_str(), tokio_postgres::NoTls)
+                .await
+                .unwrap();
             let database_connection = tokio::spawn(connection);
             owner.batch_execute(&format!(
                 "REVOKE ALL ON DATABASE {database} FROM PUBLIC; GRANT CONNECT, TEMPORARY ON DATABASE {database} TO {}; GRANT CONNECT ON DATABASE {database} TO {}",

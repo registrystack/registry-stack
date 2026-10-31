@@ -10,8 +10,7 @@ mod support;
 
 use axum::http::StatusCode;
 use registry_adapter_connectors::operation::{
-    CommandKey, NativeState, Observable, Operation, OutcomeCategory,
-    PreparedAttempt,
+    CommandKey, NativeState, Observable, Operation, OutcomeCategory, PreparedAttempt,
 };
 use registry_breg_client::BRegProblemCode;
 use serde_json::{json, Value};

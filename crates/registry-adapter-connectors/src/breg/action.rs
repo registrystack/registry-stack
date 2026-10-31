@@ -160,12 +160,9 @@ pub(crate) fn prepare_invocation(
     let evidence = if guarded {
         None
     } else {
-        let request = BRegActionInvocationRequest::new(
-            connector.action_binding(),
-            inputs.clone(),
-            None,
-        )
-        .map_err(|_| ConnectorFault::InvalidInput)?;
+        let request =
+            BRegActionInvocationRequest::new(connector.action_binding(), inputs.clone(), None)
+                .map_err(|_| ConnectorFault::InvalidInput)?;
         Some(
             connector
                 .client()
@@ -196,12 +193,7 @@ fn condition_inputs(
         .action_binding()
         .required_condition_keys()
         .iter()
-        .map(|name| {
-            inputs
-                .get(name)
-                .cloned()
-                .map(|value| (name.clone(), value))
-        })
+        .map(|name| inputs.get(name).cloned().map(|value| (name.clone(), value)))
         .collect::<Option<Map<String, Value>>>()
         .ok_or(ConnectorFault::InvalidInput)
 }
@@ -218,10 +210,11 @@ fn acquire_conditions(
     )
     .map_err(|_| ConnectorFault::InvalidInput)?;
     connector
-        .block(connector.client().action_target_conditions(
-            connector.action_binding(),
-            &request,
-        ))
+        .block(
+            connector
+                .client()
+                .action_target_conditions(connector.action_binding(), &request),
+        )
         .map(|read| read.value)
         .map_err(|error| fault(&error))
 }
@@ -240,8 +233,7 @@ pub(crate) fn invocation_request(
     {
         return Err(ConnectorFault::BindingChanged);
     }
-    let key =
-        BRegIdempotencyKey::parse(&envelope.key).map_err(|_| ConnectorFault::NotPrepared)?;
+    let key = BRegIdempotencyKey::parse(&envelope.key).map_err(|_| ConnectorFault::NotPrepared)?;
     let Some(evidence) = &envelope.evidence else {
         let conditions = acquire_conditions(connector, &envelope.inputs)?;
         return BRegActionInvocationRequest::new(
