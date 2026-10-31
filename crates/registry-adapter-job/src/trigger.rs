@@ -79,7 +79,9 @@ impl Edits {
                 let delay_seconds = declared.rescan_delay_seconds.ok_or_else(|| {
                     "the source route declares edits: rescan with no rescanDelaySeconds".to_string()
                 })?;
-                Ok(Self::Rescan { delay_seconds })
+                Ok(Self::Rescan {
+                    delay_seconds: delay_seconds.get(),
+                })
             }
             other => Err(format!(
                 "the source route declares edits {other:?}, which is neither ordered nor rescan; the job checks refuse it at compile"

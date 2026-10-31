@@ -1407,7 +1407,8 @@
         "rescanDelaySeconds": {
           "description": "The seconds between a `rescan` source route's ordinary passes from\nthe first page, from\n[`MINIMUM_SOURCE_RESCAN_DELAY_SECONDS`] to\n[`MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS`] (one minute to one day).\nMandatory beside `edits: rescan`, refused beside `edits: ordered`,\nand range-checked; the checks police all three under\n`adapter.job.source-rescan-delay`.",
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 86400,
+          "minimum": 60,
           "type": "integer"
         },
         "scan": {

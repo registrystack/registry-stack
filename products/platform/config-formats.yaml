@@ -4047,7 +4047,7 @@ formats:
       driftCheck: products/adapter/scripts/check-contracts.sh
     reader:
       crate: registry-adapter
-      file: crates/registry-adapter/src/job.rs
+      file: crates/registry-adapter/src/engine/job.rs
       function: compile_job
       type: AdapterJob
     check: adapterctl job check {work}/packs/kobotoolbox/pack.yaml products/adapter/examples/kobotoolbox-job/job.yaml --runtime products/adapter/examples/kobotoolbox-job/runtime.example.yaml --profile products/adapter/examples/kobotoolbox-job/profile.yaml --project products/adapter/examples/kobotoolbox-job/project.yaml
@@ -4167,7 +4167,7 @@ formats:
       apiVersion: id.registrystack.org/formats/adapter/effective-contract/v1alpha1
       kind: AdapterEffectiveContract
       checkedBy:
-        file: crates/registry-adapter/src/effective_contract.rs
+        file: crates/registry-adapter/src/engine/effective_contract.rs
         symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/adapter/effective-contract/v1alpha1
@@ -4180,7 +4180,7 @@ formats:
       driftCheck: products/adapter/scripts/check-contracts.sh
     reader: none
     emittedBy:
-      file: crates/registry-adapter/src/effective_contract.rs
+      file: crates/registry-adapter/src/engine/effective_contract.rs
       symbol: to_pretty_json
     check: none
     example: products/adapter/examples/formats/effective-contract.json

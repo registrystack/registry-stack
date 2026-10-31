@@ -231,7 +231,7 @@ pub struct SourceRouteDecl {
     /// and range-checked; the checks police all three under
     /// `adapter.job.source-rescan-delay`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rescan_delay_seconds: Option<u64>,
+    pub rescan_delay_seconds: Option<registry_platform_yaml::BoundedU64<60, 86_400>>,
     /// The ordered steps, as an internal route's body.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
@@ -567,7 +567,12 @@ mod tests {
         assert_eq!(finite.scan, Some(SourceScan::Finite));
         assert_eq!(finite.next_recovery, Some(SourceRecovery::ExactReplay));
         assert_eq!(finite.edits.as_deref(), Some("rescan"));
-        assert_eq!(finite.rescan_delay_seconds, Some(3600));
+        assert_eq!(
+            finite
+                .rescan_delay_seconds
+                .map(registry_platform_yaml::BoundedU64::get),
+            Some(3600)
+        );
         let wire = serde_json::to_value(&pack).expect("serialize");
         assert_eq!(wire["sourceRoutes"][0]["scan"], "ongoing");
         assert_eq!(wire["sourceRoutes"][0]["nextRecovery"], "key-deduplicated");

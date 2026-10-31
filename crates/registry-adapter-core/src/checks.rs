@@ -1557,7 +1557,7 @@ fn edit_declaration_checks(prefix: &str, source: &SourceRouteDecl) -> Vec<Diagno
                 ("rescan", Some(delay))
                     if !(crate::pack::MINIMUM_SOURCE_RESCAN_DELAY_SECONDS
                         ..=crate::pack::MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS)
-                        .contains(&delay) =>
+                        .contains(&delay.get()) =>
                 {
                     findings.push(job_finding(
                         JobCode::SourceRescanDelay,
