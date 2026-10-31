@@ -44,5 +44,6 @@ routeTemplates:
 sourceRoutes:
   - id: kobo-submissions
     nextRecovery: key-deduplicated
+    edits: ordered
     steps: []
 capabilities: {}

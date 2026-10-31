@@ -171,6 +171,25 @@ pub enum SourceRecovery {
     KeyDeduplicated,
 }
 
+/// The closed edit-finding declarations a source route carries in its
+/// `edits` property (the governed-ingestion concept section 3, "Finding
+/// edits"): the position only moves forward, so each source declares how
+/// an edit to an already-read item becomes visible again. The values are
+/// validated by the checks rather than the reader, so a value outside the
+/// closed set refuses under `adapter.job.source-edits-unknown` and the
+/// corpus can hold the fault like every other declared-code refusal.
+pub const SOURCE_EDIT_VALUES: &[&str] = &["ordered", "rescan"];
+
+/// The shortest rescan delay, in seconds: one minute, so a misconfigured
+/// delay cannot drive an ordinary pass from the first page against the
+/// source every few seconds.
+pub const MINIMUM_SOURCE_RESCAN_DELAY_SECONDS: u64 = 60;
+
+/// The longest rescan delay, in seconds: one day, so a rescan stays an
+/// operator-visible cadence a deployment can reason about, never a
+/// background sweep no one named.
+pub const MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS: u64 = 86_400;
+
 /// One source route of the governed-ingestion mode
 /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): a route
 /// definition's steps plus the item-contract declaration. A source route
@@ -194,6 +213,25 @@ pub struct SourceRouteDecl {
     /// absence under `adapter.job.source-recovery-required`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_recovery: Option<SourceRecovery>,
+    /// How the source reports edits to items the scan has already read,
+    /// one of [`SOURCE_EDIT_VALUES`]: `ordered`, where an edit moves the
+    /// item past the read position or items never change so an ordinary
+    /// pass suffices, or `rescan`, where an edit can stay behind the
+    /// position and the declared `rescanDelaySeconds` starts an ordinary
+    /// pass from the first page. Mandatory; the checks refuse its absence
+    /// under `adapter.job.source-edits-required` and a value outside the
+    /// closed set under `adapter.job.source-edits-unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edits: Option<String>,
+    /// The seconds between a `rescan` source route's ordinary passes from
+    /// the first page, from
+    /// [`MINIMUM_SOURCE_RESCAN_DELAY_SECONDS`] to
+    /// [`MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS`] (one minute to one day).
+    /// Mandatory beside `edits: rescan`, refused beside `edits: ordered`,
+    /// and range-checked; the checks police all three under
+    /// `adapter.job.source-rescan-delay`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rescan_delay_seconds: Option<u64>,
     /// The ordered steps, as an internal route's body.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
@@ -484,6 +522,8 @@ mod tests {
                 id: LocalId::new("kobo-submissions").expect("id"),
                 scan: Some(SourceScan::Ongoing),
                 next_recovery: Some(SourceRecovery::KeyDeduplicated),
+                edits: Some("ordered".to_string()),
+                rescan_delay_seconds: None,
                 steps: Vec::new(),
             }])
             .expect("unique"),
@@ -501,8 +541,9 @@ mod tests {
     }
 
     /// A source route declares its scan and recovery semantics, spells
-    /// them in the closed kebab/lowercase sets, and refuses an unknown
-    /// member. Repeated source route ids refuse at the reader (CFG-ID-5).
+    /// them in the closed kebab/lowercase sets, declares its edit-finding
+    /// mode beside them, and refuses an unknown member. Repeated source
+    /// route ids refuse at the reader (CFG-ID-5).
     #[test]
     fn source_routes_round_trip_and_declare_their_contract() {
         let pack: AdapterPack = serde_json::from_str(
@@ -511,8 +552,8 @@ mod tests {
                 "version": "1",
                 "testedVersions": [],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated" },
-                    { "id": "exports", "scan": "finite", "nextRecovery": "exact-replay" }
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated", "edits": "ordered" },
+                    { "id": "exports", "scan": "finite", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 3600 }
                 ]
             }"#,
         )
@@ -520,12 +561,18 @@ mod tests {
         let source = pack.source_routes.get("kobo-submissions").expect("route");
         assert_eq!(source.scan, Some(SourceScan::Ongoing));
         assert_eq!(source.next_recovery, Some(SourceRecovery::KeyDeduplicated));
+        assert_eq!(source.edits.as_deref(), Some("ordered"));
+        assert_eq!(source.rescan_delay_seconds, None);
         let finite = pack.source_routes.get("exports").expect("route");
         assert_eq!(finite.scan, Some(SourceScan::Finite));
         assert_eq!(finite.next_recovery, Some(SourceRecovery::ExactReplay));
+        assert_eq!(finite.edits.as_deref(), Some("rescan"));
+        assert_eq!(finite.rescan_delay_seconds, Some(3600));
         let wire = serde_json::to_value(&pack).expect("serialize");
         assert_eq!(wire["sourceRoutes"][0]["scan"], "ongoing");
         assert_eq!(wire["sourceRoutes"][0]["nextRecovery"], "key-deduplicated");
+        assert_eq!(wire["sourceRoutes"][0]["edits"], "ordered");
+        assert_eq!(wire["sourceRoutes"][1]["rescanDelaySeconds"], 3600);
         assert!(wire["sourceRoutes"][0].get("steps").is_none());
         assert!(
             serde_json::from_str::<AdapterPack>(
@@ -555,12 +602,16 @@ mod tests {
                     id: LocalId::new("same").expect("id"),
                     scan: None,
                     next_recovery: None,
+                    edits: None,
+                    rescan_delay_seconds: None,
                     steps: Vec::new(),
                 },
                 SourceRouteDecl {
                     id: LocalId::new("same").expect("id"),
                     scan: None,
                     next_recovery: None,
+                    edits: None,
+                    rescan_delay_seconds: None,
                     steps: Vec::new(),
                 },
             ])

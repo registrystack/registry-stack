@@ -45,5 +45,6 @@ sourceRoutes:
   - id: find-cases
     scan: ongoing
     nextRecovery: exact-replay
+    edits: ordered
     steps: []
 capabilities: {}

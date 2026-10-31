@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.projection-bound: this artifact set must be refused with
+# exactly adapter.job.projection-bound. The job's single projected path is 130 characters, over the 128-character bound.
+#
+# The job definition is refused by the job compiler's check_job over the
+# pinned pack beside this file (the workspace itself stays clean):
+#   job check products/adapter/fixtures/corpus/bad/adapter.job.projection-bound/job.yaml
+#     --pack products/adapter/fixtures/corpus/bad/adapter.job.projection-bound/pack.yaml
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobo-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: sha256:f5a4e735895f4b3c51dcb84e06c2e5bfb6a86d305632a63791fbbb2a94e267df
+  route: kobo-submissions
+projection:
+  fields:
+    - household.members.nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 16777216
+  maximumPageItems: 500
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 4
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 500

@@ -16,13 +16,21 @@ source:
   pack:
     id: case-api-pack
     version: "1"
-    digest: sha256:2625b40e3bb085002784f55db24514f1e68f9ee225a0e8def91c27db8dfe2b0d
+    digest: sha256:b9dd9ed15dee9d882de39e0d4180bb5cec8fd3117f090dad24eabafa157881aa
   route: kobo-submissions
+projection:
+  fields:
+    - submission.id
+    - submission.status
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
 profile:
   pageDeadlineMilliseconds: 300000
   maximumResponseBytes: 1048576
   maximumPageItems: 500
   maximumPageBytes: 2097152
+  maximumUpstreamCalls: 4
   read:
     maximumFileBytes: 1073741824
     maximumRowBytes: 1048576

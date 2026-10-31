@@ -45,6 +45,7 @@ sourceRoutes:
   - id: kobo-submissions
     scan: ongoing
     nextRecovery: exact-replay
+    edits: ordered
     steps:
       - pollEnrich:
           uri: file:nope

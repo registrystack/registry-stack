@@ -33,6 +33,7 @@ const PACK: &str = r#"{
     ],
     "sourceRoutes": [
         { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated",
+          "edits": "ordered",
           "steps": [
             { "pollEnrich": {
                 "uri": "file:submissions",
@@ -109,11 +110,19 @@ fn job() -> AdapterJob {
             },
             "route": "kobo-submissions"
         },
+        "projection": {
+            "fields": ["answers.age"],
+            "digestOf": "projection"
+        },
+        "triggers": [
+            { "kind": "interval", "delayMilliseconds": 60000 }
+        ],
         "profile": {
             "pageDeadlineMilliseconds": 300000,
             "maximumResponseBytes": 16777216,
             "maximumPageItems": 500,
             "maximumPageBytes": 1048576,
+            "maximumUpstreamCalls": 16,
             "read": {
                 "maximumFileBytes": 1073741824,
                 "maximumRowBytes": 1048576,
@@ -174,6 +183,12 @@ fn the_governed_ingestion_journey_checks_clean_end_to_end() {
         job_findings.is_empty(),
         "the job checks clean over its pinned pack: {:?}",
         codes(&job_findings)
+    );
+    // The projection digest a pass stores beside the item rows is the
+    // stable sha256 hex of the canonical block serialization.
+    assert_eq!(
+        job.projection_digest(),
+        "4afae89030f11b1ddb56a070fea2815ce10a219727c504d42bf41b79c45de692"
     );
 
     // One produced page: a leading-zero identifier stays text, the

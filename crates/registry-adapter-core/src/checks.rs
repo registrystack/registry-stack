@@ -12,7 +12,7 @@ use crate::envelope::SlotForm;
 use crate::fixture::{AdapterFixture, Intercept};
 use crate::job::{job_finding, JobCode, MAXIMUM_POSTGRES_QUERY_PARAMETERS, POLL_DECODER_NAMES};
 use crate::model::{ComponentKind, Expression, HttpMethod, SendComponent};
-use crate::pack::{AdapterPack, GraphQlOperationKind};
+use crate::pack::{AdapterPack, GraphQlOperationKind, SourceRouteDecl};
 use crate::profile::{
     resolve_problem, AdapterProfile, EnvelopeTemplate, ProfileOperation, MAX_PROBLEM_DATA_FIELDS,
     READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE, SLOT_PROBLEM_DATA, SLOT_RECORD, SLOT_RECORDS,
@@ -1485,7 +1485,8 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
 
 /// The source-route declaration checks of the governed-ingestion mode
 /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): every source
-/// route declares its scan and its `next` recovery semantics, and no
+/// route declares its scan and its `next` recovery semantics, its
+/// edit-finding mode with a well-formed rescan delay beside it, and no
 /// source route id collides with an internal route or template id.
 fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
@@ -1517,6 +1518,7 @@ fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
                 "Declare nextRecovery as exact-replay or key-deduplicated; the item contract requires the declaration.",
             ));
         }
+        findings.extend(edit_declaration_checks(&prefix, source));
         if internal_ids.contains(source.id.as_str()) {
             findings.push(job_finding(
                 JobCode::SourceIdCollision,
@@ -1525,6 +1527,60 @@ fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
                 "Give the source route an id no internal route or template carries.",
             ));
         }
+    }
+    findings
+}
+
+/// The edit-finding declaration of one source route (the
+/// governed-ingestion concept section 3, "Finding edits"): `edits` is
+/// mandatory and spelled in the closed set beside `scan` and
+/// `nextRecovery`; a `rescan` route names its
+/// `rescanDelaySeconds`, an `ordered` route names no delay, and the
+/// delay stays inside its one-minute-to-one-day range.
+fn edit_declaration_checks(prefix: &str, source: &SourceRouteDecl) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    match source.edits.as_deref() {
+        None => findings.push(job_finding(
+            JobCode::SourceEditsRequired,
+            &format!("{prefix}/edits"),
+            "the source route declares no edit-finding mode",
+            "Declare edits as ordered or rescan; the item contract requires the declaration.",
+        )),
+        Some(edits) if crate::pack::SOURCE_EDIT_VALUES.contains(&edits) => {
+            match (edits, source.rescan_delay_seconds) {
+                ("rescan", None) => findings.push(job_finding(
+                    JobCode::SourceRescanDelay,
+                    &format!("{prefix}/rescanDelaySeconds"),
+                    "a rescan source route declares no rescan delay",
+                    "Declare rescanDelaySeconds beside edits: rescan, from 60 to 86400 seconds.",
+                )),
+                ("rescan", Some(delay))
+                    if !(crate::pack::MINIMUM_SOURCE_RESCAN_DELAY_SECONDS
+                        ..=crate::pack::MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS)
+                        .contains(&delay) =>
+                {
+                    findings.push(job_finding(
+                        JobCode::SourceRescanDelay,
+                        &format!("{prefix}/rescanDelaySeconds"),
+                        "the rescan delay lies outside its 60-to-86400-second range",
+                        "Declare the rescan delay inside its 60 to 86400 range.",
+                    ));
+                }
+                ("ordered", Some(_)) => findings.push(job_finding(
+                    JobCode::SourceRescanDelay,
+                    &format!("{prefix}/rescanDelaySeconds"),
+                    "an ordered source route declares a rescan delay",
+                    "Drop rescanDelaySeconds, or declare edits as rescan.",
+                )),
+                _ => {}
+            }
+        }
+        Some(_) => findings.push(job_finding(
+            JobCode::SourceEditsUnknown,
+            &format!("{prefix}/edits"),
+            "the source route declares an edit-finding mode outside the closed ordered-and-rescan set",
+            "Declare edits as ordered or rescan.",
+        )),
     }
     findings
 }
@@ -4526,6 +4582,38 @@ fn route_worst_case(
         main.saturating_add(clause_worst).saturating_add(resends),
         walk.depth_exceeded,
     )
+}
+
+/// The static worst-case upstream call count of one source route over
+/// the pack's own route graph: the same walk [`route_worst_case`]
+/// performs for the facade binding budget, with the `direct:`-expansion
+/// bodies drawn from the pack's internal routes and templates alone,
+/// because a job runs beside no project. A source route `direct:` target
+/// that names another source route resolves to nothing, so it counts no
+/// send. The returned flag reports the walk saturating past the reader's
+/// depth bound, where the count is uncountable and the caller must
+/// refuse rather than pass.
+pub(crate) fn source_route_worst_case(pack: &AdapterPack, steps: &[Step]) -> (u64, bool) {
+    let mut bodies: HashMap<&str, &[Step]> = HashMap::new();
+    for route in pack.routes.iter() {
+        bodies.insert(route.id.as_str(), route.steps.as_slice());
+    }
+    for template in pack.route_templates.iter() {
+        bodies.insert(template.id.as_str(), template.steps.as_slice());
+    }
+    let oauth_endpoints: HashSet<&str> = pack
+        .endpoints
+        .iter()
+        .filter(|endpoint| {
+            matches!(
+                endpoint.authentication,
+                EndpointAuthentication::Oauth2ClientCredentials { .. }
+                    | EndpointAuthentication::Oauth2PrivateKeyJwt { .. }
+            )
+        })
+        .map(|endpoint| endpoint.id.as_str())
+        .collect();
+    route_worst_case(steps, &bodies, &oauth_endpoints)
 }
 
 /// The redeliveries a body declares: the widest `maximumRedeliveries`
@@ -12916,7 +13004,9 @@ mod tests {
         );
     }
 
-    /// A source route declares its scan and recovery, and never collides
+    /// A source route declares its scan, recovery, and edit-finding
+    /// mode, spells its edits in the closed set, pairs a rescan delay
+    /// with rescan alone, keeps the delay in range, and never collides
     /// with an internal route or template id.
     #[test]
     fn source_route_declarations_check_through_the_pack_checks() {
@@ -12926,7 +13016,7 @@ mod tests {
                 "version": "1",
                 "testedVersions": [],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay" }
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "ordered" }
                 ]
             }"#,
         );
@@ -12943,9 +13033,95 @@ mod tests {
         let findings = check_pack(&undeclared);
         assert!(
             has_job_code(&findings, JobCode::SourceScanRequired)
-                && has_job_code(&findings, JobCode::SourceRecoveryRequired),
-            "both declarations refuse by name: {findings:?}"
+                && has_job_code(&findings, JobCode::SourceRecoveryRequired)
+                && has_job_code(&findings, JobCode::SourceEditsRequired),
+            "every mandatory declaration refuses by name: {findings:?}"
         );
+
+        let unknown_edits = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "sweeping" }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&unknown_edits);
+        assert!(
+            has_job_code(&findings, JobCode::SourceEditsUnknown),
+            "an edit mode outside the closed set refuses: {findings:?}"
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .find(|finding| finding.code == JobCode::SourceEditsUnknown.code())
+                .map(|finding| finding.path.as_str()),
+            Some("/sourceRoutes/0/edits"),
+            "the finding points at the edits declaration"
+        );
+
+        let rescan_without_delay = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan" }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&rescan_without_delay);
+        assert!(
+            has_job_code(&findings, JobCode::SourceRescanDelay),
+            "a rescan route without its delay refuses: {findings:?}"
+        );
+
+        let delay_out_of_bounds = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 59 }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&delay_out_of_bounds);
+        assert!(
+            has_job_code(&findings, JobCode::SourceRescanDelay),
+            "a delay below its range refuses: {findings:?}"
+        );
+
+        let delay_beside_ordered = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "ordered", "rescanDelaySeconds": 3600 }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&delay_beside_ordered);
+        assert!(
+            has_job_code(&findings, JobCode::SourceRescanDelay),
+            "a delay beside an ordered route refuses: {findings:?}"
+        );
+
+        let rescan_at_bounds = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "a", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 60 },
+                    { "id": "b", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 86400 }
+                ]
+            }"#,
+        );
+        assert_clean(check_pack(&rescan_at_bounds));
 
         let collision = job_pack(
             r#"{
@@ -12956,7 +13132,7 @@ mod tests {
                     { "id": "shared", "from": { "uri": "direct:shared" }, "steps": [] }
                 ],
                 "sourceRoutes": [
-                    { "id": "shared", "scan": "finite", "nextRecovery": "exact-replay" }
+                    { "id": "shared", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered" }
                 ]
             }"#,
         );
@@ -12991,7 +13167,7 @@ mod tests {
                       "steps": [ { "setBody": { "jsonpath": "$.items" } } ] }
                 ],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated",
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated", "edits": "ordered",
                       "steps": [
                         { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5000, "decoder": { "delimiter": ";" } } },
                         { "to": { "uri": "direct:normalize" } },
@@ -13065,7 +13241,7 @@ mod tests {
                       "steps": [ { "to": { "uri": "direct:kobo-submissions" } } ] }
                 ],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay" }
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered" }
                 ]
             }"#,
         );
@@ -13100,7 +13276,7 @@ mod tests {
                     { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] }
                 ],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay",
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
                       "steps": [
                         { "pollEnrich": { "uri": "file:nope", "timeoutMilliseconds": 5 } },
                         { "pollEnrich": { "uri": "file:dropbox", "timeoutMilliseconds": 5 } },
@@ -13159,7 +13335,7 @@ mod tests {
                     { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] }
                 ],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay",
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
                       "steps": [
                         { "to": { "uri": "postgres:ledger", "parameters": { "httpMethod": "GET", "query": { "limit": { "constant": 10 } } } } },
                         { "to": { "uri": "postgres:ledger", "parameters": { "queryParameters": { "p00": { "constant": 0 }, "p01": { "constant": 1 }, "p02": { "constant": 2 }, "p03": { "constant": 3 }, "p04": { "constant": 4 }, "p05": { "constant": 5 }, "p06": { "constant": 6 }, "p07": { "constant": 7 }, "p08": { "constant": 8 }, "p09": { "constant": 9 }, "p10": { "constant": 10 }, "p11": { "constant": 11 }, "p12": { "constant": 12 }, "p13": { "constant": 13 }, "p14": { "constant": 14 }, "p15": { "constant": 15 }, "p16": { "constant": 16 } } } } }
@@ -13203,7 +13379,7 @@ mod tests {
                       "steps": [ { "to": { "uri": "http:big" } } ] }
                 ],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay",
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
                       "steps": [
                         { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5 } }
                       ] }
@@ -13239,7 +13415,7 @@ mod tests {
                     { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] }
                 ],
                 "sourceRoutes": [
-                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay",
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
                       "steps": [ { "to": { "uri": "http:big" } } ] }
                 ]
             }"#,

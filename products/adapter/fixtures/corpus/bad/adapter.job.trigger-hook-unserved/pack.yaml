@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
+# exactly adapter.job.trigger-hook-unserved. Clean baseline pack; the job definition beside it carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+  - id: submissions
+    component: file
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+  - id: ledger
+    component: postgres
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    queryFile: queries/ledger.sql
+queryFiles:
+  - path: queries/ledger.sql
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+sourceRoutes:
+  - id: kobo-submissions
+    scan: ongoing
+    nextRecovery: key-deduplicated
+    edits: ordered
+    steps:
+      - pollEnrich:
+          uri: file:submissions
+          timeoutMilliseconds: 5000
+          decoder: csv
+      - to:
+          uri: postgres:ledger
+          parameters:
+            queryParameters:
+              since:
+                exchangeProperty: AdapterJobCursor
+capabilities: {}

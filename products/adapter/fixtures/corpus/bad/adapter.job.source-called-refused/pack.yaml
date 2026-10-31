@@ -47,5 +47,6 @@ sourceRoutes:
   - id: kobo-submissions
     scan: ongoing
     nextRecovery: key-deduplicated
+    edits: ordered
     steps: []
 capabilities: {}
