@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Synthetic HTTP and mutual-TLS upstreams for the authored experiments.
+//! Synthetic HTTP and mutual-TLS upstreams for the source-shape fixtures.
 //! Both terminate a real socket and preserve the complete request transcript.
 
 use std::collections::VecDeque;

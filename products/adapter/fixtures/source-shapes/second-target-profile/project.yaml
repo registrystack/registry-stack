@@ -1,16 +1,16 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
 #
-# Experiment project: experiment 4's jsonapi-households pack, byte for byte
+# Experiment project: the rest-offset-mtls jsonapi-households pack, byte for byte
 # (pack.yaml and scripts/ are copies, same digest), bound to the
 # FHIR-shaped experiment profile in profile.yaml beside this file. It tests
 # D17: one pack, a second target API, no pack change.
 #
-# Upstream-call budgets as in experiment 4: search 11, read 2.
+# Upstream-call budgets as in rest-offset-mtls: search 11, read 2.
 #
 # Check with:
-#   adapterctl check products/adapter/experiments/second-target-profile/project.yaml \
-#     --profile products/adapter/experiments/second-target-profile/profile.yaml \
-#     --runtime products/adapter/experiments/second-target-profile/runtime.yaml
+#   adapterctl check products/adapter/fixtures/source-shapes/second-target-profile/project.yaml \
+#     --profile products/adapter/fixtures/source-shapes/second-target-profile/profile.yaml \
+#     --runtime products/adapter/fixtures/source-shapes/second-target-profile/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:

@@ -652,7 +652,8 @@ fn the_case_api_corpus_base_compiles_with_foreign_names() {
 /// project.
 #[test]
 fn the_second_target_experiment_compiles() {
-    let experiment = repo_root().join("products/adapter/experiments/second-target-profile");
+    let experiment =
+        repo_root().join("products/adapter/fixtures/source-shapes/second-target-profile");
     let (root, project) = copied_tree(&experiment);
     let (document, _) = compile(&project, &[]);
     let _ = root;
@@ -681,7 +682,8 @@ fn the_second_target_experiment_compiles() {
 /// typed pagination members; the only HTTP parameter is the contract pin.
 #[test]
 fn the_graphql_experiment_exposes_its_closed_post_request_body() {
-    let experiment = repo_root().join("products/adapter/experiments/graphql-cursor-source");
+    let experiment =
+        repo_root().join("products/adapter/fixtures/source-shapes/graphql-cursor-source");
     let (root, project) = copied_tree(&experiment);
     // The experiment pins the shared case-api profile, which sits outside
     // its tree.

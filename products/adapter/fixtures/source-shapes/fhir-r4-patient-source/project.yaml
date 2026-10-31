@@ -8,9 +8,9 @@
 # resend after a refreshed 401 for the OAuth endpoint = 21; budget 24.
 #
 # Check with:
-#   adapterctl check products/adapter/experiments/fhir-r4-patient-source/project.yaml \
+#   adapterctl check products/adapter/fixtures/source-shapes/fhir-r4-patient-source/project.yaml \
 #     --profile products/adapter/profiles/breg-records/profile.yaml \
-#     --runtime products/adapter/experiments/fhir-r4-patient-source/runtime.yaml
+#     --runtime products/adapter/fixtures/source-shapes/fhir-r4-patient-source/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:

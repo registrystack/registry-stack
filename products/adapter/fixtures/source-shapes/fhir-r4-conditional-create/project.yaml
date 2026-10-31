@@ -8,9 +8,9 @@
 # refreshed 401 for the OAuth endpoint = 5; budget 6.
 #
 # Check with:
-#   adapterctl check products/adapter/experiments/fhir-r4-conditional-create/project.yaml \
+#   adapterctl check products/adapter/fixtures/source-shapes/fhir-r4-conditional-create/project.yaml \
 #     --profile products/adapter/profiles/breg-records/profile.yaml \
-#     --runtime products/adapter/experiments/fhir-r4-conditional-create/runtime.yaml
+#     --runtime products/adapter/fixtures/source-shapes/fhir-r4-conditional-create/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:

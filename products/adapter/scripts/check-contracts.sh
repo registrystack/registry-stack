@@ -6,11 +6,11 @@ set -euo pipefail
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"
 
-# The verification floor from products/adapter/DELIVERY-PLAN.md: format
-# over the workspace, then clippy and tests over the adapter crates. Cargo
-# runs in the caller's explicit worktree target, so an omitted target cannot
-# fill the source volume before the example generator rejects it. PATH keeps
-# cargo reachable when it is not on the caller's PATH.
+# The verification floor: format over the workspace, then clippy and tests
+# over the adapter crates. Cargo runs in the caller's explicit worktree
+# target, so an omitted target cannot fill the source volume before the
+# example generator rejects it. PATH keeps cargo reachable when it is not on
+# the caller's PATH.
 PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter -p registry-adapter-core -p registry-adapterctl --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter-core -p registry-adapterctl --locked
@@ -169,19 +169,19 @@ printf 'OpenCRVS example check passed\n'
   "${ocrvs_flags[@]}" >/dev/null
 printf 'OpenCRVS example fixture replay passed\n'
 
-# Each committed experiment holds the concrete contract its project compiles
+# Each source-shape fixture holds the concrete contract its project compiles
 # to (`generated/openapi.json` beside the project) and at least one fixture
 # that the actual runtime interpreter replays offline. `compile --check` and
-# `fixtures replay` refuse on drift or an unserved transcript, so experiments
-# cannot rot behind reader, core, document, or route-engine changes. An
-# experiment that carries no `profile.yaml` beside its project binds the
+# `fixtures replay` refuse on drift or an unserved transcript, so the source
+# shapes cannot rot behind reader, core, document, or route-engine changes. A
+# source shape that carries no `profile.yaml` beside its project binds the
 # maintained profile its project pins by id, under
 # `products/adapter/profiles/<id>/`, the same profile its documented check
 # command names; a project that pins no id, one with no maintained profile,
 # or one with no discovered fixture refuses loudly rather than being skipped.
-experiments=0
-experiment_fixtures=0
-for project in products/adapter/experiments/*/project.yaml; do
+source_shapes=0
+shape_fixtures=0
+for project in products/adapter/fixtures/source-shapes/*/project.yaml; do
   directory="${project%/*}"
   if [[ -f "${directory}/profile.yaml" ]]; then
     profile="${directory}/profile.yaml"
@@ -198,19 +198,19 @@ for project in products/adapter/experiments/*/project.yaml; do
     printf 'check-contracts: %s has no fixture under %s/fixtures/.\n' "${project}" "${directory}" >&2
     exit 2
   fi
-  experiment_fixture_flags=()
+  shape_fixture_flags=()
   for fixture in "${fixture_paths[@]}"; do
-    experiment_fixture_flags+=(--fixtures "${fixture}")
-    experiment_fixtures=$((experiment_fixtures + 1))
+    shape_fixture_flags+=(--fixtures "${fixture}")
+    shape_fixtures=$((shape_fixtures + 1))
   done
   "$adapterctl_bin" compile --check "$project" --profile "$profile" >/dev/null
   "$adapterctl_bin" fixtures replay "$project" \
     --profile "$profile" \
-    "${experiment_fixture_flags[@]}" >/dev/null
-  experiments=$((experiments + 1))
+    "${shape_fixture_flags[@]}" >/dev/null
+  source_shapes=$((source_shapes + 1))
 done
-printf 'Experiment contracts and fixture replays hold (%d experiments, %d fixtures)\n' \
-  "$experiments" "$experiment_fixtures"
+printf 'Source-shape contracts and fixture replays hold (%d source shapes, %d fixtures)\n' \
+  "$source_shapes" "$shape_fixtures"
 
 # The bad-authoring corpus: every discovered bad/ member refuses with its
 # own code (plus, transitionally, a co-fired partner code that is another

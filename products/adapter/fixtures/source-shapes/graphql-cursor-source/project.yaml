@@ -7,9 +7,9 @@
 # redelivery) = 2; a static API key has no token refresh; budget 2.
 #
 # Check with:
-#   adapterctl check products/adapter/experiments/graphql-cursor-source/project.yaml \
+#   adapterctl check products/adapter/fixtures/source-shapes/graphql-cursor-source/project.yaml \
 #     --profile products/adapter/profiles/case-api/profile.yaml \
-#     --runtime products/adapter/experiments/graphql-cursor-source/runtime.yaml
+#     --runtime products/adapter/fixtures/source-shapes/graphql-cursor-source/runtime.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 project:

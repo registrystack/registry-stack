@@ -1,10 +1,12 @@
-# Experiment 4: offset-paged REST source behind mTLS
+# Source shape: offset-paged REST source behind mTLS
 
-Status: experiment, not a maintained pack. Authored from the public JSON:API
-1.1 specification (https://jsonapi.org/format/) and RFC 7523 / RFC 8705
-only; no server was contacted. Nothing here changes Rust.
+A source-shape fixture, not a maintained pack. It holds one upstream API
+shape against the authoring check, the compiler, fixture replay, and the
+served runtime. Authored from the public JSON:API 1.1 specification
+(https://jsonapi.org/format/) and RFC 7523 / RFC 8705 only; no server was
+contacted.
 
-## What it tries to express
+## The shape
 
 `records-search` and `records-get` on the `breg-records` profile, answered
 from a JSON:API household registry:
@@ -32,15 +34,25 @@ from a JSON:API household registry:
   as the paging state (`pageOffset`, `upstreamTotal`, `households`) is
   expressible, and the budget counts the send behind the `direct:` hop:
   10 iterations x 1 send + 1 refreshed-401 resend = 11. Budget 10 is
-  refused (probe `e4-budget10`); the read's 2 is exact (probe
-  `e4-budget-get1`).
-- `doCatch` naming a class outside the closed hierarchy is refused (probe
-  `e4-docatch-bogus`); a relative path as a trust profile's `caBundleFile`
-  is refused (probe `e4-plain-ca`).
+  refused; the read's 2 is exact.
+- `doCatch` naming a class outside the closed hierarchy is refused; a
+  relative path as a trust profile's `caBundleFile` is refused.
 - The runtime config can express mTLS plus private-key JWT on the upstream
   endpoint.
+- `adapterctl compile --check` holds the committed `generated/openapi.json`,
+  and `adapterctl fixtures replay` replays `fixtures/search-first-page.yaml`
+  (the synthetic token exchange and the exact JSON:API request);
+  `products/adapter/scripts/check-contracts.sh` runs both.
+- `crates/registry-adapter/tests/experiments_served.rs` (feature
+  `postgres-test`, run by `products/adapter/scripts/test-postgres.sh`)
+  serves the shape through the real Adapter binary against a mutual-TLS
+  socket upstream.
 
-## What it could not express (gaps)
+## Recorded gaps
+
+These were recorded against the authoring model when the shape was written;
+the pack's comments, scripts, and runtime config point here. `CONCEPT.md`
+holds the current contract for each construct.
 
 1. **Ending the exchange with a problem from a plain step.** CONCEPT section
    7 validates every final route body against the success schema, and
@@ -50,8 +62,8 @@ from a JSON:API household registry:
    `throwException` (https://camel.apache.org/components/next/eips/throwException-eip.html)
    is not ported, so the pack raises `validation` on purpose
    (`scripts/is-present.rhai`) for a handled `validation` clause to catch.
-   The first draft (kept as probe `e4-fallback-problem`) built the problem
-   bodies in `onFallback` and in a `choice` branch, and `check` passed it.
+   Building the problem bodies in `onFallback` or in a `choice` branch
+   instead passes `check`.
 2. **Breaker failure classification.** resilience4j's `recordExceptions` and
    `ignoreExceptions` (https://camel.apache.org/components/next/eips/resilience4jConfiguration-eip.html,
    https://resilience4j.readme.io/docs/circuitbreaker) are not in 8.7, so
@@ -64,9 +76,9 @@ from a JSON:API household registry:
    plain route `fetch-household-page`; the clauses that map its
    `breaker.open`, `upstream.*`, and `validation` live on the calling
    template. No document says whether an error raised in a `direct:`
-   target is handled by the caller's clauses. I believe Camel hands it back
-   to the caller, whose route-scoped `onException` then applies, but the
-   exception-clause page (https://camel.apache.org/manual/exception-clause.html)
+   target is handled by the caller's clauses. Camel most likely hands it
+   back to the caller, whose route-scoped `onException` then applies, but
+   the exception-clause page (https://camel.apache.org/manual/exception-clause.html)
    does not say so for `direct:`; unverified.
 4. **Paging state across `enrich`.** The CONCEPT's paging pattern
    (`enrich` per page with `jsonArrayAppend`) cannot carry the offset and
@@ -76,15 +88,13 @@ from a JSON:API household registry:
    and the resource exchange", not what happens to properties, so
    the pack uses `to: direct:` and repeats `jsonArrayAppend` with `uniqueBy:
    id` by hand in `scripts/append-page.rhai`. Swapping in `enrich` passes
-   `check` (probe `e4-enrich-loop`), so the check cannot tell the
-   difference either.
+   `check`, so the check cannot tell the difference either.
 5. **The total cap is unchecked against the loop bound.** `maximum_total`
-   50000 with `maximumIterations: 10` and `page_size: 100` passes (probe
-   `e4-maxtotal-over-reach`): the route then raises
-   `loop.maximum-iterations-reached` after 1000 records instead of answering.
-   `maximumIterations` cannot be a template parameter (probe
-   `e4-maxiter-template`, `config.expected-integer`), so the two bounds
-   cannot be derived from one value.
+   50000 with `maximumIterations: 10` and `page_size: 100` passes: the
+   route then raises `loop.maximum-iterations-reached` after 1000 records
+   instead of answering. `maximumIterations` cannot be a template parameter
+   (`config.expected-integer`), so the two bounds cannot be derived from
+   one value.
 6. **Template integers are strings at runtime.** A template parameter is
    placed only inside a quoted `constant`, so `page_size` and `maximum_total`
    reach the scripts as text and need `parse_int`.
@@ -93,46 +103,14 @@ from a JSON:API household registry:
    `mtlsIdentity` bind the upstream endpoint only, and nothing says whether
    the token request uses them. A token endpoint on a private CA cannot be
    reached.
-8. **Upstream response content type.** A fixture's `upstreamResponse` takes
-   only `status` and `body`; `headers` is refused (first check run:
-   `error[config.unknown-key] .../fixtures/search-first-page.yaml:35:7 /entries/0/upstreamResponse/headers`),
-   so `application/vnd.api+json` cannot be recorded or replayed, and
-   CONCEPT does not say which content types the http component parses as
-   JSON.
-9. **Facade inputs.** As in experiment 1: the region filter is a template
-   parameter, not a caller filter, and the read assumes the record id
-   arrives as the `recordId` header.
+8. **Facade inputs.** As in `fhir-r4-patient-source`: the region filter is
+   a template parameter, not a caller filter, and the read assumes the
+   record id arrives as the `recordId` header.
 
-## Check defects found
-
-- `tokenEndpoint: http://auth.example.invalid/oauth2/token` passes, and so
-  does `tokenEndpoint: not a url at all` (probes `e4-token-http`,
-  `e4-token-garbage`). The field is a `String`, not a `Url`, in
-  `crates/registry-adapter-core/src/auth.rs`, so a client assertion can be
-  sent in the clear. (Landed 2026-10-30 as
-  `adapter.runtime.insecure-origin` on the token endpoint origin and
-  `config.invalid-value` at the reader for a value that is no URL.)
-- An unbound path placeholder passes: `path: /regions/{region}/households/{id}`
-  with only `id` in `pathParameters` (probe `e4-unbound-placeholder`).
-  (Landed 2026-10-30 as `adapter.route.path-parameter-mismatch`: send paths
-  write `{{name}}` and both directions of the correspondence are checked.)
-- `okStatusCodeRange: 200-299,404` passes (probe `e4-status-range`); as in
-  experiment 1 the value is not validated at all. (Landed 2026-10-30 as
-  `adapter.route.invalid-status-code-range`, validated as Camel writes it.)
-- A problem body built outside a handled clause (in `onFallback`, in a
-  `choice` branch) passes (probe `e4-fallback-problem`), though the runtime
-  contract would validate it as a success body.
-
-## Check run
+## Check
 
 ```
-adapterctl check products/adapter/experiments/rest-offset-mtls/project.yaml \
+adapterctl check products/adapter/fixtures/source-shapes/rest-offset-mtls/project.yaml \
   --profile products/adapter/profiles/breg-records/profile.yaml \
-  --runtime products/adapter/experiments/rest-offset-mtls/runtime.yaml
-Authoring check passed.
-0 errors, 0 warnings in 13 files
-exit=0
+  --runtime products/adapter/fixtures/source-shapes/rest-offset-mtls/runtime.yaml
 ```
-
-Probe outputs are recorded verbatim in the findings report returned with these
-experiments, not in this directory.

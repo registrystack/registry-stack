@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native acceptance proof for every authored API transformation experiment.
+//! Native acceptance proof for every source-shape fixture.
 //! Each case runs the external adapterctl acceptance commands, then starts the
 //! real Adapter binary over an isolated PostgreSQL schema and drives the
 //! documented facade request through the compiled pack to a socket upstream.

@@ -7,7 +7,7 @@
 #
 # The facade search drives one synthetic token acquisition, reused for both
 # documented FHIR pages. The second data request reconstructs the HAPI
-# continuation query exactly as this experiment's route declares.
+# continuation query exactly as this source shape's route declares.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: fhir-r4-patient-search-two-pages

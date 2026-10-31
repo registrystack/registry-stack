@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native acceptance harness for the five authored API experiments.
+//! Native acceptance harness for the five source-shape fixtures under
+//! `products/adapter/fixtures/source-shapes/`.
 
 pub mod upstream;
 
@@ -76,7 +77,9 @@ impl Scenario {
     }
 
     pub fn directory(self) -> PathBuf {
-        product_root().join("experiments").join(self.slug())
+        product_root()
+            .join("fixtures/source-shapes")
+            .join(self.slug())
     }
 
     fn fixture_path(self) -> PathBuf {
