@@ -21,7 +21,11 @@ use registry_adapter::engine::route::{
 };
 use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    check_project, check_routes, AccessProfile, AdapterPack, AdapterProfile, AdapterProject, Binding, Capabilities, Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef, Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType, RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace, AdapterEndpointBindings,
+    check_project, check_routes, AccessProfile, AdapterEndpointBindings, AdapterPack,
+    AdapterProfile, AdapterProject, Binding, Capabilities, Cidr, ComponentKind, Endpoint,
+    EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef,
+    Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType,
+    RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::{

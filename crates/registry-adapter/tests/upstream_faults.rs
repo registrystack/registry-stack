@@ -19,7 +19,8 @@ use registry_adapter::engine::route::{
 };
 use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    Cidr, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding, ErrorClass, RuntimeCredential, Step, AdapterEndpointBindings,
+    AdapterEndpointBindings, Cidr, ComponentKind, Endpoint, EndpointAuthentication,
+    EndpointBinding, ErrorClass, RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::{BoundedU64, ExternalId, LocalId, UniqueIdList, UniqueList, Url};
