@@ -352,7 +352,7 @@ impl AdapterContract {
             || !authentication
                 .get("audience")
                 .and_then(Value::as_str)
-                .is_some_and(registry_platform_httputil::valid_resource_uri)
+                .is_some_and(valid_adapter_audience)
         {
             return Err(InvalidAdapterContract);
         }
@@ -444,6 +444,12 @@ impl AdapterContract {
         }
         Ok(())
     }
+}
+
+fn valid_adapter_audience(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= registry_platform_config::MAX_OIDC_AUDIENCE_CHARACTERS
+        && !value.chars().any(char::is_control)
 }
 
 fn exact_object_keys(value: &Value, keys: &[&str]) -> bool {

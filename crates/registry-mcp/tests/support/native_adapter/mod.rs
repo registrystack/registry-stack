@@ -27,7 +27,7 @@ use std::{
 
 pub const GET_TOOL: &str = "get_registry_person";
 pub const SEARCH_TOOL: &str = "search_registry_people";
-pub const ADAPTER_AUDIENCE: &str = "urn:registry-adapter:native-proof";
+pub const ADAPTER_AUDIENCE: &str = "adapter-native-proof";
 const MACHINE_CLIENT: &str = "synthetic-adapter-machine";
 const CHAT_CLIENT: &str = "synthetic-chat-host";
 const GATEWAY_SCOPE: &str = "adapter:read";
