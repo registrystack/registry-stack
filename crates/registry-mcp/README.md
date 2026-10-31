@@ -34,8 +34,13 @@ source exchange and source disclosure profile.
 
 ## Check and serve
 
-When running from sources, check the [example and golden workspace](../../products/platform/examples/mcp-runtime/README.md).
-A packaged binary uses an absolute runtime configuration path:
+This foundation increment is source-build-only. `registry-mcp` has no numbered-release
+asset, installer, `rstack` component or container image, and stays held out of the
+release roster until that packaging work is approved and implemented. Build it from
+the exact Registry Stack source revision you intend to operate.
+
+Check the [example and golden workspace](../../products/platform/examples/mcp-runtime/README.md)
+before serving. An operator-built binary uses an absolute runtime configuration path:
 
 ```sh
 registry-mcp --runtime-config /srv/mcp/runtime.yaml check

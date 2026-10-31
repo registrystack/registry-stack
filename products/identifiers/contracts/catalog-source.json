@@ -221,6 +221,14 @@
       "description": "Product-scoped CLI API connections and project selections."
     },
     {
+      "glob": "products/platform/generated/mcp-runtime/*.schema.json",
+      "sourcePath": "crates/registry-mcp/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Configurable Registry Stack MCP gateway runtime configuration JSON Schema."
+    },
+    {
       "glob": "products/coordinator/generated/project/*.schema.json",
       "sourcePath": "crates/registry-coordinator/src/authoring.rs",
       "owner": "coordinator",

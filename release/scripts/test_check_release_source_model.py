@@ -116,6 +116,20 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
+    def test_requires_configurable_mcp_sources(self) -> None:
+        for crate, name in (
+            ("registry-mcp-edge", "registry-mcp shared edge crate"),
+            ("registry-mcp", "registry-mcp source-build-only service crate"),
+        ):
+            with self.subTest(crate=crate):
+                with MonorepoFixture() as stack_root:
+                    shutil.rmtree(stack_root / "crates" / crate)
+
+                    result = run_validator(stack_root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+
     def test_requires_every_casework_crate(self) -> None:
         for crate, name in (
             ("registry-casework-core", "registry-casework core crate"),
@@ -374,6 +388,8 @@ class MonorepoFixture:
             "crates/registry-breg-client-node",
             "crates/registry-breg-client-py",
             "crates/registry-breg-mcp",
+            "crates/registry-mcp-edge",
+            "crates/registry-mcp",
             "crates/registry-breg-review",
             "crates/registry-casework-core",
             "crates/registry-casework-breg",

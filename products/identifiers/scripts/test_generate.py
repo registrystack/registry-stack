@@ -518,6 +518,29 @@ class CatalogGeneratorTest(unittest.TestCase):
 class RepositoryCatalogSourceTest(unittest.TestCase):
     """The repository's own catalog source, read as it is committed."""
 
+    def test_configurable_mcp_schema_has_an_active_catalog_owner(self) -> None:
+        repo_root = SCRIPT.parents[3]
+        source = generate.load_source_config(
+            repo_root / "products/identifiers/contracts/catalog-source.json"
+        )
+        entries = generate.schema_entries(
+            repo_root,
+            source["schemaSources"],
+            generate.repository_files(repo_root),
+            source["referenceExclusions"],
+        )
+        identifier = (
+            f"{generate.BASE_URL}/schemas/platform/mcp-runtime/mcp-runtime.v1alpha1.schema.json"
+        )
+        matching = [entry for entry in entries if entry["uri"] == identifier]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["owner"], "platform")
+        self.assertEqual(matching[0]["source"]["path"], "crates/registry-mcp/src/schema.rs")
+        self.assertEqual(
+            matching[0]["artifact"]["path"],
+            "products/platform/generated/mcp-runtime/mcp-runtime.schema.json",
+        )
+
     def test_breg_explain_groups_name_each_schemas_own_compatibility_line(self) -> None:
         repo_root = SCRIPT.parents[3]
         source = json.loads(
