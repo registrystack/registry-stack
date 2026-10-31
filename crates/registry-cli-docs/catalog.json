@@ -288,6 +288,123 @@
           "subcommands": []
         },
         {
+          "name": "job",
+          "invocation": "adapterctl job",
+          "about": "Operate one authored ingestion job",
+          "long_about": null,
+          "usage": "adapterctl job [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "adapterctl job check",
+              "about": "Compile one ingestion job offline, exactly as the page run would, and print the findings",
+              "long_about": null,
+              "usage": "adapterctl job check [OPTIONS] <PACK> <JOB>",
+              "arguments": [
+                {
+                  "display": "<PACK>",
+                  "description": "The pack document the job pins",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "<JOB>",
+                  "description": "The job definition",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--runtime <FILE>",
+                  "description": "The operator runtime config; defaults to `runtime.yaml` beside the pack",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--profile <FILE>",
+                  "description": "The facade profile the workspace checks run over; defaults to `profile.yaml` beside the pack",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--project <FILE>",
+                  "description": "The project whose workspace checks the runtime stands on; defaults to `project.yaml` beside the pack",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "project",
           "invocation": "adapterctl project",
           "about": "Operate one authored adapter project",
