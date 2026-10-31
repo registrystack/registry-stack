@@ -256,7 +256,7 @@ impl Provider for BRegProvider {
             .await
         {
             Ok(value) => ProviderOutcome::success(value, success_effect(name)),
-            Err(error) => ProviderOutcome::failure(provider_failure(error)),
+            Err(error) => refused_outcome(invocation.request_id, error),
         }
     }
 }
@@ -267,6 +267,16 @@ fn success_effect(tool: &str) -> EffectCertainty {
     } else {
         EffectCertainty::NoEffect
     }
+}
+
+fn refused_outcome(request_id: uuid::Uuid, error: ToolError) -> ProviderOutcome {
+    tracing::warn!(
+        target: "registry_breg_mcp",
+        request_id = %request_id,
+        reason = error.code.as_str(),
+        "BReg tool call refused"
+    );
+    ProviderOutcome::failure(provider_failure(error))
 }
 
 fn provider_failure(error: ToolError) -> ProviderFailure {
@@ -284,6 +294,8 @@ fn provider_failure(error: ToolError) -> ProviderFailure {
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Write, sync::Mutex};
+
     use registry_mcp_edge::{EffectCertainty, Provider as _};
     use registry_platform_audit::AuditProfile;
     use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
@@ -352,6 +364,58 @@ mod tests {
         );
         assert_eq!(unknown.code(), "registry-unavailable");
         assert_eq!(unknown.effect(), EffectCertainty::Unknown);
+    }
+
+    #[test]
+    fn typed_refusal_log_keeps_only_code_and_request_correlation() {
+        #[derive(Clone, Default)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        struct Writer(Arc<Mutex<Vec<u8>>>);
+        impl Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("capture lock")
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let capture = Capture::default();
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || Writer(Arc::clone(&writer.0)))
+            .finish();
+        let request_id = uuid::Uuid::parse_str("de305d54-75b4-431b-adb2-eb6b9e546014")
+            .expect("fixed request id");
+        let error = ToolError {
+            code: ToolErrorCode::RegistryUnavailable,
+            trace_id: Some("downstream-trace-canary".to_owned()),
+            effect_unknown: false,
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            let _ = refused_outcome(request_id, error);
+        });
+
+        let logs =
+            String::from_utf8(capture.0.lock().expect("capture lock").clone()).expect("UTF-8 logs");
+        assert!(logs.contains("registry-unavailable"), "{logs}");
+        assert!(logs.contains(&request_id.to_string()), "{logs}");
+        for forbidden in [
+            "downstream-trace-canary",
+            "Bearer secret-token",
+            "https://registry.example.test/private",
+            "private-record-value",
+        ] {
+            assert!(!logs.contains(forbidden), "{forbidden}: {logs}");
+        }
     }
 
     #[test]

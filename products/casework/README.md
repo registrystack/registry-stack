@@ -306,6 +306,17 @@ caseworkctl check products/casework/examples/canonical-review \
   --against-breg-package /absolute/path/to/breg-package
 ```
 
+The source-built `registry-mcp` supporting service can use the default-off
+`delegatedStaffReaders` contract for assigned-task listing and context reads at
+`/v1/delegated-staff`. Each reader explicitly admits a trusted gateway,
+represented staff profile, required scopes, short token lifetime and optional
+source profiles. Ordinary staff and producer routes retain their own
+authentication. Current-source context additionally requires
+`delegatedDisplayExchange` and an institution-approved source agent profile;
+the Casework bearer is never forwarded to BReg. See
+[the composition design](../platform/MCP-GATEWAY.md) and
+[the staff runtime example](../platform/examples/mcp-runtime/casework.example.yaml).
+
 Pairing refusals retain `casework.provider-pair.contract-mismatch`,
 `casework.provider-pair.unserved-capability`, or
 `casework.provider-pair.version-mismatch`. The diagnostic names the review

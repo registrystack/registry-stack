@@ -15,8 +15,8 @@ use axum::{
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use registry_casework::{
-    operational_log_level, router, CaseworkAuthenticator, CaseworkService, DatabaseConfig,
-    DelegatedStaffReaderConfig, HttpState, HumanIdentityConfig, PostgresStore,
+    operational_log_level, router, CaseworkAudit, CaseworkAuthenticator, CaseworkService,
+    DatabaseConfig, DelegatedStaffReaderConfig, HttpState, HumanIdentityConfig, PostgresStore,
     ReviewTaskDecisionRequest,
 };
 use registry_casework_client::{
@@ -424,7 +424,7 @@ async fn app_with_project(
     Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
-    app_with_project_options(idp, project, None, false).await
+    app_with_project_options(idp, project, None, false, None).await
 }
 
 async fn app_with_project_and_delegated_barrier(
@@ -440,7 +440,7 @@ async fn app_with_project_and_delegated_barrier(
     Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
-    app_with_project_options(idp, project, delegated_barrier, true).await
+    app_with_project_options(idp, project, delegated_barrier, true, None).await
 }
 
 async fn app_with_project_options(
@@ -448,6 +448,7 @@ async fn app_with_project_options(
     project: CaseworkProject,
     delegated_barrier: Option<Arc<DelegatedSourceBarrier>>,
     strict_delegation_client: bool,
+    runtime_audit: Option<CaseworkAudit>,
 ) -> (
     axum::Router,
     CaseworkService,
@@ -514,7 +515,7 @@ async fn app_with_project_options(
         .expect("bind reviewer membership to test issuer");
     let store = PostgresStore::connect_runtime(&database_config, &secrets)
         .expect("runtime store")
-        .with_audit(registry_casework::CaseworkAudit::capture().0);
+        .with_audit(runtime_audit.unwrap_or_else(|| CaseworkAudit::capture().0));
     project.check().expect("review HTTP project");
     let verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
     let verifier = if strict_delegation_client {
@@ -527,6 +528,15 @@ async fn app_with_project_options(
     } else {
         verifier
     };
+    let delegated_reader = DelegatedStaffReaderConfig {
+        profile: "staff".to_owned(),
+        client: "registry-mcp".to_owned(),
+        actor_subject: "registry-mcp".to_owned(),
+        assertion_issuer: idp.issuer().to_owned(),
+        required_scope: "casework:staff:delegated-read".to_owned(),
+        maximum_token_lifetime_seconds: 300,
+        source_profiles: vec!["reviewer-source".to_owned()],
+    };
     let authenticator = CaseworkAuthenticator::new(
         &project,
         verifier,
@@ -537,19 +547,10 @@ async fn app_with_project_options(
         )),
         HumanIdentityConfig::default(),
     )
-    .with_delegated_staff_readers(BTreeMap::from([(
-        "assistant-reader".to_owned(),
-        DelegatedStaffReaderConfig {
-            profile: "staff".to_owned(),
-            client: "registry-mcp".to_owned(),
-            actor_issuer: idp.issuer().to_owned(),
-            actor_subject: "registry-mcp".to_owned(),
-            assertion_issuer: idp.issuer().to_owned(),
-            required_scope: "casework:staff:delegated-read".to_owned(),
-            maximum_token_lifetime_seconds: 300,
-            source_profiles: vec!["reviewer-source".to_owned()],
-        },
-    )]));
+    .with_delegated_staff_readers(BTreeMap::from([
+        ("assistant-reader".to_owned(), delegated_reader.clone()),
+        ("assistant-reader-rotation".to_owned(), delegated_reader),
+    ]));
     let revoked = Arc::new(AtomicBool::new(false));
     let changed = Arc::new(AtomicBool::new(false));
     let failure = Arc::new(AtomicU8::new(0));
@@ -883,6 +884,180 @@ async fn delegated_reader_credential_cannot_enter_producer_create_or_cancel_rout
     idp.stop().await;
 }
 
+fn delegated_read_request(idp: &MockIdp, path: &str) -> Request<Body> {
+    Request::builder()
+        .uri(path)
+        .header(
+            "authorization",
+            format!(
+                "Bearer {}",
+                delegated_staff_read_token_value(idp, "canary-delegated-audit-person")
+            ),
+        )
+        .header("registry-casework-delegated-reader", "assistant-reader")
+        .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+        .body(Body::empty())
+        .expect("delegated audit request")
+}
+
+async fn assert_delegated_route_audit_failures(path: impl Fn() -> String, event: &str) {
+    let idp = MockIdp::start().await;
+    for accepted_lines in [0, 1] {
+        let (audit, capture) = CaseworkAudit::capture();
+        capture.refuse_after(accepted_lines);
+        let (app, ..) =
+            app_with_project_options(&idp, project(&idp.issuer()), None, true, Some(audit)).await;
+        let response = app
+            .oneshot(delegated_read_request(&idp, &path()))
+            .await
+            .expect("delegated audit refusal response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), 32 * 1024)
+                .await
+                .expect("bounded delegated audit refusal body")
+                .to_vec(),
+        )
+        .expect("UTF-8 delegated audit refusal body");
+        assert!(!body.contains("canary"));
+        let entries = capture.entries();
+        assert_eq!(entries.len(), accepted_lines);
+        if accepted_lines == 1 {
+            assert_eq!(entries[0]["phase"], "request");
+            assert_eq!(entries[0]["record"]["event"], event);
+            assert_eq!(entries[0]["record"]["roleMode"], "delegated-staff-read");
+            assert!(!entries[0].to_string().contains("canary"));
+        }
+    }
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn delegated_review_task_list_withholds_results_when_audit_begin_or_terminal_fails() {
+    assert_delegated_route_audit_failures(
+        || "/v1/delegated-staff/review-tasks?limit=25".to_owned(),
+        "casework.delegated-review-tasks-read",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn delegated_review_task_context_withholds_results_when_audit_begin_or_terminal_fails() {
+    let task_id = Uuid::new_v4();
+    assert_delegated_route_audit_failures(
+        || format!("/v1/delegated-staff/review-tasks/{task_id}/context"),
+        "casework.delegated-review-task-context-read",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn delegated_submitted_context_ignores_admitted_source_profile_and_audits_one_success() {
+    let idp = MockIdp::start().await;
+    let (audit, capture) = CaseworkAudit::capture();
+    let (app, _, _, _, _, _, database) =
+        app_with_project_options(&idp, project(&idp.issuer()), None, true, Some(audit)).await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let (_, task_id) = create_answer_task(&app, &database, &idp, "delegated-submitted").await;
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    client
+        .claim_review_task(
+            CaseworkAuth::new(&reviewer, "staff"),
+            task_id,
+            1,
+            "claim-delegated-submitted",
+        )
+        .await
+        .expect("claim submitted-context task as represented staff");
+    let before = capture.entries().len();
+
+    let delegated = delegated_staff_read_token(&idp, "reviewer");
+    let context = client
+        .delegated_review_task_context(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader")
+                .with_source_profile("reviewer-source"),
+            task_id,
+        )
+        .await
+        .expect("read submitted context with an admitted but irrelevant source profile")
+        .value;
+    assert!(matches!(
+        context.context,
+        ReviewTaskContextData::Submitted { snapshot } if snapshot == json!({})
+    ));
+
+    let entries = capture.entries();
+    let read_entries = &entries[before..];
+    assert_eq!(read_entries.len(), 2, "{read_entries:?}");
+    assert_eq!(read_entries[0]["phase"], "request");
+    assert_eq!(
+        read_entries[0]["record"]["event"],
+        "casework.delegated-review-task-context-read"
+    );
+    assert_eq!(read_entries[1]["phase"], "response");
+    assert_eq!(read_entries[1]["record"]["outcome"], "succeeded");
+    assert!(read_entries
+        .iter()
+        .all(|entry| entry["record"]["outcome"] != "failed"));
+
+    server.abort();
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn delegated_cursor_is_partitioned_by_reader_policy_during_client_rotation() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) =
+        app_with_project_options(&idp, project(&idp.issuer()), None, true, None).await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    for reference in ["rotation-page-one", "rotation-page-two"] {
+        let (_, task_id) = create_answer_task(&app, &database, &idp, reference).await;
+        let idempotency_key = format!("claim-{reference}");
+        client
+            .claim_review_task(
+                CaseworkAuth::new(&reviewer, "staff"),
+                task_id,
+                1,
+                &idempotency_key,
+            )
+            .await
+            .expect("claim submitted-context task as represented staff");
+    }
+    let delegated = delegated_staff_read_token(&idp, "reviewer");
+    let first = client
+        .delegated_review_tasks(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader"),
+            None,
+            1,
+        )
+        .await
+        .expect("read the first page under the original reader policy")
+        .value;
+    let cursor = first.next_cursor.expect("a second page remains");
+
+    let crossed = client
+        .delegated_review_tasks(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader-rotation"),
+            Some(cursor),
+            1,
+        )
+        .await
+        .expect_err("a cursor from another reader policy must expire");
+    assert_client_status(crossed, 410);
+    client
+        .delegated_review_tasks(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader"),
+            Some(cursor),
+            1,
+        )
+        .await
+        .expect("the cursor remains valid under its issuing reader policy");
+
+    server.abort();
+    idp.stop().await;
+}
+
 #[tokio::test]
 async fn delegated_reads_withhold_rows_and_context_when_assignment_changes_during_source_io() {
     let idp = MockIdp::start().await;
@@ -898,6 +1073,34 @@ async fn delegated_reads_withhold_rows_and_context_when_assignment_changes_durin
     let supervisor = human_token(&idp, "supervisor", "supervisor");
     let list_delegated = delegated_staff_read_token(&idp, "reviewer");
     let context_delegated = delegated_staff_read_token(&idp, "reviewer");
+
+    let (_, stable_task) = create_task(
+        &app,
+        &database,
+        &idp,
+        &review_request_for_subject(
+            "delegated-list-stable",
+            "delegated-list-stable-source-canary",
+            &idp.issuer(),
+        ),
+    )
+    .await;
+    client
+        .assign_review_task(
+            CaseworkAuth::new(&supervisor, "supervisor").with_source_profile("reviewer-source"),
+            stable_task,
+            1,
+            "assign-delegated-list-stable",
+            &AssignmentRequest {
+                assignee: IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "reviewer".to_owned(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .expect("assign stable list task to represented staff");
 
     let (_, list_task) = create_task(
         &app,
@@ -965,21 +1168,11 @@ async fn delegated_reads_withhold_rows_and_context_when_assignment_changes_durin
         .await
         .expect("delegated list completed after source release")
         .expect("delegated list task joined");
-    let list_rendered = match list_result {
-        Ok(page) => {
-            assert!(
-                page.value.items.is_empty(),
-                "reassigned work must leave the delegated list"
-            );
-            assert!(page.value.next_cursor.is_none());
-            format!("{page:?}")
-        }
-        Err(error) => {
-            let rendered = format!("{error:?}");
-            assert_client_status(error, 404);
-            rendered
-        }
-    };
+    let page = list_result.expect("one changed task must not conceal stable assigned work");
+    assert_eq!(page.value.items.len(), 1, "only stable work is released");
+    assert_eq!(page.value.items[0].task_id, stable_task);
+    assert!(page.value.next_cursor.is_none());
+    let list_rendered = format!("{page:?}");
     assert!(!list_rendered.contains(&list_task.to_string()));
     assert!(!list_rendered.contains("Authorized source view"));
     assert!(!list_rendered.contains("delegated-list-source-canary"));

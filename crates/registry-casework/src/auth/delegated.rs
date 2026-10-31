@@ -74,33 +74,10 @@ impl crate::CaseworkService {
                     ..Default::default()
                 },
                 Some(&reader.credential_context),
+                Some(&reader.policy_id),
             )
             .await;
-        let outcome = match outcome {
-            Ok(page) => {
-                let mut current = Ok(());
-                for task in &page.items {
-                    let recheck = self
-                        .store
-                        .review_task_by_activity(&reader.actor, task.task_id, true, false)
-                        .await
-                        .map(|latest| reader.holds(&latest) && latest.revision == task.revision);
-                    if let Err(error) = delegated_recheck(recheck) {
-                        current = Err(error);
-                        break;
-                    }
-                }
-                current.map(|()| page)
-            }
-            Err(error) => Err(error),
-        };
-        let terminal = match &outcome {
-            Ok(_) => crate::audit::AuditOutcome::Succeeded,
-            Err(crate::ReviewRuntimeError::Forbidden | crate::ReviewRuntimeError::NotFound) => {
-                crate::audit::AuditOutcome::Refused
-            }
-            Err(_) => crate::audit::AuditOutcome::Failed,
-        };
+        let terminal = delegated_audit_outcome(&outcome);
         audit.conclude_without_change(terminal).await?;
         outcome
     }
@@ -153,15 +130,25 @@ impl crate::CaseworkService {
             Ok(_) => Err(crate::ReviewRuntimeError::NotFound),
             Err(error) => Err(error),
         };
-        let terminal = match &outcome {
-            Ok(_) => crate::audit::AuditOutcome::Succeeded,
-            Err(crate::ReviewRuntimeError::Forbidden | crate::ReviewRuntimeError::NotFound) => {
-                crate::audit::AuditOutcome::Refused
-            }
-            Err(_) => crate::audit::AuditOutcome::Failed,
-        };
+        let terminal = delegated_audit_outcome(&outcome);
         audit.conclude_without_change(terminal).await?;
         outcome
+    }
+}
+
+fn delegated_audit_outcome<T>(
+    outcome: &Result<T, crate::ReviewRuntimeError>,
+) -> crate::audit::AuditOutcome {
+    match outcome {
+        Ok(_) => crate::audit::AuditOutcome::Succeeded,
+        Err(
+            crate::ReviewRuntimeError::Forbidden
+            | crate::ReviewRuntimeError::NotFound
+            | crate::ReviewRuntimeError::SourceProfileRequired
+            | crate::ReviewRuntimeError::ResultExpired
+            | crate::ReviewRuntimeError::Invalid,
+        ) => crate::audit::AuditOutcome::Refused,
+        Err(_) => crate::audit::AuditOutcome::Failed,
     }
 }
 
@@ -181,6 +168,20 @@ fn delegated_recheck(
 }
 
 impl CaseworkAuthenticator {
+    fn delegated_staff_refusal(
+        &self,
+        stage: registry_platform_oidc::AuthenticationStage,
+        error: AuthenticationError,
+    ) -> AuthenticationError {
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            stage,
+            "Casework delegated staff authentication refused",
+            remedy = "check delegatedStaffReaders and authentication.oidc client, assertion, actor, scope and lifetime bindings"
+        );
+        error
+    }
+
     pub(crate) async fn authenticate_staff_read(
         &self,
         token: &str,
@@ -199,40 +200,62 @@ impl CaseworkAuthenticator {
             );
             AuthenticationError::Refused
         })?;
-        let binding = self
-            .delegated_staff_readers
-            .get(policy_id)
-            .ok_or(AuthenticationError::Profile)?;
+        let binding = self.delegated_staff_readers.get(policy_id).ok_or_else(|| {
+            self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Profile,
+                AuthenticationError::Profile,
+            )
+        })?;
         let profile = self
             .profiles
             .get(&binding.profile)
             .filter(|profile| profile.role == CaseworkRole::Staff)
-            .ok_or(AuthenticationError::Profile)?;
+            .ok_or_else(|| {
+                self.delegated_staff_refusal(
+                    registry_platform_oidc::AuthenticationStage::Profile,
+                    AuthenticationError::Profile,
+                )
+            })?;
         if source_profile.is_some_and(|source| {
             !binding
                 .source_profiles
                 .iter()
                 .any(|allowed| allowed == source)
         }) {
-            return Err(AuthenticationError::Profile);
+            return Err(self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Profile,
+                AuthenticationError::Profile,
+            ));
         }
-        if verified
-            .matched_client_id()
-            .map_err(|_| AuthenticationError::Refused)?
-            != Some(binding.client.as_str())
+        let matched_client = verified.matched_client_id().map_err(|_| {
+            self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Client,
+                AuthenticationError::Refused,
+            )
+        })?;
+        if matched_client != Some(binding.client.as_str())
             || verified
                 .claims
                 .extra
                 .get(ASSERTION_ISSUER_CLAIM)
                 .and_then(Value::as_str)
                 != Some(binding.assertion_issuer.as_str())
-            || verified
-                .claims
-                .extra
-                .keys()
-                .any(|key| key.starts_with("registry_grant_"))
         {
-            return Err(AuthenticationError::Refused);
+            return Err(self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Client,
+                AuthenticationError::Refused,
+            ));
+        }
+        if verified
+            .claims
+            .extra
+            .keys()
+            .any(|key| key.starts_with("registry_grant_"))
+        {
+            return Err(self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Profile,
+                AuthenticationError::Refused,
+            ));
         }
         let audience = match verified.claims.aud.as_ref() {
             Some(Audience::One(audience)) if audience == &self.audience => audience.clone(),
@@ -241,20 +264,30 @@ impl CaseworkAuthenticator {
             {
                 audiences[0].clone()
             }
-            _ => return Err(AuthenticationError::Refused),
+            _ => {
+                return Err(self.delegated_staff_refusal(
+                    registry_platform_oidc::AuthenticationStage::Audience,
+                    AuthenticationError::Refused,
+                ))
+            }
         };
-        let issuer = verified
-            .claims
-            .iss
-            .as_deref()
-            .filter(|issuer| *issuer == binding.actor_issuer)
-            .ok_or(AuthenticationError::Refused)?;
+        let issuer = verified.claims.iss.as_deref().ok_or_else(|| {
+            self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Issuer,
+                AuthenticationError::Refused,
+            )
+        })?;
         let subject = verified
             .claims
             .sub
             .as_deref()
             .filter(|subject| !subject.is_empty())
-            .ok_or(AuthenticationError::Claims)?;
+            .ok_or_else(|| {
+                self.delegated_staff_refusal(
+                    registry_platform_oidc::AuthenticationStage::Profile,
+                    AuthenticationError::Claims,
+                )
+            })?;
         let expires_at = match (verified.claims.iat, verified.claims.exp) {
             (Some(issued_at), Some(expires_at))
                 if issued_at >= 0
@@ -265,13 +298,21 @@ impl CaseworkAuthenticator {
             {
                 expires_at
             }
-            _ => return Err(AuthenticationError::Refused),
+            _ => {
+                return Err(self.delegated_staff_refusal(
+                    registry_platform_oidc::AuthenticationStage::Time,
+                    AuthenticationError::Refused,
+                ))
+            }
         };
         let act = strict_actor(
             verified.claims.extra.get("act"),
-            &binding.actor_issuer,
+            issuer,
             &binding.actor_subject,
-        )?;
+        )
+        .map_err(|error| {
+            self.delegated_staff_refusal(registry_platform_oidc::AuthenticationStage::Client, error)
+        })?;
         let actual_scopes = verified.scopes.iter().cloned().collect::<BTreeSet<_>>();
         let mut expected_scopes = profile
             .required_scopes
@@ -279,8 +320,13 @@ impl CaseworkAuthenticator {
             .cloned()
             .collect::<BTreeSet<_>>();
         expected_scopes.insert(binding.required_scope.clone());
-        if actual_scopes != expected_scopes || actual_scopes.len() != verified.scopes.len() {
-            return Err(AuthenticationError::Profile);
+        if !expected_scopes.is_subset(&actual_scopes)
+            || actual_scopes.len() != verified.scopes.len()
+        {
+            return Err(self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Scope,
+                AuthenticationError::Profile,
+            ));
         }
         if verified
             .claims
@@ -289,7 +335,10 @@ impl CaseworkAuthenticator {
             .and_then(Value::as_str)
             != Some(self.human_identity.value.as_str())
         {
-            return Err(AuthenticationError::NotHuman);
+            return Err(self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Profile,
+                AuthenticationError::NotHuman,
+            ));
         }
         let principal = if profile.principal_claim == "sub" {
             Some(subject)
@@ -301,7 +350,12 @@ impl CaseworkAuthenticator {
                 .and_then(Value::as_str)
         }
         .filter(|value| !value.is_empty())
-        .ok_or(AuthenticationError::Claims)?;
+        .ok_or_else(|| {
+            self.delegated_staff_refusal(
+                registry_platform_oidc::AuthenticationStage::Profile,
+                AuthenticationError::Claims,
+            )
+        })?;
         Ok(DelegatedStaffReader {
             actor: ActorContext {
                 principal: IssuerPrincipal {
@@ -334,25 +388,51 @@ fn strict_actor(
 ) -> Result<(String, String), AuthenticationError> {
     let object = value
         .and_then(Value::as_object)
-        .filter(|object| object.len() == 2)
         .ok_or(AuthenticationError::Refused)?;
-    let issuer = object
-        .get("iss")
-        .and_then(Value::as_str)
-        .filter(|value| *value == expected_issuer)
-        .ok_or(AuthenticationError::Refused)?;
+    if object.contains_key("act") {
+        return Err(AuthenticationError::Refused);
+    }
+    if let Some(issuer) = object.get("iss") {
+        if issuer.as_str() != Some(expected_issuer) {
+            return Err(AuthenticationError::Refused);
+        }
+    }
     let subject = object
         .get("sub")
         .and_then(Value::as_str)
         .filter(|value| *value == expected_subject)
         .ok_or(AuthenticationError::Refused)?;
-    Ok((issuer.to_owned(), subject.to_owned()))
+    Ok((expected_issuer.to_owned(), subject.to_owned()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::delegated_recheck;
+    use super::{delegated_audit_outcome, delegated_recheck};
+    use crate::audit::AuditOutcome;
     use crate::{ReviewRuntimeError, StoreError};
+
+    #[test]
+    fn delegated_caller_refusals_are_not_audited_as_runtime_failures() {
+        for error in [
+            ReviewRuntimeError::Forbidden,
+            ReviewRuntimeError::NotFound,
+            ReviewRuntimeError::SourceProfileRequired,
+            ReviewRuntimeError::ResultExpired,
+            ReviewRuntimeError::Invalid,
+        ] {
+            assert_eq!(
+                delegated_audit_outcome(&Err::<(), _>(error)),
+                AuditOutcome::Refused
+            );
+        }
+        assert_eq!(
+            delegated_audit_outcome(&Err::<(), _>(ReviewRuntimeError::Store(
+                StoreError::Unavailable
+            ))),
+            AuditOutcome::Failed
+        );
+        assert_eq!(delegated_audit_outcome(&Ok(())), AuditOutcome::Succeeded);
+    }
 
     #[test]
     fn delegated_recheck_conceals_authority_changes_but_preserves_store_failures() {

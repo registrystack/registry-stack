@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Permit an explicit standing-agent `get-review-context` grant for a verified
+  trusted actor and exact nonempty requester-client ceiling, including on
+  submitted Proposals. This is an opt-in source service permission, independent
+  of task grants and the represented person's human BReg permissions. Institutions
+  must approve the profile's disclosure ceiling before enabling it; submitted
+  mutations and decisions remain refused.
+- Share MCP transport, authentication and durable audit with the configurable
+  supporting service. `breg-mcp` retains its configuration, seven citizen tools
+  and audit identity. Catalogs now sort public tool names alphabetically and
+  acquire downstream authorization independently for each binding; catalog
+  failures retain their safe code and trace.
+
 - BREAKING: Registry Record v1 renames `entityTypeIdentifier` to
   `recordTypeIdentifier` before the 1.0 freeze. The v1 identifiers, schema,
   context and profile are edited in place, so a client keeps its profile check

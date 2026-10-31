@@ -12,6 +12,12 @@ publish = false
 workspace = true
 
 [features]
+schema = [
+    "dep:schemars",
+    "registry-platform-audit/schema",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
 test-support = []
 
 [dependencies]
@@ -22,12 +28,16 @@ jsonwebtoken.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
+registry-platform-yaml.workspace = true
 rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+schemars = { workspace = true, optional = true }
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -41,3 +51,4 @@ registry-platform-testing = { workspace = true, features = ["test-authorization-
 reqwest.workspace = true
 tokio.workspace = true
 tower.workspace = true
+tracing-subscriber.workspace = true

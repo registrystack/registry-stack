@@ -34,8 +34,31 @@ if [[ ! -f "$configuration" ]]; then
   exit 1
 fi
 
-workspace=$(mktemp -d)
-trap 'printf "Boundary probe scratch retained at %s\n" "$workspace"' EXIT
+scratch_root=${TMPDIR:-/tmp}
+workspace=$(mktemp -d "$scratch_root/registry-breg-mcp-boundary.XXXXXX")
+cleanup() {
+  local status=$?
+  if [[ "$status" -eq 0 ]]; then
+    python3 - "$workspace" "$scratch_root" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+workspace = Path(sys.argv[1]).resolve()
+scratch_root = Path(sys.argv[2]).resolve()
+if (
+    workspace.parent != scratch_root
+    or not workspace.name.startswith("registry-breg-mcp-boundary.")
+):
+    raise SystemExit(f"refusing to clean unexpected boundary scratch path: {workspace}")
+shutil.rmtree(workspace)
+PY
+  else
+    printf 'Boundary probe scratch retained at %s\n' "$workspace" >&2
+  fi
+  return "$status"
+}
+trap cleanup EXIT
 
 printf 'Linting registry-breg-mcp against %s\n' "${configuration#"$repository_root"/}"
 
@@ -121,6 +144,22 @@ if [[ -z "$platform_library" ]]; then
   exit 1
 fi
 
+# The fixed authorization factory is defined by the shared edge. The probe
+# references the constructor itself, so it does not couple a token-provider
+# value from one dependency artifact to an edge built against another.
+edge_library=''
+for candidate in "$dependencies"/libregistry_mcp_edge-*.rlib; do
+  [[ -f "$candidate" ]] || continue
+  if [[ -z "$edge_library" || "$candidate" -nt "$edge_library" ]]; then
+    edge_library="$candidate"
+  fi
+done
+
+if [[ -z "$edge_library" ]]; then
+  printf 'No compiled registry-mcp-edge was found under the cargo target directory debug/deps, so the probes cannot run.\n' >&2
+  exit 1
+fi
+
 # Each probe is one file put through `clippy-driver` directly against a copy of
 # the crate's own configuration, so what is proved here is that configuration and
 # not a restatement of it.
@@ -146,6 +185,7 @@ lint_probe() {
     --out-dir "$probe" \
     -L "dependency=$dependencies" \
     --extern "registry_breg_client=$client_library" \
+    --extern "registry_mcp_edge=$edge_library" \
     --extern "registry_platform_httputil=$platform_library" \
     "$probe/$name.rs" >"$log" 2>&1 || true
   local compiled=0
@@ -225,6 +265,18 @@ pub fn provide(
 RUST
 
 lint_probe provider
+
+# A fixed provider authorization would let BReg use a service credential that
+# is not derived from the verified citizen. Merely taking the constructor as a
+# function item proves the lint resolves without creating an artifact-sensitive
+# token-provider value.
+cat >"$probe/fixed_factory.rs" <<'RUST'
+pub fn constructor_is_reachable() {
+    let _constructor = registry_mcp_edge::FixedAuthorizationFactory::new;
+}
+RUST
+
+lint_probe fixed_factory
 
 # A bearer header written out of a token, and an HTTP client built beside the
 # registry client. Either would let a request reach the registry without going
@@ -404,6 +456,7 @@ verdicts=(
   'refuses|credential|a static token built through a re-export|disallowed method `registry_platform_httputil::client::StaticToken::new`'
   'refuses|credential|a bearer token built through a re-export|disallowed method `registry_platform_httputil::client::BearerToken::new`'
   'refuses|provider|a token provider handed to the client configuration|disallowed method `registry_breg_client::BaseRegistryClientConfig::with_token_provider`'
+  'refuses|fixed_factory|a fixed provider authorization for BReg|disallowed method `registry_mcp_edge::FixedAuthorizationFactory::new`'
   'refuses|transport|a bearer header written out of a token|disallowed method `registry_platform_httputil::client::BearerToken::authorization_header_value`'
   'refuses|transport|an HTTP client built beside the registry client|disallowed method `registry_platform_httputil::client::build_client`'
   'refuses|tombstone|a tombstone through an aliased import|disallowed method `registry_breg_client::BaseRegistryClient::tombstone_record`'

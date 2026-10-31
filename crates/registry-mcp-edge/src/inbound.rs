@@ -21,13 +21,13 @@ use serde_json::{json, Value};
 use url::{Host, Url};
 use zeroize::Zeroizing;
 
-use crate::server::problem;
+use crate::server::{problem, METADATA_PREFIX};
 
-pub const METADATA_PREFIX: &str = "/.well-known/oauth-protected-resource";
 const MAXIMUM_TOKEN_LIFETIME: Duration = Duration::from_secs(86_400);
 
-/// Supported asymmetric JWT access-token algorithms.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+/// An asymmetric access-token signature algorithm.
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum AccessTokenAlgorithm {
     RS256,
     RS384,
@@ -37,7 +37,7 @@ pub enum AccessTokenAlgorithm {
 }
 
 impl AccessTokenAlgorithm {
-    const fn jsonwebtoken(self) -> jsonwebtoken::Algorithm {
+    pub const fn jsonwebtoken(self) -> jsonwebtoken::Algorithm {
         match self {
             Self::RS256 => jsonwebtoken::Algorithm::RS256,
             Self::RS384 => jsonwebtoken::Algorithm::RS384,
@@ -246,7 +246,7 @@ impl CallerContext<'_> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Refusal {
+pub(crate) enum Refusal {
     Missing,
     InvalidToken,
     InsufficientScope,
@@ -340,7 +340,10 @@ impl ResourceServer {
         let token = bearer_token(headers)?;
         let verified = match self.verifier.verify(token).await {
             Ok(verified) => verified,
-            Err(error) if is_key_source_failure(&error) => return Err(Refusal::KeySource),
+            Err(error) if is_key_source_failure(&error) => {
+                tracing::warn!("the access-token key set is unavailable");
+                return Err(Refusal::KeySource);
+            }
             Err(_) => return Err(Refusal::InvalidToken),
         };
         let caller = self.caller(&verified, token)?;
@@ -389,7 +392,7 @@ impl ResourceServer {
             .map_err(|_| Refusal::Unavailable)
     }
 
-    fn refusal_response(&self, refusal: Refusal) -> Response {
+    pub(crate) fn refusal_response(&self, refusal: Refusal) -> Response {
         let (status, challenge) = match refusal {
             Refusal::Missing => (StatusCode::UNAUTHORIZED, Some(self.challenge.clone())),
             Refusal::InvalidToken => (
@@ -466,6 +469,7 @@ fn valid_issuer_url(url: &Url, allow_insecure_http: bool) -> bool {
 fn loopback(url: &Url) -> bool {
     matches!(url.host(), Some(Host::Ipv4(ip)) if ip.is_loopback())
         || matches!(url.host(), Some(Host::Ipv6(ip)) if ip.is_loopback())
+        || matches!(url.host(), Some(Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost"))
 }
 
 fn limiter(options: TokenBucketOptions) -> Result<TokenBucketLimiter, TokenBucketError> {
@@ -528,7 +532,7 @@ async fn admit(limiter: &TokenBucketLimiter, key: &str) -> Result<(), Refusal> {
     }
 }
 
-fn retry_after_seconds(retry_after: Duration) -> u64 {
+pub(crate) fn retry_after_seconds(retry_after: Duration) -> u64 {
     (retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0)).max(1)
 }
 

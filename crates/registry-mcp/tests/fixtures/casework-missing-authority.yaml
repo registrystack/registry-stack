@@ -1,4 +1,4 @@
-# Migration refusal fixture: this historical template lacks the required
+# Negative configuration fixture: this template lacks the required
 # authority: delegated-staff-read selector. Offline check must refuse it.
 # Use casework.example.yaml with a matching backend delegated-reader policy.
 apiVersion: id.registrystack.org/formats/platform/mcp-runtime/v1alpha1

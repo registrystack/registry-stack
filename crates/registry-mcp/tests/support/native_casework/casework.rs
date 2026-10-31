@@ -19,7 +19,7 @@ use super::{
     breg::ProposalFixture,
     database::NativeDatabases,
     process::{copy_tree, json_document, operator, private_file, required_binary, ServiceProcess},
-    BREG_AUDIENCE, CASEWORK_AUDIENCE,
+    BREG_AUDIENCE, CASEWORK_AUDIENCE, HUMAN_IDENTITY_CLAIM, HUMAN_IDENTITY_VALUE,
 };
 
 pub const READER_POLICY: &str = "assistant-reader";
@@ -129,11 +129,11 @@ impl Casework {
                     "issuer":issuer.issuer(),"audience":CASEWORK_AUDIENCE,"allowInsecureHttp":true,
                     "allowedClients":["registry-mcp","casework-human","facility-registry"],
                     "assertionIssuers":{"registry-mcp":[issuer.issuer()]},
-                    "scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"},
+                    "scopeClaim":"scope","humanIdentity":{"claim":HUMAN_IDENTITY_CLAIM,"value":HUMAN_IDENTITY_VALUE},
                     "maximumTokenLifetimeSeconds":300,
                     "delegatedStaffReaders":{
                         READER_POLICY:{
-                            "profile":STAFF_PROFILE,"client":"registry-mcp","actorIssuer":issuer.issuer(),"actorSubject":"registry-mcp",
+                            "profile":STAFF_PROFILE,"client":"registry-mcp","actorSubject":"registry-mcp",
                             "assertionIssuer":issuer.issuer(),"requiredScope":"casework:staff:delegated-read","maximumTokenLifetimeSeconds":300,
                             "sourceProfiles":[SOURCE_PROFILE]
                         }

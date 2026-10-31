@@ -159,13 +159,23 @@ the existing acceptance rule.
 `delegatedStaffReaders` is absent by default. When present, it is a non-empty
 map keyed by an operator-owned reader policy identifier, such as
 `assistant-reader`. Each entry names one existing `Staff` access profile, one
-explicitly allowed OAuth client, the exact trusted `act.iss` and `act.sub`, the
+explicitly allowed OAuth client, the exact trusted `act.sub`, the
 exact subject-token issuer recorded by the exchange, one scope used only for
 delegated staff reads, and a token lifetime ceiling of 1 through 300 seconds.
-The delegated token must carry exactly the Staff profile scopes plus that one
-read scope, one Casework audience, the configured human assertion, no grant
-claims and no nested actor. The ordinary authentication path continues to
-refuse every token with `act`.
+The delegated token must carry every Staff profile scope plus that one read
+scope; unrelated extra scopes grant no authority on these dedicated routes.
+It also carries one Casework audience, the configured human assertion, no
+grant claims and no nested actor. An `act.iss` is optional, and when present
+must equal the verified token issuer. The ordinary authentication path
+continues to refuse a configured delegated-reader client's token when it has
+`act` or the delegated-read scope.
+
+For delegated readers, configure `humanIdentity` against an issuer-verified
+claim about the represented person and preserve it through both exchanges.
+The gateway's current actor category can be `service` while the subject is
+human, so that category alone cannot establish subject identity. Direct human
+credentials must carry the configured claim too. The issuer, rather than tool
+arguments, supplies the subject, purpose and jurisdiction claims used downstream.
 
 The dedicated routes are `GET /v1/delegated-staff/review-tasks` and
 `GET /v1/delegated-staff/review-tasks/{taskId}/context`. A client selects the
@@ -185,6 +195,10 @@ generation. Casework passes only verified subject-token metadata and the
 invocation credential to this provider boundary. The provider performs a
 fresh per-call exchange and sends only the exchanged bearer to BReg; it never
 forwards the Casework bearer or falls back to the human-display credential.
+The delegated OAuth client must differ from the provider's unattended status
+client so the authorization server can grant subject-delegation authority
+without granting it to the status identity. This separates OAuth policy; key
+material is separate only when the deployment configures separate keys.
 
 During key rotation, publish the replacement key first and confirm that Casework accepts a
 test token signed by it. Add the retiring key identifier to `revokedKeyIds` when it must stop

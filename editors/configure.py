@@ -40,6 +40,8 @@ SCHEMAS = {
     "mcp": (
         ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),
         ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.example.yaml"),
+        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "casework.example.yaml"),
+        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "adapter.example.yaml"),
     ),
     "breg": (
         ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
@@ -135,8 +137,6 @@ SCHEMAS = {
         ("products/manifest/schemas/profile.schema.json", "**/profile.yaml"),
     ),
     "platform": (
-        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),
-        ("products/platform/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.example.yaml"),
         ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
         ("crates/registry-cli-api/schema/connections.schema.json", "connections.yaml"),

@@ -110,9 +110,9 @@ fn unreadable_configuration_is_an_operational_failure_with_exit_three() {
 }
 
 #[test]
-fn legacy_staff_template_requires_explicit_delegated_read_authority_without_credentials() {
+fn missing_staff_authority_is_refused_without_credentials() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/platform/examples/mcp-runtime/casework-held.example.yaml")
+        .join("tests/fixtures/casework-missing-authority.yaml")
         .canonicalize()
         .unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-mcp"));
@@ -146,4 +146,47 @@ fn legacy_staff_template_requires_explicit_delegated_read_authority_without_cred
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0]["code"], "config.missing-key");
     assert_eq!(diagnostics[0]["path"], "/bindings/0/provider");
+}
+#[test]
+fn human_check_refusals_use_stderr_and_a_headline() {
+    let directory = tempfile::tempdir().unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_registry-mcp"))
+        .args([
+            "--runtime-config",
+            directory.path().join("missing.yaml").to_str().unwrap(),
+            "check",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(3));
+    assert!(result.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("registry-mcp check could not read all of its input."));
+}
+
+#[test]
+fn offline_check_resolves_a_relative_config_path_without_resolving_secrets() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::copy(example(), directory.path().join("runtime.yaml")).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_registry-mcp"))
+        .current_dir(directory.path())
+        .args([
+            "--runtime-config",
+            "runtime.yaml",
+            "check",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&result.stdout).unwrap()["ok"],
+        true
+    );
+    assert!(result.stderr.is_empty());
 }

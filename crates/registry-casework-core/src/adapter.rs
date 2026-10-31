@@ -219,7 +219,9 @@ pub trait ReviewContextProvider: Send + Sync {
         }
         results
     }
-    /// A delegated staff projection. Providers opt in explicitly and acquire
+    /// A delegated staff projection. The shared observation type describes
+    /// source data, not human approval or which credential authorized it.
+    /// Providers opt in explicitly and acquire
     /// any source credential under their own resource and policy boundary.
     async fn delegated_display(
         &self,

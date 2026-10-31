@@ -11,7 +11,9 @@ use registry_platform_testing::{
 use serde_json::Value;
 use url::Url;
 
-use crate::{AuthorizationFactory as _, Delegation, DelegationOptions, VerifiedCaller};
+use crate::{
+    AuthorizationError, AuthorizationFactory as _, Delegation, DelegationOptions, VerifiedCaller,
+};
 
 const AUDIENCE: &str = "urn:breg:citizen-address-correction";
 const RESOURCE: &str = "https://gateway.example.test/mcp";
@@ -114,13 +116,14 @@ fn header(token: &registry_platform_httputil::client::BearerToken) -> String {
 #[tokio::test]
 async fn the_exchanged_token_names_the_citizen_and_the_gateway_as_actor() {
     let fixture = fixture().await;
+    let caller = caller(&fixture, now() + 300);
     let authorization = fixture
         .delegation
-        .authorization(&caller(&fixture, now() + 300))
+        .authorization(&caller)
         .expect("authorization");
-    let value = claims(&header(
-        &authorization.bearer_token().await.expect("exchange"),
-    ));
+    let header = header(&authorization.bearer_token().await.expect("exchange"));
+    assert_ne!(header, format!("Bearer {}", caller.token()));
+    let value = claims(&header);
     assert_eq!(value["sub"], "citizen-a");
     assert_eq!(value["aud"], AUDIENCE);
     assert_eq!(value["act"]["sub"], ACTOR);
@@ -159,10 +162,12 @@ async fn the_exchange_sends_the_citizens_token_and_accepts_the_issued_token() {
 #[tokio::test]
 async fn an_expired_citizen_token_is_refused_before_any_exchange() {
     let fixture = fixture().await;
-    assert!(fixture
-        .delegation
-        .authorization(&caller(&fixture, now() - 1))
-        .is_err());
+    assert!(matches!(
+        fixture
+            .delegation
+            .authorization(&caller(&fixture, now() - 1)),
+        Err(AuthorizationError::Unavailable)
+    ));
 }
 
 #[tokio::test]
@@ -174,8 +179,10 @@ async fn an_actor_that_is_not_the_gateway_is_refused() {
         fixture.other_key.clone(),
     ))
     .expect("foreign actor");
-    assert!(fixture
-        .delegation
-        .authorization_with_actor_for_test(&caller(&fixture, now() + 300), Arc::new(foreign))
-        .is_err());
+    assert!(matches!(
+        fixture
+            .delegation
+            .authorization_with_actor_for_test(&caller(&fixture, now() + 300), Arc::new(foreign)),
+        Err(AuthorizationError::Configuration)
+    ));
 }

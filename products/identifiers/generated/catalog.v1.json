@@ -4600,7 +4600,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
-        "sha256": "d212936fbb1c87e69b470c1616f7417ab413c8b757ebc62eaeec30995ea92ca3",
+        "sha256": "2481544f84d61d0bd21ba44e31e7bdefcbf9e10b12d3b103fc100ebead1e346e",
         "mediaType": "application/schema+json"
       }
     },
@@ -4686,11 +4686,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "0ee141c5dc879b2c3437985df4e55f9eb129fb1c5afbce36174f602b95acadcd"
+        "sha256": "47d65004647fa541fef411bd213072d25a35384d5e48d03f8fdb51e5569e1bf8"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "e7bf3ebd0d8705938c1cb2bf38b3bc8aa5883eac35479abfeb15fc352f681e1f",
+        "sha256": "ef82e91c0f0c3366bd62967be8453e90920341c246a6d05f56e4b4b4b8eb85b0",
         "mediaType": "application/schema+json"
       }
     },
@@ -5370,11 +5370,11 @@
       "description": "Configurable Registry Stack MCP gateway runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-mcp/src/schema.rs",
-        "sha256": "2cfea729296c16b07d3d50af34f24cd3d765bdba4841acfb74f43e692897a888"
+        "sha256": "92b053026e128997664c3981e09347cb4d2f1bd1c34dd96f646db0b37bdb4d7c"
       },
       "artifact": {
         "path": "products/platform/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "bdcd0f52ce8d9cfd012096fc1fb72e4d4319a4e76a4097e4bc529f54632de155",
+        "sha256": "28757cb955ea96d628ff2442cc9dd7ce4f11998edada848a834ef9dfbc3c5c3e",
         "mediaType": "application/schema+json"
       }
     },

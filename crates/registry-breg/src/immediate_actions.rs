@@ -2724,19 +2724,6 @@ fn compile_execution(
             {
                 errors.push(Diagnostic::error("breg.proposal.standing-agent-operation-forbidden", "accessProfiles[].permissions.proposals", "an agent without a task grant can only start or edit caller-owned draft Proposals and read an explicitly bounded review context; other operations require task-grant or human authority"));
             }
-            if profile.actor_kind == Some(ActorKindSource::Agent)
-                && profile.task_grant.is_none()
-                && grant
-                    .operations
-                    .contains(&ProposalOperation::GetReviewContext)
-                && profile.requester_clients.is_empty()
-            {
-                errors.push(Diagnostic::error(
-                    "breg.proposal.standing-agent-review-client-required",
-                    "accessProfiles[].requesterClients",
-                    "standing-agent get-review-context disclosure requires at least one exact requesterClients client",
-                ));
-            }
             if grant.operations.is_empty()
                 || permissions
                     .iter()

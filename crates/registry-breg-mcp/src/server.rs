@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Excluded from lib.rs. Maintained runtime code and tests live in registry-mcp-edge.
 
 //! The HTTP application: health, readiness, RFC 9728 metadata, and the MCP
 //! endpoint behind the resource-server middleware.

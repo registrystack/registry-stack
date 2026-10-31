@@ -191,7 +191,67 @@ fn standing_agent_review_context_requires_an_exact_requester_client() {
         compile(&value),
         "a standing-agent review disclosure without an exact client",
     );
-    assert!(codes(&failure).contains(&REVIEW_CLIENT_REQUIRED));
+    assert_eq!(
+        codes(&failure)
+            .into_iter()
+            .filter(|code| *code == REVIEW_CLIENT_REQUIRED)
+            .count(),
+        1,
+        "one global profile-binding diagnostic owns this refusal"
+    );
+}
+
+#[test]
+fn imported_proposal_action_uses_the_global_requester_client_binding() {
+    let mut value = project();
+    value["accessProfiles"][1]["permissions"]["actions"] = json!([]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] =
+        json!(["get-review-context"]);
+    value["accessProfiles"][1]["permissions"]["proposals"][0]
+        .as_object_mut()
+        .expect("proposal permission")
+        .remove("ownership");
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["currentLabel", "proposedLabel"]);
+    value["accessProfiles"][1]
+        .as_object_mut()
+        .expect("standing agent profile")
+        .remove("requesterClients");
+    let action = value["actions"]
+        .as_array_mut()
+        .expect("actions array")
+        .remove(1);
+    value["modules"] = json!([{"id": "proposal-actions", "version": "1"}]);
+    let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
+        .expect("project parses");
+    let module = parse_module_json(
+        &serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+            "kind":"BRegModule",
+            "id":"proposal-actions",
+            "version":"1",
+            "actions":[action]
+        }))
+        .expect("module serializes"),
+    )
+    .expect("module parses");
+
+    let failure = refused(
+        compile_project(
+            &project,
+            std::slice::from_ref(&module),
+            CompileProfile::Authoring,
+        ),
+        "an imported Proposal action cannot bypass the global requester-client binding",
+    );
+    assert_eq!(
+        codes(&failure)
+            .into_iter()
+            .filter(|code| *code == REVIEW_CLIENT_REQUIRED)
+            .count(),
+        1,
+        "the project profile is validated once before imported Action compilation"
+    );
 }
 
 #[test]

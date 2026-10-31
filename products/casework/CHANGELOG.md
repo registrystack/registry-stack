@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add default-off delegated staff-reader policies and dedicated assigned-task
+  list/context routes. They admit an explicitly trusted gateway and represented
+  Staff profile, require the configured read scopes and bounded lifetime, and
+  check current assignment. Ordinary producer, decision and administrative
+  routes retain their authentication. Current-source reads additionally require
+  an independent source exchange and approved disclosure profile.
+- Bind delegated paging cursors to their reader policy so a replacement gateway
+  can share a Staff profile without accepting another policy's continuation.
+  Actor tokens accept `act.sub` with an optional matching issuer; unrelated extra
+  scopes grant no additional capability on these read-only routes.
+
 - BREAKING: `caseworkctl` removes the `data` wrapper and adopts the shared
   report envelope. Machine-readable reports open with `ok`, `command`, `status`,
   `apiVersion` and `kind`, command members are flat, and every report carries

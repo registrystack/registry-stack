@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Offline-checked bindings for one independently operated MCP resource server.
-use registry_breg_mcp::config::{
-    AuditConfig, ExchangeConfig, LimitsConfig, LogLevel, RateLimitConfig, RegistryConfig,
-    ResourceServerConfig, ResourceUri, ScopeToken, ServiceConfig,
+use registry_breg_mcp::config::{RegistryConfig, ServiceConfig};
+use registry_mcp_edge::config::{
+    AuditConfig, ExchangeConfig, LimitsConfig, LogLevel, RateLimitConfig, ResourceServerConfig,
+    ResourceServerConfigError, ResourceUri, ScopeToken,
 };
-use registry_mcp_edge::{AccessTokenAlgorithm, ResourceServerOptions};
+use registry_mcp_edge::ResourceServerOptions;
 use registry_platform_config::{
-    PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
+    PrivateListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
     SecretReference, TlsTermination, MAX_OIDC_AUDIENCE_CHARACTERS,
 };
 use registry_platform_yaml::{Diagnostic, Digest, LocalId, Report, UniqueList, Url};
@@ -14,7 +15,6 @@ use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    time::Duration,
 };
 use url::Host;
 
@@ -83,8 +83,10 @@ pub enum ProviderConfig {
         #[serde(rename = "readerPolicy")]
         reader_policy: LocalId,
         #[serde(rename = "sourceProfile")]
-        source_profile: LocalId,
-        #[serde(rename = "pageSize")]
+        #[serde(default)]
+        source_profile: Option<LocalId>,
+        #[serde(rename = "pageSize", default = "default_casework_page_size")]
+        #[cfg_attr(feature = "schema", schemars(default = "default_casework_page_size"))]
         #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 100)))]
         page_size: usize,
         authorization: DelegationConfig,
@@ -111,10 +113,14 @@ pub enum ProviderConfig {
         #[serde(rename = "machineTokenRef")]
         machine_token_ref: SecretReference,
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
-        operations: std::collections::BTreeMap<String, String>,
+        operations: std::collections::BTreeMap<String, crate::adapter::AdapterToolBinding>,
     },
 }
 registry_platform_yaml::tagged_union!(ProviderConfig);
+
+const fn default_casework_page_size() -> usize {
+    25
+}
 
 /// This selector declares the intended backend contract; Casework independently
 /// admits the trusted gateway and enforces current task and source authority.
@@ -146,7 +152,10 @@ impl RuntimeConfig {
         RuntimeConfigLoader::new(RuntimeEnvelope {
             api_version: API_VERSION,
             kind: KIND,
-        })
+        }).removed_keys(&[RemovedKey {
+            path: "rateLimits.perCitizen",
+            replacement: "Rename rateLimits.perCitizen to rateLimits.perPrincipal in PlatformMcpRuntimeConfig; breg-mcp retains perCitizen.",
+        }])
     }
     pub fn load(path: &Path) -> Result<Self, String> {
         let checked = Self::loader().check_offline::<Self>(path, true, stand_in);
@@ -179,56 +188,14 @@ impl RuntimeConfig {
         self.listener.tls_termination == TlsTermination::DevelopmentLoopback
     }
     pub fn resource_options(&self) -> ResourceServerOptions {
-        let resource = &self.resource_server;
-        ResourceServerOptions {
-            resource: resource.resource.as_str().to_owned(),
-            issuer: resource.issuer.as_str().to_owned(),
-            allow_insecure_http: resource.allow_insecure_http,
-            algorithms: resource
-                .algorithms
-                .iter()
-                .map(|algorithm| match algorithm {
-                    registry_breg_mcp::config::AccessTokenAlgorithm::RS256 => {
-                        AccessTokenAlgorithm::RS256
-                    }
-                    registry_breg_mcp::config::AccessTokenAlgorithm::RS384 => {
-                        AccessTokenAlgorithm::RS384
-                    }
-                    registry_breg_mcp::config::AccessTokenAlgorithm::ES256 => {
-                        AccessTokenAlgorithm::ES256
-                    }
-                    registry_breg_mcp::config::AccessTokenAlgorithm::ES384 => {
-                        AccessTokenAlgorithm::ES384
-                    }
-                    registry_breg_mcp::config::AccessTokenAlgorithm::EdDSA => {
-                        AccessTokenAlgorithm::EdDSA
-                    }
-                })
-                .collect(),
-            allowed_clients: resource
-                .allowed_clients
-                .iter()
-                .map(|value| value.as_str().to_owned())
-                .collect(),
-            required_scopes: resource
-                .required_scopes
-                .iter()
-                .map(|value| value.as_str().to_owned())
-                .collect(),
-            scope_claim: resource.scope_claim.to_string(),
-            maximum_token_lifetime: Duration::from_secs(
-                resource.maximum_token_lifetime_seconds.get(),
-            ),
-            resource_name: self.name.clone(),
-            principal_audit_namespace: "mcp.principal".to_owned(),
-            client_audit_namespace: "mcp.client".to_owned(),
-        }
+        self.resource_server
+            .options(&self.name, "mcp.principal", "mcp.client")
     }
     fn findings(&self) -> Vec<Diagnostic> {
         let mut result = Vec::new();
-        let mut reject = |location: &str, message: &str, action: &str| {
+        let mut reject = |code: &str, location: &str, message: &str, action: &str| {
             result.push(Diagnostic::error(
-                "platform.mcp-runtime.invalid-binding",
+                format!("platform.mcp-runtime.{code}"),
                 location,
                 message,
                 action,
@@ -239,6 +206,7 @@ impl RuntimeConfig {
             || self.name.chars().any(char::is_control)
         {
             reject(
+                "name-invalid",
                 "/name",
                 "The gateway name is invalid.",
                 "Write a non-blank display name of at most 256 characters.",
@@ -246,6 +214,7 @@ impl RuntimeConfig {
         }
         if !self.listener.is_valid() {
             reject(
+                "listener-invalid",
                 "/listener",
                 "The listener does not meet its private network boundary.",
                 "Bind to an allowed private or development loopback address.",
@@ -256,6 +225,7 @@ impl RuntimeConfig {
             || self.audit.destination().is_err()
         {
             reject(
+                "audit-invalid",
                 "/audit",
                 "The audit destination or declared secret providers are invalid.",
                 "Check the audit destination and declare the hash key's secret provider.",
@@ -263,52 +233,42 @@ impl RuntimeConfig {
         }
         if self.resource_options().validate().is_err() {
             reject(
+                "resource-server-invalid",
                 "/resourceServer",
                 "The resource-server settings are invalid.",
                 "Use a valid MCP resource, issuer, asymmetric algorithms, clients and scopes.",
             );
         }
-        if !self.development_loopback()
-            && (self.resource_server.resource.to_url().scheme() != "https"
-                || (!self.resource_server.allow_insecure_http
-                    && self.resource_server.issuer.to_url().scheme() != "https"))
-        {
+        let resource_errors = self
+            .resource_server
+            .validate(self.development_loopback(), &self.secret_providers);
+        if resource_errors.iter().any(|error| {
+            matches!(
+                error,
+                ResourceServerConfigError::InsecureResource
+                    | ResourceServerConfigError::InsecureIssuer
+            )
+        }) {
             reject(
+                "insecure-resource-server",
                 "/resourceServer",
                 "Production resource-server URLs must protect credentials.",
                 "Use HTTPS, or declare development-loopback for a local fixture.",
             );
         }
-        if self
-            .resource_server
-            .jwks_source
-            .check_with_insecure_http(
-                "resourceServer.jwksSource",
-                self.development_loopback(),
-                self.resource_server.allow_insecure_http,
+        if resource_errors.iter().any(|error| {
+            matches!(
+                error,
+                ResourceServerConfigError::JwksSource(_)
+                    | ResourceServerConfigError::JwksDocumentReference(_)
             )
-            .is_err()
-        {
+        }) {
             reject(
+                "jwks-source-invalid",
                 "/resourceServer/jwksSource",
                 "The JWKS source is invalid.",
                 "Use a permitted HTTPS source or a declared static document reference.",
             );
-        }
-        if let registry_platform_config::JwksSource::Static { document_ref } =
-            &self.resource_server.jwks_source
-        {
-            if self
-                .secret_providers
-                .check_reference("documentRef", document_ref)
-                .is_err()
-            {
-                reject(
-                    "/resourceServer/jwksSource/documentRef",
-                    "The static JWKS secret provider is not declared.",
-                    "Declare the file or environment provider used by documentRef.",
-                );
-            }
         }
         let protected_endpoint = |url: url::Url| {
             registry_platform_httputil::client::ServiceBaseUrl::new(url.clone()).is_ok()
@@ -317,10 +277,22 @@ impl RuntimeConfig {
                         && self.development_loopback()
                         && loopback_host(&url)))
         };
+        if self
+            .bindings
+            .iter()
+            .any(|binding| matches!(&binding.provider, ProviderConfig::Breg { .. }))
+            && self
+                .bindings
+                .iter()
+                .any(|binding| matches!(&binding.provider, ProviderConfig::Casework { .. }))
+        {
+            reject("mixed-personas", "/bindings", "Citizen and staff providers cannot share one inbound MCP resource.", "Deploy separate citizen and staff configurations with distinct resources, clients, scopes and credentials.");
+        }
         let mut names = BTreeSet::new();
         let mut tools = BTreeSet::new();
         if self.bindings.is_empty() || self.bindings.len() > 32 {
             reject(
+                "binding-count",
                 "/bindings",
                 "Configure between one and 32 bindings.",
                 "Keep a bounded list of explicit provider bindings.",
@@ -340,73 +312,176 @@ impl RuntimeConfig {
                     .any(|name| !tools.insert(name.as_str()))
             {
                 reject(
+                    "tool-ceiling-invalid",
                     &pointer,
                     "Binding names and public tools must be unique and non-empty.",
                     "Remove duplicates and explicitly name every public tool.",
                 );
             }
-            let check_exchange = |exchange: &ExchangeConfig| {
-                !self
-                    .resource_server
-                    .allowed_clients
-                    .iter()
-                    .any(|client| client == &exchange.client_id)
-                    && protected_endpoint(exchange.token_endpoint.to_url())
-                    && self
-                        .secret_providers
-                        .check_reference("privateKeyRef", exchange.private_key_ref.as_str())
-                        .is_ok()
-            };
             match &binding.provider {
                 ProviderConfig::Breg {
                     registry,
                     exchange,
                     service,
                 } => {
+                    let provider = format!("{pointer}/provider");
                     let review = service.review_base_url.to_url();
-                    if registry.audience.as_str() == self.resource_server.resource.as_str()
-                        || review.path() != "/"
+                    if registry.audience.as_str() == self.resource_server.resource.as_str() {
+                        reject(
+                            "downstream-audience-reused",
+                            &format!("{provider}/registry/audience"),
+                            "The BReg audience reuses the inbound MCP resource identifier.",
+                            "Configure the distinct downstream audience admitted by BReg.",
+                        );
+                    }
+                    if review.path() != "/"
                         || review.query().is_some()
                         || review.fragment().is_some()
                         || !protected_endpoint(review)
                     {
-                        reject(&pointer, "The downstream audience or review origin is invalid.", "Use a distinct BReg audience and an HTTPS review origin with no path, query or fragment.");
+                        reject(
+                            "breg-review-origin-invalid",
+                            &format!("{provider}/service/reviewBaseUrl"),
+                            "The BReg review origin is invalid.",
+                            "Use an HTTPS review origin with no path, query or fragment, or an explicitly isolated loopback fixture.",
+                        );
                     }
-                    if !check_exchange(exchange)
-                        || registry.scopes.is_empty()
-                        || !protected_endpoint(registry.base_url.to_url())
-                        || binding.tools.iter().any(|name| {
-                            !registry_breg_mcp::BREG_TOOL_NAMES.contains(&name.as_str())
-                        })
+                    if self
+                        .resource_server
+                        .allowed_clients
+                        .iter()
+                        .any(|client| client == &exchange.client_id)
                     {
-                        reject(&pointer, "The BReg capability or credential binding is invalid.", "Use supported citizen tools and a separate configured exchange identity.");
+                        reject(
+                            "exchange-client-reused",
+                            &format!("{provider}/exchange/clientId"),
+                            "The BReg exchange client is also admitted as an inbound MCP client.",
+                            "Configure a distinct client identity for the downstream token exchange.",
+                        );
+                    }
+                    if !protected_endpoint(exchange.token_endpoint.to_url()) {
+                        reject(
+                            "exchange-url-invalid",
+                            &format!("{provider}/exchange/tokenEndpoint"),
+                            "The BReg exchange endpoint is outside the configured network boundary.",
+                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                        );
+                    }
+                    if self
+                        .secret_providers
+                        .check_reference("privateKeyRef", exchange.private_key_ref.as_str())
+                        .is_err()
+                    {
+                        reject(
+                            "exchange-secret-provider-undeclared",
+                            &format!("{provider}/exchange/privateKeyRef"),
+                            "The BReg exchange-key secret provider is not declared.",
+                            "Declare the environment or file provider used by privateKeyRef.",
+                        );
+                    }
+                    if !protected_endpoint(registry.base_url.to_url()) {
+                        reject(
+                            "provider-url-invalid",
+                            &format!("{provider}/registry/baseUrl"),
+                            "The BReg service URL is outside the configured network boundary.",
+                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                        );
+                    }
+                    for (tool_index, name) in binding.tools.iter().enumerate() {
+                        if !registry_breg_mcp::BREG_TOOL_NAMES.contains(&name.as_str()) {
+                            reject(
+                                "provider-tool-unsupported",
+                                &format!("{pointer}/tools/{tool_index}"),
+                                "The BReg provider does not support this public tool.",
+                                "Remove the tool or bind it to a provider that implements it.",
+                            );
+                        }
                     }
                 }
                 ProviderConfig::Casework {
                     authority: CaseworkAuthority::DelegatedStaffRead,
                     base_url,
-                    reader_policy,
-                    source_profile,
+                    reader_policy: _,
+                    source_profile: _,
                     page_size,
                     authorization,
                 } => {
-                    if !check_exchange(&authorization.exchange)
-                        || authorization.audience.as_str() == self.resource_server.resource.as_str()
-                        || authorization.scopes.is_empty()
-                        || !protected_endpoint(base_url.to_url())
-                        || crate::casework::CaseworkOptions::new(
-                            base_url.to_url(),
-                            reader_policy.to_string(),
-                            source_profile.to_string(),
-                            *page_size,
-                        )
-                        .is_err()
-                        || binding
-                            .tools
-                            .iter()
-                            .any(|name| !crate::casework::TOOL_NAMES.contains(&name.as_str()))
+                    let provider = format!("{pointer}/provider");
+                    let exchange = &authorization.exchange;
+                    if self
+                        .resource_server
+                        .allowed_clients
+                        .iter()
+                        .any(|client| client == &exchange.client_id)
                     {
-                        reject(&pointer, "The Casework read or delegation binding is invalid.", "Use assigned task reads, bounded pages and a separate staff delegation credential.");
+                        reject(
+                            "exchange-client-reused",
+                            &format!("{provider}/authorization/exchange/clientId"),
+                            "The Casework exchange client is also admitted as an inbound MCP client.",
+                            "Configure a distinct client identity for the downstream token exchange.",
+                        );
+                    }
+                    if !protected_endpoint(exchange.token_endpoint.to_url()) {
+                        reject(
+                            "exchange-url-invalid",
+                            &format!("{provider}/authorization/exchange/tokenEndpoint"),
+                            "The Casework exchange endpoint is outside the configured network boundary.",
+                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                        );
+                    }
+                    if self
+                        .secret_providers
+                        .check_reference("privateKeyRef", exchange.private_key_ref.as_str())
+                        .is_err()
+                    {
+                        reject(
+                            "exchange-secret-provider-undeclared",
+                            &format!("{provider}/authorization/exchange/privateKeyRef"),
+                            "The Casework exchange-key secret provider is not declared.",
+                            "Declare the environment or file provider used by privateKeyRef.",
+                        );
+                    }
+                    if authorization.audience.as_str() == self.resource_server.resource.as_str() {
+                        reject(
+                            "downstream-audience-reused",
+                            &format!("{provider}/authorization/audience"),
+                            "The Casework audience reuses the inbound MCP resource identifier.",
+                            "Configure the distinct downstream audience admitted by Casework.",
+                        );
+                    }
+                    if authorization.scopes.is_empty() {
+                        reject(
+                            "downstream-scopes-empty",
+                            &format!("{provider}/authorization/scopes"),
+                            "The Casework downstream scope set is empty.",
+                            "Configure the least-privileged delegated-reader scopes required by Casework.",
+                        );
+                    }
+                    if !protected_endpoint(base_url.to_url()) {
+                        reject(
+                            "provider-url-invalid",
+                            &format!("{provider}/baseUrl"),
+                            "The Casework service URL is outside the configured network boundary.",
+                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                        );
+                    }
+                    if !(1..=100).contains(page_size) {
+                        reject(
+                            "casework-page-size-invalid",
+                            &format!("{provider}/pageSize"),
+                            "The Casework page size is outside its supported bounds.",
+                            "Configure pageSize between 1 and 100.",
+                        );
+                    }
+                    for (tool_index, name) in binding.tools.iter().enumerate() {
+                        if !crate::casework::TOOL_NAMES.contains(&name.as_str()) {
+                            reject(
+                                "provider-tool-unsupported",
+                                &format!("{pointer}/tools/{tool_index}"),
+                                "The Casework provider does not support this public tool.",
+                                "Remove the tool or bind it to a provider that implements it.",
+                            );
+                        }
                     }
                 }
                 ProviderConfig::Adapter {
@@ -421,13 +496,14 @@ impl RuntimeConfig {
                     let provider = format!("{pointer}/provider");
                     if !protected_endpoint(base_url.to_url()) {
                         reject(
-                            &format!("{provider}/baseUrl"),
+                            "adapter-url-invalid", &format!("{provider}/baseUrl"),
                             "The Adapter base URL is outside the configured network boundary.",
                             "Use HTTPS, or numeric loopback HTTP only with a development-loopback listener.",
                         );
                     }
                     if !contract_file.is_absolute() {
                         reject(
+                            "adapter-path-invalid",
                             &format!("{provider}/contractFile"),
                             "The Adapter effective-contract file path is not absolute.",
                             "Write the absolute path of the reviewed effective-contract export.",
@@ -435,7 +511,7 @@ impl RuntimeConfig {
                     }
                     if !valid_digest(contract_digest) {
                         reject(
-                            &format!("{provider}/contractDigest"),
+                            "adapter-digest-invalid", &format!("{provider}/contractDigest"),
                             "The Adapter contract digest is not a SHA-256 digest.",
                             "Write sha256: followed by the 64 lowercase hexadecimal digits from the reviewed export.",
                         );
@@ -446,6 +522,7 @@ impl RuntimeConfig {
                         .is_err()
                     {
                         reject(
+                            "adapter-secret-provider-undeclared",
                             &format!("{provider}/machineTokenRef"),
                             "The Adapter machine-token secret provider is not declared.",
                             "Declare the environment or file provider used by machineTokenRef.",
@@ -453,14 +530,14 @@ impl RuntimeConfig {
                     }
                     if !valid_adapter_audience(audience) {
                         reject(
-                            &format!("{provider}/audience"),
+                            "adapter-audience-invalid", &format!("{provider}/audience"),
                             "The Adapter audience is invalid.",
                             "Use the exact non-empty Adapter OIDC audience of at most 512 characters, without control characters.",
                         );
                     }
                     if audience.as_str() == self.resource_server.resource.as_str() {
                         reject(
-                            &format!("{provider}/audience"),
+                            "adapter-audience-reused", &format!("{provider}/audience"),
                             "The Adapter audience reuses the inbound MCP resource identifier.",
                             "Configure the distinct audience stated by the Adapter effective contract.",
                         );
@@ -472,26 +549,49 @@ impl RuntimeConfig {
                         || operations.len() != binding.tools.len()
                     {
                         reject(
-                            &format!("{provider}/operations"),
+                            "adapter-tool-ceiling-mismatch", &format!("{provider}/operations"),
                             "The Adapter operation map does not exactly cover the binding's public tools.",
                             "Map each configured public tool exactly once and remove every unlisted mapping.",
                         );
                     }
                     if contract_file.is_absolute() && valid_digest(contract_digest) {
-                        match crate::adapter::AdapterContract::load(contract_file, contract_digest) {
+                        match crate::adapter::AdapterContract::load_bound_checked(
+                            contract_file, contract_digest,
+                            &operations.values().map(|binding| binding.operation.clone()).collect(),
+                        ) {
                             Ok(contract)
                                 if contract
                                     .validate_binding(operations, audience.as_str())
                                     .is_ok() => {}
                             Ok(_) => reject(
-                                &provider,
+                                "adapter-binding-mismatch", &provider,
                                 "The Adapter audience or operation mapping does not match the pinned effective contract.",
                                 "Use the audience and served operation identifiers from the exact reviewed export.",
                             ),
-                            Err(_) => reject(
-                                &format!("{provider}/contractFile"),
-                                "The exact pinned Adapter effective contract could not be loaded.",
-                                "Export the contract again, review it, and configure its absolute file path and exact digest.",
+                            Err(crate::adapter::AdapterContractLoadError::Unreadable) => reject(
+                                "adapter-contract-unreadable", &format!("{provider}/contractFile"),
+                                "The Adapter effective-contract file could not be read.",
+                                "Check the absolute file path, readability and bounded file size.",
+                            ),
+                            Err(crate::adapter::AdapterContractLoadError::Malformed) => reject(
+                                "adapter-contract-invalid", &format!("{provider}/contractFile"),
+                                "The Adapter effective contract or selected operation schema is unsupported.",
+                                "Use a compatible producer export and supported configured read operations.",
+                            ),
+                            Err(crate::adapter::AdapterContractLoadError::DigestMismatch) => reject(
+                                "adapter-digest-mismatch", &format!("{provider}/contractDigest"),
+                                "The Adapter export does not match the reviewed digest pin.",
+                                "Review the producer export and copy its digest member; do not use a file checksum.",
+                            ),
+                            Err(crate::adapter::AdapterContractLoadError::UnsupportedSelection) => reject(
+                                "adapter-operation-not-read", &format!("{provider}/operations"),
+                                "A configured Adapter operation is outside the supported read-only contract.",
+                                "Select a served GET or explicitly read-only POST operation; external writes are not supported.",
+                            ),
+                            Err(crate::adapter::AdapterContractLoadError::SelectionMismatch) => reject(
+                                "adapter-operation-missing", &format!("{provider}/operations"),
+                                "A selected Adapter operation is absent from the pinned effective contract.",
+                                "Use only served operation identifiers from the reviewed producer export.",
                             ),
                         }
                     }

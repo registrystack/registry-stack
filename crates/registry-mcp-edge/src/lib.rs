@@ -11,6 +11,7 @@
 
 mod audit;
 mod authorization;
+pub mod config;
 mod core;
 mod handler;
 mod inbound;

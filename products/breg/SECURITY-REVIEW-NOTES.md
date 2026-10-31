@@ -4887,9 +4887,33 @@ start or edit its caller-owned draft under the existing operation ceiling.
   the offline runtime-config refusal and its listed-client control on the
   maintained minimal project with Record permissions removed.
 - `crates/registry-breg/src/api/tests/immediate_action_tests.rs`:
-  `proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_owned_drafts`
-  retains the existing standing-agent operation ceiling.
+  `proposal_task_scopes_and_standing_agent_draft_and_context_permissions_are_exact`
+  checks separate task-grant, draft and explicit review-context permissions.
 
 No request authorization or PostgreSQL path changes. The construction check
 fails earlier on a configuration whose named client could never pass token
 verification.
+
+## Opt-in delegated agent review-context disclosure
+
+An explicitly granted standing-agent profile may use `get-review-context`,
+including on a submitted Proposal. This extends the earlier Start/Edit-only
+Proposal ceiling for a read, without granting submission, decisions, ordinary
+Proposal Get/List, status reads or direct mutation. It is a source-owned service
+permission, independent of a task grant and the represented person's own BReg
+profile.
+
+Compilation requires an exact nonempty `requesterClients` ceiling. Runtime
+admission requires a verified trusted actor. Fields, rows, targets, purposes and
+scopes are constrained by the authored profile; an absent or unrestricted
+constraint is not silently narrowed to human permissions. Keep the capability
+disabled until the institution approves its reviewer population and source
+ceiling. Casework assignment checks do not replace that source ceiling.
+
+`standing_agent_review_context_requires_an_exact_requester_client` and
+`standing_agent_review_context_refuses_an_authored_empty_requester_client_list`
+in `crates/registry-breg/tests/standing_agent_ceiling.rs` prove compilation
+refusals. `delegated_standing_agent_reads_only_its_bounded_review_context` in
+`crates/registry-breg/src/api/tests/immediate_action_tests.rs` checks runtime
+disclosure, wrong-client and direct-agent refusal, and continued lifecycle
+refusal. These remain distinct from human confirmation and approval.

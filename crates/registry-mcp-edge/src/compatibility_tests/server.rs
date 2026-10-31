@@ -12,14 +12,17 @@ use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_httputil::{client::StaticToken, FetchUrlPolicy};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{TestAuthorizationServer, TestClient};
-use rmcp::model::Tool;
+use rmcp::{
+    model::{ProtocolVersion, Tool},
+    ServerHandler,
+};
 use tower::ServiceExt;
 use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
-    router, token_verifier, AccessTokenAlgorithm, AuditOptions, EffectCertainty,
-    FixedAuthorizationFactory, GatewayCore, GatewayInfo, Invocation, Provider,
+    handler::GatewayHandler, router, token_verifier, AccessTokenAlgorithm, AuditOptions,
+    EffectCertainty, FixedAuthorizationFactory, GatewayCore, GatewayInfo, Invocation, Provider,
     ProviderAuthorization, ProviderBinding, ProviderFailure, ProviderOutcome, RateLimitOptions,
     ResolvedTool, ResourceServer, ResourceServerOptions, ServerOptions, TokenBucketOptions,
     ToolAuditLog, VerifiedCaller,
@@ -54,6 +57,27 @@ impl Provider for UnusedProvider {
             EffectCertainty::NoEffect,
         ))
     }
+}
+
+fn gateway_core() -> Arc<GatewayCore> {
+    let token = StaticToken::new("test-only-static-token").expect("token");
+    let binding = ProviderBinding::new(
+        Arc::new(UnusedProvider),
+        Arc::new(FixedAuthorizationFactory::new(Arc::new(token))),
+        ["unused".to_owned()],
+    )
+    .expect("binding");
+    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(Box::new(io::sink())));
+    Arc::new(
+        GatewayCore::new(
+            [binding],
+            audit,
+            AuditOptions::new("registry-test-mcp.tool-call/v1", "test_mcp.tool_call")
+                .expect("audit"),
+            GatewayInfo::new("test-mcp", "Test", "Test").expect("info"),
+        )
+        .expect("core"),
+    )
 }
 
 async fn application(resource: &str) -> Router {
@@ -97,23 +121,8 @@ async fn application(resource: &str) -> Router {
         },
     )
     .expect("resource server");
-    let token = StaticToken::new("test-only-static-token").expect("token");
-    let binding = ProviderBinding::new(
-        Arc::new(UnusedProvider),
-        Arc::new(FixedAuthorizationFactory::new(Arc::new(token))),
-        ["unused".to_owned()],
-    )
-    .expect("binding");
-    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(Box::new(io::sink())));
-    let core = GatewayCore::new(
-        [binding],
-        audit,
-        AuditOptions::new("registry-test-mcp.tool-call/v1", "test_mcp.tool_call").expect("audit"),
-        GatewayInfo::new("test-mcp", "Test", "Test").expect("info"),
-    )
-    .expect("core");
     router(
-        Arc::new(core),
+        gateway_core(),
         Arc::new(resource_server),
         &ServerOptions {
             resource: Url::parse(&options.resource).expect("resource URL"),
@@ -121,6 +130,16 @@ async fn application(resource: &str) -> Router {
             hsts: false,
         },
     )
+}
+
+#[test]
+fn initialization_pins_the_locked_sdk_protocol_version() {
+    let initialization = GatewayHandler::new(gateway_core()).get_info();
+
+    assert_eq!(
+        initialization.protocol_version,
+        ProtocolVersion::V_2026_07_28
+    );
 }
 
 async fn status(app: &Router, uri: &str, host: Option<&str>) -> StatusCode {

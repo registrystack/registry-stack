@@ -16,6 +16,9 @@
         "clientIdRef": {
           "$ref": "#/$defs/SecretReference"
         },
+        "delegatedDisplayExchange": {
+          "$ref": "#/$defs/DelegatedDisplayExchangeBinding"
+        },
         "resource": {
           "type": "string"
         },
@@ -77,6 +80,45 @@
         "id",
         "accessProfile",
         "scopes"
+      ],
+      "type": "object"
+    },
+    "DelegatedDisplayExchangeBinding": {
+      "additionalProperties": false,
+      "description": "Dedicated per-call delegation for staff-subject source disclosure. This is\nseparate from the provider's status and task-context service credential.",
+      "properties": {
+        "clientAssertionAudience": {
+          "type": "string"
+        },
+        "clientAssertionKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "clientIdRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientIdRef",
+        "clientAssertionKeyRef",
+        "resource",
+        "scopes",
+        "generation"
       ],
       "type": "object"
     },

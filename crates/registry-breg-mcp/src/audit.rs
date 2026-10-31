@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Excluded from lib.rs. Maintained runtime code and tests live in registry-mcp-edge.
 
 //! The gateway's minimized tool-call audit.
 //!

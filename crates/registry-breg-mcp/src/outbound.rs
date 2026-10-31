@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Excluded from lib.rs. Maintained runtime code and tests live in registry-mcp-edge.
 
 //! The outbound half of the gateway: one delegated registry client per call.
 //!

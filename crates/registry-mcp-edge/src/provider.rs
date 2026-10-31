@@ -86,8 +86,6 @@ pub enum EffectCertainty {
     NoEffect,
     /// The provider confirmed the effect.
     Confirmed,
-    /// The provider accepted work whose completion remains pending.
-    AcceptedPending,
     /// A request may have taken effect, but its result is not known.
     Unknown,
 }

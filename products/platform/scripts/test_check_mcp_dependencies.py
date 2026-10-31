@@ -19,6 +19,9 @@ NAMES = {
     "runtime": "registry-mcp",
     "provider": "registry-breg-mcp",
     "breg-client": "registry-breg-client",
+    "breg-runtime": "registry-breg",
+    "evidence": "registry-evidence",
+    "cli-docs": "registry-cli-docs",
     "casework-client": "registry-casework-client",
     "casework-core": "registry-casework-core",
     "casework-runtime": "registry-casework",
@@ -137,6 +140,43 @@ class McpDependencyTests(unittest.TestCase):
         edges = valid_edges()
         edges["casework-runtime"] = []
         edges["runtime"] = ["edge", ("casework-runtime", "dev")]
+        self.assertEqual(MODULE.violations(metadata(edges)), [])
+
+    def test_reviewed_boundaries_do_not_hide_foreign_or_runtime_dependencies(self) -> None:
+        for boundary, dependency in (
+            ("provider", "breg-runtime"),
+            ("provider", "evidence"),
+            ("casework-client", "casework-runtime"),
+        ):
+            with self.subTest(boundary=boundary, dependency=dependency):
+                edges = valid_edges()
+                edges[dependency] = []
+                edges[boundary].append(dependency)
+                failures = "\n".join(MODULE.violations(metadata(edges)))
+                self.assertIn(NAMES[boundary], failures)
+                self.assertIn(NAMES[dependency], failures)
+
+    def test_a_provider_cannot_hide_an_engine_behind_its_client(self) -> None:
+        edges = valid_edges()
+        edges["breg-runtime"] = []
+        edges["breg-client"].append("breg-runtime")
+        failures = "\n".join(MODULE.violations(metadata(edges)))
+        self.assertIn("registry-breg-mcp", failures)
+        self.assertIn("registry-breg", failures)
+
+    def test_products_cannot_reach_mcp_services_or_the_shared_edge(self) -> None:
+        for target in ("runtime", "edge"):
+            with self.subTest(target=target):
+                edges = valid_edges()
+                edges["casework-runtime"] = [target]
+                failures = "\n".join(MODULE.violations(metadata(edges)))
+                self.assertIn("registry-casework", failures)
+                self.assertIn(NAMES[target], failures)
+
+    def test_cli_catalog_and_product_dev_fixtures_keep_their_expected_edges(self) -> None:
+        edges = valid_edges()
+        edges["cli-docs"] = ["runtime"]
+        edges["casework-runtime"] = [("runtime", "dev")]
         self.assertEqual(MODULE.violations(metadata(edges)), [])
 
     def test_missing_boundary_package_fails_closed(self) -> None:

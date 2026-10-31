@@ -954,14 +954,9 @@ impl CaseworkService {
         };
         let mut retained_author_required = false;
         let context = match record.context.as_ref().ok_or(ReviewRuntimeError::Corrupt)? {
-            ReviewContext::Submitted { snapshot } => {
-                if source_profile_id.is_some() {
-                    return Err(ReviewRuntimeError::SourceProfileNotApplicable);
-                }
-                ReviewTaskContextData::Submitted {
-                    snapshot: snapshot.clone(),
-                }
-            }
+            ReviewContext::Submitted { snapshot } => ReviewTaskContextData::Submitted {
+                snapshot: snapshot.clone(),
+            },
             ReviewContext::CurrentSource { binding } => {
                 let ReviewContextPolicy::CurrentSource { provider, contract } =
                     &record.policy.context

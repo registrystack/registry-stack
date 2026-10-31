@@ -15,6 +15,7 @@ workspace = true
 schema = [
     "dep:schemars",
     "registry-breg-mcp/schema",
+    "registry-mcp-edge/schema",
     "registry-platform-audit/schema",
     "registry-platform-config/schema",
     "registry-platform-yaml/schema",

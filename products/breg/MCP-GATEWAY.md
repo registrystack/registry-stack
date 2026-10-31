@@ -33,6 +33,13 @@ the review page with `registry.action`, `registry.targetInput`, and its independ
 permissions belong in the registry project. Deployment supplies issuer/exchange
 credentials through secret references.
 
+The product-neutral `registry-mcp-edge` supplies protected transport and durable
+audit. The configurable, source-built `registry-mcp` supporting service can bind
+this same citizen provider, or a separate Casework delegated staff reader.
+Keep `breg-mcp` for existing citizen deployments. The configurable service's
+ownership, protocol and source disclosure contract are recorded in
+[the composition design](../platform/MCP-GATEWAY.md).
+
 Use the maintained site guides:
 
 - [Citizen chat assistant](../../docs/site/src/content/docs/configure/breg-mcp.mdx)

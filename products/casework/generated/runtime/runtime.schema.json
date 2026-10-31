@@ -219,9 +219,6 @@
       "additionalProperties": false,
       "description": "One deployment-owned delegation ceiling. The policy id is the containing\nmap key, never a human profile supplied by the HTTP caller.",
       "properties": {
-        "actorIssuer": {
-          "$ref": "#/$defs/Url"
-        },
         "actorSubject": {
           "type": "string"
         },
@@ -256,7 +253,6 @@
       "required": [
         "profile",
         "client",
-        "actorIssuer",
         "actorSubject",
         "assertionIssuer",
         "requiredScope",

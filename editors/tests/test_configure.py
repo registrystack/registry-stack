@@ -35,6 +35,12 @@ class ConfigureTests(unittest.TestCase):
             shutil.copyfile(ROOT / source, path / marker)
         return path
 
+    def test_mcp_schema_mappings_stay_in_the_selected_mcp_project(self):
+        mcp = configure.SCHEMAS["mcp"]
+        self.assertEqual(len(mcp), len(set(mcp)))
+        self.assertIn("casework.example.yaml", [pattern for _, pattern in mcp])
+        self.assertFalse(any("mcp-runtime" in schema for schema, _ in configure.SCHEMAS["platform"]))
+
     def test_editor_versions_match_the_hosted_server(self):
         expected = configure.workspace_version()
         vscode = json.loads((ROOT / "editors/vscode/package.json").read_text())
@@ -416,7 +422,7 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("mcp", project, self.workspace, None)
         schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
         managed = project / ".registry-stack-editor/schemas"
-        self.assertEqual(schemas[(managed / "mcp-runtime.schema.json").as_uri()], [str(project / "runtime.yaml"), str(project / "runtime.example.yaml")])
+        self.assertEqual(schemas[(managed / "mcp-runtime.schema.json").as_uri()], [str(project / "runtime.yaml"), str(project / "runtime.example.yaml"), str(project / "casework.example.yaml"), str(project / "adapter.example.yaml")])
         self.assertEqual((managed / "mcp-runtime.schema.json").read_bytes(), (ROOT / "products/platform/generated/mcp-runtime/mcp-runtime.schema.json").read_bytes())
         task = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"][0]
         self.assertEqual(task["command"], "registry-mcp")
@@ -432,7 +438,6 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             schemas,
             {
-                (managed / "mcp-runtime.schema.json").as_uri(): [str(project / "runtime.yaml"), str(project / "runtime.example.yaml")],
                 (managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")],
                 (managed / "connections.schema.json").as_uri(): [str(project / "connections.yaml")],
                 (managed / "check-acceptances.schema.json").as_uri(): [

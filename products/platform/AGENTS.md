@@ -38,6 +38,18 @@ Preserve these shared boundaries:
 - SQLite is bounded and read-only. Shared OIDC helpers verify tokens but do
   not replace each product's principal, claim, scope, or authority rules.
 
+## MCP composition service
+
+Integration maintainers own `registry-mcp`, a source-built supporting service.
+Platform owns `registry-mcp-edge`, its neutral protected transport, verified
+caller, per-binding credential and durable audit primitive. BReg citizen,
+Casework staff and experimental Live Adapter consumers own downstream
+authorization and data disclosure. Apply their product guides when changing
+those semantics. The service refuses arbitrary URL/SQL tools, dynamic plugins,
+inherited product authority and mixed citizen/staff resource configurations.
+See [the design record](MCP-GATEWAY.md) for the protocol subset, operator choice,
+source disclosure exception and producer readiness limits.
+
 ## Audit writer
 
 Review `registry-platform-audit`'s file writer against this contract:

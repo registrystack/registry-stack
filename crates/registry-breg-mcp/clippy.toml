@@ -26,6 +26,7 @@ disallowed-methods = [
   { path = "registry_breg_client::BaseRegistryClient::with_bearer_token", reason = "outbound calls authenticate only through the per-call token exchange" },
   { path = "registry_platform_httputil::client::StaticToken::new", reason = "outbound calls authenticate only through the per-call token exchange" },
   { path = "registry_platform_httputil::client::BearerToken::new", reason = "outbound calls authenticate only through the per-call token exchange" },
+  { path = "registry_mcp_edge::FixedAuthorizationFactory::new", reason = "BReg outbound calls authenticate only through per-call delegation from the verified citizen" },
 
   # A credential attached some other way than the exchange. The one call that
   # attaches authorization to the client is `client::authorized`, which takes
