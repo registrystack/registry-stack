@@ -1,0 +1,25 @@
+namespace Adapter {
+  entity OrganisationUnit in [OrganisationUnit];
+
+  entity Principal = {
+    verifiedPerson: Bool,
+    organisationUnit: OrganisationUnit,
+  };
+
+  entity Record = {
+    ownerPrincipal: Principal,
+    organisationUnit: OrganisationUnit,
+  };
+
+  action "records-get" appliesTo {
+    principal: Principal,
+    resource: Record,
+    context: { actingService: String, explicitDeny: Bool },
+  };
+
+  action "records-update" appliesTo {
+    principal: Principal,
+    resource: Record,
+    context: { actingService: String, explicitDeny: Bool },
+  };
+}

@@ -45,7 +45,7 @@ filtering.
 | Port-table milestone | PASS for Increment 1 | 37 rows, 35 delivered with evidence, 2 pending |
 | Strict workspace configuration conformance | EXCEPTION, not green | 5,553 cells: 4,133 pass, 2 fail, 0 stale, 0 blocked, 1,418 not applicable; no Adapter failure |
 | Dependency advisory gate | EXCEPTION, not green | Three unchanged Wasmtime 48.0.7 advisories; no manifest or version change and no new ignore |
-| Latest MCP/gateway pairing | HOLD | First six-case attempt failed at fixture digest-pin preparation before any runtime journey; successful matching rerun unverified |
+| Latest MCP/gateway read pairing | PASS | 6 native Adapter/PostgreSQL cases passed, zero failed or ignored; four artifact hashes stable and committed fixture archive reproduced |
 | Full program definition of done | HOLD | Later port rows, increments, real OpenCRVS, and workspace debt remain open |
 
 The two strict-configuration failures are the unchanged `evidence/bundle` and
@@ -118,13 +118,16 @@ documented, `testedVersions` is empty, and no real OpenCRVS system was reached.
 The required client is unavailable. No OpenCRVS read or write is accepted as
 live proof.
 
-The earlier matching MCP/gateway read integration passed at the accepted read
-checkpoint, but that paired artifact is now historical. The latest Adapter v3
-artifact has been handed off. The first six-case attempt failed during fixture
-digest-pin preparation, with zero cases passed and no runtime journey reached.
-Gateway fixture repair and a successful matching-artifact rerun remain
-unverified. Native Adapter writes remain excluded from the external gateway
-contract.
+The latest immutable Adapter v3 artifact passed all six matching MCP/gateway
+native PostgreSQL cases, with zero failures or ignored cases. The lead verified
+the raw log hash and all four artifact hashes, and reproduced the fixture
+archive from committed source. The gateway's later two-file inventory and
+regression-test follow-up changes no runtime. The first attempt failed at
+fixture digest-pin preparation before any runtime journey; the repaired
+harness prepares temporary projects with exact supplied profile and pack pins.
+This establishes bounded reads with synthetic issuers and sources and real
+product runtimes and PostgreSQL. Native Adapter writes remain excluded from
+the external gateway contract.
 
 ## Open items before full program acceptance
 
@@ -145,21 +148,18 @@ contract.
 7. Complete the remaining Increment 3 obligations, including real OpenCRVS
    reads and writes, the applicable source protocol decision, and the planned
    facade-contract work.
-8. Run the latest six-case MCP/gateway native integration against the handed
-   off Adapter artifact and latest gateway repair. Do not infer MCP write
-   authority from native Adapter writes.
-9. Resolve or formally retain the two non-Adapter strict-configuration
+8. Resolve or formally retain the two non-Adapter strict-configuration
    failures. The current command is red even though no Adapter cell failed.
-10. Resolve or formally retain the three Wasmtime advisories. The current
+9. Resolve or formally retain the three Wasmtime advisories. The current
     dependency advisory command is red even though Adapter does not reach
     Wasmtime normally.
-11. Keep personal delegation, record-level and field-level authorization,
+10. Keep personal delegation, record-level and field-level authorization,
     MCP writes, and typed non-record commands behind their separate contracts
     and acceptance gates.
-12. Complete the matching MCP proof against the immutable Adapter artifact,
-    then execute the prepared one-PR Adapter publication under Jeremi's
-    authority. Adapter integration precedes MCP integration. No push, merge,
-    tag, release, or production deployment is claimed here.
+11. Execute the prepared one-PR Adapter publication under Jeremi's authority.
+    The latest matching read proof is complete; Adapter integration precedes
+    MCP integration. No push, merge, tag, release, or production deployment is
+    claimed here.
 
 Until these items close, this file is a current-checkpoint audit under the
 planned `final.md` path, not the final full-program PASS required by

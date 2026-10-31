@@ -85,6 +85,7 @@ credential kind never falls back to anonymous access.
 | Fresh real DHIS2 create and attribute-update journey | 25 of 25 checks passed: create, update, exact body replay with the original response ID in header and body, changed-body mismatch without another send, readback and ownership-verified cleanup |
 | Fresh real `verify --live` | 1 request executed, 0 waits, 0 diagnostics |
 | Fresh HAPI journey | 18 recorded checks passed for one synthetic Patient: setup and authentication, conditional create 201, read and search 200, exact replay, mismatch 422, one source POST, owned delete 200 and readback 410 |
+| Latest matching MCP read integration | 6 native Adapter/PostgreSQL cases passed, 0 failed or ignored; all four immutable artifact hashes stable and the committed fixture archive reproduced |
 
 The lead reports that the DHIS2 and HAPI journeys used the same immutable
 feature-enabled Adapter executable and matching CLI/runtime library. Its
@@ -94,12 +95,16 @@ This review did not access the private harness, environment, logs, or recovery
 material. Exact local artifact identities and private execution evidence remain
 in the lead's checkpoint.
 
-The earlier 6-of-6 matching MCP/gateway native read proof belongs to the
-accepted read checkpoint and remains historical evidence only. A v3 Adapter
-artifact has been handed off. The first six-case attempt failed during fixture
-digest-pin preparation, with zero cases passed and no runtime journey reached.
-Gateway fixture repair and a successful matching-artifact rerun remain
-unverified. No current matching-artifact MCP claim is made here.
+The latest six-case MCP/gateway native read run passed against the immutable
+v3 Adapter artifact, using synthetic issuers and sources with real product
+processes and PostgreSQL. All four artifact hashes stayed unchanged before and
+after; the lead verified the raw log hash and reproduced the fixture archive
+from its committed source. The gateway's later two-file inventory and
+regression-test follow-up changes no runtime. The first attempt failed at
+fixture digest-pin preparation before any runtime journey; the repaired
+harness prepares temporary copies with exact supplied profile and pack pins.
+This closes the bounded read checkpoint, without granting MCP write or
+personal authority. Exact candidate identities remain in private run evidence.
 
 Three generated property-test seeds were present and executed in both owning
 gates. Their exact files are retained for reproducibility, including cases

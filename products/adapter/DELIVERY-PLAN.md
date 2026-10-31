@@ -657,6 +657,25 @@ verified by the commands above. The final report to Jeremi states the count
 of `captured` and `documented` fixtures, every open finding, every
 contradiction rule 11 surfaced, and the decisions still pending.
 
+## Live-source handover checkpoint
+
+The current bounded checkpoint covers the accepted read engine, synchronous
+DHIS2 create and update with replay and recovery, actual fixture execution,
+live verification, and the separate MCP read contract. It does not accept the
+remaining Increment 2 or Increment 3 work. The
+[handover closure record](reviews/handover-closure.md) maps the inherited
+cleanup items to current source and evidence; the
+[current-checkpoint audit](reviews/final.md) retains every full-program gap.
+
+The requested Cedar versus closed-YAML spike followed the first real
+synchronous write. Its [isolated experiment](experiments/authorization-spike/)
+and [comparison](reviews/authorization-spike.md) test organisation-unit
+hierarchy and source-owned record ownership using synthetic facts. These are
+research inputs, not registered Adapter configuration formats or runtime
+authorization. Neither candidate changes trusted-machine admission or enables
+personal delegation, record-level disclosure, or MCP writes. Any integration
+needs a separate authority, acquisition, freshness and enforcement contract.
+
 ## Increment checklist
 
 - [x] Increment 0

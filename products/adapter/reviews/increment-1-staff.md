@@ -19,8 +19,8 @@ remaining read-engine definition of done.
   PostgreSQL gates, workspace check and Clippy, CLI catalog, CI classifier,
   port-table milestone, generated contracts, and exact-artifact source proof
   are green. The three retained property-test seeds were exercised by both
-  owning gates. The earlier matching MCP proof is historical; the latest v3
-  pairing is pending and is not included in this PASS.
+  owning gates. The lead has also verified the latest immutable-artifact MCP
+  read pairing described below.
 - **Increment 1 acceptance: PASS with explicit workspace exceptions.** Strict
   workspace configuration conformance still has two unchanged failures owned
   by Evidence and Coordinator. `cargo deny` still reports three unchanged
@@ -242,12 +242,15 @@ executable, its matching CLI and runtime library:
 Exact local artifact identities and the private execution details remain in
 the lead's checkpoint. This report relies only on the supplied counts and
 identity readback. It does not expose credentials or private harness content.
-The earlier 6-of-6 matching MCP proof is historical to the accepted read
-checkpoint. The latest Adapter artifact has been handed off. Its first
-six-case attempt failed during fixture digest-pin preparation, with zero cases
-passed and no runtime journey reached. Gateway fixture repair and a successful
-matching-artifact rerun remain unverified. Neither proof is permission to
-claim MCP writes or broader product authority.
+The latest immutable Adapter artifact passed six matching MCP/Adapter native
+PostgreSQL cases, with zero failures or ignored cases. The lead verified the
+log hash, all four retained artifact hashes, and the archive reproduced from
+committed source. The first attempt failed at fixture digest-pin preparation
+before any runtime journey; the successful rerun uses temporary projects with
+exact supplied profile and pack pins. The gateway's subsequent two-file
+inventory and regression-test follow-up changes no runtime. This is bounded
+read-composition evidence with synthetic issuers and sources, not permission
+to claim MCP writes or broader product authority.
 
 Three generated property-test seeds, stored in two files, were present in both
 owning runs and are retained unchanged in the final delivery set. Committing
@@ -286,9 +289,9 @@ advisories remain workspace dependency debt and are not claimed fixed.
   under the named anonymous-HTTPS acknowledgement. It does not establish a
   maintained FHIR pack or turn the documented experiment fixtures into
   captured evidence.
-- The latest matching MCP/gateway native run is pending. The earlier paired
-  read proof is historical and native writes remain outside the gateway
-  contract.
+- The latest matching MCP/gateway native read run is green. Native writes
+  remain outside the gateway contract; the proof uses synthetic issuers and
+  sources rather than a real external deployment.
 - Personal delegation, record and field disclosure authority, MCP writes, and
   typed non-record commands retain their own gates.
 - No push, merge, tag, release, or production deployment is claimed.

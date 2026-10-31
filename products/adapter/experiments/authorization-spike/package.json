@@ -1,0 +1,14 @@
+{
+  "name": "registry-adapter-authorization-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "spike": "node src/run.mjs"
+  },
+  "dependencies": {
+    "@cedar-policy/cedar-wasm": "4.14.0",
+    "yaml": "2.9.1"
+  }
+}

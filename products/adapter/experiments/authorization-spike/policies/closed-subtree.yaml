@@ -1,0 +1,10 @@
+apiVersion: authorization-spike/v1
+kind: ClosedAuthorizationPolicy
+policy:
+  id: org-unit-subtree-read
+  effect: permit
+  operation: records-get
+  relationship: organisation-unit-subtree
+  requiredService: registry-reader
+  requireVerifiedPerson: true
+  denyWhenExplicit: true
