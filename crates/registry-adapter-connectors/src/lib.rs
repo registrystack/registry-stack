@@ -16,6 +16,10 @@
 //! an exact persistable prepared form with no bearer token, one send with
 //! a shared outcome vocabulary over the product's native detail, and a
 //! per-operation recovery rule.
+//!
+//! The connector implements every BReg operation family, but an
+//! ingestion job may send only some of them directly; the `breg`
+//! module's `job_direct_admits` names which.
 
 pub mod operation;
 
