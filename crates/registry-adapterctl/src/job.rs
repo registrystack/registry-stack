@@ -53,6 +53,10 @@ pub struct JobCheckArgs {
     /// defaults to `project.yaml` beside the pack.
     #[arg(long, value_name = "FILE", requires = "profile")]
     pub project: Option<PathBuf>,
+
+    /// Exit 1 when a warning is reported.
+    #[arg(long)]
+    pub deny_warnings: bool,
 }
 
 /// One completed job check: the artifacts as written.
@@ -61,6 +65,8 @@ pub(crate) struct JobCheckRun {
     pub(crate) job: String,
     pub(crate) runtime: String,
     pub(crate) files_checked: usize,
+    /// The reader's warnings over the authored artifacts.
+    pub(crate) warnings: Vec<registry_platform_yaml::Diagnostic>,
 }
 
 /// Why the job check could not run to a verdict.
@@ -126,11 +132,12 @@ pub(crate) fn run(args: &JobCheckArgs) -> Result<JobCheckRun, JobCheckFailure> {
         }
     };
     match outcome {
-        Ok(_program) => Ok(JobCheckRun {
+        Ok(program) => Ok(JobCheckRun {
             pack: args.pack.display().to_string(),
             job: args.job.display().to_string(),
             runtime: runtime.display().to_string(),
             files_checked: files_checked(),
+            warnings: program.warnings,
         }),
         Err(error) => Err(JobCheckFailure::Refused {
             diagnostics: error.diagnostics,
@@ -185,6 +192,7 @@ mod tests {
             runtime: Some(base.join("job-runtime.yaml")),
             profile: Some(base.join("profile.yaml")),
             project: Some(base.join("project.yaml")),
+            deny_warnings: false,
         };
         let run = match run(&args) {
             Ok(run) => run,

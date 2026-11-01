@@ -354,24 +354,56 @@ pub(crate) fn read<T: DeserializeOwned>(
     path: &Path,
     format: &FormatSpec<'static>,
 ) -> Result<(T, Vec<u8>), LoadError> {
+    read_located(path, format)
+        .map(|(value, bytes, _warnings)| (value, bytes))
+        .map_err(|refusal| match refusal {
+            ReadRefusal::Unreadable(error) => error,
+            ReadRefusal::Refused { path, diagnostics } => LoadError::Refused {
+                path,
+                reasons: diagnostics
+                    .iter()
+                    .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            },
+        })
+}
+
+/// Why [`read_located`] could not decode an artifact.
+pub(crate) enum ReadRefusal {
+    /// The file could not be read.
+    Unreadable(LoadError),
+    /// The reader refused the document: its own located findings, each
+    /// with the code, pointer, and position an author fixes.
+    Refused {
+        path: String,
+        diagnostics: Vec<registry_platform_yaml::Diagnostic>,
+    },
+}
+
+/// The same read as [`read`], keeping the reader's located findings
+/// instead of folding them into one message, and returning the
+/// document's warnings beside the value.
+pub(crate) fn read_located<T: DeserializeOwned>(
+    path: &Path,
+    format: &FormatSpec<'static>,
+) -> Result<(T, Vec<u8>, Vec<registry_platform_yaml::Diagnostic>), ReadRefusal> {
     let shown = path.display().to_string();
-    let bytes = std::fs::read(path).map_err(|_| LoadError::Unreadable {
-        path: shown.clone(),
+    let bytes = std::fs::read(path).map_err(|_| {
+        ReadRefusal::Unreadable(LoadError::Unreadable {
+            path: shown.clone(),
+        })
     })?;
     let mut hook = AuthoredExpressions;
     let decoded = Reader::new(shown.clone())
         .with_hook(&mut hook)
         .decode::<T>(&bytes, &Expect::one(format))
-        .map_err(|refused| LoadError::Refused {
+        .map_err(|refused| ReadRefusal::Refused {
             path: shown,
-            reasons: refused
-                .into_diagnostics()
-                .iter()
-                .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
-                .collect::<Vec<_>>()
-                .join("; "),
+            diagnostics: refused.into_diagnostics(),
         })?;
-    Ok((decoded.value, bytes))
+    let warnings = decoded.document.warnings().into_diagnostics();
+    Ok((decoded.value, bytes, warnings))
 }
 
 /// Resolve every secret reference of an endpoint's static credential, so

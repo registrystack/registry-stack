@@ -394,6 +394,23 @@ formats:
       profile: {from: products/adapter/profiles/breg-records}
       pack: {from: products/adapter/packs/dhis2-tracker}
       fixtures: {from: products/adapter/fixtures/dhis2-tracker}
+  # `adapterctl job check` compiles the job's workspace, which resolves
+  # the endpoint credential references; the staged runtime points them at
+  # the variable the runner sets for every check.
+  adapter/job:
+    copies:
+      pack: {from: products/adapter/packs/kobotoolbox}
+      runtime:
+        from: products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml
+        set:
+          /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+          /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+  adapter/job-runtime:
+    copies:
+      pack: {from: products/adapter/packs/kobotoolbox}
+    set:
+      /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+      /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
   adapter/runtime:
     project: products/adapter/examples/dhis2-tracker
     copies:

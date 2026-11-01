@@ -41,8 +41,8 @@ use serde_json::Value;
 
 use crate::engine::exchange::Exchange;
 use crate::engine::load::{
-    artifact_path, compile_authored_with, format_spec, preflight_endpoint_credential, read,
-    step_aggregation_strategies, step_expressions, EndpointCompilation, LoadError,
+    artifact_path, compile_authored_with, format_spec, preflight_endpoint_credential, read_located,
+    step_aggregation_strategies, step_expressions, EndpointCompilation, LoadError, ReadRefusal,
 };
 use crate::engine::resilience::ResilienceRuntime;
 use crate::engine::route::{
@@ -142,6 +142,10 @@ pub struct JobProgram {
     pub(crate) resolver: SecretResolver,
     /// The compiled governed-ingestion sources the page runs read.
     pub(crate) job_state: crate::engine::job_sources::JobPageState,
+    /// The reader's warnings over the authored artifacts the compile
+    /// read from files. A run proceeds past them; an offline check that
+    /// denies warnings refuses on them.
+    pub warnings: Vec<Diagnostic>,
 }
 
 impl JobProgram {
@@ -249,31 +253,41 @@ pub fn compile_job_with(
     project_path: &Path,
 ) -> Result<JobProgram, JobError> {
     let pack_directory = artifact_directory(pack_path)?;
-    let (pack, pack_bytes): (AdapterPack, _) = read(
+    let mut warnings = Vec::new();
+    let (pack, pack_bytes): (AdapterPack, _) = read_job_artifact(
         pack_path,
-        &format_spec(ADAPTER_PACK_KIND, ADAPTER_PACK_API_VERSION),
-    )
-    .map_err(artifact_error)?;
-    let (job, _): (AdapterJob, _) = read(
+        ADAPTER_PACK_KIND,
+        ADAPTER_PACK_API_VERSION,
+        &mut warnings,
+    )?;
+    let (job, _): (AdapterJob, _) = read_job_artifact(
         job_path,
-        &format_spec(ADAPTER_JOB_KIND, ADAPTER_JOB_API_VERSION),
-    )
-    .map_err(artifact_error)?;
-    let (profile, profile_bytes): (AdapterProfile, _) = read(
+        ADAPTER_JOB_KIND,
+        ADAPTER_JOB_API_VERSION,
+        &mut warnings,
+    )?;
+    let (profile, profile_bytes): (AdapterProfile, _) = read_job_artifact(
         profile_path,
-        &format_spec(ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_API_VERSION),
-    )
-    .map_err(artifact_error)?;
-    let (project, project_bytes): (AdapterProject, _) = read(
+        ADAPTER_PROFILE_KIND,
+        ADAPTER_PROFILE_API_VERSION,
+        &mut warnings,
+    )?;
+    let (project, project_bytes): (AdapterProject, _) = read_job_artifact(
         project_path,
-        &format_spec(ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_API_VERSION),
-    )
-    .map_err(artifact_error)?;
-    let job_runtime = crate::engine::job_sources::JobRuntimeConfig::load(runtime_path)
-        .map_err(|error| runtime_error(&format!("the runtime config was refused: {error}")))?;
+        ADAPTER_PROJECT_KIND,
+        ADAPTER_PROJECT_API_VERSION,
+        &mut warnings,
+    )?;
+    let job_runtime =
+        crate::engine::job_sources::JobRuntimeConfig::load(runtime_path).map_err(|error| {
+            job_error(located_in(
+                error.diagnostics().to_vec(),
+                ADAPTER_JOB_RUNTIME_KIND,
+            ))
+        })?;
     let runtime = job_runtime.core;
     let sources = job_runtime.sources;
-    compile_job_from_artifacts(
+    let mut program = compile_job_from_artifacts(
         &pack,
         &job,
         &profile,
@@ -284,7 +298,9 @@ pub fn compile_job_with(
         &pack_directory,
         &runtime,
         sources.as_ref(),
-    )
+    )?;
+    program.warnings = warnings;
+    Ok(program)
 }
 
 /// The engine boundary's in-memory job compile: the parsed artifacts
@@ -519,6 +535,7 @@ pub fn compile_job_from_artifacts(
         routes: authored.routes,
         resolver,
         job_state,
+        warnings: Vec::new(),
     })
 }
 
@@ -571,6 +588,35 @@ fn artifact_error(error: LoadError) -> JobError {
         &format!("a job artifact was refused: {error}"),
         "Read the reader's refusal and fix the artifact.",
     )])
+}
+
+/// Read one job artifact, refusing with the reader's own located
+/// findings: the code, pointer, and position of each problem, under the
+/// artifact kind the finding points into. The document's warnings join
+/// `warnings` under the same kind.
+fn read_job_artifact<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    kind: &'static str,
+    api_version: &'static str,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<(T, Vec<u8>), JobError> {
+    let (value, bytes, found) =
+        read_located(path, &format_spec(kind, api_version)).map_err(|refusal| match refusal {
+            ReadRefusal::Unreadable(error) => artifact_error(error),
+            ReadRefusal::Refused { diagnostics, .. } => job_error(located_in(diagnostics, kind)),
+        })?;
+    warnings.extend(located_in(found, kind));
+    Ok((value, bytes))
+}
+
+/// Name the artifact kind on every finding that does not name one.
+fn located_in(mut diagnostics: Vec<Diagnostic>, kind: &'static str) -> Vec<Diagnostic> {
+    for diagnostic in &mut diagnostics {
+        if diagnostic.artifact.is_none() {
+            diagnostic.artifact = Some(kind.to_owned());
+        }
+    }
+    diagnostics
 }
 
 fn artifact_directory(path: &Path) -> Result<PathBuf, JobError> {

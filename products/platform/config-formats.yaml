@@ -4050,7 +4050,7 @@ formats:
       file: crates/registry-adapter/src/engine/job.rs
       function: compile_job
       type: AdapterJob
-    check: adapterctl job check {work}/packs/kobotoolbox/pack.yaml products/adapter/examples/kobotoolbox-job/job.yaml --runtime products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml --profile products/adapter/examples/kobotoolbox-job/profile.yaml --project products/adapter/examples/kobotoolbox-job/project.yaml
+    check: adapterctl job check {pack}/pack.yaml {file} --runtime {runtime} --profile {project}/profile.yaml --project {project}/project.yaml
     example: products/adapter/examples/kobotoolbox-job/job.yaml
     conformance:
       requiredText: /source/route
@@ -4183,7 +4183,7 @@ formats:
       file: crates/registry-adapter/src/engine/job_sources.rs
       function: load
       type: JobRuntimeConfig
-    check: adapterctl job check {work}/packs/kobotoolbox/pack.yaml products/adapter/examples/kobotoolbox-job/job.yaml --runtime {file} --profile products/adapter/examples/kobotoolbox-job/profile.yaml --project products/adapter/examples/kobotoolbox-job/project.yaml
+    check: adapterctl job check {pack}/pack.yaml {project}/job.yaml --runtime {file} --profile {project}/profile.yaml --project {project}/project.yaml
     example: products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml
     conformance:
       requiredText: /id

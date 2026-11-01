@@ -302,8 +302,14 @@ impl AdapterRuntimeConfig {
 }
 
 /// The allowlist cannot be empty: an egress policy admitting no private
-/// range is not a configuration, it is an omission (CFG-EMPTY-2).
-fn at_least_one_cidr<'de, D>(deserializer: D) -> Result<UniqueList<Cidr>, D::Error>
+/// range is not a configuration, it is an omission (CFG-EMPTY-2). Public
+/// so every document that states the endpoint bindings holds the same
+/// rule.
+///
+/// # Errors
+///
+/// An empty list, or a member that is not a unique CIDR range.
+pub fn at_least_one_cidr<'de, D>(deserializer: D) -> Result<UniqueList<Cidr>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

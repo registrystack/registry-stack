@@ -253,28 +253,9 @@ async fn apply_migrations(client: &impl GenericClient) -> Result<(), StoreError>
     Ok(())
 }
 
-/// The job store block of the operator runtime config (`store:`): the
-/// item table's single connection reference. The job store runs its
-/// migrations on the same connection it serves from, so the block
-/// carries no separate migration member; the facade's database block
-/// (journal and idempotency pools) is a facade member the job document
-/// refuses. Secret references only, resolved by the host, never a URL
-/// in the document.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct JobStoreConfig {
-    /// The runtime connection reference of the item table's database.
-    pub runtime_url_ref: registry_platform_yaml::SecretReference,
-    /// The root certificate the connection trusts beside the platform
-    /// roots; absent, the platform roots alone.
-    #[serde(default)]
-    pub trusted_root_certificate_ref: Option<registry_platform_yaml::SecretReference>,
-    /// Plaintext connections for the loopback test database only;
-    /// refused in any build without this crate's `postgres-test`
-    /// feature, the way the facade database refuses it.
-    #[serde(default)]
-    pub test_only_plaintext: bool,
-}
+/// The job store block of the operator runtime config (`store:`), read
+/// by the one job runtime reader the compile path shares.
+pub use registry_adapter::engine::job_sources::JobStoreConfig;
 
 /// The margin the pass lease carries beside the profile's page
 /// deadline, renewed at every fenced write, so an operator sees a
