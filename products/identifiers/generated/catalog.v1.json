@@ -4812,11 +4812,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "e35f753eff850412f05a1ca2fd61c65755fcbba6dfdf21fc3615c8c41a52575a"
+        "sha256": "ae097b5904283e2c57ae726020a6376fe02b975391df284e67e08e5b3ddaf64c"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "c000f1b2b00bd521fbce3e15aa71715b4bb9d051db8d10a1063cdfc92add9991",
+        "sha256": "472c4861ab27a301f077784e63cd06891ef4b73813aab1dd802c567daac70d16",
         "mediaType": "application/schema+json"
       }
     },

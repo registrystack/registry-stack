@@ -873,7 +873,18 @@ impl Definition {
                         item["onTimeout"] = serde_json::json!(on_timeout);
                         item["onCancel"] = serde_json::json!(on_cancel);
                     }
-                    Step::Choose { cases, .. } => item["cases"] = serde_json::json!(cases),
+                    Step::Choose { cases, .. } => {
+                        item["cases"] = serde_json::json!(cases);
+                        if let Some(expected) = self
+                            .workflow
+                            .presentation
+                            .steps
+                            .get(id)
+                            .and_then(|metadata| metadata.get("expected"))
+                        {
+                            item["expected"] = expected.clone();
+                        }
+                    }
                     Step::Finish { finish, .. } => item["outcome"] = serde_json::json!(finish),
                     _ => {}
                 }

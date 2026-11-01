@@ -69,6 +69,12 @@ at the first decisive one, so `present: true` before a numeric test guards an op
 missing or wrongly typed value in any other test fails the run with `choice-invalid`, as a missing
 case does today; it never routes silently to `unmatched`. Compare holds no Function and no clock.
 
+A `choose` step may declare `expected: <case-label>` to identify its everyday path for readers
+and diagram tools. The label must name one of that step's `cases`, for both compares and mapped
+strings. Omission leaves the expected path unspecified; neither case order nor YAML order implies
+one. `expected` is presentation metadata: it survives snapshots and appears on the step in
+`check --explain`, but changes neither routing, the order of `next`, nor `workflowRevision`.
+
 Owner-generated numeric width annotations such as `int64` are accepted only on
 matching numeric types. Validation intersects explicit bounds with the declared
 width and the canonical safe-integer range, while retaining imported schema bytes
