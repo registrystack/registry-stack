@@ -40,7 +40,7 @@
 
 use std::time::Duration;
 
-use registry_adapter_core::ErrorClass;
+use registry_adapter_core::{ErrorClass, MAXIMUM_POSTGRES_QUERY_PARAMETERS};
 use serde_json::Value;
 
 use crate::engine::route::RouteFailure;
@@ -94,6 +94,9 @@ pub struct PinnedQuery {
 #[derive(Debug)]
 pub struct QueryRefused(pub &'static str);
 
+// The refusal in compile_query names the bound in its text.
+const _: () = assert!(MAXIMUM_POSTGRES_QUERY_PARAMETERS == 16);
+
 /// Parse one query text and refuse everything but exactly one top-level
 /// plain SELECT: no other statement kind, no data-modifying CTE, no
 /// utility command, a root `ORDER BY` so offset pages are stable, and a
@@ -143,10 +146,21 @@ pub fn compile_query(text: &str) -> Result<PinnedQuery, QueryRefused> {
                 ));
             }
             pg_query::NodeRef::ParamRef(parameter) => {
-                let index = parameter.number as usize;
+                let Ok(index) = usize::try_from(parameter.number) else {
+                    return Err(QueryRefused(
+                        "the query carries a negative parameter reference; write $1 and up",
+                    ));
+                };
                 if index == 0 {
                     return Err(QueryRefused(
                         "the query carries a zero parameter reference; write $1 and up",
+                    ));
+                }
+                // Bound the index before it sizes the name list, so one
+                // huge reference refuses instead of allocating.
+                if index > MAXIMUM_POSTGRES_QUERY_PARAMETERS {
+                    return Err(QueryRefused(
+                        "the query references a parameter above $16; a query carries at most 16",
                     ));
                 }
                 if parameter_names.len() < index {
