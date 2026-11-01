@@ -242,7 +242,7 @@ jsonpath-rust = { version = "1" }
 # which would downgrade psm workspace-wide 0.1.32 to 0.1.24 and drop
 # ar_archive_writer 0.5.3 from the lock (the Render chain reaches psm
 # through stacker and typst-eval). Revisit when upstream relaxes the pin.
-pest = { version = "=2.8.5" }
+pest = { version = "=2.9.2" }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 # Messaging SMTP only. Default features stay off: no connection pool, no
 # native-tls, no hostname lookup, and no sendmail or file transport. `tracing`
