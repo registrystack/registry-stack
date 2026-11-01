@@ -1347,6 +1347,11 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: products/adapter/scripts/check-contracts.sh
 
+      - name: Registry Adapter ingestion-job PostgreSQL recovery
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: products/adapter/scripts/test-job-postgres.sh
+
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime
     needs: [changes, rust-policy]

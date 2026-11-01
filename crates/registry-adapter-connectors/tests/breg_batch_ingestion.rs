@@ -1,0 +1,444 @@
+// SPDX-License-Identifier: Apache-2.0
+#![cfg(feature = "breg")]
+//! Mock boundary tests for the BReg connector's batch family and finite
+//! ingestion run protocol (N5): bound enforcement at prepare, the
+//! replayed-chunk note, the read-then-decide run recovery, and the
+//! operator-authority gate, against a scripted in-process BReg.
+
+#[path = "support/mod.rs"]
+mod support;
+
+use axum::http::StatusCode;
+use registry_adapter_connectors::operation::{
+    CommandKey, ConnectorFault, Observable, Operation, OutcomeCategory, PreparedAttempt,
+};
+use registry_breg_client::BRegProblemCode;
+use serde_json::{json, Value};
+
+use support::{
+    chunk_submission, ingestion_run, problem, Mock, INPUT_DIGEST, PACKAGE_REVISION, PROFILE,
+    RECORD_ID, RUN_ID, SCHEMA_FINGERPRINT, SERVER_ETAG, TOKEN,
+};
+
+fn key(step: &str) -> CommandKey {
+    CommandKey::new(format!("adapter-unit/company/{step}")).expect("derived key")
+}
+
+fn batch_input() -> Value {
+    json!({
+        "items": [
+            {"operation": "create", "data": {"legalName": "Batch Ltd"}},
+            {"operation": "patch", "record": RECORD_ID, "etag": SERVER_ETAG,
+             "operations": [{"op": "replace", "field": "legalName", "value": "Batched Ltd"}]}
+        ]
+    })
+}
+
+fn batch_receipt() -> Value {
+    json!({"snapshot": format!("breg1_{RUN_ID}"), "results": [
+        {"operation": "create", "recordIdentifier": RECORD_ID, "revisionIdentifier": "1",
+         "etag": SERVER_ETAG, "domainData": {"legalName": "Batch Ltd"}},
+        {"operation": "patch", "recordIdentifier": RECORD_ID, "revisionIdentifier": "2",
+         "etag": SERVER_ETAG, "domainData": {"legalName": "Batched Ltd"}}
+    ]})
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_sends_one_atomic_exchange_and_completes_on_the_snapshot() {
+    let mock = Mock::start("immediate", false).await;
+    mock.push(support::mutation_json(StatusCode::OK, batch_receipt()));
+    let answer = {
+        let prepared = mock
+            .connector
+            .batch_records()
+            .prepare(&batch_input(), key("batch"))
+            .expect("prepares");
+        mock.connector.batch_records().send(&prepared)
+    };
+    let outcome = answer.expect("send answers");
+    assert_eq!(outcome.category, OutcomeCategory::Completed);
+    assert_eq!(
+        outcome.correlation.as_deref(),
+        Some(format!("breg1_{RUN_ID}").as_str())
+    );
+    let requests = mock.exchanges();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].uri,
+        "/tenant/prefix/v1/records/companies:batch?accessProfile=writer"
+    );
+    assert_eq!(
+        requests[0].idempotency_key.as_deref(),
+        Some("adapter-unit/company/batch")
+    );
+    let body: Value = serde_json::from_slice(&requests[0].body).expect("batch body");
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(2));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_over_the_binding_bounds_refuses_at_prepare() {
+    let mock = Mock::start("immediate", false).await;
+    // The fixture binding admits two items; three refuse with no I/O.
+    let over_bound = json!({
+        "items": [
+            {"operation": "create", "data": {"legalName": "One"}},
+            {"operation": "create", "data": {"legalName": "Two"}},
+            {"operation": "create", "data": {"legalName": "Three"}}
+        ]
+    });
+    let fault = mock
+        .connector
+        .batch_records()
+        .prepare(&over_bound, key("batch"));
+    assert_eq!(fault.unwrap_err(), ConnectorFault::InvalidInput);
+    assert!(mock.exchanges().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_recovery_resends_the_sealed_items_under_the_same_key() {
+    let mock = Mock::start("immediate", false).await;
+    let stored = {
+        let prepared = mock
+            .connector
+            .batch_records()
+            .prepare(&batch_input(), key("batch"))
+            .expect("prepares");
+        prepared.as_bytes().to_vec()
+    };
+    mock.push(support::mutation_json(StatusCode::OK, batch_receipt()));
+    let outcome = {
+        let prepared = registry_adapter_connectors::breg::batch::PreparedBatch::from_bytes(&stored)
+            .expect("restores");
+        mock.connector.batch_records().recover(&prepared)
+    }
+    .expect("recovery answers");
+    assert_eq!(outcome.category, OutcomeCategory::Completed);
+    let requests = mock.exchanges();
+    assert_eq!(
+        requests[0].idempotency_key.as_deref(),
+        Some("adapter-unit/company/batch")
+    );
+    let bytes = String::from_utf8_lossy(&stored).to_string();
+    assert!(!bytes.contains(TOKEN));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_observation_reads_the_receipt_snapshot_back() {
+    let mock = Mock::start("immediate", false).await;
+    mock.push(
+        support::MockResponse::json(
+            StatusCode::OK,
+            json!({
+                "items": [],
+                "snapshot": format!("breg1_{RUN_ID}"),
+                "pageInfo": {"nextCursor": null},
+                "meta": {
+                    "registryIdentifier": "business-registry",
+                    "datasetIdentifier": "legal-entities",
+                    "recordTypeIdentifier": "company"
+                }
+            }),
+        )
+        .with_header(
+            "link",
+            "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </tenant/prefix/v1/schemas/company>; rel=\"describedby\"",
+        )
+        .with_header("cache-control", "no-store")
+        .with_header("vary", "authorization, accept"),
+    );
+    let state = mock
+        .connector
+        .batch_records()
+        .observe(&format!("breg1_{RUN_ID}"))
+        .expect("observation answers");
+    assert_eq!(state.state, "snapshot-readable");
+    assert!(state
+        .details
+        .iter()
+        .any(|(name, value)| name == "snapshot" && value.as_str() == format!("breg1_{RUN_ID}")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_family_stays_out_of_the_catalog_until_authority_opens() {
+    let closed = Mock::start_closed_import().await;
+    let names: Vec<&str> = closed
+        .connector
+        .catalog()
+        .iter()
+        .map(|descriptor| descriptor.name)
+        .collect();
+    assert!(!names.contains(&"breg.ingestion.create-run"));
+    assert!(!names.contains(&"breg.ingestion.submit-chunk"));
+    let fault = closed.connector.ingestion_create_run().prepare(
+        &json!({
+            "profile": PROFILE, "operation": "create",
+            "packageRevision": PACKAGE_REVISION,
+            "schemaFingerprint": SCHEMA_FINGERPRINT,
+            "inputDigest": INPUT_DIGEST, "inputLength": 64,
+            "itemCount": 2, "chunkCount": 1
+        }),
+        key("create-run"),
+    );
+    assert_eq!(fault.unwrap_err(), ConnectorFault::AuthorityAbsent);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_accepts_with_the_run_correlation() {
+    let mock = Mock::start("immediate", false).await;
+    mock.push(support::mutation_json(
+        StatusCode::CREATED,
+        json!({"run": ingestion_run("open", 0, 0, &support::empty_prefix_digest())}),
+    ));
+    let outcome = {
+        let prepared = mock
+            .connector
+            .ingestion_create_run()
+            .prepare(
+                &json!({
+                    "profile": PROFILE, "operation": "create",
+                    "packageRevision": PACKAGE_REVISION,
+                    "schemaFingerprint": SCHEMA_FINGERPRINT,
+                    "inputDigest": INPUT_DIGEST, "inputLength": 64,
+                    "itemCount": 2, "chunkCount": 1
+                }),
+                key("create-run"),
+            )
+            .expect("prepares");
+        assert!(mock.exchanges().is_empty());
+        mock.connector.ingestion_create_run().send(&prepared)
+    }
+    .expect("send answers");
+    assert_eq!(outcome.category, OutcomeCategory::Accepted);
+    assert_eq!(
+        outcome.correlation.as_deref(),
+        Some(format!("{RUN_ID}/{PROFILE}").as_str())
+    );
+    // The announcement carries no idempotency key; the destination derives
+    // its own attempt identity.
+    let requests = mock.exchanges();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].idempotency_key.is_none());
+    assert_eq!(
+        requests[0].uri,
+        "/tenant/prefix/v1/records/companies/ingestion-runs?accessProfile=writer"
+    );
+    let body: Value = serde_json::from_slice(&requests[0].body).expect("announcement");
+    assert_eq!(body["inputDigest"], INPUT_DIGEST);
+    assert_eq!(body["itemCount"], 2);
+    assert_eq!(
+        body["chunkAlgorithmVersion"],
+        "greedy-canonical-http-batch-v1"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_recovery_reads_before_it_announces_again() {
+    let mock = Mock::start("immediate", false).await;
+    // The announcement's answer is lost past the attempt timeout.
+    mock.push(support::mutation_json(StatusCode::CREATED, json!({})).hanging());
+    let stored = {
+        let prepared = mock
+            .connector
+            .ingestion_create_run()
+            .prepare(
+                &json!({
+                    "profile": PROFILE, "operation": "create",
+                    "packageRevision": PACKAGE_REVISION,
+                    "schemaFingerprint": SCHEMA_FINGERPRINT,
+                    "inputDigest": INPUT_DIGEST, "inputLength": 64,
+                    "itemCount": 2, "chunkCount": 1
+                }),
+                key("create-run"),
+            )
+            .expect("prepares");
+        prepared.as_bytes().to_vec()
+    };
+    let uncertain = {
+        let prepared =
+            registry_adapter_connectors::breg::ingestion::PreparedCreateRun::from_bytes(&stored)
+                .expect("restores");
+        mock.connector.ingestion_create_run().send(&prepared)
+    }
+    .expect("uncertainty is an outcome");
+    assert_eq!(uncertain.category, OutcomeCategory::Uncertain);
+    // Recovery lists the caller's open runs under the input digest and
+    // settles on the run the destination proves, announcing nothing new.
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        json!({
+            "runs": [ingestion_run("open", 0, 0, &support::empty_prefix_digest())],
+            "hasMore": false,
+            "nextCursor": null
+        }),
+    ));
+    let recovered = {
+        let prepared =
+            registry_adapter_connectors::breg::ingestion::PreparedCreateRun::from_bytes(&stored)
+                .expect("restores");
+        mock.connector.ingestion_create_run().recover(&prepared)
+    }
+    .expect("recovery answers");
+    assert_eq!(recovered.category, OutcomeCategory::Accepted);
+    assert_eq!(
+        recovered.correlation.as_deref(),
+        Some(format!("{RUN_ID}/{PROFILE}").as_str())
+    );
+    let requests = mock.exchanges();
+    assert_eq!(requests.len(), 2, "the lost announcement, then the listing");
+    assert_eq!(
+        requests[1].uri,
+        format!(
+            "/tenant/prefix/v1/records/companies/ingestion-runs?accessProfile={PROFILE}&status=open&inputDigest={INPUT_DIGEST}"
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_chunk_submits_and_names_a_replay_in_the_note() {
+    let mock = Mock::start("immediate", false).await;
+    let items = json!([
+        {"operation": "create", "data": {"legalName": "Chunk One"}},
+        {"operation": "create", "data": {"legalName": "Chunk Two"}}
+    ]);
+    let items = items.as_array().expect("items").clone();
+    // First commit.
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        chunk_submission(&items, false),
+    ));
+    let input = json!({
+        "run": RUN_ID, "profile": PROFILE, "chunkIndex": 0,
+        "prefixDigest": support::empty_prefix_digest(),
+        "items": items
+    });
+    let outcome = {
+        let prepared = mock
+            .connector
+            .ingestion_submit_chunk()
+            .prepare(&input, key("chunk"))
+            .expect("prepares");
+        mock.connector.ingestion_submit_chunk().send(&prepared)
+    }
+    .expect("send answers");
+    assert_eq!(outcome.category, OutcomeCategory::Completed);
+    assert!(outcome.note.is_none());
+    // The identical resubmission replays the retained receipt; the
+    // outcome names the replay in its note, never as a problem.
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        chunk_submission(&items, true),
+    ));
+    let replayed = {
+        let prepared = mock
+            .connector
+            .ingestion_submit_chunk()
+            .prepare(&input, key("chunk"))
+            .expect("prepares");
+        mock.connector.ingestion_submit_chunk().send(&prepared)
+    }
+    .expect("replay answers");
+    assert_eq!(replayed.category, OutcomeCategory::Completed);
+    assert_eq!(
+        replayed.note,
+        Some("the destination replayed its retained receipt for this chunk")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_chunk_recovery_resends_the_identical_chunk() {
+    let mock = Mock::start("immediate", false).await;
+    let items = json!([{"operation": "create", "data": {"legalName": "Chunk One"}}]);
+    let items = items.as_array().expect("items").clone();
+    mock.push(support::mutation_json(StatusCode::OK, json!({})).hanging());
+    let stored = {
+        let prepared = mock
+            .connector
+            .ingestion_submit_chunk()
+            .prepare(
+                &json!({
+                    "run": RUN_ID, "profile": PROFILE, "chunkIndex": 0,
+                    "prefixDigest": support::empty_prefix_digest(),
+                    "items": items
+                }),
+                key("chunk"),
+            )
+            .expect("prepares");
+        prepared.as_bytes().to_vec()
+    };
+    let uncertain = {
+        let prepared =
+            registry_adapter_connectors::breg::ingestion::PreparedSubmitChunk::from_bytes(&stored)
+                .expect("restores");
+        mock.connector.ingestion_submit_chunk().send(&prepared)
+    }
+    .expect("uncertainty is an outcome");
+    assert_eq!(uncertain.category, OutcomeCategory::Uncertain);
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        chunk_submission(&items, true),
+    ));
+    let recovered = {
+        let prepared =
+            registry_adapter_connectors::breg::ingestion::PreparedSubmitChunk::from_bytes(&stored)
+                .expect("restores");
+        mock.connector.ingestion_submit_chunk().recover(&prepared)
+    }
+    .expect("recovery answers");
+    assert_eq!(recovered.category, OutcomeCategory::Completed);
+    assert_eq!(
+        recovered.note,
+        Some("the destination replayed its retained receipt for this chunk")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_observation_reads_the_run_state() {
+    let mock = Mock::start("immediate", false).await;
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        json!({"run": ingestion_run("open", 1, 2, &support::empty_prefix_digest())}),
+    ));
+    let state = mock
+        .connector
+        .ingestion_create_run()
+        .observe(&format!("{RUN_ID}/{PROFILE}"))
+        .expect("observation answers");
+    assert_eq!(state.state, "open");
+    assert!(state
+        .details
+        .iter()
+        .any(|(name, value)| name == "inputDigest" && value == INPUT_DIGEST));
+    assert!(state
+        .details
+        .iter()
+        .any(|(name, value)| name == "committedItems" && value == "2"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_refusal_surfaces_the_product_word() {
+    let mock = Mock::start("immediate", false).await;
+    mock.push(problem(BRegProblemCode::IngestionRunNotOpen));
+    let outcome = {
+        let prepared = mock
+            .connector
+            .ingestion_create_run()
+            .prepare(
+                &json!({
+                    "profile": PROFILE, "operation": "create",
+                    "packageRevision": PACKAGE_REVISION,
+                    "schemaFingerprint": SCHEMA_FINGERPRINT,
+                    "inputDigest": INPUT_DIGEST, "inputLength": 64,
+                    "itemCount": 2, "chunkCount": 1
+                }),
+                key("create-run"),
+            )
+            .expect("prepares");
+        mock.connector.ingestion_create_run().send(&prepared)
+    }
+    .expect("refusal is an outcome");
+    assert_eq!(outcome.category, OutcomeCategory::Refused);
+    assert_eq!(
+        outcome.native_problem.as_deref(),
+        Some("ingestion.run_not_open")
+    );
+}

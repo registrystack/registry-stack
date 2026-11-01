@@ -172,7 +172,7 @@ fn served_operation(record_schema: Value, paginated: bool) -> ServedOperation {
         method: HttpMethod::Get,
         method_path: "/records/generated-record".to_owned(),
         request_template: None,
-        request_maximum_bytes: crate::load::DEFAULT_REQUEST_MAXIMUM_BYTES,
+        request_maximum_bytes: crate::engine::load::DEFAULT_REQUEST_MAXIMUM_BYTES,
         filters: Vec::new(),
         record_type_parameter: "type".to_owned(),
         record_id_parameter: None,
@@ -180,10 +180,13 @@ fn served_operation(record_schema: Value, paginated: bool) -> ServedOperation {
         record_type: "generated-record".to_owned(),
         route_id: "generated-route".to_owned(),
         steps: Arc::new(Vec::new()),
-        resilience: crate::resilience::ResilienceRuntime::empty(),
+        resilience: crate::engine::resilience::ResilienceRuntime::empty(),
         maximum_upstream_calls: 1,
-        response_envelope: crate::envelope::CompiledEnvelope::compile("{}", &BTreeMap::new())
-            .expect("an empty envelope compiles for slot testing"),
+        response_envelope: crate::engine::envelope::CompiledEnvelope::compile(
+            "{}",
+            &BTreeMap::new(),
+        )
+        .expect("an empty envelope compiles for slot testing"),
         item_envelope: None,
         record_schema,
         pagination: paginated.then_some(ServedPagination {

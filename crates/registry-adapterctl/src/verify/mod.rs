@@ -370,6 +370,12 @@ fn first_send<'a>(steps: &'a [Step], pack: &'a AdapterPack, depth: usize) -> Spi
                 }
                 SendComponent::Http => return Spine::Send(to),
                 SendComponent::GraphQl => return Spine::GraphQl,
+                // A job component send is never a facade send: the
+                // loader leaves a binding whose route reaches one
+                // unserved, so the live probe drives nothing here.
+                SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => {
+                    return Spine::Caller("the route reaches a job component send");
+                }
             },
             Step::Choice(_)
             | Step::Split(_)

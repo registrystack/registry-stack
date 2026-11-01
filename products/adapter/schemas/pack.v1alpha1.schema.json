@@ -7,13 +7,13 @@
           "additionalProperties": false,
           "description": "Keep the newest exchange: the default for `enrich`, which replaces\nthe body with the resource reply.",
           "properties": {
-            "use-latest": {
-              "additionalProperties": false,
-              "type": "object"
+            "type": {
+              "const": "use-latest",
+              "type": "string"
             }
           },
           "required": [
-            "use-latest"
+            "type"
           ],
           "type": "object"
         },
@@ -21,19 +21,17 @@
           "additionalProperties": false,
           "description": "Keep the original exchange: the default for `split`. With\n`propagateException` false, the split's item failures are\nswallowed and the original message returns\n(manual/split-eip.html, `UseOriginalAggregationStrategy`).",
           "properties": {
-            "use-original": {
-              "additionalProperties": false,
-              "properties": {
-                "propagateException": {
-                  "description": "Whether an item failure is raised after the split completes;\nCamel's default is true.",
-                  "type": "boolean"
-                }
-              },
-              "type": "object"
+            "propagateException": {
+              "description": "Whether an item failure is raised after the split completes;\nCamel's default is true.",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "use-original",
+              "type": "string"
             }
           },
           "required": [
-            "use-original"
+            "type"
           ],
           "type": "object"
         },
@@ -41,13 +39,13 @@
           "additionalProperties": false,
           "description": "Concatenate the split results into one list, Camel's `groupedBody`.",
           "properties": {
-            "grouped-body": {
-              "additionalProperties": false,
-              "type": "object"
+            "type": {
+              "const": "grouped-body",
+              "type": "string"
             }
           },
           "required": [
-            "grouped-body"
+            "type"
           ],
           "type": "object"
         },
@@ -55,38 +53,34 @@
           "additionalProperties": false,
           "description": "Append one array's elements into another, refusing a duplicate\n`uniqueBy` value with the `aggregation.duplicate` class.",
           "properties": {
-            "json-array-append": {
-              "additionalProperties": false,
-              "properties": {
-                "from": {
-                  "description": "The array property the elements are appended into.",
-                  "type": "string"
-                },
-                "into": {
-                  "description": "The message body member the array lands in.",
-                  "type": "string"
-                },
-                "properties": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
-                  "type": "object"
-                },
-                "uniqueBy": {
-                  "description": "Member whose value must stay unique across appended elements.",
-                  "type": "string"
-                }
+            "from": {
+              "description": "The array property the elements are appended into.",
+              "type": "string"
+            },
+            "into": {
+              "description": "The message body member the array lands in.",
+              "type": "string"
+            },
+            "properties": {
+              "additionalProperties": {
+                "type": "string"
               },
-              "required": [
-                "from",
-                "into"
-              ],
+              "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
               "type": "object"
+            },
+            "type": {
+              "const": "json-array-append",
+              "type": "string"
+            },
+            "uniqueBy": {
+              "description": "Member whose value must stay unique across appended elements.",
+              "type": "string"
             }
           },
           "required": [
-            "json-array-append"
+            "from",
+            "into",
+            "type"
           ],
           "type": "object"
         },
@@ -94,34 +88,30 @@
           "additionalProperties": false,
           "description": "Merge one JSON object into another. No duplicate refusal.",
           "properties": {
-            "json-merge": {
-              "additionalProperties": false,
-              "properties": {
-                "from": {
-                  "description": "The object property merged into the body.",
-                  "type": "string"
-                },
-                "into": {
-                  "description": "The message body member the object lands in.",
-                  "type": "string"
-                },
-                "properties": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
-                  "type": "object"
-                }
+            "from": {
+              "description": "The object property merged into the body.",
+              "type": "string"
+            },
+            "into": {
+              "description": "The message body member the object lands in.",
+              "type": "string"
+            },
+            "properties": {
+              "additionalProperties": {
+                "type": "string"
               },
-              "required": [
-                "from",
-                "into"
-              ],
+              "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
               "type": "object"
+            },
+            "type": {
+              "const": "json-merge",
+              "type": "string"
             }
           },
           "required": [
-            "json-merge"
+            "from",
+            "into",
+            "type"
           ],
           "type": "object"
         },
@@ -129,22 +119,18 @@
           "additionalProperties": false,
           "description": "A custom strategy: a Rhai entrypoint over the old and new bodies,\nnamed `oldExchange` and `newExchange` after Camel's own\n`AggregationStrategy.aggregate`.",
           "properties": {
-            "rhai": {
-              "additionalProperties": false,
-              "properties": {
-                "expression": {
-                  "$ref": "#/$defs/RhaiExpression",
-                  "description": "The script file and entrypoint, resolved against the pack's\nscript inventory."
-                }
-              },
-              "required": [
-                "expression"
-              ],
-              "type": "object"
+            "expression": {
+              "$ref": "#/$defs/RhaiExpression",
+              "description": "The script file and entrypoint, resolved against the pack's\nscript inventory."
+            },
+            "type": {
+              "const": "rhai",
+              "type": "string"
             }
           },
           "required": [
-            "rhai"
+            "expression",
+            "type"
           ],
           "type": "object"
         }
@@ -320,12 +306,15 @@
       "type": "object"
     },
     "ComponentKind": {
-      "description": "A component kind, the ported subset of Camel's component library\n(`products/adapter/CONCEPT.md` section 8.8). `rest` is the facade\nconsumer; `direct` calls routes in process; `http` and `graphql` are the\nupstream producers.",
+      "description": "A component kind, the ported subset of Camel's component library\n(`products/adapter/CONCEPT.md` sections 8.8 and 17.2). `rest` is the\nfacade consumer; `direct` calls routes in process; `http`, `graphql`,\nand `postgres` are the upstream producers; `file` and `sftp` are the\njob-only sources a facade route may never reach (section 17.1).",
       "enum": [
         "direct",
+        "file",
+        "graphql",
         "http",
+        "postgres",
         "rest",
-        "graphql"
+        "sftp"
       ],
       "type": "string"
     },
@@ -354,6 +343,57 @@
         "type"
       ],
       "type": "object"
+    },
+    "CsvDecoder": {
+      "additionalProperties": false,
+      "description": "The CSV decoder options, the port of Camel's `CsvDataFormat` at\ncamel-4.23.0 restricted to a bounded row decoder\n(`products/adapter/CONCEPT.md` section 8.10, the CSV row). Every kept\noption cites the Java field it ports, and every default is that\nfield's effective default: the reference `DEFAULT` format's comma\ndelimiter, double quote, no comment marker, header record on, and no\ntrimming. The dropped options and the reason each is dropped are\nrecorded in `products/adapter/scratch/core/port-record.md`. Our rows\nare maps keyed by the header record, so `useMaps` has no false form\nhere; type inference is refused, so a field decodes as the text the\nfile carries.",
+      "properties": {
+        "commentMarker": {
+          "description": "The comment marker; absent, comments are off, the reference\nformat's default. Ports `commentMarker`\n(camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java#commentMarker);\nthe separate `commentMarkerDisabled` flag is folded into absence.",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": "string"
+        },
+        "delimiter": {
+          "description": "The field delimiter. Ports `delimiter`\n(camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java#delimiter,\n\"The default value is , (comma)\"; the component-side field the\nengine reads is a `Character`), typed as one character so the\nreader refuses a multi-character delimiter.",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": "string"
+        },
+        "encoding": {
+          "$ref": "#/$defs/DecoderEncoding",
+          "description": "The encoding the bytes are decoded with; UTF-8 only."
+        },
+        "header": {
+          "description": "Whether the file's first record is the column header the row maps\nare keyed by. Ports `headerDisabled`, complemented: Camel's\ndefault keeps headers enabled, so the default here is true\n(camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java#headerDisabled).\nThe comma-separated header rename list of Camel's `header` field\nis not ported: renaming columns is mapping work, and the row map\nkeys are the file's own header names.",
+          "type": "boolean"
+        },
+        "quote": {
+          "description": "The quote character. Ports `quote`\n(camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java#quote,\n\"The quote character to use. The default is double-quote\ncharacter.\").",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": "string"
+        },
+        "quoteDisabled": {
+          "description": "Whether quoting is off. Ports `quoteDisabled`\n(camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java#quoteDisabled);\nfalse keeps Camel's default quoting on.",
+          "type": "boolean"
+        },
+        "trim": {
+          "description": "Whether leading and trailing blanks are trimmed. Ports `trim`\n(camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java#trim);\nfalse keeps the reference format's default.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DecoderEncoding": {
+      "description": "The character encoding a decoder reads. UTF-8 only: Camel carries a\ncharset per exchange where its CSV data format has no encoding option\nof its own; the bounded decoder pins one encoding instead\n(`products/adapter/CONCEPT.md` section 17.2).",
+      "oneOf": [
+        {
+          "const": "utf-8",
+          "description": "UTF-8, the only encoding the decoders read.",
+          "type": "string"
+        }
+      ]
     },
     "DefaultErrorHandler": {
       "additionalProperties": false,
@@ -458,6 +498,7 @@
         "idempotentConsumer",
         "loop",
         "onException",
+        "pollEnrich",
         "removeHeader",
         "removeProperty",
         "script",
@@ -491,16 +532,16 @@
         },
         "component": {
           "$ref": "#/$defs/ComponentKind",
-          "description": "The producer component: `http` or `graphql`."
+          "description": "The producer component: `http`, `graphql`, or the read-only\n`postgres` source; or the job-only `file` and `sftp` sources a\n`pollEnrich` step reads (section 17.1)."
         },
         "id": {
           "$ref": "#/$defs/LocalId",
-          "description": "The endpoint identifier `http:` and `graphql:` URIs name."
+          "description": "The endpoint identifier `http:`, `graphql:`, `postgres:`, and the\n`pollEnrich` URIs name."
         },
         "maximumResponseBytes": {
-          "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform ceiling is\nrefused, never shortened. The runtime binding may lower it, never\nraise it.",
+          "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform cap is\nrefused, never shortened. The runtime binding may lower it, never\nraise it. A facade-reachable endpoint stays within the facade\nceiling and a source-route-only endpoint may declare up to the\nplatform cap (D39); the checks refuse the facade-reachable excess\nunder `adapter.job.endpoint-response-bound`.",
           "format": "uint64",
-          "maximum": 1048576,
+          "maximum": 16777216,
           "minimum": 1,
           "type": "integer"
         },
@@ -682,7 +723,7 @@
     },
     "EnrichStep": {
       "additionalProperties": false,
-      "description": "An `enrich` step: call a static endpoint and merge the reply. Static URI\nonly; no `pollEnrich`. Absent a strategy, the reply replaces the body\n(Camel's default).",
+      "description": "An `enrich` step: call a static endpoint and merge the reply. Static URI\nonly; absent a strategy, the reply replaces the body (Camel's default).",
       "properties": {
         "aggregateOnException": {
           "description": "Whether to aggregate the reply of a failed call (Camel default\nfalse; failure propagates to the error handler).",
@@ -1076,6 +1117,48 @@
       },
       "type": "object"
     },
+    "PollDecoder": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CsvDecoder",
+          "description": "A `csv` declaration with its options; an empty mapping selects csv\nat Camel's defaults."
+        },
+        {
+          "description": "A bare decoder name.",
+          "type": "string"
+        }
+      ],
+      "description": "The decoder a `pollEnrich` step selects. A mapping form is a `csv`\ndeclaration with its options, the only decoder that carries options; a\nbare string names one of `csv`, `jsonl`, or `raw`. One member carries\nboth forms, so `decoder: csv` and `decoder: {\"delimiter\": \";\"}` read\nthe same way."
+    },
+    "PollEnrichStep": {
+      "additionalProperties": false,
+      "description": "A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one\nbounded page from a static `file:` or `sftp:` endpoint the pack\ndeclares; no dynamic endpoint expression and no `consumerSendTo` are\nported. Absent a strategy, the page replaces the body, as `enrich`\nreplaces it. `timeoutMilliseconds` is mandatory: the checks refuse its\nabsence under `adapter.job.poll-timeout`, and the reader refuses a\nvalue outside 1 to 10000 (D39 keeps the platform-frozen per-attempt\nceiling for every endpoint). The step never appears in a\nfacade-reachable route (`adapter.job.poll-facade-refused`).",
+      "properties": {
+        "aggregationStrategy": {
+          "$ref": "#/$defs/AggregationStrategy",
+          "description": "The aggregation strategy, Camel's Poll Enricher aggregation;\nabsent, the page replaces the body, like `enrich` with no strategy."
+        },
+        "decoder": {
+          "$ref": "#/$defs/PollDecoder",
+          "description": "The decoder the read applies: absent, `raw`, the file bytes' digest\npage; `csv` decodes rows with the options of [`CsvDecoder`], written\neither as the bare name `csv` or as a mapping of its options;\n`jsonl` decodes one bounded JSON value per line. The checks refuse\nany other name under `adapter.job.decoder-unknown`."
+        },
+        "timeoutMilliseconds": {
+          "description": "The mandatory poll timeout in milliseconds, bounded 1 to 10000.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "uri": {
+          "description": "The static job source URI: `file:<endpointId>` or\n`sftp:<endpointId>`, naming a declared pack endpoint of the matching\ncomponent. The authoring checks refuse an unknown endpoint\n(`adapter.job.poll-endpoint-unknown`) and an endpoint whose\ncomponent does not match the scheme\n(`adapter.job.poll-endpoint-kind`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "type": "object"
+    },
     "RedeliveryOptions": {
       "additionalProperties": false,
       "description": "The redelivery option set, shared by the error handler and an\n`onException` clause (`products/adapter/CONCEPT.md` section 8.7; the\nnesting under `redeliveryPolicy` follows Camel's own YAML DSL,\n`manual/exception-clause.html` and `manual/exception-redelivery.html`).\nOption spellings stay ours (CFG-NAME); only the nesting is Camel's.\nOnly the non-default members serialize.",
@@ -1248,8 +1331,8 @@
       "type": "object"
     },
     "SendUri": {
-      "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:` endpoint, or a `graphql:` endpoint declared in the pack\n(`products/adapter/CONCEPT.md` sections 8.3 and 8.8). The URI is static;\nno `toD` is ported.",
-      "pattern": "^(direct|http|graphql):.+$",
+      "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:`, `graphql:`, or `postgres:` endpoint declared in the pack\n(`products/adapter/CONCEPT.md` sections 8.3, 8.8, and 17.2). The URI is\nstatic; no `toD` is ported. A `file:` or `sftp:` URI parses so the\nauthoring checks can refuse it under its own code\n(`adapter.job.send-component-refused`): a job source is read through the\n`pollEnrich` step, never through a send.",
+      "pattern": "^(direct|http|graphql|postgres|file|sftp):.+$",
       "type": "string"
     },
     "SetHeaderStep": {
@@ -1289,6 +1372,76 @@
         "value"
       ],
       "type": "object"
+    },
+    "SourceRecovery": {
+      "description": "The recovery semantics of a source route's `next` cursor, the closed\nset CONCEPT 17.2 pins.",
+      "oneOf": [
+        {
+          "const": "exact-replay",
+          "description": "A replayed cursor re-reads the same bytes, such as a file digest\nand position.",
+          "type": "string"
+        },
+        {
+          "const": "key-deduplicated",
+          "description": "Upstream pages may shift between reads; the consumer deduplicates\nby key.",
+          "type": "string"
+        }
+      ]
+    },
+    "SourceRouteDecl": {
+      "additionalProperties": false,
+      "description": "One source route of the governed-ingestion mode\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2): a route\ndefinition's steps plus the item-contract declaration. A source route\nis an entry point of the job mode, never a subroutine: a facade\nbinding naming it, or a `direct:` send targeting it, refuses\n(`adapter.job.source-bound-refused`,\n`adapter.job.source-called-refused`). There is no `from`: the\n`from: file:` consumer form was rejected with the job's read step\n(section 17.2).",
+      "properties": {
+        "edits": {
+          "description": "How the source reports edits to items the scan has already read,\none of [`SOURCE_EDIT_VALUES`]: `ordered`, where an edit moves the\nitem past the read position or items never change so an ordinary\npass suffices, or `rescan`, where an edit can stay behind the\nposition and the declared `rescanDelaySeconds` starts an ordinary\npass from the first page. Mandatory; the checks refuse its absence\nunder `adapter.job.source-edits-required` and a value outside the\nclosed set under `adapter.job.source-edits-unknown`.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The source route identifier the job definition names."
+        },
+        "nextRecovery": {
+          "$ref": "#/$defs/SourceRecovery",
+          "description": "The recovery semantics of `next`. Mandatory; the checks refuse its\nabsence under `adapter.job.source-recovery-required`."
+        },
+        "rescanDelaySeconds": {
+          "description": "The seconds between a `rescan` source route's ordinary passes from\nthe first page, from\n[`MINIMUM_SOURCE_RESCAN_DELAY_SECONDS`] to\n[`MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS`] (one minute to one day).\nMandatory beside `edits: rescan`, refused beside `edits: ordered`,\nand range-checked; the checks police all three under\n`adapter.job.source-rescan-delay`.",
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "scan": {
+          "$ref": "#/$defs/SourceScan",
+          "description": "Whether the scan ends. Mandatory; the checks refuse its absence\nunder `adapter.job.source-scan-required`."
+        },
+        "steps": {
+          "description": "The ordered steps, as an internal route's body.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SourceScan": {
+      "description": "Whether a source route's scan ends: the closed set CONCEPT 17.2 pins\nfor the item contract.",
+      "oneOf": [
+        {
+          "const": "finite",
+          "description": "The scan ends: `next` is absent at the end.",
+          "type": "string"
+        },
+        {
+          "const": "ongoing",
+          "description": "The scan continues: the job re-runs the route until stopped.",
+          "type": "string"
+        }
+      ]
     },
     "SplitStep": {
       "additionalProperties": false,
@@ -1590,6 +1743,19 @@
         },
         {
           "additionalProperties": false,
+          "description": "Poll a job source through a static `file:` or `sftp:` URI and merge\nor replace the body with one bounded page\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Job-only:\nthe authoring checks refuse the step in every facade-reachable\nroute.",
+          "properties": {
+            "pollEnrich": {
+              "$ref": "#/$defs/PollEnrichStep"
+            }
+          },
+          "required": [
+            "pollEnrich"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Wrap steps in a resilience4j circuit breaker with `onFallback`.",
           "properties": {
             "circuitBreaker": {
@@ -1843,6 +2009,16 @@
           },
           "type": "object"
         },
+        "queryParameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          },
+          "description": "Named parameter name to expression of a `postgres:` send, each key\na parameter the endpoint's digest-pinned query file declares\n(`products/adapter/CONCEPT.md` section 8.10, the SQL row; CFG-ID-1\nkeys, engine-evaluated expressions). The checks refuse more than\nsixteen parameters (`adapter.job.postgres-parameters-unbounded`)\nand the member on any non-postgres send.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
         "resumeBindings": {
           "description": "The source-native identifiers a later write-resume step needs\n(Increment 3; `products/adapter/CONCEPT.md` section 9).",
           "items": {
@@ -1998,6 +2174,14 @@
       },
       "type": "array",
       "uniqueItems": true
+    },
+    "sourceRoutes": {
+      "default": [],
+      "description": "The governed-ingestion source routes the job mode runs\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Entry\npoints of the job mode; a facade route never reaches one.",
+      "items": {
+        "$ref": "#/$defs/SourceRouteDecl"
+      },
+      "type": "array"
     },
     "testedVersions": {
       "description": "The upstream versions this pack was tested against, pack-wide.",

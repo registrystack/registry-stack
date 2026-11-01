@@ -10,7 +10,7 @@
 //! bytes always compile to the same document bytes and the file's diff is
 //! the contract review.
 
-use registry_adapter::effective_contract::{
+use registry_adapter::engine::effective_contract::{
     PIN_PROBLEM_CODE, REQUEST_ID_PATTERN, UNAVAILABLE_PROBLEM_CODE,
 };
 use registry_adapter_core::{
@@ -144,7 +144,7 @@ pub(crate) fn assemble(
         };
         path_object.insert(method, Value::Object(members));
     }
-    let well_known_path = registry_adapter::effective_contract::WELL_KNOWN_PATH;
+    let well_known_path = registry_adapter::engine::effective_contract::WELL_KNOWN_PATH;
     if paths.contains_key(well_known_path) {
         findings.push(assembly_refusal(
             "adapterctl.compile.reserved-path",
@@ -239,7 +239,7 @@ pub(crate) fn assemble(
 }
 
 fn runtime_contract_component_schema() -> Value {
-    let mut schema = registry_adapter::effective_contract::schema();
+    let mut schema = registry_adapter::engine::effective_contract::schema();
     if let Some(object) = schema.as_object_mut() {
         object.remove("$id");
         let required = object
@@ -256,7 +256,7 @@ fn runtime_contract_component_schema() -> Value {
 
 fn contract_pin_parameter() -> Value {
     json!({
-        "name": registry_adapter::effective_contract::PIN_HEADER,
+        "name": registry_adapter::engine::effective_contract::PIN_HEADER,
         "in": "header",
         "required": false,
         "description": "Optional whole effective-contract digest pin. A wrong or repeated header is refused with HTTP 412 before the request body or source is read.",
@@ -791,8 +791,8 @@ mod tests {
                 ["requestId"]["pattern"],
             REQUEST_ID_PATTERN
         );
-        let contract =
-            &document["paths"][registry_adapter::effective_contract::WELL_KNOWN_PATH]["get"];
+        let contract = &document["paths"]
+            [registry_adapter::engine::effective_contract::WELL_KNOWN_PATH]["get"];
         assert_eq!(
             contract["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/EffectiveContract"
@@ -1054,12 +1054,13 @@ mod tests {
         let paths = document["paths"].as_object().expect("paths object");
         assert_eq!(
             paths.keys().map(String::as_str).collect::<Vec<_>>(),
-            [registry_adapter::effective_contract::WELL_KNOWN_PATH]
+            [registry_adapter::engine::effective_contract::WELL_KNOWN_PATH]
         );
         assert!(paths.get("/v2/cases/case/{case_id}").is_none());
         assert!(paths.get("/v2/cases/case").is_none());
         assert_eq!(
-            paths[registry_adapter::effective_contract::WELL_KNOWN_PATH]["get"]["operationId"],
+            paths[registry_adapter::engine::effective_contract::WELL_KNOWN_PATH]["get"]
+                ["operationId"],
             "adapter-effective-contract"
         );
     }
@@ -1210,7 +1211,7 @@ mod tests {
                 .expect("parameters")
                 .iter()
                 .find(|parameter| {
-                    parameter["name"] == registry_adapter::effective_contract::PIN_HEADER
+                    parameter["name"] == registry_adapter::engine::effective_contract::PIN_HEADER
                 })
                 .expect("whole-contract pin header");
             assert_eq!(pin, &contract_pin_parameter());

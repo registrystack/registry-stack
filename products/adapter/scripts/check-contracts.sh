@@ -6,19 +6,46 @@ set -euo pipefail
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"
 
+# The dependency-direction gate runs first, before any cargo build: its
+# unittest, then the check against the resolved graph and the engine
+# module's imports. Both are cheap and a violation should not wait on a
+# cold compile.
+python3 -m unittest discover -s products/adapter/scripts -p 'test_dependency_direction.py'
+python3 products/adapter/scripts/check_dependency_direction.py
+
 # The verification floor: format over the workspace, then clippy and tests
 # over the adapter crates. Cargo runs in the caller's explicit worktree
 # target, so an omitted target cannot fill the source volume before the
 # example generator rejects it. PATH keeps cargo reachable when it is not on
 # the caller's PATH.
 PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check
-PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter -p registry-adapter-core -p registry-adapterctl --all-targets -- -D warnings
-PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter-core -p registry-adapterctl --locked
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-job -p registry-adapterctl --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-job -p registry-adapterctl --no-fail-fast
+# The BReg connector is default-off. Compile every connector target with its
+# feature and execute its scripted suites here; the real-runtime scenarios
+# remain isolated under test-connector-native.py because they provision BReg
+# and PostgreSQL explicitly.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-connectors --features breg --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-connectors --features breg --no-fail-fast
 # The live verifier's HTTPS policy is proven against a deterministic local
 # private-CA server. Keep this feature build after the default suite so the
 # default adapterctl binary used by the product checks remains the production
 # build; the PostgreSQL gate builds its own feature binary serially later.
 PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapterctl --locked --features tls-test --test verify
+# The governed-ingestion job sources (CONCEPT 17): each default-off
+# feature gate holds its own clippy and test lane, so a gate can never
+# rot behind the default build. The first lane builds registry-adapter on
+# its own: the combined run above links registry-adapterctl, which turns
+# both gates on, so only this lane runs the suites that hold a build
+# without them to its refusals.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --features job-file --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-file
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --features job-postgres --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-postgres
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter --features job-file,job-postgres --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-file,job-postgres
 
 # The generated schemas are held to their generator (CFG-SCHEMA-2), and the
 # five adapter formats are held to the configuration-format convention
@@ -211,6 +238,26 @@ for project in products/adapter/fixtures/source-shapes/*/project.yaml; do
 done
 printf 'Source-shape contracts and fixture replays hold (%d source shapes, %d fixtures)\n' \
   "$source_shapes" "$shape_fixtures"
+
+# The governed-ingestion example jobs compile offline over the same
+# compile the page run uses, through the exact command the
+# configuration-format conformance registers for the job format. The
+# example credentials are synthetic stand-ins for the check, and the
+# profile and project sit beside the job, the bundle layout the job
+# format's example carries.
+export KOBO_USERNAME=check-contracts KOBO_PASSWORD=check-contracts
+export ODK_EMAIL=check-contracts ODK_PASSWORD=check-contracts
+"$adapterctl_bin" job check products/adapter/packs/kobotoolbox/pack.yaml \
+  products/adapter/examples/kobotoolbox-job/job.yaml \
+  --runtime products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml \
+  --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
+  --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
+"$adapterctl_bin" job check products/adapter/packs/odk-central/pack.yaml \
+  products/adapter/examples/odk-central-job/job.yaml \
+  --runtime products/adapter/examples/odk-central-job/job-runtime.example.yaml \
+  --profile products/adapter/examples/odk-central-job/profile.yaml \
+  --project products/adapter/examples/odk-central-job/project.yaml >/dev/null
+printf 'Job example checks passed\n'
 
 # The bad-authoring corpus: every discovered bad/ member refuses with its
 # own code (plus, transitionally, a co-fired partner code that is another

@@ -1,0 +1,2353 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real ODK Central
+# server): first run: no cursor, no `$filter`, the first 100 of 130
+# submissions in submission order (submission 3 and 57 edited, the
+# rest with a null `updatedAt`), the cursor back names the last
+# submission date and the submissions read at it.
+# The upstream shape follows the documented Central OData page
+# (https://docs.getodk.org/central-api-odata-endpoints/: `value`,
+# `$filter` and `$orderby` on `__system/submissionDate`, `$top`;
+# `__system/updatedAt` is null until a submission is edited,
+# https://docs.getodk.org/central-api-submission-management/). Every
+# value is a made-up stand-in; the reply's own `@odata.nextLink` is
+# synthetic and unread by the route.
+# The entry shape is the provisional job replay contract: `jobRun`
+# carries the cursor the job restores, `upstream` the request the
+# route sends and the scripted reply, `expected` the item page or
+# problem class. crates/registry-adapter/tests/job_pack_replay.rs
+# replays every entry through the job compiler.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: odk-central-submissions-page-one
+pack: odk-central
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://docs.getodk.org/central-api-odata-endpoints/
+intercepts:
+- type: endpoint
+  endpoint: odk-odata
+entries:
+- jobRun:
+    cursor: null
+  upstream:
+  - request:
+      endpoint: odk-odata
+      method: GET
+      path: /
+      query: '%24orderby=__system%2FsubmissionDate%20asc&%24top=100'
+    response:
+      status: 200
+      body:
+        '@odata.context': https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/$metadata#Submissions
+        value:
+        - &id001
+          __id: uuid:00000000-0000-4000-8000-000000000001
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000001
+          respondent_name: Fixture Respondent 1
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T08:11:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id002
+          __id: uuid:00000000-0000-4000-8000-000000000002
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000002
+          respondent_name: Fixture Respondent 2
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T08:22:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id003
+          __id: uuid:00000000-0000-4000-8000-000000000003
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000003
+          respondent_name: Fixture Respondent 3
+          household:
+            household_size: 4
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T08:33:00.000Z'
+            updatedAt: '2026-08-05T10:03:00.000Z'
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: edited
+            deviceId: null
+            edits: 1
+            formVersion: '1'
+        - &id004
+          __id: uuid:00000000-0000-4000-8000-000000000004
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000004
+          respondent_name: Fixture Respondent 4
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T08:44:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id005
+          __id: uuid:00000000-0000-4000-8000-000000000005
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000005
+          respondent_name: Fixture Respondent 5
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T08:55:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id006
+          __id: uuid:00000000-0000-4000-8000-000000000006
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000006
+          respondent_name: Fixture Respondent 6
+          household:
+            household_size: 7
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T09:06:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id007
+          __id: uuid:00000000-0000-4000-8000-000000000007
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000007
+          respondent_name: Fixture Respondent 7
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T09:17:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id008
+          __id: uuid:00000000-0000-4000-8000-000000000008
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000008
+          respondent_name: Fixture Respondent 8
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T09:28:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id009
+          __id: uuid:00000000-0000-4000-8000-000000000009
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000009
+          respondent_name: Fixture Respondent 9
+          household:
+            household_size: 3
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T09:39:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id010
+          __id: uuid:00000000-0000-4000-8000-000000000010
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000010
+          respondent_name: Fixture Respondent 10
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T09:50:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id011
+          __id: uuid:00000000-0000-4000-8000-000000000011
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000011
+          respondent_name: Fixture Respondent 11
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T10:01:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id012
+          __id: uuid:00000000-0000-4000-8000-000000000012
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000012
+          respondent_name: Fixture Respondent 12
+          household:
+            household_size: 6
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T10:12:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id013
+          __id: uuid:00000000-0000-4000-8000-000000000013
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000013
+          respondent_name: Fixture Respondent 13
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T10:23:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id014
+          __id: uuid:00000000-0000-4000-8000-000000000014
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000014
+          respondent_name: Fixture Respondent 14
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T10:34:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id015
+          __id: uuid:00000000-0000-4000-8000-000000000015
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000015
+          respondent_name: Fixture Respondent 15
+          household:
+            household_size: 2
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T10:45:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id016
+          __id: uuid:00000000-0000-4000-8000-000000000016
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000016
+          respondent_name: Fixture Respondent 16
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T10:56:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id017
+          __id: uuid:00000000-0000-4000-8000-000000000017
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000017
+          respondent_name: Fixture Respondent 17
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T11:07:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id018
+          __id: uuid:00000000-0000-4000-8000-000000000018
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000018
+          respondent_name: Fixture Respondent 18
+          household:
+            household_size: 5
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T11:18:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id019
+          __id: uuid:00000000-0000-4000-8000-000000000019
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000019
+          respondent_name: Fixture Respondent 19
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T11:29:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id020
+          __id: uuid:00000000-0000-4000-8000-000000000020
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000020
+          respondent_name: Fixture Respondent 20
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T11:40:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id021
+          __id: uuid:00000000-0000-4000-8000-000000000021
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000021
+          respondent_name: Fixture Respondent 21
+          household:
+            household_size: 1
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T11:51:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id022
+          __id: uuid:00000000-0000-4000-8000-000000000022
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000022
+          respondent_name: Fixture Respondent 22
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T12:02:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id023
+          __id: uuid:00000000-0000-4000-8000-000000000023
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000023
+          respondent_name: Fixture Respondent 23
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T12:13:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id024
+          __id: uuid:00000000-0000-4000-8000-000000000024
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000024
+          respondent_name: Fixture Respondent 24
+          household:
+            household_size: 4
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T12:24:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id025
+          __id: uuid:00000000-0000-4000-8000-000000000025
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000025
+          respondent_name: Fixture Respondent 25
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T12:35:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id026
+          __id: uuid:00000000-0000-4000-8000-000000000026
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000026
+          respondent_name: Fixture Respondent 26
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T12:46:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id027
+          __id: uuid:00000000-0000-4000-8000-000000000027
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000027
+          respondent_name: Fixture Respondent 27
+          household:
+            household_size: 7
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T12:57:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id028
+          __id: uuid:00000000-0000-4000-8000-000000000028
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000028
+          respondent_name: Fixture Respondent 28
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T13:08:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id029
+          __id: uuid:00000000-0000-4000-8000-000000000029
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000029
+          respondent_name: Fixture Respondent 29
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T13:19:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id030
+          __id: uuid:00000000-0000-4000-8000-000000000030
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000030
+          respondent_name: Fixture Respondent 30
+          household:
+            household_size: 3
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T13:30:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id031
+          __id: uuid:00000000-0000-4000-8000-000000000031
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000031
+          respondent_name: Fixture Respondent 31
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T13:41:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id032
+          __id: uuid:00000000-0000-4000-8000-000000000032
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000032
+          respondent_name: Fixture Respondent 32
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T13:52:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id033
+          __id: uuid:00000000-0000-4000-8000-000000000033
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000033
+          respondent_name: Fixture Respondent 33
+          household:
+            household_size: 6
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T14:03:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id034
+          __id: uuid:00000000-0000-4000-8000-000000000034
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000034
+          respondent_name: Fixture Respondent 34
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T14:14:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id035
+          __id: uuid:00000000-0000-4000-8000-000000000035
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000035
+          respondent_name: Fixture Respondent 35
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T14:25:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id036
+          __id: uuid:00000000-0000-4000-8000-000000000036
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000036
+          respondent_name: Fixture Respondent 36
+          household:
+            household_size: 2
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T14:36:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id037
+          __id: uuid:00000000-0000-4000-8000-000000000037
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000037
+          respondent_name: Fixture Respondent 37
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T14:47:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id038
+          __id: uuid:00000000-0000-4000-8000-000000000038
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000038
+          respondent_name: Fixture Respondent 38
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T14:58:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id039
+          __id: uuid:00000000-0000-4000-8000-000000000039
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000039
+          respondent_name: Fixture Respondent 39
+          household:
+            household_size: 5
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T15:09:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id040
+          __id: uuid:00000000-0000-4000-8000-000000000040
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000040
+          respondent_name: Fixture Respondent 40
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T15:20:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id041
+          __id: uuid:00000000-0000-4000-8000-000000000041
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000041
+          respondent_name: Fixture Respondent 41
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T15:31:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id042
+          __id: uuid:00000000-0000-4000-8000-000000000042
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000042
+          respondent_name: Fixture Respondent 42
+          household:
+            household_size: 1
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T15:42:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id043
+          __id: uuid:00000000-0000-4000-8000-000000000043
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000043
+          respondent_name: Fixture Respondent 43
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T15:53:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id044
+          __id: uuid:00000000-0000-4000-8000-000000000044
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000044
+          respondent_name: Fixture Respondent 44
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T16:04:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id045
+          __id: uuid:00000000-0000-4000-8000-000000000045
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000045
+          respondent_name: Fixture Respondent 45
+          household:
+            household_size: 4
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T16:15:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id046
+          __id: uuid:00000000-0000-4000-8000-000000000046
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000046
+          respondent_name: Fixture Respondent 46
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T16:26:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id047
+          __id: uuid:00000000-0000-4000-8000-000000000047
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000047
+          respondent_name: Fixture Respondent 47
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T16:37:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id048
+          __id: uuid:00000000-0000-4000-8000-000000000048
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000048
+          respondent_name: Fixture Respondent 48
+          household:
+            household_size: 7
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T16:48:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id049
+          __id: uuid:00000000-0000-4000-8000-000000000049
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000049
+          respondent_name: Fixture Respondent 49
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T16:59:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id050
+          __id: uuid:00000000-0000-4000-8000-000000000050
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000050
+          respondent_name: Fixture Respondent 50
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T17:10:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id051
+          __id: uuid:00000000-0000-4000-8000-000000000051
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000051
+          respondent_name: Fixture Respondent 51
+          household:
+            household_size: 3
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T17:21:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id052
+          __id: uuid:00000000-0000-4000-8000-000000000052
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000052
+          respondent_name: Fixture Respondent 52
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T17:32:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id053
+          __id: uuid:00000000-0000-4000-8000-000000000053
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000053
+          respondent_name: Fixture Respondent 53
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T17:43:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id054
+          __id: uuid:00000000-0000-4000-8000-000000000054
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000054
+          respondent_name: Fixture Respondent 54
+          household:
+            household_size: 6
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T17:54:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id055
+          __id: uuid:00000000-0000-4000-8000-000000000055
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000055
+          respondent_name: Fixture Respondent 55
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T18:05:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id056
+          __id: uuid:00000000-0000-4000-8000-000000000056
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000056
+          respondent_name: Fixture Respondent 56
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T18:16:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id057
+          __id: uuid:00000000-0000-4000-8000-000000000057
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000057
+          respondent_name: Fixture Respondent 57
+          household:
+            household_size: 2
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T18:27:00.000Z'
+            updatedAt: '2026-08-05T19:57:00.000Z'
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: edited
+            deviceId: null
+            edits: 1
+            formVersion: '1'
+        - &id058
+          __id: uuid:00000000-0000-4000-8000-000000000058
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000058
+          respondent_name: Fixture Respondent 58
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T18:38:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id059
+          __id: uuid:00000000-0000-4000-8000-000000000059
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000059
+          respondent_name: Fixture Respondent 59
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T18:49:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id060
+          __id: uuid:00000000-0000-4000-8000-000000000060
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000060
+          respondent_name: Fixture Respondent 60
+          household:
+            household_size: 5
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T19:00:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id061
+          __id: uuid:00000000-0000-4000-8000-000000000061
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000061
+          respondent_name: Fixture Respondent 61
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T19:11:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id062
+          __id: uuid:00000000-0000-4000-8000-000000000062
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000062
+          respondent_name: Fixture Respondent 62
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T19:22:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id063
+          __id: uuid:00000000-0000-4000-8000-000000000063
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000063
+          respondent_name: Fixture Respondent 63
+          household:
+            household_size: 1
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T19:33:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id064
+          __id: uuid:00000000-0000-4000-8000-000000000064
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000064
+          respondent_name: Fixture Respondent 64
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T19:44:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id065
+          __id: uuid:00000000-0000-4000-8000-000000000065
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000065
+          respondent_name: Fixture Respondent 65
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T19:55:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id066
+          __id: uuid:00000000-0000-4000-8000-000000000066
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000066
+          respondent_name: Fixture Respondent 66
+          household:
+            household_size: 4
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T20:06:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id067
+          __id: uuid:00000000-0000-4000-8000-000000000067
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000067
+          respondent_name: Fixture Respondent 67
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T20:17:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id068
+          __id: uuid:00000000-0000-4000-8000-000000000068
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000068
+          respondent_name: Fixture Respondent 68
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T20:28:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id069
+          __id: uuid:00000000-0000-4000-8000-000000000069
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000069
+          respondent_name: Fixture Respondent 69
+          household:
+            household_size: 7
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T20:39:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id070
+          __id: uuid:00000000-0000-4000-8000-000000000070
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000070
+          respondent_name: Fixture Respondent 70
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T20:50:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id071
+          __id: uuid:00000000-0000-4000-8000-000000000071
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000071
+          respondent_name: Fixture Respondent 71
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T21:01:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id072
+          __id: uuid:00000000-0000-4000-8000-000000000072
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000072
+          respondent_name: Fixture Respondent 72
+          household:
+            household_size: 3
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T21:12:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id073
+          __id: uuid:00000000-0000-4000-8000-000000000073
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000073
+          respondent_name: Fixture Respondent 73
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T21:23:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id074
+          __id: uuid:00000000-0000-4000-8000-000000000074
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000074
+          respondent_name: Fixture Respondent 74
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T21:34:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id075
+          __id: uuid:00000000-0000-4000-8000-000000000075
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000075
+          respondent_name: Fixture Respondent 75
+          household:
+            household_size: 6
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T21:45:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id076
+          __id: uuid:00000000-0000-4000-8000-000000000076
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000076
+          respondent_name: Fixture Respondent 76
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T21:56:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id077
+          __id: uuid:00000000-0000-4000-8000-000000000077
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000077
+          respondent_name: Fixture Respondent 77
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T22:07:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id078
+          __id: uuid:00000000-0000-4000-8000-000000000078
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000078
+          respondent_name: Fixture Respondent 78
+          household:
+            household_size: 2
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T22:18:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id079
+          __id: uuid:00000000-0000-4000-8000-000000000079
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000079
+          respondent_name: Fixture Respondent 79
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T22:29:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id080
+          __id: uuid:00000000-0000-4000-8000-000000000080
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000080
+          respondent_name: Fixture Respondent 80
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T22:40:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id081
+          __id: uuid:00000000-0000-4000-8000-000000000081
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000081
+          respondent_name: Fixture Respondent 81
+          household:
+            household_size: 5
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T22:51:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id082
+          __id: uuid:00000000-0000-4000-8000-000000000082
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000082
+          respondent_name: Fixture Respondent 82
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T23:02:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id083
+          __id: uuid:00000000-0000-4000-8000-000000000083
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000083
+          respondent_name: Fixture Respondent 83
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T23:13:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id084
+          __id: uuid:00000000-0000-4000-8000-000000000084
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000084
+          respondent_name: Fixture Respondent 84
+          household:
+            household_size: 1
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T23:24:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id085
+          __id: uuid:00000000-0000-4000-8000-000000000085
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000085
+          respondent_name: Fixture Respondent 85
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T23:35:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id086
+          __id: uuid:00000000-0000-4000-8000-000000000086
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000086
+          respondent_name: Fixture Respondent 86
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-05T23:46:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id087
+          __id: uuid:00000000-0000-4000-8000-000000000087
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000087
+          respondent_name: Fixture Respondent 87
+          household:
+            household_size: 4
+            has_water: false
+          __system:
+            submissionDate: '2026-08-05T23:57:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id088
+          __id: uuid:00000000-0000-4000-8000-000000000088
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000088
+          respondent_name: Fixture Respondent 88
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T00:08:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id089
+          __id: uuid:00000000-0000-4000-8000-000000000089
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000089
+          respondent_name: Fixture Respondent 89
+          household:
+            household_size: 6
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T00:19:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id090
+          __id: uuid:00000000-0000-4000-8000-000000000090
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000090
+          respondent_name: Fixture Respondent 90
+          household:
+            household_size: 7
+            has_water: false
+          __system:
+            submissionDate: '2026-08-06T00:30:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id091
+          __id: uuid:00000000-0000-4000-8000-000000000091
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000091
+          respondent_name: Fixture Respondent 91
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T00:41:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id092
+          __id: uuid:00000000-0000-4000-8000-000000000092
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000092
+          respondent_name: Fixture Respondent 92
+          household:
+            household_size: 2
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T00:52:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id093
+          __id: uuid:00000000-0000-4000-8000-000000000093
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000093
+          respondent_name: Fixture Respondent 93
+          household:
+            household_size: 3
+            has_water: false
+          __system:
+            submissionDate: '2026-08-06T01:03:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id094
+          __id: uuid:00000000-0000-4000-8000-000000000094
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000094
+          respondent_name: Fixture Respondent 94
+          household:
+            household_size: 4
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T01:14:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id095
+          __id: uuid:00000000-0000-4000-8000-000000000095
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000095
+          respondent_name: Fixture Respondent 95
+          household:
+            household_size: 5
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T01:25:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id096
+          __id: uuid:00000000-0000-4000-8000-000000000096
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000096
+          respondent_name: Fixture Respondent 96
+          household:
+            household_size: 6
+            has_water: false
+          __system:
+            submissionDate: '2026-08-06T01:36:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id097
+          __id: uuid:00000000-0000-4000-8000-000000000097
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000097
+          respondent_name: Fixture Respondent 97
+          household:
+            household_size: 7
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T01:47:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id098
+          __id: uuid:00000000-0000-4000-8000-000000000098
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000098
+          respondent_name: Fixture Respondent 98
+          household:
+            household_size: 1
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T01:58:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id099
+          __id: uuid:00000000-0000-4000-8000-000000000099
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000099
+          respondent_name: Fixture Respondent 99
+          household:
+            household_size: 2
+            has_water: false
+          __system:
+            submissionDate: '2026-08-06T02:09:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        - &id100
+          __id: uuid:00000000-0000-4000-8000-000000000100
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000100
+          respondent_name: Fixture Respondent 100
+          household:
+            household_size: 3
+            has_water: true
+          __system:
+            submissionDate: '2026-08-06T02:20:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+        '@odata.nextLink': https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/Submissions?%24orderby=__system%2FsubmissionDate%20asc&%24top=100&%24skiptoken=fixture-skiptoken-0001
+  expected:
+    type: page
+    page:
+      items:
+      - key: uuid:00000000-0000-4000-8000-000000000001
+        revision: '2026-08-05T08:11:00.000Z'
+        value: *id001
+      - key: uuid:00000000-0000-4000-8000-000000000002
+        revision: '2026-08-05T08:22:00.000Z'
+        value: *id002
+      - key: uuid:00000000-0000-4000-8000-000000000003
+        revision: '2026-08-05T10:03:00.000Z'
+        value: *id003
+      - key: uuid:00000000-0000-4000-8000-000000000004
+        revision: '2026-08-05T08:44:00.000Z'
+        value: *id004
+      - key: uuid:00000000-0000-4000-8000-000000000005
+        revision: '2026-08-05T08:55:00.000Z'
+        value: *id005
+      - key: uuid:00000000-0000-4000-8000-000000000006
+        revision: '2026-08-05T09:06:00.000Z'
+        value: *id006
+      - key: uuid:00000000-0000-4000-8000-000000000007
+        revision: '2026-08-05T09:17:00.000Z'
+        value: *id007
+      - key: uuid:00000000-0000-4000-8000-000000000008
+        revision: '2026-08-05T09:28:00.000Z'
+        value: *id008
+      - key: uuid:00000000-0000-4000-8000-000000000009
+        revision: '2026-08-05T09:39:00.000Z'
+        value: *id009
+      - key: uuid:00000000-0000-4000-8000-000000000010
+        revision: '2026-08-05T09:50:00.000Z'
+        value: *id010
+      - key: uuid:00000000-0000-4000-8000-000000000011
+        revision: '2026-08-05T10:01:00.000Z'
+        value: *id011
+      - key: uuid:00000000-0000-4000-8000-000000000012
+        revision: '2026-08-05T10:12:00.000Z'
+        value: *id012
+      - key: uuid:00000000-0000-4000-8000-000000000013
+        revision: '2026-08-05T10:23:00.000Z'
+        value: *id013
+      - key: uuid:00000000-0000-4000-8000-000000000014
+        revision: '2026-08-05T10:34:00.000Z'
+        value: *id014
+      - key: uuid:00000000-0000-4000-8000-000000000015
+        revision: '2026-08-05T10:45:00.000Z'
+        value: *id015
+      - key: uuid:00000000-0000-4000-8000-000000000016
+        revision: '2026-08-05T10:56:00.000Z'
+        value: *id016
+      - key: uuid:00000000-0000-4000-8000-000000000017
+        revision: '2026-08-05T11:07:00.000Z'
+        value: *id017
+      - key: uuid:00000000-0000-4000-8000-000000000018
+        revision: '2026-08-05T11:18:00.000Z'
+        value: *id018
+      - key: uuid:00000000-0000-4000-8000-000000000019
+        revision: '2026-08-05T11:29:00.000Z'
+        value: *id019
+      - key: uuid:00000000-0000-4000-8000-000000000020
+        revision: '2026-08-05T11:40:00.000Z'
+        value: *id020
+      - key: uuid:00000000-0000-4000-8000-000000000021
+        revision: '2026-08-05T11:51:00.000Z'
+        value: *id021
+      - key: uuid:00000000-0000-4000-8000-000000000022
+        revision: '2026-08-05T12:02:00.000Z'
+        value: *id022
+      - key: uuid:00000000-0000-4000-8000-000000000023
+        revision: '2026-08-05T12:13:00.000Z'
+        value: *id023
+      - key: uuid:00000000-0000-4000-8000-000000000024
+        revision: '2026-08-05T12:24:00.000Z'
+        value: *id024
+      - key: uuid:00000000-0000-4000-8000-000000000025
+        revision: '2026-08-05T12:35:00.000Z'
+        value: *id025
+      - key: uuid:00000000-0000-4000-8000-000000000026
+        revision: '2026-08-05T12:46:00.000Z'
+        value: *id026
+      - key: uuid:00000000-0000-4000-8000-000000000027
+        revision: '2026-08-05T12:57:00.000Z'
+        value: *id027
+      - key: uuid:00000000-0000-4000-8000-000000000028
+        revision: '2026-08-05T13:08:00.000Z'
+        value: *id028
+      - key: uuid:00000000-0000-4000-8000-000000000029
+        revision: '2026-08-05T13:19:00.000Z'
+        value: *id029
+      - key: uuid:00000000-0000-4000-8000-000000000030
+        revision: '2026-08-05T13:30:00.000Z'
+        value: *id030
+      - key: uuid:00000000-0000-4000-8000-000000000031
+        revision: '2026-08-05T13:41:00.000Z'
+        value: *id031
+      - key: uuid:00000000-0000-4000-8000-000000000032
+        revision: '2026-08-05T13:52:00.000Z'
+        value: *id032
+      - key: uuid:00000000-0000-4000-8000-000000000033
+        revision: '2026-08-05T14:03:00.000Z'
+        value: *id033
+      - key: uuid:00000000-0000-4000-8000-000000000034
+        revision: '2026-08-05T14:14:00.000Z'
+        value: *id034
+      - key: uuid:00000000-0000-4000-8000-000000000035
+        revision: '2026-08-05T14:25:00.000Z'
+        value: *id035
+      - key: uuid:00000000-0000-4000-8000-000000000036
+        revision: '2026-08-05T14:36:00.000Z'
+        value: *id036
+      - key: uuid:00000000-0000-4000-8000-000000000037
+        revision: '2026-08-05T14:47:00.000Z'
+        value: *id037
+      - key: uuid:00000000-0000-4000-8000-000000000038
+        revision: '2026-08-05T14:58:00.000Z'
+        value: *id038
+      - key: uuid:00000000-0000-4000-8000-000000000039
+        revision: '2026-08-05T15:09:00.000Z'
+        value: *id039
+      - key: uuid:00000000-0000-4000-8000-000000000040
+        revision: '2026-08-05T15:20:00.000Z'
+        value: *id040
+      - key: uuid:00000000-0000-4000-8000-000000000041
+        revision: '2026-08-05T15:31:00.000Z'
+        value: *id041
+      - key: uuid:00000000-0000-4000-8000-000000000042
+        revision: '2026-08-05T15:42:00.000Z'
+        value: *id042
+      - key: uuid:00000000-0000-4000-8000-000000000043
+        revision: '2026-08-05T15:53:00.000Z'
+        value: *id043
+      - key: uuid:00000000-0000-4000-8000-000000000044
+        revision: '2026-08-05T16:04:00.000Z'
+        value: *id044
+      - key: uuid:00000000-0000-4000-8000-000000000045
+        revision: '2026-08-05T16:15:00.000Z'
+        value: *id045
+      - key: uuid:00000000-0000-4000-8000-000000000046
+        revision: '2026-08-05T16:26:00.000Z'
+        value: *id046
+      - key: uuid:00000000-0000-4000-8000-000000000047
+        revision: '2026-08-05T16:37:00.000Z'
+        value: *id047
+      - key: uuid:00000000-0000-4000-8000-000000000048
+        revision: '2026-08-05T16:48:00.000Z'
+        value: *id048
+      - key: uuid:00000000-0000-4000-8000-000000000049
+        revision: '2026-08-05T16:59:00.000Z'
+        value: *id049
+      - key: uuid:00000000-0000-4000-8000-000000000050
+        revision: '2026-08-05T17:10:00.000Z'
+        value: *id050
+      - key: uuid:00000000-0000-4000-8000-000000000051
+        revision: '2026-08-05T17:21:00.000Z'
+        value: *id051
+      - key: uuid:00000000-0000-4000-8000-000000000052
+        revision: '2026-08-05T17:32:00.000Z'
+        value: *id052
+      - key: uuid:00000000-0000-4000-8000-000000000053
+        revision: '2026-08-05T17:43:00.000Z'
+        value: *id053
+      - key: uuid:00000000-0000-4000-8000-000000000054
+        revision: '2026-08-05T17:54:00.000Z'
+        value: *id054
+      - key: uuid:00000000-0000-4000-8000-000000000055
+        revision: '2026-08-05T18:05:00.000Z'
+        value: *id055
+      - key: uuid:00000000-0000-4000-8000-000000000056
+        revision: '2026-08-05T18:16:00.000Z'
+        value: *id056
+      - key: uuid:00000000-0000-4000-8000-000000000057
+        revision: '2026-08-05T19:57:00.000Z'
+        value: *id057
+      - key: uuid:00000000-0000-4000-8000-000000000058
+        revision: '2026-08-05T18:38:00.000Z'
+        value: *id058
+      - key: uuid:00000000-0000-4000-8000-000000000059
+        revision: '2026-08-05T18:49:00.000Z'
+        value: *id059
+      - key: uuid:00000000-0000-4000-8000-000000000060
+        revision: '2026-08-05T19:00:00.000Z'
+        value: *id060
+      - key: uuid:00000000-0000-4000-8000-000000000061
+        revision: '2026-08-05T19:11:00.000Z'
+        value: *id061
+      - key: uuid:00000000-0000-4000-8000-000000000062
+        revision: '2026-08-05T19:22:00.000Z'
+        value: *id062
+      - key: uuid:00000000-0000-4000-8000-000000000063
+        revision: '2026-08-05T19:33:00.000Z'
+        value: *id063
+      - key: uuid:00000000-0000-4000-8000-000000000064
+        revision: '2026-08-05T19:44:00.000Z'
+        value: *id064
+      - key: uuid:00000000-0000-4000-8000-000000000065
+        revision: '2026-08-05T19:55:00.000Z'
+        value: *id065
+      - key: uuid:00000000-0000-4000-8000-000000000066
+        revision: '2026-08-05T20:06:00.000Z'
+        value: *id066
+      - key: uuid:00000000-0000-4000-8000-000000000067
+        revision: '2026-08-05T20:17:00.000Z'
+        value: *id067
+      - key: uuid:00000000-0000-4000-8000-000000000068
+        revision: '2026-08-05T20:28:00.000Z'
+        value: *id068
+      - key: uuid:00000000-0000-4000-8000-000000000069
+        revision: '2026-08-05T20:39:00.000Z'
+        value: *id069
+      - key: uuid:00000000-0000-4000-8000-000000000070
+        revision: '2026-08-05T20:50:00.000Z'
+        value: *id070
+      - key: uuid:00000000-0000-4000-8000-000000000071
+        revision: '2026-08-05T21:01:00.000Z'
+        value: *id071
+      - key: uuid:00000000-0000-4000-8000-000000000072
+        revision: '2026-08-05T21:12:00.000Z'
+        value: *id072
+      - key: uuid:00000000-0000-4000-8000-000000000073
+        revision: '2026-08-05T21:23:00.000Z'
+        value: *id073
+      - key: uuid:00000000-0000-4000-8000-000000000074
+        revision: '2026-08-05T21:34:00.000Z'
+        value: *id074
+      - key: uuid:00000000-0000-4000-8000-000000000075
+        revision: '2026-08-05T21:45:00.000Z'
+        value: *id075
+      - key: uuid:00000000-0000-4000-8000-000000000076
+        revision: '2026-08-05T21:56:00.000Z'
+        value: *id076
+      - key: uuid:00000000-0000-4000-8000-000000000077
+        revision: '2026-08-05T22:07:00.000Z'
+        value: *id077
+      - key: uuid:00000000-0000-4000-8000-000000000078
+        revision: '2026-08-05T22:18:00.000Z'
+        value: *id078
+      - key: uuid:00000000-0000-4000-8000-000000000079
+        revision: '2026-08-05T22:29:00.000Z'
+        value: *id079
+      - key: uuid:00000000-0000-4000-8000-000000000080
+        revision: '2026-08-05T22:40:00.000Z'
+        value: *id080
+      - key: uuid:00000000-0000-4000-8000-000000000081
+        revision: '2026-08-05T22:51:00.000Z'
+        value: *id081
+      - key: uuid:00000000-0000-4000-8000-000000000082
+        revision: '2026-08-05T23:02:00.000Z'
+        value: *id082
+      - key: uuid:00000000-0000-4000-8000-000000000083
+        revision: '2026-08-05T23:13:00.000Z'
+        value: *id083
+      - key: uuid:00000000-0000-4000-8000-000000000084
+        revision: '2026-08-05T23:24:00.000Z'
+        value: *id084
+      - key: uuid:00000000-0000-4000-8000-000000000085
+        revision: '2026-08-05T23:35:00.000Z'
+        value: *id085
+      - key: uuid:00000000-0000-4000-8000-000000000086
+        revision: '2026-08-05T23:46:00.000Z'
+        value: *id086
+      - key: uuid:00000000-0000-4000-8000-000000000087
+        revision: '2026-08-05T23:57:00.000Z'
+        value: *id087
+      - key: uuid:00000000-0000-4000-8000-000000000088
+        revision: '2026-08-06T00:08:00.000Z'
+        value: *id088
+      - key: uuid:00000000-0000-4000-8000-000000000089
+        revision: '2026-08-06T00:19:00.000Z'
+        value: *id089
+      - key: uuid:00000000-0000-4000-8000-000000000090
+        revision: '2026-08-06T00:30:00.000Z'
+        value: *id090
+      - key: uuid:00000000-0000-4000-8000-000000000091
+        revision: '2026-08-06T00:41:00.000Z'
+        value: *id091
+      - key: uuid:00000000-0000-4000-8000-000000000092
+        revision: '2026-08-06T00:52:00.000Z'
+        value: *id092
+      - key: uuid:00000000-0000-4000-8000-000000000093
+        revision: '2026-08-06T01:03:00.000Z'
+        value: *id093
+      - key: uuid:00000000-0000-4000-8000-000000000094
+        revision: '2026-08-06T01:14:00.000Z'
+        value: *id094
+      - key: uuid:00000000-0000-4000-8000-000000000095
+        revision: '2026-08-06T01:25:00.000Z'
+        value: *id095
+      - key: uuid:00000000-0000-4000-8000-000000000096
+        revision: '2026-08-06T01:36:00.000Z'
+        value: *id096
+      - key: uuid:00000000-0000-4000-8000-000000000097
+        revision: '2026-08-06T01:47:00.000Z'
+        value: *id097
+      - key: uuid:00000000-0000-4000-8000-000000000098
+        revision: '2026-08-06T01:58:00.000Z'
+        value: *id098
+      - key: uuid:00000000-0000-4000-8000-000000000099
+        revision: '2026-08-06T02:09:00.000Z'
+        value: *id099
+      - key: uuid:00000000-0000-4000-8000-000000000100
+        revision: '2026-08-06T02:20:00.000Z'
+        value: *id100
+      next:
+        submissionDate: '2026-08-06T02:20:00.000Z'
+        seen:
+        - uuid:00000000-0000-4000-8000-000000000100

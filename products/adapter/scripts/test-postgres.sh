@@ -78,3 +78,12 @@ export ADAPTERCTL_BIN="${CARGO_TARGET_DIR}/debug/adapterctl"
 # The postgres-test feature gates the suites that need the database, so a
 # plain cargo test run never silently skips them.
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features postgres-test
+
+# The governed-ingestion job sources (CONCEPT 17), each behind its own
+# default-off feature: the file source lane, the postgres source lane,
+# and the live postgres suite, whose read-only authority, statement
+# bound, and bounded fetch prove themselves against this same server
+# through the engine's host-supplied client seam.
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-file
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-file,job-postgres
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features job-file,job-postgres,postgres-test --test camel_sql

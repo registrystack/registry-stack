@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.component-facade-refused: this artifact set must be refused with
+# exactly adapter.job.component-facade-refused. The bound find-cases template sends to the postgres job component, so the facade path reaches a job-only send.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.component-facade-refused/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: ledger
+    component: postgres
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    queryFile: queries/ledger.sql
+queryFiles:
+  - path: queries/ledger.sql
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: postgres:ledger
+capabilities: {}

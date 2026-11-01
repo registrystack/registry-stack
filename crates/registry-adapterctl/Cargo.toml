@@ -24,7 +24,14 @@ tls-test = ["registry-platform-httputil/test-support"]
 base64.workspace = true
 clap.workspace = true
 graphql-parser.workspace = true
-registry-adapter.workspace = true
+# The job sources' compile rides the same gates the runtime carries:
+# `job check` validates a file or postgres job exactly as the runtime
+# serves it. Cargo unifies features per build, so any build that selects
+# this crate beside registry-adapter (a workspace build, or one `cargo
+# test` over both) compiles registry-adapter, its facade binary and its
+# tests with both gates on. The facade serves no job either way; the
+# lane that tests the gates off must build registry-adapter alone.
+registry-adapter = { workspace = true, features = ["job-file", "job-postgres"] }
 registry-adapter-core = { workspace = true, features = ["schema"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true

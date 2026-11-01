@@ -14,11 +14,11 @@
 #[allow(dead_code)]
 mod upstream;
 
-use registry_adapter::auth::{
+use registry_adapter::engine::auth::{
     AuthError, AuthEvent, AuthPlanFault, ClientAssertion, ClientAssertionSigner, ProtectedText,
     TokenBudget,
 };
-use registry_adapter::egress::{
+use registry_adapter::engine::egress::{
     Egress, EgressError, EgressFault, EgressRefusal, OkStatusCodeRanges, SendBody, SendBodyFormat,
     SendShape,
 };
@@ -87,7 +87,9 @@ fn pack_endpoint(
 
 /// The runtime config for the given bindings, every origin loopback so
 /// the development profile admits it.
-fn runtime_config(bindings: Vec<EndpointBinding>) -> registry_adapter_core::AdapterRuntimeConfig {
+fn runtime_config(
+    bindings: Vec<EndpointBinding>,
+) -> registry_adapter_core::AdapterEndpointBindings {
     runtime_config_with(bindings, &["192.168.0.0/16"], None)
 }
 
@@ -98,8 +100,8 @@ fn runtime_config_with(
     bindings: Vec<EndpointBinding>,
     cidrs: &[&str],
     tls: Option<registry_adapter_core::OutboundTls>,
-) -> registry_adapter_core::AdapterRuntimeConfig {
-    registry_adapter_core::AdapterRuntimeConfig {
+) -> registry_adapter_core::AdapterEndpointBindings {
+    registry_adapter_core::AdapterEndpointBindings {
         id: LocalId::new("egress-deployment").expect("deployment id"),
         endpoints: registry_platform_yaml::UniqueIdList::new(bindings).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(
@@ -110,28 +112,6 @@ fn runtime_config_with(
         )
         .expect("cidrs"),
         outbound_tls: tls,
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/EGR_C4B_DB_RUNTIME",
-                "migrationUrlRef": "secret:env/EGR_C4B_DB_MIGRATION"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "egress" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("egress-client").expect("client")])
-            .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 
@@ -210,7 +190,7 @@ async fn authorize(
     endpoint: &str,
     budget: &mut TokenBudget,
     events: &mut Vec<AuthEvent>,
-) -> Result<Option<registry_adapter::auth::AuthorizedCredential>, AuthError> {
+) -> Result<Option<registry_adapter::engine::auth::AuthorizedCredential>, AuthError> {
     let bound = egress
         .endpoint(endpoint)
         .expect("the endpoint compiled at startup");
@@ -224,11 +204,11 @@ async fn authorize(
 /// the throw option are the knobs under test.
 fn outbound<'a>(
     link: &'a str,
-    authorization: &'a registry_adapter::auth::AuthHeader,
+    authorization: &'a registry_adapter::engine::auth::AuthHeader,
     attempt: std::time::Duration,
     throw: bool,
-) -> registry_adapter::egress::OutboundSend<'a> {
-    registry_adapter::egress::OutboundSend {
+) -> registry_adapter::engine::egress::OutboundSend<'a> {
+    registry_adapter::engine::egress::OutboundSend {
         link,
         exchange_headers: &[],
         shape: SendShape::Get,
@@ -241,7 +221,7 @@ fn outbound<'a>(
 }
 
 /// The upstream failure an admitted exchange ended on.
-fn upstream_failure(error: &EgressError) -> &registry_adapter::egress::UpstreamFailure {
+fn upstream_failure(error: &EgressError) -> &registry_adapter::engine::egress::UpstreamFailure {
     match error {
         EgressError::Upstream(failure) => failure,
         EgressError::Refused(refusal) => panic!("not a refusal case: {refusal:?}"),
@@ -360,7 +340,7 @@ async fn an_oauth2_kind_acquires_and_carries_a_token_over_the_frozen_transport()
     // The data send carries the issued credential, not the client
     // pair.
     let reply = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -506,7 +486,7 @@ async fn a_refused_destination_surfaces_as_egress_refused() {
     // private range this deployment admits.
     let bound = egress.endpoint("private-api").expect("the endpoint");
     let error = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: "http://10.0.0.7:8080/records",
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -590,7 +570,7 @@ async fn the_credential_travels_after_the_exchange_headers() {
     let credential = credential.expect("a basic kind produces a header").header;
 
     let reply = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[
                 ("authorization".to_owned(), "shadow-payload".to_owned()),
@@ -675,7 +655,7 @@ async fn an_exchange_entry_under_the_api_key_name_never_shadows_the_key() {
     let credential = credential.expect("an api key produces a header").header;
 
     bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[
                 ("x-api-key".to_owned(), "shadow-key".to_owned()),
@@ -750,7 +730,7 @@ async fn a_redirect_is_raised_and_never_followed() {
         let credential = credential.expect("a basic kind produces a header").header;
 
         let error = bound
-            .send(registry_adapter::egress::OutboundSend {
+            .send(registry_adapter::engine::egress::OutboundSend {
                 link: &upstream.url("/records"),
                 exchange_headers: &[],
                 shape: SendShape::Get,
@@ -818,7 +798,7 @@ async fn the_pinned_origin_refuses_foreign_links_and_sends_the_target_unchanged(
     drop(probe);
     let foreign = format!("http://127.0.0.1:{foreign_port}/api/records");
     let error = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &foreign,
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -842,7 +822,7 @@ async fn the_pinned_origin_refuses_foreign_links_and_sends_the_target_unchanged(
 
     // A link under the base path travels as written.
     bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/api/records?page=2&size=5"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -924,7 +904,7 @@ async fn a_post_send_carries_its_body_and_classifies_its_reply() {
 
     let body = br#"{"record": 7}"#;
     let error = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &upstream.url("/records"),
             exchange_headers: &[],
             shape: SendShape::Post(SendBody {
@@ -980,7 +960,7 @@ async fn load_basic_and_authorize(
     password_env: &str,
     user: &str,
     password: &str,
-) -> (Egress, registry_adapter::auth::AuthHeader) {
+) -> (Egress, registry_adapter::engine::auth::AuthHeader) {
     std::env::set_var(user_env, user);
     std::env::set_var(password_env, password);
     let config = runtime_config(vec![basic_binding(
@@ -1456,7 +1436,7 @@ async fn an_unreachable_upstream_raises_connection_not_sent() {
     };
     let bound = egress.endpoint("dead-api").expect("the endpoint");
     let error = bound
-        .send(registry_adapter::egress::OutboundSend {
+        .send(registry_adapter::engine::egress::OutboundSend {
             link: &format!("http://127.0.0.1:{dead_port}/records"),
             exchange_headers: &[],
             shape: SendShape::Get,
@@ -1528,7 +1508,7 @@ async fn a_stalled_upstream_raises_timeout_maybe_sent() {
             .header;
         let bound = egress.endpoint("stall-api").expect("the endpoint");
         bound
-            .send(registry_adapter::egress::OutboundSend {
+            .send(registry_adapter::engine::egress::OutboundSend {
                 link: &format!("http://127.0.0.1:{stalled_port}/records"),
                 exchange_headers: &[],
                 shape: SendShape::Get,
@@ -1612,15 +1592,15 @@ async fn an_over_bound_response_head_raises_too_large() {
 #[test]
 fn a_send_debug_render_carries_no_value() {
     const MARKER: &str = "c4b-outbound-marker-77b1c9";
-    let credential = registry_adapter::auth::AuthHeader::new(
+    let credential = registry_adapter::engine::auth::AuthHeader::new(
         "authorization",
-        registry_adapter::auth::ProtectedText::from_str_value(&format!(
+        registry_adapter::engine::auth::ProtectedText::from_str_value(&format!(
             "Bearer token-{MARKER}-credential"
         )),
     );
     let exchange_headers = [("x-trace".to_owned(), format!("trace-{MARKER}-header"))];
     let body_bytes = format!(r#"{{"record": "{MARKER}-body"}}"#).into_bytes();
-    let send = registry_adapter::egress::OutboundSend {
+    let send = registry_adapter::engine::egress::OutboundSend {
         link: "http://127.0.0.1:1/records",
         exchange_headers: &exchange_headers,
         shape: SendShape::Post(SendBody {

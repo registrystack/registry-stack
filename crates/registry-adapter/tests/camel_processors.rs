@@ -8,15 +8,15 @@
 
 use std::collections::BTreeMap;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::route::{check_servable, run_route, RouteContext, RouteTable};
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::route::{check_servable, run_route, RouteContext, RouteTable};
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{AdapterPack, ErrorClass, Step};
 use registry_platform_config::{sha256_uri, SecretProvider, SecretResolver};
 use serde_json::{json, Value};
 
 /// The empty code-map table: no test lane here converts.
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     std::sync::Arc::new(std::collections::BTreeMap::new())
 }
 
@@ -26,11 +26,14 @@ fn steps(value: Value) -> Vec<Step> {
 
 /// One route run over a body-bearing exchange, with no endpoint and the
 /// given scripts: the leaf processors need no upstream.
-async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> registry_adapter::route::RouteOutcome {
+async fn run(
+    step_list: Vec<Step>,
+    scripts: &ScriptSet,
+) -> registry_adapter::engine::route::RouteOutcome {
     let endpoints = BTreeMap::new();
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -40,6 +43,7 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> registry_adapter::rou
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 4,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("test".to_owned());
     exchange.message.body = json!({"items": [{"id": "a"}, {"id": "b"}]});
@@ -70,7 +74,7 @@ fn property_script(map: &str) -> ScriptSet {
     scripts(&format!("fn apply(exchange) {{ #{{ {map} }} }}"))
 }
 
-fn body_of(outcome: &registry_adapter::route::RouteOutcome) -> &Value {
+fn body_of(outcome: &registry_adapter::engine::route::RouteOutcome) -> &Value {
     &outcome
         .result
         .as_ref()

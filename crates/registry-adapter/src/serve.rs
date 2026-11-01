@@ -28,14 +28,14 @@ use tokio::sync::watch;
 use tokio_postgres::Config as PgConfig;
 use zeroize::Zeroizing;
 
-use crate::component::rest::continuation::{ContinuationCodec, CursorKey, CursorTtl};
-use crate::effective_contract::EffectiveContract;
+use crate::engine::component::rest::continuation::{ContinuationCodec, CursorKey, CursorTtl};
+use crate::engine::effective_contract::EffectiveContract;
+use crate::engine::load::{load, LoadError};
 use crate::facade::{router, FacadeState};
 use crate::idempotent::{
     self, PostgresIdempotencyStore, MAX_CALLER_IDENTITY_BYTES, MAX_CALLER_ISSUER_BYTES,
 };
 use crate::journal;
-use crate::load::{load, LoadError};
 
 /// The access token media type the facade admits (RFC 9068).
 const ACCESS_TOKEN_TYPE: &str = "at+jwt";

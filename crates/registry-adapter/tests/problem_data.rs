@@ -9,14 +9,14 @@ use std::collections::BTreeMap;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Response, StatusCode};
-use registry_adapter::envelope::CompiledEnvelope;
-use registry_adapter::exchange::Exchange;
-use registry_adapter::facade::{route_problem, Problems};
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::envelope::CompiledEnvelope;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     run_route, run_route_with_profile, RouteContext, RouteFailure, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::{CodeMaps, ScriptSet};
+use registry_adapter::engine::scripts::{CodeMaps, ScriptSet};
+use registry_adapter::facade::{route_problem, Problems};
 use registry_adapter_core::{
     AdapterProfile, EnvelopeTemplate, ErrorClass, Expression, Problem, RecordField,
     RecordFieldType, Step, ThrowExceptionStep, MAX_PROBLEM_DATA_BYTES,
@@ -129,6 +129,7 @@ async fn run(profile: Option<&AdapterProfile>, steps: &[Step]) -> RouteOutcome {
         routes: &routes,
         code_maps,
         maximum_upstream_calls: 1,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     match profile {
         Some(profile) => {
@@ -315,6 +316,7 @@ async fn declared_closed_typed_problem_data_is_rendered() {
         message: Some("bounded public detail".to_owned()),
         data: Some(json!({"accepted": 3, "rejected": 1})),
         auth: None,
+        code: None,
     };
 
     let (status, rendered) = body(route_problem(problems, &failure, "case", "request-1")).await;
@@ -347,6 +349,7 @@ async fn invalid_problem_data_fails_closed_without_value_or_detail_fallback() {
             message: Some(canary.to_owned()),
             data: Some(data),
             auth: None,
+            code: None,
         };
         let (status, rendered) =
             body(route_problem(problems, &failure, "case", "request-invalid")).await;
@@ -374,6 +377,7 @@ async fn data_for_a_problem_without_a_declaration_is_a_disclosure_violation() {
         message: Some("must not survive".to_owned()),
         data: Some(json!({"accepted": 3})),
         auth: None,
+        code: None,
     };
     let (status, rendered) = body(route_problem(
         problems,
@@ -403,6 +407,7 @@ async fn whole_problem_data_remains_optional_and_plain_problems_are_unchanged() 
             message: Some("bounded public detail".to_owned()),
             data: None,
             auth: None,
+            code: None,
         };
         let (status, rendered) =
             body(route_problem(problems, &failure, "case", "request-plain")).await;

@@ -16,7 +16,7 @@
 #[path = "support/upstream/mod.rs"]
 mod upstream;
 
-use registry_adapter::auth::{
+use registry_adapter::engine::auth::{
     AuthError, AuthEvent, AuthPlan, AuthorizeContext, AuthorizedCredential, ClientAssertion,
     ClientAssertionSigner, ProtectedText, TokenBudget, CREDENTIAL_REJECTED_CLASS,
 };
@@ -95,8 +95,8 @@ fn oauth_binding(
 }
 
 async fn authorize_with_plan(
-    plan: &registry_adapter::auth::AuthPlan,
-    send: &dyn registry_adapter::auth::TokenSend,
+    plan: &registry_adapter::engine::auth::AuthPlan,
+    send: &dyn registry_adapter::engine::auth::TokenSend,
     events: &mut Vec<AuthEvent>,
 ) -> Result<Option<AuthorizedCredential>, AuthError> {
     let mut budget = TokenBudget::new_exchange();
@@ -469,7 +469,7 @@ mod oauth2_client_credentials {
             .await;
         assert_eq!(
             action,
-            registry_adapter::auth::UpstreamStatusAction::RetryWithFreshCredential
+            registry_adapter::engine::auth::UpstreamStatusAction::RetryWithFreshCredential
         );
         assert!(cache.remaining_lifetime().await.is_none());
         let mut context = AuthorizeContext {
@@ -482,7 +482,7 @@ mod oauth2_client_credentials {
         let error = plan.authorize(&mut context).await.unwrap_err();
         assert_eq!(
             error,
-            AuthError::Token(registry_adapter::auth::TokenFault::Refused {
+            AuthError::Token(registry_adapter::engine::auth::TokenFault::Refused {
                 code: "invalid_client"
             })
         );
@@ -572,7 +572,7 @@ mod oauth2_client_credentials {
             .unwrap_err();
         assert_eq!(
             error,
-            AuthError::Token(registry_adapter::auth::TokenFault::Refused {
+            AuthError::Token(registry_adapter::engine::auth::TokenFault::Refused {
                 code: "unregistered-error-code"
             })
         );
@@ -616,7 +616,7 @@ mod oauth2_client_credentials {
             let error = plan.authorize(&mut context).await.unwrap_err();
             assert_eq!(
                 error,
-                AuthError::Token(registry_adapter::auth::TokenFault::Refused {
+                AuthError::Token(registry_adapter::engine::auth::TokenFault::Refused {
                     code: "invalid_client"
                 })
             );
@@ -686,7 +686,7 @@ mod oauth2_client_credentials {
             .await;
         assert_eq!(
             action,
-            registry_adapter::auth::UpstreamStatusAction::RetryWithFreshCredential
+            registry_adapter::engine::auth::UpstreamStatusAction::RetryWithFreshCredential
         );
         assert!(refresh_used);
         assert!(cache.remaining_lifetime().await.is_none());
@@ -696,7 +696,7 @@ mod oauth2_client_credentials {
             .await;
         assert_eq!(
             action,
-            registry_adapter::auth::UpstreamStatusAction::CredentialRejected
+            registry_adapter::engine::auth::UpstreamStatusAction::CredentialRejected
         );
         assert_eq!(
             AuthError::Credential.class(),
@@ -708,7 +708,7 @@ mod oauth2_client_credentials {
             .await;
         assert_eq!(
             action,
-            registry_adapter::auth::UpstreamStatusAction::Continue
+            registry_adapter::engine::auth::UpstreamStatusAction::Continue
         );
     }
 }
@@ -792,8 +792,8 @@ mod oauth2_private_key_jwt {
 /// into platform material, or refuses value-free.
 mod outbound_tls {
     use super::*;
-    use registry_adapter::auth::{EndpointTls, TlsFault};
-    use registry_adapter_core::AdapterRuntimeConfig;
+    use registry_adapter::engine::auth::{EndpointTls, TlsFault};
+    use registry_adapter_core::AdapterEndpointBindings;
     use registry_platform_yaml::LocalId;
 
     /// Throwaway self-signed fixtures generated for these tests only; no
@@ -812,7 +812,7 @@ mod outbound_tls {
 
     /// A runtime config declaring the one trust profile `private-ca` whose
     /// bundle file is `ca_bundle_file`; `None` declares no profiles.
-    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterRuntimeConfig {
+    fn runtime_config(ca_bundle_file: Option<&str>) -> AdapterEndpointBindings {
         let trust_profiles = ca_bundle_file.map_or_else(
             || r#"{ "trustProfiles": {} }"#.to_owned(),
             |file| {
@@ -826,21 +826,10 @@ mod outbound_tls {
                 "id": "case-deployment",
                 "endpoints": [],
                 "outboundTls": {trust_profiles},
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "listener": {{ "bind": "127.0.0.1:8080" }},
-                "database": {{
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                }},
-                "oidc": {{
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                }},
-                "allowedClients": ["case-portal"],
-                "audit": {{ "retentionDays": 90 }}
+                "allowedPrivateCidrs": ["10.0.0.0/8"]
             }}"#
         ))
-        .expect("runtime config")
+        .expect("runtime bindings")
     }
 
     /// A binding without a trust profile resolves nothing; a declared
@@ -1191,7 +1180,7 @@ mod marker_secret_absence {
             .unwrap_err();
         assert_eq!(
             error,
-            AuthError::Token(registry_adapter::auth::TokenFault::Refused {
+            AuthError::Token(registry_adapter::engine::auth::TokenFault::Refused {
                 code: "invalid_client"
             })
         );
@@ -1212,7 +1201,7 @@ mod marker_secret_absence {
     /// send that never completes on the transport.
     #[tokio::test]
     async fn body_markers_reach_no_rendering() {
-        use registry_adapter::auth::TokenFault;
+        use registry_adapter::engine::auth::TokenFault;
         std::env::set_var("ADAPTER_MARK_BODY_ID", "cid-body");
         std::env::set_var("ADAPTER_MARK_BODY_SECRET", MARKER_SECRET);
         let double = UpstreamDouble::start();

@@ -5,10 +5,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{check_servable, run_route, RouteContext, RouteOutcome, RouteTable};
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
+    check_servable, run_route, RouteContext, RouteOutcome, RouteTable,
+};
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::Step;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::{json, Value};
@@ -17,7 +19,7 @@ fn steps(value: Value) -> Vec<Step> {
     serde_json::from_value(value).expect("the steps parse")
 }
 
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     Arc::new(BTreeMap::new())
 }
 
@@ -45,6 +47,7 @@ async fn run_empty(main: Value, targets: Value) -> RouteOutcome {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 4,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     run_route(&context, &main, Exchange::new("error-lifecycle".to_owned())).await
 }

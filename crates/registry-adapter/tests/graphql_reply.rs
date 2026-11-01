@@ -5,13 +5,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use registry_adapter::component::graphql::GraphQlQuery;
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable};
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::component::graphql::GraphQlQuery;
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
+    run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
+};
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding,
+    AdapterEndpointBindings, ComponentKind, Endpoint, EndpointAuthentication, EndpointBinding,
     GraphQlOperationKind, RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -57,7 +59,7 @@ fn endpoint_runtime(
         operation_name: Some("FindCases".to_owned()),
         variables: None,
     };
-    let config = AdapterRuntimeConfig {
+    let config = AdapterEndpointBindings {
         id: LocalId::new("graphql-reply").expect("deployment id"),
         endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(vec![registry_adapter_core::Cidr::new(
@@ -66,30 +68,6 @@ fn endpoint_runtime(
         .expect("cidr")])
         .expect("cidrs"),
         outbound_tls: None,
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/GRAPHQL_REPLY_DB",
-                "migrationUrlRef": "secret:env/GRAPHQL_REPLY_DB"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "graphql-reply" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![
-            ExternalId::new("graphql-reply-client").expect("client")
-        ])
-        .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("binding");
     let mut runtime =
@@ -125,6 +103,7 @@ async fn run_reply(status: u16, body: &str) -> RouteOutcome {
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 2,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     run_route(&context, &steps, Exchange::new("graphql-reply".to_owned())).await
 }

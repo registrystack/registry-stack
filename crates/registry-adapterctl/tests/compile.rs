@@ -26,7 +26,7 @@ fn assert_contract_pin(parameters: &Value) {
     assert_eq!(pins.len(), 1, "one contract pin header: {parameters}");
     assert_eq!(
         pins[0]["name"],
-        registry_adapter::effective_contract::PIN_HEADER
+        registry_adapter::engine::effective_contract::PIN_HEADER
     );
     assert_eq!(pins[0]["required"], false);
     assert_eq!(
@@ -192,7 +192,7 @@ fn the_minimal_fixture_project_compiles() {
     // remains (D6, CONCEPT section 7).
     let paths = document["paths"].as_object().expect("paths");
     assert_eq!(paths.len(), 2, "{paths:?}");
-    assert!(paths.contains_key(registry_adapter::effective_contract::WELL_KNOWN_PATH));
+    assert!(paths.contains_key(registry_adapter::engine::effective_contract::WELL_KNOWN_PATH));
     let operation = &document["paths"]["/v2/cases/case"]["get"];
     assert_eq!(operation["operationId"], "cases-get.case");
     assert_contract_pin(&operation["parameters"]);
@@ -385,7 +385,7 @@ fn an_unbound_profile_operation_emits_no_path() {
     let (document, _) = compile(&project, &[]);
     let paths = document["paths"].as_object().expect("paths");
     assert_eq!(paths.len(), 1, "only the protected system route remains");
-    assert!(paths.contains_key(registry_adapter::effective_contract::WELL_KNOWN_PATH));
+    assert!(paths.contains_key(registry_adapter::engine::effective_contract::WELL_KNOWN_PATH));
     assert!(paths.get("/v2/cases/case").is_none());
     let _ = root;
 }
@@ -406,7 +406,7 @@ fn the_maintained_example_compiles_under_breg_records() {
     // `/v1/records/person` carries search (get) and create (post);
     // `/v1/records/person/{record_id}` carries get.
     assert_eq!(paths.len(), 3, "{paths:?}");
-    assert!(paths.contains_key(registry_adapter::effective_contract::WELL_KNOWN_PATH));
+    assert!(paths.contains_key(registry_adapter::engine::effective_contract::WELL_KNOWN_PATH));
     let search = &document["paths"]["/v1/records/person"]["get"];
     assert_eq!(search["operationId"], "records-search.person");
     assert_eq!(

@@ -4,14 +4,14 @@
 //! accepts is processed, and a script that loops or builds without end still
 //! ends in a budget failure.
 
-use registry_adapter::scripts::{ScriptFailure, ScriptSet};
+use registry_adapter::engine::scripts::{ScriptFailure, ScriptSet};
 
 use registry_adapter_core::AdapterPack;
 use registry_platform_config::sha256_uri;
 use serde_json::{json, Value};
 
 /// The empty code-map table: no test lane here converts.
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     std::sync::Arc::new(std::collections::BTreeMap::new())
 }
 
