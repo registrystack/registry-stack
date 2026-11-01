@@ -382,46 +382,75 @@ impl Operation for IngestionCreateRun {
         let envelope = self.unseal(prepared)?;
         let operation = operation_kind(&envelope).map_err(|_| ConnectorFault::NotPrepared)?;
         // Read what the destination proves: the caller's open runs under
-        // the announced input digest. Only a run whose announcement matches
-        // this envelope in every member is the outcome; a run another
-        // announcement opened over the same input is not. No match announces
-        // again, under the same ledger key and no destination key. More than
-        // one match cannot be settled from here and stays uncertain.
-        let query = BRegIngestionRunListQuery::default()
+        // the announced input digest, every page of them. Only a run whose
+        // announcement matches this envelope in every member is the outcome;
+        // a run another announcement opened over the same input is not. No
+        // match announces again, under the same ledger key and no
+        // destination key. More than one match, or a listing that outruns
+        // its page bound, cannot be settled from here and stays uncertain.
+        let base = BRegIngestionRunListQuery::default()
             .access_profile(envelope.profile.clone())
             .map_err(|_| ConnectorFault::NotPrepared)?
             .status(BRegIngestionRunStatus::Open)
             .input_digest(envelope.input_digest.clone())
             .map_err(|_| ConnectorFault::NotPrepared)?;
-        let listed = self.connector.block(
-            self.connector
-                .client()
-                .list_ingestion_runs(self.connector.route(), &query),
-        );
-        let page = match listed {
-            Ok(page) => page,
-            Err(error) => return classify(&error),
-        };
-        let mut matching = page
-            .value
-            .runs()
-            .iter()
-            .filter(|run| announces(run, &envelope, operation));
-        match (matching.next(), matching.next()) {
-            (Some(run), None) => Ok(accepted(correlation(
-                &run.run_id().to_string(),
-                &envelope.profile,
-            ))),
-            (None, _) => self.announce(&envelope),
-            (Some(_), Some(_)) => Ok(SendOutcome {
-                category: OutcomeCategory::Uncertain,
-                native_problem: None,
-                correlation: None,
-                note: Some(
-                    "more than one open ingestion run matches the announcement; settle it by reading the runs",
-                ),
-            }),
+        let mut found: Option<String> = None;
+        let mut cursor: Option<String> = None;
+        for _ in 0..RECOVERY_PAGE_BOUND {
+            let query = match &cursor {
+                Some(after) => base
+                    .clone()
+                    .cursor(after.clone())
+                    .map_err(|_| ConnectorFault::NotPrepared)?,
+                None => base.clone(),
+            };
+            let listed = self.connector.block(
+                self.connector
+                    .client()
+                    .list_ingestion_runs(self.connector.route(), &query),
+            );
+            let page = match listed {
+                Ok(page) => page.value,
+                Err(error) => return classify(&error),
+            };
+            for run in page
+                .runs()
+                .iter()
+                .filter(|run| announces(run, &envelope, operation))
+            {
+                if found.is_some() {
+                    return Ok(unsettled(
+                        "more than one open ingestion run matches the announcement; settle it by reading the runs",
+                    ));
+                }
+                found = Some(run.run_id().to_string());
+            }
+            match page.next_cursor() {
+                Some(next) => cursor = Some(next.to_owned()),
+                None => {
+                    return match found {
+                        Some(run) => Ok(accepted(correlation(&run, &envelope.profile))),
+                        None => self.announce(&envelope),
+                    };
+                }
+            }
         }
+        Ok(unsettled(
+            "the open ingestion runs outrun the recovery page bound; settle it by reading the runs",
+        ))
+    }
+}
+
+/// The open-run pages run recovery reads before it stays uncertain.
+const RECOVERY_PAGE_BOUND: usize = 10;
+
+/// An outcome recovery cannot settle from what the destination listed.
+fn unsettled(note: &'static str) -> SendOutcome {
+    SendOutcome {
+        category: OutcomeCategory::Uncertain,
+        native_problem: None,
+        correlation: None,
+        note: Some(note),
     }
 }
 

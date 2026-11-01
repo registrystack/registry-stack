@@ -124,6 +124,30 @@ async fn batch_recovery_resends_the_sealed_items_under_the_same_key() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn batch_recovery_refuses_when_the_batch_binding_changed() {
+    let original = Mock::start("immediate", false).await;
+    let stored = {
+        let prepared = original
+            .connector
+            .batch_records()
+            .prepare(&batch_input(), key("batch"))
+            .expect("prepares");
+        prepared.as_bytes().to_vec()
+    };
+    // The deployment now resolves a batch binding of another identity; the
+    // persisted attempt is never rebuilt against it.
+    let changed = Mock::start_at_revision(
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    )
+    .await;
+    let prepared = registry_adapter_connectors::breg::batch::PreparedBatch::from_bytes(&stored)
+        .expect("restores");
+    let fault = changed.connector.batch_records().recover(&prepared);
+    assert_eq!(fault.unwrap_err(), ConnectorFault::BindingChanged);
+    assert!(changed.exchanges().is_empty(), "nothing is sent");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn batch_observation_reads_the_receipt_snapshot_back() {
     let mock = Mock::start("immediate", false).await;
     mock.push(
@@ -426,6 +450,85 @@ async fn ingestion_create_run_recovery_is_uncertain_when_two_runs_match() {
     assert!(recovered.correlation.is_none());
     assert_eq!(mock.exchanges().len(), 2, "no new announcement");
 }
+
+/// One page of the open-run listing.
+fn run_page(runs: Vec<Value>, next_cursor: Option<&str>) -> support::MockResponse {
+    support::mutation_json(
+        StatusCode::OK,
+        json!({"runs": runs, "hasMore": next_cursor.is_some(), "nextCursor": next_cursor}),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_recovery_follows_the_listing_past_its_first_page() {
+    let mock = Mock::start("immediate", false).await;
+    let stored = lost_announcement(&mock).await;
+    mock.push(run_page(
+        vec![other_announcement(OTHER_RUN_ID)],
+        Some(OTHER_RUN_ID),
+    ));
+    mock.push(run_page(
+        vec![ingestion_run("open", 0, 0, &support::empty_prefix_digest())],
+        None,
+    ));
+    let recovered = recover_run(&mock, &stored);
+    assert_eq!(recovered.category, OutcomeCategory::Accepted);
+    assert_eq!(
+        recovered.correlation.as_deref(),
+        Some(format!("{RUN_ID}/{PROFILE}").as_str())
+    );
+    let requests = mock.exchanges();
+    assert_eq!(requests.len(), 3, "the lost announcement, then two pages");
+    assert!(
+        requests[2]
+            .uri
+            .contains(&format!("&cursor={OTHER_RUN_ID}&")),
+        "the second page continues after the first: {}",
+        requests[2].uri
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_recovery_is_uncertain_when_a_later_page_holds_a_twin() {
+    let mock = Mock::start("immediate", false).await;
+    let stored = lost_announcement(&mock).await;
+    let mut twin = ingestion_run("open", 0, 0, &support::empty_prefix_digest());
+    twin["runId"] = json!(OTHER_RUN_ID);
+    mock.push(run_page(
+        vec![ingestion_run("open", 0, 0, &support::empty_prefix_digest())],
+        Some(RUN_ID),
+    ));
+    mock.push(run_page(vec![twin], None));
+    let recovered = recover_run(&mock, &stored);
+    assert_eq!(recovered.category, OutcomeCategory::Uncertain);
+    assert!(recovered.correlation.is_none());
+    assert_eq!(mock.exchanges().len(), 3, "no new announcement");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_recovery_is_uncertain_when_the_listing_outruns_its_bound() {
+    let mock = Mock::start("immediate", false).await;
+    let stored = lost_announcement(&mock).await;
+    // Every page continues; recovery stops at its page bound without
+    // proving the run absent, so it announces nothing.
+    for _ in 0..RECOVERY_PAGE_BOUND {
+        mock.push(run_page(
+            vec![other_announcement(OTHER_RUN_ID)],
+            Some(OTHER_RUN_ID),
+        ));
+    }
+    let recovered = recover_run(&mock, &stored);
+    assert_eq!(recovered.category, OutcomeCategory::Uncertain);
+    assert!(recovered.correlation.is_none());
+    assert_eq!(
+        mock.exchanges().len(),
+        1 + RECOVERY_PAGE_BOUND,
+        "the listing pages, and no new announcement"
+    );
+}
+
+/// The open-run pages recovery reads before it stays uncertain.
+const RECOVERY_PAGE_BOUND: usize = 10;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ingestion_chunk_submits_and_names_a_replay_in_the_note() {
