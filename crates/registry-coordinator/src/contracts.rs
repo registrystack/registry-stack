@@ -853,10 +853,10 @@ pub fn contract(operation: Operation) -> &'static OperationContract {
                 .map(|(id, (mut input, mut output))| {
                     derived::finish(&mut input, &format!("{id} input"));
                     derived::finish(&mut output, &format!("{id} output"));
-                    let declared_refusal = crate::operations::descriptor(id)
-                        .expect("every derived contract names a catalog operation")
-                        .declared_refusal
-                        .then(derived::output::<crate::protocol::DeclaredRefusal>);
+                    let declared_refusal = derived_declared_refusal(
+                        crate::operations::descriptor(id)
+                            .expect("every derived contract names a catalog operation"),
+                    );
                     (
                         id.to_owned(),
                         OperationContract::new(input, output, declared_refusal, None)
@@ -911,6 +911,28 @@ fn derived_contracts() -> BTreeMap<&'static str, (Value, Value)> {
     crate::operations::operation_catalog!(schema_catalog)
 }
 
+/// The finalized declared-refusal schema for one catalog operation.
+#[cfg(feature = "schema")]
+fn derived_declared_refusal(descriptor: &crate::operations::OperationDescriptor) -> Option<Value> {
+    if !descriptor.declared_refusal {
+        return None;
+    }
+    let mut refusal = derived::output::<crate::protocol::DeclaredRefusal>();
+    let title = if descriptor.id == Operation::InvokeBregAction.as_str() {
+        "invoke-breg-action declared-refusal output".to_owned()
+    } else {
+        format!("{} declared-refusal output", descriptor.id)
+    };
+    if descriptor.id == Operation::LookupRecord.as_str() {
+        refusal["properties"]["refusalCode"] = serde_json::json!({
+            "type": "string",
+            "const": crate::record_read::UNRESOLVED
+        });
+    }
+    derived::finish(&mut refusal, &title);
+    Some(refusal)
+}
+
 /// Generated contract files and their reference, keyed by file name.
 #[cfg(feature = "schema")]
 pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
@@ -961,22 +983,9 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         text,
     );
     for descriptor in crate::operations::descriptors() {
-        if !descriptor.declared_refusal {
+        let Some(refusal) = derived_declared_refusal(descriptor) else {
             continue;
-        }
-        let mut refusal = derived::output::<crate::protocol::DeclaredRefusal>();
-        let title = if descriptor.id == Operation::InvokeBregAction.as_str() {
-            "invoke-breg-action declared-refusal output".to_owned()
-        } else {
-            format!("{} declared-refusal output", descriptor.id)
         };
-        if descriptor.id == Operation::LookupRecord.as_str() {
-            refusal["properties"]["refusalCode"] = serde_json::json!({
-                "type": "string",
-                "const": crate::record_read::UNRESOLVED
-            });
-        }
-        derived::finish(&mut refusal, &title);
         let mut text = serde_json::to_string_pretty(&refusal)?;
         text.push('\n');
         files.insert(
@@ -2333,6 +2342,23 @@ mod tests {
             false,
             message_content_runtime_accepts,
         );
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn in_memory_declared_refusals_match_the_generated_catalog() {
+        let files = generate().unwrap();
+        let catalog: BTreeMap<String, Value> =
+            serde_json::from_str(&files["catalog.json"]).unwrap();
+        for descriptor in crate::operations::descriptors() {
+            let operation = Operation::parse(descriptor.id).unwrap();
+            assert_eq!(
+                contract(operation).declared_refusal.as_ref(),
+                catalog[descriptor.id].get("declaredRefusal"),
+                "{}",
+                descriptor.id
+            );
+        }
     }
 
     #[cfg(feature = "schema")]
