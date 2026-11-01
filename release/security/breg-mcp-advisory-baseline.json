@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:66303ab9bc99bc28104c888c6f015d0b07d890bca36439599e22bbd262f60e30",
+      "sha256:bc716929a72951913a3c5275378ae6128d37125a817172c1fcff86f454e382ba",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84"
+    "definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493"
   },
   "policies": [
     {
@@ -75,8 +75,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -93,14 +93,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
-      "component_layer_id": "sha256:66303ab9bc99bc28104c888c6f015d0b07d890bca36439599e22bbd262f60e30",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
+      "component_layer_id": "sha256:bc716929a72951913a3c5275378ae6128d37125a817172c1fcff86f454e382ba",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -133,8 +133,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -151,14 +151,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
-      "component_layer_id": "sha256:66303ab9bc99bc28104c888c6f015d0b07d890bca36439599e22bbd262f60e30",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
+      "component_layer_id": "sha256:bc716929a72951913a3c5275378ae6128d37125a817172c1fcff86f454e382ba",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,68 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
+      }
+    },
+    {
+      "vulnerability_id": "CVE-2026-84243",
+      "package": "libc6",
+      "installed_version": "2.41-12+deb13u4",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Proposed risk acceptance for owner review: the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 was reviewed on 2026-11-01. Native Grype reports CVE-2026-84243 as High and not-fixed with no fixed version for libc6 2.41-12+deb13u4; Debian also still lists this package as vulnerable without a fixed version. The affected gettext implementation remains in libc and can be reached internally by ordinary error reporting. Exploitation additionally requires non-C LC_MESSAGES, attacker-controlled LANGUAGE across an environment trust boundary, and a crafted readable .mo catalog. In the exact Debian glibc source, guess_category_value reads the current category and returns for C or C.<encoding> before consulting LANGUAGE; POSIX is stopped before catalog loading. Programs start in C, and libc does not call setlocale itself. Independently cross-checked GNU and LLVM ELF reports cover /usr/local/bin/breg-mcp; their loaded closure is only the executable, loader, libc, libm and libpthread. Neither the applications nor their non-libc loaded libraries import global or thread locale setters, and source review found no compiled locale-changing path or such constructor. pg_query NLS is compiled out where present; AWS-LC constructors perform CPU and cryptographic initialization. The exact exports contain no locale catalogs, and the pinned nonroot OCI processes set only PATH and SSL_CERT_FILE. These reviewed processes retain their startup C locale; locale environment variables alone do not change it. The runtime and operator-tool reports, where present, have no review-required or unlocated dynamic lookup. All resolved application dlsym lookups select only __pthread_get_minstack, _dl_find_object and getrandom, not locale or gettext entrypoints. The exact ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exported rootfs. The whole application-layer binding covers every shipped operator tool as well as the entrypoint. Locale/gettext calls, a changed runtime or tool dependency closure, deployment-supplied native libraries, or plugin/extension enablement require re-review under the existing exposure-assertion and runtime invalidation rules. This is a conditional exposure decision for the reviewed Linux amd64 processes, not a dependency fix. The proposed owner is @jeremi and expiry remains 2027-01-26.",
+      "reviewed_at": "2026-11-01",
+      "expires_at": "2027-01-26",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_base_changed",
+        "runtime_config_changed"
+      ],
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
+      "component_layer_id": "sha256:bc716929a72951913a3c5275378ae6128d37125a817172c1fcff86f454e382ba",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/breg-mcp",
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
+          }
+        ],
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -191,8 +249,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. Debian's trixie tracker still marks this CVE vulnerable and does not record a <no-dsa> note. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. Debian's trixie tracker still marks this CVE vulnerable and does not record a <no-dsa> note. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -209,14 +267,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +294,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -249,8 +307,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -267,14 +325,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -294,10 +352,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -307,8 +365,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -325,14 +383,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -352,10 +410,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -365,8 +423,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -383,14 +441,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -410,10 +468,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -423,8 +481,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -441,14 +499,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -468,10 +526,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -481,8 +539,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -499,14 +557,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -526,10 +584,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -539,8 +597,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -557,14 +615,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -584,10 +642,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -597,8 +655,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -615,14 +673,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -642,10 +700,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     },
     {
@@ -655,8 +713,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
-      "reviewed_at": "2026-10-27",
+      "rationale": "Reviewed the v0.45.0 Linux amd64 breg-mcp local reproduction from review-only rehearsal 41317676125 on 2026-11-01. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/breg-mcp.json record no review-required dynamic lookup in /usr/local/bin/breg-mcp; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "reviewed_at": "2026-11-01",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -673,14 +731,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+      "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0f4911c4284e241013485658fdcd0c2eb929f6564b8f345861f5f25dc4a9a5a8",
-        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
+        "reference_image_digest": "sha256:aea9da88c24b37ca9bceee8f1b7a6135886e131b9bd629420148b0dc27dc8c55",
+        "reference_source_revision": "d68c3e4620bf3edbbd7c89b1e851d1e90693b60a",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:d6c6c2eb0bfb0529c1cff4604ec1d943ac40e442684e3b68695a6ba5213f4d84",
+        "runtime_definition_digest": "sha256:c33b4c04d7aeb0ee1cbf03d5abb3a11c25a389e228655246e21b288492373493",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -700,10 +758,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:f14e118bbc8e7ebb1de75e9e4712392644da79866161274974b22624e6067325"
+            "sha256": "sha256:a14df34df2297da04074c093f113786c9ae6d3d13f77e9c577db67be93960a67"
           }
         ],
-        "definition_digest": "sha256:a4b2389594103c02d1a2005689d328aee28912a843e04a95f0b03221cb1cbba9"
+        "definition_digest": "sha256:3eb07284abaaee42b9915b7d9370bfd18e723bd723db772b3400917a82f05352"
       }
     }
   ]
