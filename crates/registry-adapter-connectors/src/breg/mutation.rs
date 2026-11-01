@@ -48,7 +48,7 @@ use crate::operation::{
     Product, RecoveryRule, SendOutcome,
 };
 
-use super::{classify, completed, fault};
+use super::{classify, completed, fault, recovered};
 
 fn descriptor(
     name: &'static str,
@@ -394,10 +394,6 @@ impl Operation for RecordCreate {
     }
 
     fn send(&self, prepared: &PreparedCreate) -> Result<SendOutcome, ConnectorFault> {
-        self.recover(prepared)
-    }
-
-    fn recover(&self, prepared: &PreparedCreate) -> Result<SendOutcome, ConnectorFault> {
         let binding = self.connector.create_binding()?;
         let (request, key, format) = self
             .connector
@@ -413,6 +409,10 @@ impl Operation for RecordCreate {
             Ok(record) => Ok(completed(record.value.data.record_identifier.clone())),
             Err(error) => classify(&error),
         }
+    }
+
+    fn recover(&self, prepared: &PreparedCreate) -> Result<SendOutcome, ConnectorFault> {
+        recovered(self.send(prepared))
     }
 }
 
@@ -461,10 +461,6 @@ impl Operation for RecordPatch {
     }
 
     fn send(&self, prepared: &PreparedPatch) -> Result<SendOutcome, ConnectorFault> {
-        self.recover(prepared)
-    }
-
-    fn recover(&self, prepared: &PreparedPatch) -> Result<SendOutcome, ConnectorFault> {
         let envelope: PatchEnvelope = unseal(&prepared.envelope, "breg.record.patch")?;
         let request = build_patch(&envelope.operations)?;
         let etag = BRegEtag::parse(&envelope.etag).map_err(|_| ConnectorFault::NotPrepared)?;
@@ -482,6 +478,10 @@ impl Operation for RecordPatch {
             Ok(record) => Ok(completed(record.value.data.record_identifier.clone())),
             Err(error) => classify(&error),
         }
+    }
+
+    fn recover(&self, prepared: &PreparedPatch) -> Result<SendOutcome, ConnectorFault> {
+        recovered(self.send(prepared))
     }
 }
 
@@ -524,10 +524,6 @@ impl Operation for RecordTombstone {
     }
 
     fn send(&self, prepared: &PreparedTombstone) -> Result<SendOutcome, ConnectorFault> {
-        self.recover(prepared)
-    }
-
-    fn recover(&self, prepared: &PreparedTombstone) -> Result<SendOutcome, ConnectorFault> {
         let envelope: TombstoneEnvelope = unseal(&prepared.envelope, "breg.record.tombstone")?;
         let etag = BRegEtag::parse(&envelope.etag).map_err(|_| ConnectorFault::NotPrepared)?;
         let key =
@@ -545,5 +541,9 @@ impl Operation for RecordTombstone {
             Ok(record) => Ok(completed(record.value.data.record_identifier.clone())),
             Err(error) => classify(&error),
         }
+    }
+
+    fn recover(&self, prepared: &PreparedTombstone) -> Result<SendOutcome, ConnectorFault> {
+        recovered(self.send(prepared))
     }
 }

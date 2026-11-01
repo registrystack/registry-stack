@@ -23,8 +23,16 @@
 //! unchanged targets reproduce the identical body, which the destination
 //! replays or executes once, and a moved target produces a different
 //! body under a spent key, which the destination answers with
-//! `idempotency.key-reused` and the connector surfaces as a refusal.
-//! Silence is never read as success.
+//! `idempotency.key-reused`. On a first send that answer is a refusal. On
+//! a recovery it is uncertain: the first attempt's
+//! own committed effect moves the target just as another writer would,
+//! and the answer cannot tell the two apart, so the outcome is settled by
+//! reading the target, never by a refusal or a resend under another key.
+//! An unguarded recovery resends the saved bytes exactly, and its
+//! horizon answers are uncertain for the same reason every keyed
+//! recovery's are: the destination also gives them when the first
+//! attempt committed under another activation, profile, or claims, or
+//! after its held response expired. Silence is never read as success.
 //!
 //! # Correlation and observation
 //!
@@ -51,7 +59,7 @@ use crate::operation::{
     Product, RecoveryRule, SendOutcome,
 };
 
-use super::{classify, completed, fault};
+use super::{classify, completed, fault, recovered};
 
 /// An immediate Action holds the target conditions' declared
 /// preconditions; an unguarded action carries none.
@@ -285,11 +293,6 @@ pub(crate) fn seal_invocation(
     serde_json::to_vec(&envelope).map_err(|_| ConnectorFault::InvalidInput)
 }
 
-/// The invocation request one send executes: the saved evidence re-armed
-/// when it carries the action's conditions, and otherwise the conditions
-/// read fresh for the same inputs. A prepared attempt whose action left
-/// the deployment answers [`ConnectorFault::BindingChanged`] and is never
-/// sent.
 /// Open this module's envelope shape, refusing foreign or earlier forms.
 pub(crate) fn unseal_invocation(
     bytes: &[u8],
@@ -308,8 +311,8 @@ impl ActionInvoke {
         let envelope = unseal_invocation(&prepared.envelope, OPERATION)?;
         let key =
             BRegIdempotencyKey::parse(&envelope.key).map_err(|_| ConnectorFault::NotPrepared)?;
-        // The exact saved attempt first: its conditions ride its own
-        // bytes, so recovery never re-reads them.
+        // An unguarded attempt re-arms its saved bytes exactly; a guarded
+        // one reads the target conditions fresh and rebuilds the body.
         let request = invocation_request(&self.connector, &envelope)?;
         let answer = self.connector.block(self.connector.client().invoke_action(
             self.connector.action_binding(),
@@ -391,6 +394,6 @@ impl Operation for ActionInvoke {
     }
 
     fn recover(&self, prepared: &PreparedInvoke) -> Result<SendOutcome, ConnectorFault> {
-        self.execute(prepared)
+        recovered(self.execute(prepared))
     }
 }

@@ -42,7 +42,7 @@ use crate::operation::{
     Product, RecoveryRule, SendOutcome,
 };
 
-use super::{classify, completed, fault};
+use super::{classify, completed, fault, recovered};
 
 pub static RECORDS: LazyLock<OperationDescriptor> = LazyLock::new(|| OperationDescriptor {
     name: "breg.batch.records",
@@ -316,10 +316,6 @@ impl Operation for BatchRecords {
     }
 
     fn send(&self, prepared: &PreparedBatch) -> Result<SendOutcome, ConnectorFault> {
-        self.recover(prepared)
-    }
-
-    fn recover(&self, prepared: &PreparedBatch) -> Result<SendOutcome, ConnectorFault> {
         let envelope: BatchEnvelope =
             serde_json::from_slice(&prepared.envelope).map_err(|_| ConnectorFault::NotPrepared)?;
         if envelope.version != 1 || envelope.operation != OPERATION {
@@ -340,5 +336,9 @@ impl Operation for BatchRecords {
             Ok(receipt) => Ok(completed(receipt.value.snapshot().to_owned())),
             Err(error) => classify(&error),
         }
+    }
+
+    fn recover(&self, prepared: &PreparedBatch) -> Result<SendOutcome, ConnectorFault> {
+        recovered(self.send(prepared))
     }
 }

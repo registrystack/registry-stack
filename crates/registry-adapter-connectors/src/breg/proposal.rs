@@ -18,10 +18,12 @@
 //! documented restart flow. The one mutating exchange is still
 //! `execute_proposal`, and it always carries the same key. A read that
 //! shows the transition already holds answers the observed completion
-//! and never sends again. The receipt-horizon refusals the product
-//! answers (`idempotency.key-reused` 409, `idempotency.expired` 410)
-//! surface as [`OutcomeCategory::Refused`] with those problem words; no
-//! path falls back to another mode or key.
+//! and never sends again. The receipt-horizon answers the product gives
+//! (`idempotency.key-reused` 409, `idempotency.expired` 410) keep their
+//! problem words: a first send reports them as
+//! [`OutcomeCategory::Refused`], and a recovery as
+//! [`OutcomeCategory::Uncertain`], because the lost first attempt may have
+//! committed. No path falls back to another mode or key.
 //!
 //! Closed input shapes: `breg.proposal.start/v1` is
 //! `{"input": { ...action inputs... }}`; `breg.proposal.submit/v1` is
@@ -42,7 +44,7 @@ use crate::operation::{
     PreparedAttempt, Product, RecoveryRule, SendOutcome,
 };
 
-use super::{action, classify, completed, fault, refused_state};
+use super::{action, classify, completed, fault, recovered, refused_state};
 
 /// Starting a Proposal holds the target conditions' declared
 /// preconditions; an unguarded action carries none.
@@ -265,10 +267,6 @@ impl Operation for ProposalStart {
     }
 
     fn send(&self, prepared: &PreparedStart) -> Result<SendOutcome, ConnectorFault> {
-        self.recover(prepared)
-    }
-
-    fn recover(&self, prepared: &PreparedStart) -> Result<SendOutcome, ConnectorFault> {
         let envelope = action::unseal_invocation(&prepared.envelope, START_OPERATION)?;
         let request = action::invocation_request(&self.connector, &envelope)?;
         let key =
@@ -287,6 +285,10 @@ impl Operation for ProposalStart {
             }),
             Err(error) => classify(&error),
         }
+    }
+
+    fn recover(&self, prepared: &PreparedStart) -> Result<SendOutcome, ConnectorFault> {
+        recovered(self.send(prepared))
     }
 }
 
@@ -437,6 +439,6 @@ impl Operation for ProposalSubmit {
     }
 
     fn recover(&self, prepared: &PreparedSubmit) -> Result<SendOutcome, ConnectorFault> {
-        self.execute(prepared)
+        recovered(self.execute(prepared))
     }
 }
