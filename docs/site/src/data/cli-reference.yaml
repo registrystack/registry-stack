@@ -11,5 +11,5 @@
 status: current
 last_reviewed: 2026-10-28
 unreviewed_binaries:
-  [adapter, adapterctl, coordinator, coordinatorctl, documents, documentsctl, manifest, registry-mcp, rstack]
-source_build_only_binaries: [adapter, adapterctl, registry-mcp]
+  [adapter, adapter-job, adapterctl, coordinator, coordinatorctl, documents, documentsctl, manifest, registry-mcp, rstack]
+source_build_only_binaries: [adapter, adapter-job, adapterctl, registry-mcp]
