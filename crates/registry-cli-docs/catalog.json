@@ -876,6 +876,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when a warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
