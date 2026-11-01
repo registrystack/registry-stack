@@ -29,6 +29,20 @@
 //! [`ConnectorFault::AuthorityAbsent`], and restored bytes that belong to
 //! another operation or an earlier envelope version are
 //! [`ConnectorFault::NotPrepared`].
+//!
+//! # The direct destination
+//!
+//! The connector implements more operations than an ingestion job may
+//! send. A job sends an item directly to BReg only when the item maps to
+//! exactly one BReg operation with no lookup: an immediate Action, or a
+//! Proposal start and submit (`products/adapter/CONCEPT.md` sections 17.1
+//! and 17.3). Record create, patch, and tombstone, batch, and the
+//! ingestion run family stay out of a job's direct path: an item that
+//! needs a lookup or a choice goes to Coordinator, and bulk ends in a
+//! file for `bregctl data import`. The job's destination wiring admits a
+//! configured operation only when [`job_direct_admits`] does, so the
+//! credential it holds needs only the narrow grants those operations
+//! use.
 
 use std::sync::Arc;
 
@@ -566,6 +580,19 @@ pub(crate) fn refused_state(state: &str) -> SendOutcome {
         correlation: None,
         note: Some("the destination's state left the prepared transition behind; re-prepare"),
     }
+}
+
+/// Whether an ingestion job may send this operation directly to BReg:
+/// only an immediate Action or a Proposal start and submit, the one-
+/// operation shapes the direct destination admits (see the module
+/// documentation).
+pub fn job_direct_admits(descriptor: &OperationDescriptor) -> bool {
+    [
+        action::INVOKE.name,
+        proposal::START.name,
+        proposal::SUBMIT.name,
+    ]
+    .contains(&descriptor.name)
 }
 
 /// Recovery's reading of a keyed exchange's answer.
