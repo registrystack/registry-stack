@@ -539,6 +539,10 @@
               "$ref": "#/$defs/DisplayText",
               "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
+            "expected": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The everyday case for readers and diagram tools; it has no execution or revision effect."
+            },
             "title": {
               "$ref": "#/$defs/DisplayText",
               "description": "An optional human title; it changes neither stable identity nor behavior revision."

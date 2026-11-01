@@ -562,6 +562,9 @@ enum AuthoredStep {
         choose: AuthoredMapping,
         /// Explicit label-to-Step edges; no implicit fall-through exists.
         cases: BTreeMap<LocalId, LocalId>,
+        /// The everyday case for readers and diagram tools; it has no execution or revision effect.
+        #[serde(default)]
+        expected: Option<LocalId>,
         /// An optional human title; it changes neither stable identity nor behavior revision.
         #[serde(default, deserialize_with = "optional_display_text")]
         #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
@@ -967,7 +970,28 @@ fn project_integrity_diagnostics(
         ));
     }
     for (id, step) in &project.workflow.steps {
-        if let AuthoredStep::Choose { cases, .. } = step {
+        if let AuthoredStep::Choose {
+            cases, expected, ..
+        } = step
+        {
+            if let Some(expected) = expected
+                .as_ref()
+                .filter(|label| !cases.contains_key(*label))
+            {
+                errors.push(document.diagnostic_at_value(
+                    Severity::Error,
+                    "coordinator.definition.expected-case",
+                    &format!("/workflow/steps/{}/expected", id.as_str()),
+                    &format!(
+                        "expected case {} is not declared in this step's cases",
+                        expected.as_str()
+                    ),
+                    &format!(
+                        "Name one of this step's cases ({}), or omit expected.",
+                        definition::listed(cases.keys().map(LocalId::as_str))
+                    ),
+                ));
+            }
             errors.extend(collisions(
                 document,
                 "coordinator.project.choose-case-id-collision",
@@ -1459,6 +1483,12 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
     };
     for (id, step) in project.workflow.steps {
         let id = id.into_string();
+        let expected = match &step {
+            AuthoredStep::Choose { expected, .. } => {
+                expected.as_ref().map(LocalId::as_str).map(str::to_owned)
+            }
+            _ => None,
+        };
         let (step, title, description) = match step {
             AuthoredStep::WaitUntil {
                 wait_until,
@@ -1528,6 +1558,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 cases,
                 title,
                 description,
+                ..
             } => (
                 Step::Choose {
                     choose: choose.into(),
@@ -1553,10 +1584,12 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 description,
             ),
         };
-        if title.is_some() || description.is_some() {
-            presentation
-                .steps
-                .insert(id.clone(), json!({"title":title,"description":description}));
+        if title.is_some() || description.is_some() || expected.is_some() {
+            let mut metadata = json!({"title":title,"description":description});
+            if let Some(expected) = expected {
+                metadata["expected"] = json!(expected);
+            }
+            presentation.steps.insert(id.clone(), metadata);
         }
         steps.insert(id, step);
     }
@@ -1664,6 +1697,11 @@ fn reference_sites(document: &Document) -> BTreeMap<String, definition::SourceRe
                         }
                         (_, Some(id)) if !schema && path.ends_with("/cases") => {
                             Some(format!("/workflow/steps/{id}"))
+                        }
+                        ("expected", Some(label))
+                            if !schema && path.starts_with("/workflow/steps/") =>
+                        {
+                            Some(format!("{path}/cases/{label}"))
                         }
                         ("start", Some(id)) if !schema && path == "/workflow" => {
                             Some(format!("/workflow/steps/{id}"))

@@ -709,7 +709,10 @@ fn project_schema_matches_local_keys_bounds_and_foreign_schema_members() {
         .iter()
         .map(|variant| variant["properties"]["type"]["const"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(tags, ["function", "fields", "input", "step", "literal"]);
+    assert_eq!(
+        tags,
+        ["function", "fields", "compare", "input", "step", "literal"]
+    );
     let function = variants
         .iter()
         .find(|variant| variant["properties"]["type"]["const"] == "function")

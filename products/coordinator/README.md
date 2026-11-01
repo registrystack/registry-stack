@@ -108,6 +108,28 @@ Check resolves those references locally, verifies dominance on every incoming ro
 mappings to input and result contracts before execution. Dynamic values are validated again at
 runtime before preparation or dispatch. An invalid command reports `failurePath`, never its value.
 
+A `choose` step can name its everyday case with optional `expected` metadata:
+
+```yaml
+check-revocation:
+  title: Has the licence been revoked?
+  type: choose
+  expected: unmatched
+  choose:
+    type: compare
+    all:
+      - value: {type: input, path: /revoked}
+        equals: true
+  cases:
+    matched: already-revoked
+    unmatched: record-suspension
+```
+
+The label must exist in that step's `cases`; it also works with cases selected by a mapped string.
+`coordinatorctl --format json check --project ./my-follow-up --explain` includes `expected` on
+that step for diagram tools. Omit it when no expected path is declared. It changes presentation
+only, leaving routing, `next` ordering and `workflowRevision` unchanged.
+
 ```sh
 coordinatorctl check --project ./my-follow-up --explain
 coordinatorctl test --project ./my-follow-up
