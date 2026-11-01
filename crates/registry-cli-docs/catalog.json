@@ -138,6 +138,506 @@
       ]
     },
     {
+      "name": "adapter-job",
+      "invocation": "adapter-job",
+      "about": "Run a governed-ingestion job: check, bounded pass, status, inspect, rescan.",
+      "long_about": null,
+      "usage": "adapter-job [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--show-values",
+          "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "adapter-job check",
+          "about": "Compile a job the way a pass would, with the value-free findings",
+          "long_about": null,
+          "usage": "adapter-job check [OPTIONS] --pack <PACK> --runtime <RUNTIME> <JOB_YAML>",
+          "arguments": [
+            {
+              "display": "<JOB_YAML>",
+              "description": "The job definition file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--pack <PACK>",
+              "description": "The pinned adapter pack file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "The operator runtime config file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <PROFILE>",
+              "description": "The profile document; defaults to profile.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--project <PROJECT>",
+              "description": "The project document; defaults to project.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--show-values",
+              "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "pass",
+          "invocation": "adapter-job pass",
+          "about": "Run one bounded pass (the default, the shape a CronJob drives), or loop on the job's interval trigger",
+          "long_about": null,
+          "usage": "adapter-job pass [OPTIONS] --pack <PACK> --runtime <RUNTIME> <JOB_YAML>",
+          "arguments": [
+            {
+              "display": "<JOB_YAML>",
+              "description": "The job definition file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--pack <PACK>",
+              "description": "The pinned adapter pack file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "The operator runtime config file, whose store block names the job store's connection reference",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <PROFILE>",
+              "description": "The profile document; defaults to profile.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--project <PROJECT>",
+              "description": "The project document; defaults to project.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--fixture",
+              "description": "Hand off to the built-in fixture destination, which posts each deliverable to the receiver at --fixture-url. Loopback URLs only; a real destination is its own brief",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--fixture-url <FIXTURE_URL>",
+              "description": "The loopback URL of the fixture receiver",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--dry-run",
+              "description": "Run the pass against the preview destination, which delivers nothing, acknowledges nothing, and records what a real destination would have received. Nothing is written. Preview passes run once because they do not advance the stored schedule",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--loop",
+              "description": "Loop: sleep until the job's interval trigger is due, run the pass, and repeat, running a rescan pass when the source's declared delay says one is due. The default runs one pass",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--refusal-limit <REFUSAL_LIMIT>",
+              "description": "The consecutive item-scoped refusals with one code that stop a pass with the position unchanged",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "20"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--show-values",
+              "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--fixture",
+              "arguments": [
+                "--fixture-url <FIXTURE_URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--dry-run",
+                "--fixture"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--dry-run",
+                "--loop"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "status",
+          "invocation": "adapter-job status",
+          "about": "Count what the item table holds: statuses, refusal codes, the schedule, and why the last pass stopped. Value-free",
+          "long_about": null,
+          "usage": "adapter-job status [OPTIONS] --runtime <RUNTIME> <JOB_YAML>",
+          "arguments": [
+            {
+              "display": "<JOB_YAML>",
+              "description": "The job definition file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "The operator runtime config file, whose store block names the job store's connection reference",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--show-values",
+              "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "inspect",
+          "invocation": "adapter-job inspect",
+          "about": "Read one item's row: its statuses, sequence, and references. Value-free: the row holds no payload to print",
+          "long_about": null,
+          "usage": "adapter-job inspect [OPTIONS] --runtime <RUNTIME> --key <KEY> <JOB_YAML>",
+          "arguments": [
+            {
+              "display": "<JOB_YAML>",
+              "description": "The job definition file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "The operator runtime config file, whose store block names the job store's connection reference",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--key <KEY>",
+              "description": "The source item's key",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--show-values",
+              "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "rescan",
+          "invocation": "adapter-job rescan",
+          "about": "Mark a rescan due now, then run one rescan pass from the first page: unchanged items skip by digest, refused items retry",
+          "long_about": null,
+          "usage": "adapter-job rescan [OPTIONS] --pack <PACK> --runtime <RUNTIME> <JOB_YAML>",
+          "arguments": [
+            {
+              "display": "<JOB_YAML>",
+              "description": "The job definition file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--pack <PACK>",
+              "description": "The pinned adapter pack file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "The operator runtime config file, whose store block names the job store's connection reference",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <PROFILE>",
+              "description": "The profile document; defaults to profile.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--project <PROJECT>",
+              "description": "The project document; defaults to project.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--fixture",
+              "description": "Hand off to the built-in fixture destination at --fixture-url",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--fixture-url <FIXTURE_URL>",
+              "description": "The loopback URL of the fixture receiver",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--dry-run",
+              "description": "Run the pass against the preview destination; nothing is written",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--refusal-limit <REFUSAL_LIMIT>",
+              "description": "The consecutive item-scoped refusals with one code that stop a pass with the position unchanged",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "20"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--show-values",
+              "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--fixture",
+              "arguments": [
+                "--fixture-url <FIXTURE_URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--dry-run",
+                "--fixture"
+              ]
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "adapterctl",
       "invocation": "adapterctl",
       "about": "Registry Stack Adapter authoring and operator tooling",
@@ -286,6 +786,138 @@
             }
           ],
           "subcommands": []
+        },
+        {
+          "name": "job",
+          "invocation": "adapterctl job",
+          "about": "Operate one authored ingestion job",
+          "long_about": null,
+          "usage": "adapterctl job [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "adapterctl job check",
+              "about": "Compile one ingestion job offline, exactly as the page run would, and print the findings",
+              "long_about": null,
+              "usage": "adapterctl job check [OPTIONS] <PACK> <JOB>",
+              "arguments": [
+                {
+                  "display": "<PACK>",
+                  "description": "The pack document the job pins",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "<JOB>",
+                  "description": "The job definition",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--runtime <FILE>",
+                  "description": "The operator runtime config; defaults to `job-runtime.yaml` beside the pack",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--profile <FILE>",
+                  "description": "The facade profile the workspace checks run over; defaults to `profile.yaml` beside the pack",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--project <FILE>",
+                  "description": "The project whose workspace checks the runtime stands on; defaults to `project.yaml` beside the pack",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--profile <FILE>",
+                  "arguments": [
+                    "--project <FILE>"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--project <FILE>",
+                  "arguments": [
+                    "--profile <FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            }
+          ]
         },
         {
           "name": "project",

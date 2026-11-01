@@ -30,27 +30,28 @@ use registry_adapter_core::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::component::http::uri::encode_path_segment;
-use crate::component::rest::continuation::{
+use crate::custody::{WriteExecutionContext, WriteResolution};
+use crate::engine::component::http::uri::encode_path_segment;
+use crate::engine::component::rest::continuation::{
     filter_digest, ContinuationCodec, CursorBinding, CursorRefusal,
 };
-use crate::effective_contract::{
+use crate::engine::effective_contract::{
     EffectiveContract, RuntimeContractResponse, PIN_HEADER, PIN_PROBLEM_CODE,
     UNAVAILABLE_PROBLEM_CODE, WELL_KNOWN_PATH,
 };
-use crate::envelope::CompiledEnvelope;
-use crate::exchange::{
-    Exchange, WriteExecutionContext, WriteResolution, CONTINUATION_PROPERTY, FILTERS_PROPERTY,
-    NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
+use crate::engine::envelope::CompiledEnvelope;
+use crate::engine::exchange::MAX_IDEMPOTENCY_KEY_BYTES;
+use crate::engine::exchange::{
+    Exchange, CONTINUATION_PROPERTY, FILTERS_PROPERTY, NEXT_CONTINUATION_PROPERTY, PAGE_SIZE_HEADER,
 };
+use crate::engine::load::{Loaded, ServedOperation, ServedPagination};
+use crate::engine::read_request::{parse_filter_text, ReadRefusal};
+use crate::engine::route::{run_route_with_profile, RouteContext, RouteFailure};
 use crate::idempotent::{
     PostgresIdempotencyStore, StoredResponse, TerminalOutcome, VerifiedCallerIdentity,
-    MAX_IDEMPOTENCY_KEY_BYTES, MAX_STORED_RESPONSE_BYTES,
+    MAX_STORED_RESPONSE_BYTES,
 };
 use crate::journal::{self, JournalEvent};
-use crate::load::{Loaded, ServedOperation, ServedPagination};
-use crate::read_request::{parse_filter_text, ReadRefusal};
-use crate::route::{run_route_with_profile, RouteContext, RouteFailure};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
 
 const REQUEST_ID_HEADER: &str = "x-registry-request-id";
@@ -646,13 +647,17 @@ async fn answer(
             &record_id,
             &raw_body,
         );
-        Some(exchange.prepare_write(
+        let context = crate::custody::WriteExecutionContext::new(
             store,
             caller_identity,
             state.loaded.runtime.id.as_str().to_owned(),
             concrete_operation,
             digest,
-        ))
+        );
+        exchange.install_write(
+            context.clone() as std::sync::Arc<dyn crate::engine::exchange::WriteCustody>
+        );
+        Some(context)
     } else {
         None
     };
@@ -723,6 +728,7 @@ async fn answer(
         routes: &state.loaded.routes,
         code_maps: state.loaded.code_maps.clone(),
         maximum_upstream_calls: operation.maximum_upstream_calls,
+        job: crate::engine::job_sources::JobPageState::default(),
     };
     let outcome =
         run_route_with_profile(&context, &state.loaded.profile, &operation.steps, exchange).await;
@@ -825,6 +831,7 @@ async fn answer(
                         message: None,
                         data: None,
                         auth: None,
+                        code: None,
                     };
                     events.push((
                         journal_event(
@@ -1238,7 +1245,7 @@ struct SearchInputs {
 
 /// What the cursor the route's answer may be sealed under is bound to.
 struct SearchBinding {
-    filters: crate::component::rest::continuation::FilterDigest,
+    filters: crate::engine::component::rest::continuation::FilterDigest,
 }
 
 /// Why a request was refused: the class and status the caller sees, and a
@@ -1247,6 +1254,18 @@ pub(crate) struct Refusal {
     class: ErrorClass,
     status: StatusCode,
     reason: String,
+}
+
+impl crate::engine::load::Loaded {
+    /// The problems view the facade answers refusals from: the facade's
+    /// own projection of the compiled authored state.
+    #[must_use]
+    pub fn problems(&self) -> Problems<'_> {
+        Problems {
+            profile: &self.profile,
+            envelope: &self.problem_envelope,
+        }
+    }
 }
 
 impl Refusal {
@@ -1681,7 +1700,7 @@ fn cursor_binding<'a>(
     state: &'a FacadeState,
     operation: &'a ServedOperation,
     caller: &'a Caller,
-    filters: crate::component::rest::continuation::FilterDigest,
+    filters: crate::engine::component::rest::continuation::FilterDigest,
 ) -> CursorBinding<'a> {
     CursorBinding {
         operation: &operation.operation,
@@ -2145,16 +2164,19 @@ mod tests {
             record_type: record_type.to_owned(),
             route_id: String::new(),
             steps: std::sync::Arc::new(Vec::new()),
-            resilience: crate::resilience::ResilienceRuntime::empty(),
+            resilience: crate::engine::resilience::ResilienceRuntime::empty(),
             maximum_upstream_calls: 1,
             item_envelope: None,
-            response_envelope: crate::envelope::CompiledEnvelope::compile("{}", &BTreeMap::new())
-                .expect("an empty envelope compiles"),
+            response_envelope: crate::engine::envelope::CompiledEnvelope::compile(
+                "{}",
+                &BTreeMap::new(),
+            )
+            .expect("an empty envelope compiles"),
             record_schema: json!({}),
             pagination: None,
             method: HttpMethod::Get,
             request_template: None,
-            request_maximum_bytes: crate::load::DEFAULT_REQUEST_MAXIMUM_BYTES,
+            request_maximum_bytes: crate::engine::load::DEFAULT_REQUEST_MAXIMUM_BYTES,
             filters: Vec::new(),
         }
     }
@@ -2265,7 +2287,7 @@ mod tests {
     fn an_item_envelope_fills_the_record_and_its_identifier() {
         let mut operation = served("records-get", "person");
         operation.record_schema = person_schema();
-        operation.item_envelope = Some(crate::load::ServedItem {
+        operation.item_envelope = Some(crate::engine::load::ServedItem {
             envelope: CompiledEnvelope::compile(
                 r#"{"recordId": "{{recordId}}", "data": {{record}}}"#,
                 &BTreeMap::new(),

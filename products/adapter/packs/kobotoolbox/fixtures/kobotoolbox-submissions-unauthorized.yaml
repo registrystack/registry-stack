@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real KoboToolbox
+# server): refused credential: the data endpoint answers 401 and the
+# engine raises credential.rejected before any route step.
+# The upstream shape follows the documented v2 data endpoint ({count,
+# next, previous, results} over GET /api/v2/assets/<uid>/data/ with
+# format, limit, sort, and query;
+# https://support.kobotoolbox.org/api.html and the kpi API
+# documentation kpi/docs/api/v2/data/list.md). Every value is a
+# made-up stand-in; the reply's own `next` URL is synthetic and unread
+# by the route. Group and repeat answers arrive as slash-separated
+# names (`household/household_size`) and the expected item value
+# carries them nested.
+# The entry shape is the provisional job replay contract: `jobRun`
+# carries the cursor the job restores, `upstream` the request the
+# route sends and the scripted reply, `expected` the item page or
+# problem class. crates/registry-adapter/tests/job_pack_replay.rs
+# replays every entry through the job compiler.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: kobotoolbox-submissions-unauthorized
+pack: kobotoolbox
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://support.kobotoolbox.org/api.html
+intercepts:
+- type: endpoint
+  endpoint: kobo-api
+entries:
+- jobRun:
+    cursor: null
+  upstream:
+  - request:
+      endpoint: kobo-api
+      method: GET
+      path: /
+      query: format=json&limit=100&sort=%7B%22_id%22%3A1%7D
+    response:
+      status: 401
+      body:
+        detail: Invalid username/password.
+  expected:
+    type: problem
+    class: credential.rejected

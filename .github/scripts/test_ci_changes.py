@@ -1231,6 +1231,7 @@ class CiChangesTest(unittest.TestCase):
             "products/adapter/CONCEPT.md",
             "crates/registry-adapter-core/src/lib.rs",
             "crates/registry-adapter/src/lib.rs",
+            "crates/registry-adapter-job/src/pass.rs",
             "crates/registry-adapterctl/src/main.rs",
         ):
             with self.subTest(path=path):
@@ -1248,6 +1249,22 @@ class CiChangesTest(unittest.TestCase):
             {row["name"] for row in unrelated["rust_matrix"]["include"]},
         )
         self.assertFalse(unrelated["adapter_contracts"])
+
+    def test_adapter_contract_job_runs_the_ingestion_postgres_suite(self) -> None:
+        steps = self.workflow_jobs["adapter-contracts"]["steps"]
+        postgres = next(
+            step
+            for step in steps
+            if step.get("name") == "Registry Adapter ingestion-job PostgreSQL recovery"
+        )
+        self.assertEqual(
+            postgres["run"],
+            "products/adapter/scripts/test-job-postgres.sh",
+        )
+        self.assertEqual(
+            postgres["env"]["CARGO_TARGET_DIR"],
+            "${{ github.workspace }}/target",
+        )
 
     def test_evidence_status_store_and_dependencies_select_the_postgres_job(
         self,
@@ -2498,9 +2515,12 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-breg", outputs["rust_packages"])
         # bregctl examples uses the SDK's recoverable write-attempt contract.
         self.assertIn("registry-bregctl", outputs["rust_packages"])
+        # The parked adapter connector links the client behind its feature,
+        # so a client change runs the adapter shard beside the BReg
+        # surfaces.
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"breg", "casework", "stack-client", "developer-tools", "mcp"},
+            {"adapter", "breg", "casework", "stack-client", "developer-tools", "mcp"},
         )
 
     def test_registry_record_change_runs_the_breg_client_and_facade(self) -> None:

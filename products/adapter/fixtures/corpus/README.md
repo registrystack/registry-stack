@@ -23,9 +23,14 @@ file is its manifest.
 - Each member carries `profile.yaml`, `pack.yaml`, and `project.yaml`
   (plus `scripts/`, `queries/`, or `fixtures/` where the defect needs
   them, and `runtime.yaml` where the expected code is a runtime or auth
-  code).
-- Every file's header comment names the expected code, the defect, and the
-  exact `adapterctl check` invocation.
+  code). The eleven `adapter.job` members with a `job.yaml` (the four
+  `profile-*` and `route-unknown` members and the seven
+  `projection-*`, `trigger-*`, and `call-budget` members) carry their
+  defect in the job definition, which the job compiler's `check_job`
+  refuses over the pinned pack beside it, while the workspace itself
+  stays clean.
+- Every file's header comment names the expected code, the defect, and
+  the exact `adapterctl check` invocation.
 - Every `profile.yaml` and `pack.yaml` declares `version: "1"`; every
   `project.yaml` pins the sibling artifacts by `id`, `version`, and the real
   `sha256` of their bytes. If you edit an artifact, recompute the pins:
@@ -68,7 +73,52 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 127 members.
+finding per code. The corpus holds 156 members.
+
+`base-job/` is the clean governed-ingestion control (CONCEPT section 17):
+a pack whose source route polls a bounded `file` endpoint through
+`pollEnrich`, beside a matching `AdapterJob` definition and job runtime.
+The workspace passes `adapterctl check` with zero findings and the job
+passes `adapterctl job check`.
+
+### Job members `[ingestion]`
+
+The job-only codes live in the core crate's `job.rs` vocabulary (the
+`JobCode` enum), beside the job model they police; the corpus runner
+reads the authoring codes from `diagnostics.rs`, so wiring these members
+into the sweep also teaches it the `job.rs` registry.
+
+| Member | Defect | Expected code | Layer |
+|---|---|---|---|
+| `adapter.job.component-facade-refused` | The bound template sends to `postgres:ledger`, a job component the facade path must never reach | `adapter.job.component-facade-refused` | checks |
+| `adapter.job.poll-facade-refused` | The bound template carries a `pollEnrich` step | `adapter.job.poll-facade-refused` | checks |
+| `adapter.job.send-component-refused` | The bound template sends to `file:submissions`; a job source is read through `pollEnrich`, never sent to | `adapter.job.send-component-refused` | checks |
+| `adapter.job.source-scan-required` | The source route declares `nextRecovery` but no `scan` | `adapter.job.source-scan-required` | checks |
+| `adapter.job.source-recovery-required` | The source route declares `scan` but no `nextRecovery` | `adapter.job.source-recovery-required` | checks |
+| `adapter.job.source-edits-required` | The source route declares `scan` and `nextRecovery` but no `edits` | `adapter.job.source-edits-required` | checks |
+| `adapter.job.source-edits-unknown` | The source route declares `edits: sweeping`, outside the closed ordered-and-rescan set | `adapter.job.source-edits-unknown` | checks |
+| `adapter.job.source-rescan-delay` | The source route declares `edits: rescan` with no `rescanDelaySeconds`; the same code refuses a delay beside `ordered` and a delay outside its 60-to-86400 range | `adapter.job.source-rescan-delay` | checks |
+| `adapter.job.source-id-collision` | The source route id collides with the `find-cases` template id | `adapter.job.source-id-collision` | checks |
+| `adapter.job.source-bound-refused` | The binding names the source route id (co-fires `adapter.project.unknown-route`, whose condition is the strict superset) | `adapter.job.source-bound-refused` | checks |
+| `adapter.job.source-called-refused` | The bound template sends to `direct:kobo-submissions` (co-fires `adapter.route.unknown-direct-target`, same reason) | `adapter.job.source-called-refused` | checks |
+| `adapter.job.poll-endpoint-unknown` | The source route polls `file:nope` | `adapter.job.poll-endpoint-unknown` | checks |
+| `adapter.job.poll-endpoint-kind` | The source route polls `file:dropbox`, but `dropbox` is an `sftp` endpoint | `adapter.job.poll-endpoint-kind` | checks |
+| `adapter.job.poll-timeout` | The source route's `pollEnrich` declares no `timeoutMilliseconds` | `adapter.job.poll-timeout` | checks |
+| `adapter.job.decoder-unknown` | The source route's poll names `decoder: parquet`, outside the closed set | `adapter.job.decoder-unknown` | checks |
+| `adapter.job.postgres-query-unpinned` | The `postgres` endpoint names no `queryFile` | `adapter.job.postgres-query-unpinned` | checks |
+| `adapter.job.postgres-parameters-unbounded` | The source route's postgres send carries 17 named parameters, one past the bound of 16 | `adapter.job.postgres-parameters-unbounded` | checks |
+| `adapter.job.endpoint-response-bound` | The bound facade template's endpoint declares `maximumResponseBytes: 2097152`, above the facade ceiling | `adapter.job.endpoint-response-bound` | checks |
+| `adapter.job.route-unknown` | The job names source route `nope`; the workspace is clean, `check_job` refuses over `job.yaml` | `adapter.job.route-unknown` | checks (job) |
+| `adapter.job.profile-bound` | The job profile's `pageDeadlineMilliseconds` is `600001`, above its bound | `adapter.job.profile-bound` | checks (job) |
+| `adapter.job.profile-inconsistent` | The job profile's `maximumPageBytes` exceeds its own `maximumResponseBytes` | `adapter.job.profile-inconsistent` | checks (job) |
+| `adapter.job.profile-endpoint-bound` | The job profile is tighter than the HTTP endpoint's declared bound, which its source route reaches | `adapter.job.profile-endpoint-bound` | checks (job) |
+| `adapter.job.projection-shape` | The job declares an empty projection block, so no projected field is named | `adapter.job.projection-shape` | checks (job) |
+| `adapter.job.projection-bound` | The job's single projected path is 130 characters, over the 128-character bound | `adapter.job.projection-bound` | checks (job) |
+| `adapter.job.triggers-required` | The job declares an empty trigger list, so no pass would ever start | `adapter.job.triggers-required` | checks (job) |
+| `adapter.job.trigger-kind` | The job's only trigger names `kind: timer`, outside the closed interval-and-hook set | `adapter.job.trigger-kind` | checks (job) |
+| `adapter.job.trigger-bound` | The job's interval trigger declares `delayMilliseconds: 500`, below its 1000 floor | `adapter.job.trigger-bound` | checks (job) |
+| `adapter.job.trigger-hook-unserved` | The job declares a `hook` trigger, the contract-only seam no engine serves yet | `adapter.job.trigger-hook-unserved` | checks (job) |
+| `adapter.job.call-budget` | The job's `maximumUpstreamCalls` is 1, below its source route's worst case of 2 (a loop of two sends) | `adapter.job.call-budget` | checks (job) |
 
 ### Profile members
 

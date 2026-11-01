@@ -1,0 +1,203 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# The odk-central pack: ODK Central submission acquisition for the
+# governed-ingestion job mode over the Central OData endpoints, two
+# source routes, one page per run (CONCEPT 17.1 and 17.2). Unproved
+# state, stated plainly: no ODK Central server has been reached. Every
+# upstream shape here is synthesized from the published documentation
+# (https://docs.getodk.org/central-api-odata-endpoints/ and
+# https://docs.getodk.org/central-api-authentication/), and every
+# fixture beside this pack is synthetic and `documented`, never
+# `captured`. `testedVersions` is empty on purpose: it lists versions a
+# pack was exercised against, and none was. The Central documentation
+# names feature versions (`$orderby` since v2024.1, which this pack
+# needs) but pins no server version this pack was run against; the
+# acceptance row of CONCEPT 17.7 lists every behavior resting on
+# documentation as unproved, and the pack README carries the probe
+# questions.
+#
+# What the pack covers: the Submissions entity set of one form's OData
+# service (`GET /v1/projects/{projectId}/forms/{xmlFormId}.svc/Submissions`)
+# and one repeat entity set (Central exposes repeats as separate
+# entity sets such as `Submissions.household.member`). The read order
+# is pinned, not left to the server default (newest first):
+# odk-submissions sends `$orderby=__system/submissionDate asc` and,
+# past the first run, `$filter=__system/submissionDate ge <cursor
+# date>`; odk-repeats sends
+# `$orderby=$root/Submissions/__system/submissionDate asc` with a
+# `$skip` offset. Both send `$top=100`. The reply's `@odata.nextLink`
+# is never followed: Central's `$skiptoken` pages in its default
+# newest-first order, so it cannot resume an ascending scan. No
+# `$expand`, no `$select`: one page of one entity set per run, nothing
+# else. No write, patch, or delete endpoint exists in this pack; OData
+# over `http` is read-only here.
+#
+# Deployment scoping: the project, form, and entity set a job reads are
+# deployment values, and a source route carries no template
+# parameters. The deployment-owned slot is the endpoint binding's
+# `baseUrl`: the engine pins the origin plus its base path (CONCEPT
+# 8.11.5) and every send stays under it, so the runtime config binds
+# `odk-odata` to the entity-set URL of the deployment's own form (see
+# products/adapter/examples/odk-central-job/job-runtime.example.yaml) and
+# this pack sends `path: /`. A job on the odk-repeats route binds the
+# endpoint to the repeat entity set's URL instead. If the job compiler
+# grows a parameters block on the job definition, these bindings
+# should move there.
+#
+# Authentication (cited choice): Central accepts Basic auth over
+# HTTPS - its own docs call it "allowed, but strongly discouraged"
+# because every request re-verifies the password
+# (https://docs.getodk.org/central-api-authentication/) - and bearer
+# session tokens minted by `POST /v1/sessions`, expiring by default
+# after 24 hours. An endpoint declares one kind, so this pack declares
+# `basic`. The session-token alternative needs a credential kind that
+# owns the session exchange (mint once, carry `Authorization: Bearer`,
+# re-mint on expiry); a `static-authorization` pin carries one static
+# value and a 24-hour session token is not static, so the honest
+# statement is: Basic today, a session-token note for the engine's
+# credential ladder, and the deployment's TLS termination stays
+# mandatory either way. Central answers 401 without a
+# `WWW-Authenticate` challenge; the engine's authentication plan
+# raises the uncatchable `credential.rejected` for a refused Basic
+# credential before any route step sees it.
+#
+# Item mapping (probe-gated, see the pack README): key = the entity's
+# `__id` (the documented OData key, mapped by Central's own field
+# table to the submission `instanceId`), revision =
+# `__system/updatedAt`, falling back to `__system/submissionDate`
+# while a submission was never edited (`updatedAt` is null until
+# then), value = the entity object as returned. A repeat row keys on
+# its own `__id` and carries its parent's instance id under
+# `__Submissions-id` inside `value`.
+#
+# Ongoing scan: odk-submissions hands out `{submissionDate, seen}`, the
+# rendered date of the last row read and the ids read at exactly that
+# date; odk-repeats hands out `{offset}`. An empty page hands the
+# cursor back unchanged, so the scan holds its place at the tail and
+# each later pass reads only what arrived since.
+#
+# Error clauses: as on kobotoolbox, the 401 answer never reaches the
+# route, and the transport faults redeliver once. A GET is safe to
+# repeat. Every other error propagates as its own class.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: odk-central
+version: "1"
+testedVersions: []
+endpoints:
+  - id: odk-odata
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    operations:
+      - id: submissions-page
+      - id: repeats-page
+    testedVersions: []
+sourceRoutes:
+  - id: odk-submissions
+    scan: ongoing
+    nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      # The position this run fetches: the engine restores the job
+      # cursor into the AdapterJobCursor property, absent on the first
+      # run (CONCEPT 17.2). scripts/cursor.rhai turns it into the
+      # `$filter` on the submission date, or null on the first run,
+      # which leaves the parameter out of the send.
+      - setProperty:
+          name: odkFilter
+          value:
+            rhai:
+              file: scripts/cursor.rhai
+              entrypoint: seed_filter
+      - to:
+          uri: http:odk-odata
+          parameters:
+            httpMethod: GET
+            path: /
+            operation: submissions-page
+            query:
+              $filter:
+                exchangeProperty: odkFilter
+              $orderby:
+                constant: __system/submissionDate asc
+              # The fixed page size: the documented example size, not
+              # a server bound.
+              $top:
+                constant: "100"
+      # The item page: one F5 item per entity not already read and the
+      # `{submissionDate, seen}` cursor of the last rows, the incoming
+      # cursor back on an empty page (scripts/shape-page.rhai). This
+      # body is the whole route output; the job entry validates it
+      # against the item contract and the job profile (CONCEPT 17.2).
+      - setBody:
+          rhai:
+            file: scripts/shape-page.rhai
+            entrypoint: shape_page
+  - id: odk-repeats
+    scan: ongoing
+    nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+      # The rows already read: the cursor's offset, 0 on the first
+      # run, sent as `$skip` over the parent-date order.
+      - setProperty:
+          name: odkRepeatOffset
+          value:
+            rhai:
+              file: scripts/cursor.rhai
+              entrypoint: seed_repeat_offset
+      - to:
+          uri: http:odk-odata
+          parameters:
+            httpMethod: GET
+            path: /
+            operation: repeats-page
+            query:
+              $orderby:
+                constant: $root/Submissions/__system/submissionDate asc
+              $skip:
+                exchangeProperty: odkRepeatOffset
+              $top:
+                constant: "100"
+      - setBody:
+          rhai:
+            file: scripts/shape-repeats.rhai
+            entrypoint: shape_repeats
+scripts:
+  - path: scripts/cursor.rhai
+    digest: sha256:76d65d62275743d5778e123bdfbd9bd1ff0348907a51e8b0ad85390046543b3d
+  - path: scripts/shape-page.rhai
+    digest: sha256:2e3a51062ea8989fabdc13a95dd7d221381c92788e1a632f06064c741cd7f9b0
+  - path: scripts/shape-repeats.rhai
+    digest: sha256:7058e76ef036769e473f03af385d4faa6cd667e2eab987b789629e675b7f7472
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - exchangeProperty
+    - rhai
+  eips:
+    - onException
+    - setBody
+    - setProperty
+    - to

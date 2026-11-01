@@ -12,7 +12,7 @@ mod served_harness;
 
 use std::process::Command;
 
-use registry_adapter::effective_contract::{
+use registry_adapter::engine::effective_contract::{
     PIN_PROBLEM_CODE, UNAVAILABLE_PROBLEM_CODE, WELL_KNOWN_PATH,
 };
 use registry_platform_testing::{access_token_test_key, jwks_from_private_jwk};

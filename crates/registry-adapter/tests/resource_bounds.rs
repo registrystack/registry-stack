@@ -7,11 +7,11 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::route::{
     run_route, run_route_within, RouteContext, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{ErrorClass, Step};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::{json, Value};
@@ -20,7 +20,7 @@ fn steps(value: Value) -> Vec<Step> {
     serde_json::from_value(value).expect("the steps parse")
 }
 
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     std::sync::Arc::new(BTreeMap::new())
 }
 
@@ -29,7 +29,7 @@ async fn run_with_deadline(step_list: &[Step], deadline: Duration) -> RouteOutco
     let scripts = ScriptSet::default();
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -39,6 +39,7 @@ async fn run_with_deadline(step_list: &[Step], deadline: Duration) -> RouteOutco
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     run_route_within(
         &context,
@@ -54,7 +55,7 @@ async fn run(step_list: &[Step]) -> RouteOutcome {
     let scripts = ScriptSet::default();
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -64,6 +65,7 @@ async fn run(step_list: &[Step]) -> RouteOutcome {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     run_route(
         &context,

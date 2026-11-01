@@ -1,0 +1,609 @@
+{
+  "$defs": {
+    "AnonymousHttpsAcknowledgement": {
+      "description": "The one named acknowledgement that admits a credential-free HTTPS\nsource. This is a security-sensitive operator decision, not a boolean\nwhose meaning can be lost in a rendered configuration.",
+      "oneOf": [
+        {
+          "const": "operator-approved",
+          "description": "The operator reviewed and approved this fixed anonymous source.",
+          "type": "string"
+        }
+      ]
+    },
+    "Cidr": {
+      "description": "A private network range in `addr/prefix` form, for example 10.0.0.0/8.",
+      "pattern": "^[0-9a-fA-F.:]+/[0-9]{1,3}$",
+      "type": "string"
+    },
+    "CredentialPlacement": {
+      "description": "Where a shared client secret travels, Evidence's `CredentialPlacement`\nspelling.",
+      "oneOf": [
+        {
+          "const": "basic-header",
+          "description": "`Authorization: Basic` on the token request.",
+          "type": "string"
+        },
+        {
+          "const": "form-body",
+          "description": "A form parameter on the token request.",
+          "type": "string"
+        }
+      ]
+    },
+    "EndpointBinding": {
+      "additionalProperties": false,
+      "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions (`products/adapter/CONCEPT.md` section 10.2).",
+      "properties": {
+        "anonymousHttps": {
+          "$ref": "#/$defs/AnonymousHttpsAcknowledgement",
+          "description": "The operator's explicit acknowledgement that a credential-free\nsource is intentionally served over verified HTTPS. Omission keeps\nthe credential-free policy closed outside numeric loopback and mTLS."
+        },
+        "attemptTimeoutMilliseconds": {
+          "description": "A lower attempt timeout than the pack declares, in milliseconds;\nabsent, the declared one applies. A value above the declared one is\nrefused when the deployment loads.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The upstream origin; a fixed destination the engine never derives\nfrom a response."
+        },
+        "credential": {
+          "$ref": "#/$defs/RuntimeCredential",
+          "description": "The credential; its kind must match the endpoint's declared kind."
+        },
+        "endpoint": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The pack endpoint this binding configures."
+        },
+        "maximumResponseBytes": {
+          "description": "A lower response bound than the pack declares, in bytes; absent, the\ndeclared one applies. A value above the declared one is refused when\nthe deployment loads.",
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mtlsIdentity": {
+          "$ref": "#/$defs/MtlsIdentity",
+          "description": "The mTLS client identity, combinable with any authentication kind."
+        },
+        "tlsTrustProfile": {
+          "$ref": "#/$defs/LocalId",
+          "description": "A trust profile under `outboundTls.trustProfiles` whose CA bundle\nthe endpoint trusts beside the system roots; absent, the endpoint\ntrusts the system roots alone."
+        }
+      },
+      "required": [
+        "endpoint",
+        "baseUrl"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSource": {
+      "additionalProperties": false,
+      "description": "The runtime binding of one `file` source endpoint: the absolute base\ndirectory the read never leaves, the namespace the item keys carry,\nand the read behavior of the camel-file port.",
+      "properties": {
+        "directory": {
+          "description": "The absolute path of the directory the read lists and reads. A\nrelative path refuses at the reader.",
+          "type": "string"
+        },
+        "doneFileName": {
+          "description": "The done-file a candidate must have beside it: a literal name, or\nthe candidate's own name inside a fixed prefix and suffix\n(`$simple{file:name}` or `${file:name}`). Absent, no done-file\ncheck runs.",
+          "type": "string"
+        },
+        "include": {
+          "description": "The Ant-style glob a candidate file name must match; absent,\nevery file is a candidate. A glob carrying a path separator\nrefuses at the reader: the read is non-recursive.",
+          "type": "string"
+        },
+        "maxMessagesPerPoll": {
+          "description": "Camel's `maxMessagesPerPoll`, accepted for Camel parity; absent,\n500. One read emits at most one file, so the member bounds\nnothing a read does not already bound.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "namespace": {
+          "description": "The namespace every item key of this source carries.",
+          "type": "string"
+        },
+        "readLock": {
+          "$ref": "#/$defs/ReadLock",
+          "description": "The read lock; absent, `none`."
+        },
+        "readLockCheckIntervalMilliseconds": {
+          "description": "The `changed` lock's space between its two checks, in\nmilliseconds (100 to 5000); absent, 1000. Refused beside any read\nlock but `changed`.",
+          "format": "uint64",
+          "maximum": 5000,
+          "minimum": 100,
+          "type": "integer"
+        },
+        "readLockTimeoutMilliseconds": {
+          "description": "The `changed` lock's timeout, in milliseconds (1 to 10000, the\npollEnrich step's own timeout ceiling); absent, 10000. Refused\nbeside any read lock but `changed`.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "directory",
+        "namespace"
+      ],
+      "type": "object"
+    },
+    "JobSources": {
+      "additionalProperties": false,
+      "description": "The job source bindings, keyed by the pack endpoint each binds.",
+      "properties": {
+        "file": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FileSource"
+          },
+          "description": "The file sources, keyed by endpoint id.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "postgres": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PostgresSource"
+          },
+          "description": "The read-only postgres sources, keyed by endpoint id.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "JobStore": {
+      "additionalProperties": false,
+      "description": "The job store block: the item table's single connection reference.\nSecret references only, resolved by the job host.",
+      "properties": {
+        "runtimeUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The runtime connection reference of the item table's database."
+        },
+        "testOnlyPlaintext": {
+          "description": "Plaintext connections for the loopback test database only;\nrefused when true in any build without the job host's test\nfeature.",
+          "type": "boolean"
+        },
+        "trustedRootCertificateRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The root certificate the connection trusts beside the platform\nroots; absent, the platform roots alone."
+        }
+      },
+      "required": [
+        "runtimeUrlRef"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "MtlsIdentity": {
+      "additionalProperties": false,
+      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind (`products/adapter/CONCEPT.md` section 10.2). It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
+      "properties": {
+        "certificateRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The client certificate secret reference."
+        },
+        "keyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The client private key secret reference."
+        }
+      },
+      "required": [
+        "certificateRef",
+        "keyRef"
+      ],
+      "type": "object"
+    },
+    "OutboundTls": {
+      "additionalProperties": false,
+      "description": "The private certificate authorities endpoints may trust beside the\nsystem roots (`products/adapter/CONCEPT.md` section 10.2), in the shape\nEvidence ships: a named profile is a process-local PEM file. A CA\nbundle is not a secret, so the profile names a file, never a secret\nreference.",
+      "properties": {
+        "trustProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TrustProfile"
+          },
+          "default": {},
+          "description": "The named private CA bundles.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "PostgresSource": {
+      "additionalProperties": false,
+      "description": "The runtime binding of one read-only `postgres` source endpoint: its\nown pool, with its own credential and TLS posture.",
+      "properties": {
+        "database": {
+          "description": "The source database.",
+          "type": "string"
+        },
+        "host": {
+          "description": "The source host.",
+          "type": "string"
+        },
+        "namespace": {
+          "description": "The namespace every item key of this source carries.",
+          "type": "string"
+        },
+        "passwordRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The reference the source password resolves from."
+        },
+        "port": {
+          "description": "The source port (1 to 65535); absent, 5432.",
+          "format": "uint64",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "tls": {
+          "$ref": "#/$defs/SourceTls",
+          "description": "The TLS posture of the connection; absent, the system roots with\nTLS required."
+        },
+        "user": {
+          "description": "The source user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "database",
+        "user",
+        "passwordRef",
+        "namespace"
+      ],
+      "type": "object"
+    },
+    "ReadLock": {
+      "description": "The read lock of one file source.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No lock: a candidate is read as it stands.",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "description": "Camel's `changed` lock: the file's length and last-modified time\nstable across two checks spaced the check interval apart.",
+          "type": "string"
+        }
+      ]
+    },
+    "RuntimeCredential": {
+      "description": "The credential binding of one endpoint in the runtime config\n(`products/adapter/CONCEPT.md` section 10.2): Evidence's\n`SourceAuthentication` variant field for field, minus the pack-side\n`headerName` and `scheme`. The kind must match the endpoint's declared\nkind; the checks refuse a mismatch.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No credential; matches a `none` endpoint.",
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The Basic credential pair.",
+          "properties": {
+            "passwordRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The password secret reference."
+            },
+            "type": {
+              "const": "basic",
+              "type": "string"
+            },
+            "usernameRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The username secret reference."
+            }
+          },
+          "required": [
+            "passwordRef",
+            "type",
+            "usernameRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The static token, presented under the endpoint's declared `scheme`.",
+          "properties": {
+            "tokenRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The token secret reference."
+            },
+            "type": {
+              "const": "static-authorization",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tokenRef",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The static API key, sent in the endpoint's declared header.",
+          "properties": {
+            "type": {
+              "const": "static-api-key",
+              "type": "string"
+            },
+            "valueRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The key secret reference."
+            }
+          },
+          "required": [
+            "type",
+            "valueRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The client-credentials binding, Evidence's fields: the token\nendpoint, the client id, and the shared secret, all as references\nor fixed strings.",
+          "properties": {
+            "assumedLifetimeSeconds": {
+              "description": "Lifetime assumed when the provider omits `expires_in`.",
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "audience": {
+              "description": "Fixed `audience` form parameter.",
+              "type": "string"
+            },
+            "clientIdRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The client id secret reference."
+            },
+            "clientSecretRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The shared client secret reference."
+            },
+            "credentialPlacement": {
+              "$ref": "#/$defs/CredentialPlacement",
+              "description": "Where the shared client secret travels."
+            },
+            "maximumCacheSeconds": {
+              "description": "The token cache ceiling, Evidence's bound.",
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resource": {
+              "description": "RFC 8707 resource indicator sent as a token-request form\nparameter.",
+              "type": "string"
+            },
+            "scope": {
+              "description": "The token-request scope parameter.",
+              "type": "string"
+            },
+            "tokenEndpoint": {
+              "$ref": "#/$defs/Url",
+              "description": "The token endpoint, a fixed destination never derived from a\nresponse; an absolute `http`/`https` URL the origin check\nconfines like any other destination."
+            },
+            "type": {
+              "const": "oauth2-client-credentials",
+              "type": "string"
+            }
+          },
+          "required": [
+            "clientIdRef",
+            "clientSecretRef",
+            "credentialPlacement",
+            "maximumCacheSeconds",
+            "tokenEndpoint",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The private-key-jwt binding, Evidence's fields. The signed\nassertion always travels in the form body; there is no placement\nparameter.",
+          "properties": {
+            "assumedLifetimeSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "audience": {
+              "type": "string"
+            },
+            "clientAssertionAudience": {
+              "description": "Audience claim of the signed assertion, defaulting to the\ntoken endpoint.",
+              "type": "string"
+            },
+            "clientAssertionKeyRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The private JWK the client assertion is signed with."
+            },
+            "clientIdRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The client id secret reference."
+            },
+            "maximumCacheSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resource": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string"
+            },
+            "tokenEndpoint": {
+              "$ref": "#/$defs/Url",
+              "description": "The token endpoint, a fixed destination never derived from a\nresponse; an absolute `http`/`https` URL the origin check\nconfines like any other destination."
+            },
+            "type": {
+              "const": "oauth2-private-key-jwt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "clientAssertionKeyRef",
+            "clientIdRef",
+            "maximumCacheSeconds",
+            "tokenEndpoint",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "SourceTls": {
+      "description": "The TLS posture of one postgres source connection. Plaintext is a\ntest-build posture only and is not part of the format.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The platform trust roots, TLS required, no client certificate.",
+          "properties": {
+            "type": {
+              "const": "system-roots",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One private CA bundle file beside the platform roots.",
+          "properties": {
+            "caBundleFile": {
+              "description": "The absolute path of the PEM file holding the bundle.",
+              "type": "string"
+            },
+            "type": {
+              "const": "ca-bundle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "caBundleFile"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TrustProfile": {
+      "additionalProperties": false,
+      "description": "One named private CA bundle: the absolute path of the process-local PEM\nfile the runtime reads.",
+      "properties": {
+        "caBundleFile": {
+          "description": "The absolute path of the PEM file holding the bundle's certificates.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "caBundleFile"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The ingestion job's runtime configuration: the endpoint bindings\nevery mode shares, the job source bindings, and the job store. It\nstates none of the facade's members (`listener`, `database`, `oidc`,\n`allowedClients`, `audit`, `idempotency`, the cursor custody).",
+  "properties": {
+    "allowedPrivateCidrs": {
+      "description": "The private ranges egress may reach, at least one and at most the\nplatform bound (CFG-EMPTY-2).",
+      "items": {
+        "$ref": "#/$defs/Cidr"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/job-runtime/v1alpha1",
+      "type": "string"
+    },
+    "endpoints": {
+      "description": "One binding per configured endpoint.",
+      "items": {
+        "$ref": "#/$defs/EndpointBinding"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId",
+      "description": "The deployment this binding configures."
+    },
+    "kind": {
+      "const": "AdapterJobRuntimeConfig",
+      "type": "string"
+    },
+    "outboundTls": {
+      "$ref": "#/$defs/OutboundTls",
+      "description": "The private CAs endpoints may trust beside the system roots;\nabsent, every endpoint trusts the system roots alone."
+    },
+    "sources": {
+      "$ref": "#/$defs/JobSources",
+      "description": "The governed-ingestion source bindings. Absent, the deployment\nbinds no job source; a pack whose source route reads one refuses\nat the job compile, never at the first read."
+    },
+    "store": {
+      "$ref": "#/$defs/JobStore",
+      "description": "The job store: the item table's database. Read by the job host,\nnot by the job compile; absent, the document configures no job\nstore and the host refuses to run a pass."
+    }
+  },
+  "required": [
+    "allowedPrivateCidrs",
+    "apiVersion",
+    "endpoints",
+    "id",
+    "kind"
+  ],
+  "title": "Registry Adapter ingestion job runtime configuration",
+  "type": "object"
+}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The generated JSON Schemas of the six Adapter formats, derived from the
+//! The generated JSON Schemas of the eight Adapter formats, derived from the
 //! source-neutral model in `registry-adapter-core` with `schemars` or from
 //! the runtime's pure effective-contract projection, and
 //! written to `products/adapter/schemas/` (`products/adapter/CONCEPT.md`
@@ -9,12 +9,25 @@
 
 use clap::Args;
 use registry_adapter_core::{
-    ErrorClass, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND, ADAPTER_FIXTURE_SCHEMA_ID,
-    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PACK_SCHEMA_ID,
-    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_SCHEMA_ID,
-    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_SCHEMA_ID,
-    ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND, ADAPTER_RUNTIME_SCHEMA_ID,
+    AdapterJob, ErrorClass, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND,
+    ADAPTER_FIXTURE_SCHEMA_ID, ADAPTER_JOB_API_VERSION, ADAPTER_JOB_KIND,
+    ADAPTER_JOB_RUNTIME_API_VERSION, ADAPTER_JOB_RUNTIME_KIND, ADAPTER_PACK_API_VERSION,
+    ADAPTER_PACK_KIND, ADAPTER_PACK_SCHEMA_ID, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_PROFILE_SCHEMA_ID, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND,
+    ADAPTER_PROJECT_SCHEMA_ID, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    ADAPTER_RUNTIME_SCHEMA_ID,
 };
+
+/// `$id` of the ingestion job's JSON Schema. The core carries the
+/// format's apiVersion and kind; the `$id` follows the platform path
+/// the other Adapter formats' ids spell.
+const ADAPTER_JOB_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json";
+
+/// `$id` of the ingestion job runtime configuration's JSON Schema, on the
+/// same platform path.
+const ADAPTER_JOB_RUNTIME_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json";
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -26,9 +39,11 @@ use crate::report;
 /// the repository root the command runs from.
 pub const DEFAULT_OUTPUT_DIR: &str = "products/adapter/schemas";
 
-/// The static send URIs `SendUri::parse` accepts. Pinned to the parser by
-/// the generator's own test.
-const SEND_URI_PATTERN: &str = "^(direct|http|graphql):.+$";
+/// The static send URIs `SendUri::parse` accepts, the four producer
+/// components and the job sources the authoring checks read through
+/// `pollEnrich` or refuse as sends. Pinned to the parser by the
+/// generator's own test.
+const SEND_URI_PATTERN: &str = "^(direct|http|graphql|postgres|file|sftp):.+$";
 
 #[derive(Debug, Args)]
 pub struct SchemasArgs {
@@ -58,6 +73,24 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
         AdapterFixture, AdapterPack, AdapterProfile, AdapterProject, AdapterRuntimeConfig,
     };
     Ok(vec![
+        Entry {
+            file: "job.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(AdapterJob))?,
+            title: "Registry Adapter ingestion job",
+            schema_id: ADAPTER_JOB_SCHEMA_ID,
+            api_version: ADAPTER_JOB_API_VERSION,
+            kind: ADAPTER_JOB_KIND,
+        },
+        Entry {
+            file: "job-runtime.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(
+                crate::job_runtime::JobRuntimeDocument
+            ))?,
+            title: "Registry Adapter ingestion job runtime configuration",
+            schema_id: ADAPTER_JOB_RUNTIME_SCHEMA_ID,
+            api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
+            kind: ADAPTER_JOB_RUNTIME_KIND,
+        },
         Entry {
             file: "profile.v1alpha1.schema.json",
             derived: serde_json::to_value(schemars::schema_for!(AdapterProfile))?,
@@ -101,7 +134,7 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     ])
 }
 
-/// The six generated schema documents, keyed by file name. Deterministic:
+/// The eight generated schema documents, keyed by file name. Deterministic:
 /// the same workspace state renders the same bytes.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let shared: Value =
@@ -135,7 +168,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
     }
     documents.insert(
         "effective-contract.v1alpha1.schema.json",
-        render(&registry_adapter::effective_contract::schema())?,
+        render(&registry_adapter::engine::effective_contract::schema())?,
     );
     Ok(documents)
 }
@@ -256,12 +289,18 @@ fn apply_manual_wire_forms(schema: &mut Value, file: &str) {
             rewrite_error_class(definitions);
             internally_tagged(
                 definitions
+                    .get_mut("AggregationStrategy")
+                    .expect("the pack schema defines the aggregation strategies"),
+                "type",
+            );
+            internally_tagged(
+                definitions
                     .get_mut("EndpointAuthentication")
                     .expect("the pack schema defines the endpoint authentication"),
                 "type",
             );
         }
-        "runtime.v1alpha1.schema.json" => {
+        "runtime.v1alpha1.schema.json" | "job-runtime.v1alpha1.schema.json" => {
             internally_tagged(
                 definitions
                     .get_mut("RuntimeCredential")
@@ -516,13 +555,13 @@ mod tests {
     fn documents_are_deterministic_and_versioned() {
         let first = documents().unwrap();
         assert_eq!(documents().unwrap(), first);
-        assert_eq!(first.len(), 6);
+        assert_eq!(first.len(), 8);
         let effective: Value =
             serde_json::from_str(&first["effective-contract.v1alpha1.schema.json"])
                 .expect("the effective contract schema is JSON");
         assert_eq!(
             effective,
-            registry_adapter::effective_contract::schema(),
+            registry_adapter::engine::effective_contract::schema(),
             "the generated file is the runtime's exact projection"
         );
         for (file, contents) in &first {
@@ -717,6 +756,19 @@ mod tests {
         assert_eq!(
             basic["properties"]["usernameRef"]["$ref"],
             "#/$defs/SecretReference"
+        );
+    }
+
+    /// The job schema's backoff multiplier starts at 1, the smallest
+    /// value the checks accept, so an editor never offers a multiplier
+    /// the job check refuses.
+    #[test]
+    fn the_job_backoff_multiplier_schema_starts_where_the_checks_do() {
+        let job: Value =
+            serde_json::from_str(&documents().unwrap()["job.v1alpha1.schema.json"]).unwrap();
+        assert_eq!(
+            job["$defs"]["JobTrigger"]["properties"]["backoffMultiplier"]["minimum"],
+            u64::from(registry_adapter_core::MINIMUM_TRIGGER_BACKOFF_MULTIPLIER)
         );
     }
 

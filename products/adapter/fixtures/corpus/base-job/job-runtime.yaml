@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+#
+# The clean job-mode control: binds the facade endpoint and the file source
+# without resolving a credential or reading the source directory at check time.
+apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+kind: AdapterJobRuntimeConfig
+id: case-job-check
+endpoints:
+  - endpoint: cases
+    baseUrl: https://cases.example.invalid
+    anonymousHttps: operator-approved
+    credential:
+      type: none
+sources:
+  file:
+    submissions:
+      directory: /tmp/registry-adapter-corpus
+      namespace: submissions
+allowedPrivateCidrs:
+  - 10.0.0.0/8

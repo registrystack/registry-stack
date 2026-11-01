@@ -10,8 +10,9 @@ use crate::auth::{is_reserved_header_name, EndpointAuthentication, RuntimeCreden
 use crate::diagnostics::{finding, CheckCode};
 use crate::envelope::SlotForm;
 use crate::fixture::{AdapterFixture, Intercept};
-use crate::model::{Expression, HttpMethod, SendComponent};
-use crate::pack::{AdapterPack, GraphQlOperationKind};
+use crate::job::{job_finding, JobCode, MAXIMUM_POSTGRES_QUERY_PARAMETERS, POLL_DECODER_NAMES};
+use crate::model::{ComponentKind, Expression, HttpMethod, SendComponent};
+use crate::pack::{AdapterPack, GraphQlOperationKind, SourceRouteDecl};
 use crate::profile::{
     resolve_problem, AdapterProfile, EnvelopeTemplate, ProfileOperation, MAX_PROBLEM_DATA_FIELDS,
     READ_REQUEST_SLOTS, SLOT_PROBLEM_CODE, SLOT_PROBLEM_DATA, SLOT_RECORD, SLOT_RECORDS,
@@ -343,6 +344,7 @@ pub fn check_workspace(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     let mut findings = check_profile(workspace.profile);
     findings.extend(check_pack(workspace.pack));
     findings.extend(check_routes(workspace.pack, workspace.project));
+    findings.extend(check_job_boundaries(workspace.pack, workspace.project));
     findings.extend(problem_data_route_faults(
         workspace.profile,
         workspace.pack,
@@ -1372,12 +1374,17 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     for (index, endpoint) in pack.endpoints.iter().enumerate() {
         let prefix = format!("/endpoints/{index}");
-        if !endpoint.component.is_producer() {
+        // A producer component (http, graphql, or the read-only postgres
+        // source) names an upstream endpoint; the job-only file and sftp
+        // sources are read through pollEnrich (section 17.1). `direct`
+        // names routes and `rest` is the facade consumer; neither is an
+        // endpoint component.
+        if !endpoint.component.is_producer() && !endpoint.component.is_job_component() {
             findings.push(finding(
                 CheckCode::PackEndpointComponentInvalid,
                 &format!("{prefix}/component"),
                 "an endpoint declares a non-producer component",
-                "Declare http or graphql on an endpoint; direct names routes and rest is the facade consumer.",
+                "Declare http, graphql, postgres, or a job source component on an endpoint; direct names routes and rest is the facade consumer.",
             ));
         }
         if endpoint.component == crate::model::ComponentKind::GraphQl
@@ -1388,6 +1395,16 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
                 &format!("{prefix}/queryFile"),
                 "a graphql endpoint names no query file",
                 "Reference a digest-pinned query file from the pack inventory.",
+            ));
+        }
+        if endpoint.component == crate::model::ComponentKind::Postgres
+            && endpoint.query_file.is_none()
+        {
+            findings.push(job_finding(
+                JobCode::PostgresQueryUnpinned,
+                &format!("{prefix}/queryFile"),
+                "a postgres endpoint names no query file",
+                "Reference a digest-pinned query file from the pack inventory; user-supplied SQL never enters a send.",
             ));
         }
         if endpoint.component == crate::model::ComponentKind::GraphQl
@@ -1462,6 +1479,109 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
     findings.extend(script_reference_checks(pack));
     findings.extend(template_parameter_checks(pack));
     findings.extend(code_map_checks(pack));
+    findings.extend(source_route_checks(pack));
+    findings
+}
+
+/// The source-route declaration checks of the governed-ingestion mode
+/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): every source
+/// route declares its scan and its `next` recovery semantics, its
+/// edit-finding mode with a well-formed rescan delay beside it, and no
+/// source route id collides with an internal route or template id.
+fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    let internal_ids: HashSet<&str> = pack
+        .routes
+        .iter()
+        .map(|route| route.id.as_str())
+        .chain(
+            pack.route_templates
+                .iter()
+                .map(|template| template.id.as_str()),
+        )
+        .collect();
+    for (index, source) in pack.source_routes.iter().enumerate() {
+        let prefix = format!("/sourceRoutes/{index}");
+        if source.scan.is_none() {
+            findings.push(job_finding(
+                JobCode::SourceScanRequired,
+                &format!("{prefix}/scan"),
+                "the source route declares no scan",
+                "Declare scan as finite or ongoing; the item contract requires the declaration.",
+            ));
+        }
+        if source.next_recovery.is_none() {
+            findings.push(job_finding(
+                JobCode::SourceRecoveryRequired,
+                &format!("{prefix}/nextRecovery"),
+                "the source route declares no recovery semantics for next",
+                "Declare nextRecovery as exact-replay or key-deduplicated; the item contract requires the declaration.",
+            ));
+        }
+        findings.extend(edit_declaration_checks(&prefix, source));
+        if internal_ids.contains(source.id.as_str()) {
+            findings.push(job_finding(
+                JobCode::SourceIdCollision,
+                &format!("{prefix}/id"),
+                "the source route id collides with an internal route or template id",
+                "Give the source route an id no internal route or template carries.",
+            ));
+        }
+    }
+    findings
+}
+
+/// The edit-finding declaration of one source route
+/// (`products/adapter/CONCEPT.md` section 17.2): `edits` is
+/// mandatory and spelled in the closed set beside `scan` and
+/// `nextRecovery`; a `rescan` route names its
+/// `rescanDelaySeconds`, an `ordered` route names no delay, and the
+/// delay stays inside its one-minute-to-one-day range.
+fn edit_declaration_checks(prefix: &str, source: &SourceRouteDecl) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    match source.edits.as_deref() {
+        None => findings.push(job_finding(
+            JobCode::SourceEditsRequired,
+            &format!("{prefix}/edits"),
+            "the source route declares no edit-finding mode",
+            "Declare edits as ordered or rescan; the item contract requires the declaration.",
+        )),
+        Some(edits) if crate::pack::SOURCE_EDIT_VALUES.contains(&edits) => {
+            match (edits, source.rescan_delay_seconds) {
+                ("rescan", None) => findings.push(job_finding(
+                    JobCode::SourceRescanDelay,
+                    &format!("{prefix}/rescanDelaySeconds"),
+                    "a rescan source route declares no rescan delay",
+                    "Declare rescanDelaySeconds beside edits: rescan, from 60 to 86400 seconds.",
+                )),
+                ("rescan", Some(delay))
+                    if !(crate::pack::MINIMUM_SOURCE_RESCAN_DELAY_SECONDS
+                        ..=crate::pack::MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS)
+                        .contains(&delay.get()) =>
+                {
+                    findings.push(job_finding(
+                        JobCode::SourceRescanDelay,
+                        &format!("{prefix}/rescanDelaySeconds"),
+                        "the rescan delay lies outside its 60-to-86400-second range",
+                        "Declare the rescan delay inside its 60 to 86400 range.",
+                    ));
+                }
+                ("ordered", Some(_)) => findings.push(job_finding(
+                    JobCode::SourceRescanDelay,
+                    &format!("{prefix}/rescanDelaySeconds"),
+                    "an ordered source route declares a rescan delay",
+                    "Drop rescanDelaySeconds, or declare edits as rescan.",
+                )),
+                _ => {}
+            }
+        }
+        Some(_) => findings.push(job_finding(
+            JobCode::SourceEditsUnknown,
+            &format!("{prefix}/edits"),
+            "the source route declares an edit-finding mode outside the closed ordered-and-rescan set",
+            "Declare edits as ordered or rescan.",
+        )),
+    }
     findings
 }
 
@@ -1795,7 +1915,11 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     }
                 }
                 match target.component {
-                    SendComponent::Http | SendComponent::GraphQl => {
+                    SendComponent::Http
+                    | SendComponent::GraphQl
+                    | SendComponent::Postgres
+                    | SendComponent::File
+                    | SendComponent::Sftp => {
                         if !endpoint_ids.contains(target.id.as_str()) {
                             route_findings.push(finding(
                                 CheckCode::RouteUnknownEndpoint,
@@ -1889,7 +2013,11 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     }
                 }
                 match enrich.uri.component {
-                    SendComponent::Http | SendComponent::GraphQl => {
+                    SendComponent::Http
+                    | SendComponent::GraphQl
+                    | SendComponent::Postgres
+                    | SendComponent::File
+                    | SendComponent::Sftp => {
                         if !endpoint_ids.contains(enrich.uri.id.as_str()) {
                             route_findings.push(finding(
                                 CheckCode::RouteUnknownEndpoint,
@@ -2281,7 +2409,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             findings.push(finding(
                 CheckCode::RouteRedeliveryWithoutUpstreamSend,
                 &prefix,
-                "redelivery is declared but the route reaches no http: or graphql: send",
+                "redelivery is declared but the route reaches no http:, graphql: or postgres: send",
                 "Send to an http: or graphql: endpoint, or drop the redelivery.",
             ));
         }
@@ -2299,6 +2427,346 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         }
     }
     findings
+}
+
+/// The governed-ingestion boundary checks over one pack and project
+/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): source routes
+/// stay entry points (no facade binding reaches one, no `direct:` send
+/// calls one), the job-only components and the `pollEnrich` step stay out
+/// of every facade-reachable route, a `file:` or `sftp:` URI is never a
+/// send destination, a poll names a declared endpoint of its scheme under
+/// a mandatory timeout and a closed decoder, a `postgres:` send stays
+/// within its shape and parameter bound, and a facade-reachable endpoint
+/// keeps the facade response ceiling.
+#[must_use]
+pub fn check_job_boundaries(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    let source_ids: HashSet<&str> = pack
+        .source_routes
+        .iter()
+        .map(|source| source.id.as_str())
+        .collect();
+    // A source route is a job entry point: no facade binding may reach it.
+    for (index, binding) in project.bindings.iter().enumerate() {
+        if source_ids.contains(binding.route.as_str()) {
+            findings.push(job_finding(
+                JobCode::SourceBoundRefused,
+                &format!("/bindings/{index}/route"),
+                "a facade binding names a source route",
+                "Bind a facade operation to an internal route; a source route is a job entry point only.",
+            ));
+        }
+    }
+    // The bodies the boundary checks walk: the internal bodies by from
+    // name, at their authored positions, plus the source routes.
+    let bodies = route_bodies(pack, project);
+    let body_prefixes = authored_body_prefixes(pack, project);
+    let instantiated_ids: HashSet<&str> = project
+        .templated_routes
+        .iter()
+        .map(|instantiated| instantiated.route_id.as_str())
+        .collect();
+    let mut ordered: Vec<(&str, &[Step], String)> = bodies
+        .iter()
+        .filter(|(id, _)| !instantiated_ids.contains(*id))
+        .map(|(id, steps)| {
+            let prefix = body_prefixes
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| format!("/routes/{id}"));
+            (*id, *steps, prefix)
+        })
+        .collect();
+    ordered.sort_by_key(|(id, _, _)| *id);
+    for (index, source) in pack.source_routes.iter().enumerate() {
+        ordered.push((
+            source.id.as_str(),
+            source.steps.as_slice(),
+            format!("/sourceRoutes/{index}"),
+        ));
+    }
+    let facade = facade_reachable_bodies(pack, project);
+    let mut facade_endpoints: HashSet<&str> = HashSet::new();
+    for (_, steps, prefix) in &ordered {
+        let reachable = facade.contains(steps);
+        walk_steps(steps, &mut |step, path| {
+            let pointer = format!("{prefix}/steps{path}");
+            match step {
+                Step::To(to) => {
+                    if reachable {
+                        if to.uri.component == SendComponent::Postgres {
+                            findings.push(job_finding(
+                                JobCode::ComponentFacadeRefused,
+                                &pointer,
+                                "a job component send sits in a facade-reachable route",
+                                "Move the postgres send into a source route or an internal route no facade binding reaches.",
+                            ));
+                        }
+                        if matches!(
+                            to.uri.component,
+                            SendComponent::Http | SendComponent::GraphQl | SendComponent::Postgres
+                        ) {
+                            facade_endpoints.insert(to.uri.id.as_str());
+                        }
+                    }
+                    job_send_checks(
+                        &mut findings,
+                        &pointer,
+                        &to.uri,
+                        to.parameters.as_ref(),
+                        &source_ids,
+                    );
+                }
+                Step::Enrich(enrich) => {
+                    if reachable {
+                        if enrich.uri.component == SendComponent::Postgres {
+                            findings.push(job_finding(
+                                JobCode::ComponentFacadeRefused,
+                                &pointer,
+                                "a job component enrichment sits in a facade-reachable route",
+                                "Move the postgres enrichment into a source route or an internal route no facade binding reaches.",
+                            ));
+                        }
+                        if matches!(
+                            enrich.uri.component,
+                            SendComponent::Http | SendComponent::GraphQl | SendComponent::Postgres
+                        ) {
+                            facade_endpoints.insert(enrich.uri.id.as_str());
+                        }
+                    }
+                    job_send_checks(
+                        &mut findings,
+                        &pointer,
+                        &enrich.uri,
+                        enrich.parameters.as_ref(),
+                        &source_ids,
+                    );
+                }
+                Step::PollEnrich(poll) => {
+                    if reachable {
+                        findings.push(job_finding(
+                            JobCode::PollFacadeRefused,
+                            &pointer,
+                            "a pollEnrich step sits in a facade-reachable route",
+                            "Move the poll into a source route or an internal route no facade binding reaches; the facade never polls.",
+                        ));
+                    }
+                    poll_enrich_checks(&mut findings, &pointer, poll, pack);
+                }
+                _ => {}
+            }
+        });
+    }
+    // A facade-reachable endpoint keeps the facade response ceiling; only
+    // an endpoint the facade can never reach may declare up to the
+    // platform cap (D39).
+    for (index, endpoint) in pack.endpoints.iter().enumerate() {
+        if facade_endpoints.contains(endpoint.id.as_str())
+            && endpoint.maximum_response_bytes.get() > MAXIMUM_RESPONSE_BYTES
+        {
+            findings.push(job_finding(
+                JobCode::EndpointResponseBound,
+                &format!("/endpoints/{index}/maximumResponseBytes"),
+                "a facade-reachable endpoint declares a response bound above the facade ceiling",
+                "Keep the endpoint within the facade ceiling; only an endpoint no facade route reaches may declare up to the platform cap.",
+            ));
+        }
+    }
+    findings
+}
+
+/// The bodies the facade bindings reach, transitively through `direct:`
+/// sends, as sets of body steps. Two names aliasing one body (a pack
+/// route's id and its from name) collapse, because the set keys on the
+/// steps themselves.
+fn facade_reachable_bodies<'a>(
+    pack: &'a AdapterPack,
+    project: &'a AdapterProject,
+) -> HashSet<&'a [Step]> {
+    let bodies = route_bodies(pack, project);
+    let by_id = route_bodies_by_id(pack, project);
+    let mut reachable: HashSet<&[Step]> = HashSet::new();
+    let mut queue: std::collections::VecDeque<&str> = project
+        .bindings
+        .iter()
+        .map(|binding| binding.route.as_str())
+        .collect();
+    let mut seen: HashSet<&str> = HashSet::new();
+    while let Some(name) = queue.pop_front() {
+        if !seen.insert(name) {
+            continue;
+        }
+        if let Some(steps) = bodies
+            .get(name)
+            .copied()
+            .or_else(|| by_id.get(name).copied())
+        {
+            if reachable.insert(steps) {
+                let mut targets = Vec::new();
+                collect_direct_targets(steps, &mut targets);
+                for target in targets {
+                    queue.push_back(target);
+                }
+            }
+        }
+    }
+    reachable
+}
+
+/// The send checks of the job boundary, applied over every body: a
+/// `file:` or `sftp:` URI is never a send destination, a `direct:` send
+/// never targets a source route, and a `postgres:` send stays within its
+/// shape and its named-parameter bound.
+fn job_send_checks(
+    findings: &mut Vec<Diagnostic>,
+    pointer: &str,
+    uri: &crate::model::SendUri,
+    parameters: Option<&crate::route::ToParameters>,
+    source_ids: &HashSet<&str>,
+) {
+    if let Some(parameters) = parameters {
+        if uri.component != SendComponent::Postgres && !parameters.query_parameters.is_empty() {
+            findings.push(finding(
+                CheckCode::RouteGraphQlSendMembers,
+                &format!("{pointer}/parameters/queryParameters"),
+                "the send carries queryParameters, which only a postgres send takes",
+                "Remove queryParameters; a postgres send's named parameters ride queryParameters.",
+            ));
+        }
+    }
+    match uri.component {
+        SendComponent::File | SendComponent::Sftp => {
+            findings.push(job_finding(
+                JobCode::SendComponentRefused,
+                pointer,
+                "a send targets a job source",
+                "Read a file or sftp source through a pollEnrich step; no send targets a job source.",
+            ));
+        }
+        SendComponent::Direct => {
+            if source_ids.contains(uri.id.as_str()) {
+                findings.push(job_finding(
+                    JobCode::SourceCalledRefused,
+                    pointer,
+                    "a direct send targets a source route",
+                    "Call an internal route; a source route is a job entry point, not a subroutine.",
+                ));
+            }
+        }
+        SendComponent::Postgres => {
+            if let Some(parameters) = parameters {
+                if parameters.query_parameters.len() > MAXIMUM_POSTGRES_QUERY_PARAMETERS {
+                    findings.push(job_finding(
+                        JobCode::PostgresParametersUnbounded,
+                        &format!("{pointer}/parameters/queryParameters"),
+                        "the postgres send carries more named parameters than the bound",
+                        "Keep the named parameters within the 16-parameter bound.",
+                    ));
+                }
+                for member in postgres_send_member_faults(parameters) {
+                    findings.push(finding(
+                        CheckCode::RouteGraphQlSendMembers,
+                        &format!("{pointer}/parameters/{member}"),
+                        "the postgres send carries a member its component does not take",
+                        "A postgres send carries queryParameters only; the HTTP request members ride an http send.",
+                    ));
+                }
+            }
+        }
+        SendComponent::Http | SendComponent::GraphQl => {}
+    }
+}
+
+/// The members a `postgres:` send must not carry: it shapes no HTTP
+/// request and takes no URL query; its named parameters ride
+/// `queryParameters`.
+fn postgres_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'static str> {
+    let mut members = Vec::new();
+    if parameters.http_method.is_some() {
+        members.push("httpMethod");
+    }
+    if parameters.path.is_some() {
+        members.push("path");
+    }
+    if !parameters.path_parameters.is_empty() {
+        members.push("pathParameters");
+    }
+    if !parameters.query.is_empty() {
+        members.push("query");
+    }
+    if parameters.ok_status_code_range.is_some() {
+        members.push("okStatusCodeRange");
+    }
+    members
+}
+
+/// One `pollEnrich` step's own checks, applied wherever the step appears:
+/// the mandatory timeout, the closed decoder set, and a static URI naming
+/// a declared endpoint whose component matches the scheme.
+fn poll_enrich_checks(
+    findings: &mut Vec<Diagnostic>,
+    pointer: &str,
+    poll: &crate::route::PollEnrichStep,
+    pack: &AdapterPack,
+) {
+    if poll.timeout_milliseconds.is_none() {
+        findings.push(job_finding(
+            JobCode::PollTimeout,
+            &format!("{pointer}/timeoutMilliseconds"),
+            "the pollEnrich declares no timeoutMilliseconds",
+            "Declare timeoutMilliseconds within 1 to 10000; one read is bounded.",
+        ));
+    }
+    if let Some(decoder) = &poll.decoder {
+        if !POLL_DECODER_NAMES.contains(&decoder.name()) {
+            findings.push(job_finding(
+                JobCode::DecoderUnknown,
+                &format!("{pointer}/decoder"),
+                "the pollEnrich names no decoder the engine carries",
+                "Name csv, jsonl, or raw; an absent decoder reads raw.",
+            ));
+        }
+        if let crate::route::PollDecoder::Csv(csv) = decoder {
+            for (member, character) in [
+                ("delimiter", Some(csv.delimiter)),
+                ("quote", Some(csv.quote)),
+                ("commentMarker", csv.comment_marker),
+            ] {
+                if character.is_some_and(|character| !character.is_ascii()) {
+                    findings.push(job_finding(
+                        JobCode::DecoderUnknown,
+                        &format!("{pointer}/decoder/{member}"),
+                        "the CSV decoder declares a syntax character outside ASCII",
+                        "Declare one ASCII character for CSV syntax.",
+                    ));
+                }
+            }
+        }
+    }
+    let named = match poll.uri.split_once(':') {
+        Some(("file", id)) if !id.is_empty() => Some((ComponentKind::File, id)),
+        Some(("sftp", id)) if !id.is_empty() => Some((ComponentKind::Sftp, id)),
+        _ => None,
+    };
+    match named.and_then(|(kind, id)| pack.endpoints.get(id).map(|endpoint| (kind, endpoint))) {
+        Some((kind, endpoint)) if endpoint.component != kind => {
+            findings.push(job_finding(
+                JobCode::PollEndpointKind,
+                &format!("{pointer}/uri"),
+                "the pollEnrich uri names an endpoint whose component does not match the scheme",
+                "Name a file: or sftp: endpoint whose component matches the uri scheme.",
+            ));
+        }
+        Some(_) => {}
+        None => {
+            findings.push(job_finding(
+                JobCode::PollEndpointUnknown,
+                &format!("{pointer}/uri"),
+                "the pollEnrich uri names no declared file or sftp endpoint",
+                "Name an endpoint the pack declares with the file or sftp component.",
+            ));
+        }
+    }
 }
 
 /// A route's header writes and reads stay bounded
@@ -2408,7 +2876,9 @@ fn is_non_safe_to(to: &crate::route::ToStep, pack: &AdapterPack) -> bool {
 /// declared `safeUpstream` on its endpoint, the reviewed claim that the
 /// upstream serves that POST as its safe search form. The claim never
 /// rescues a PUT or PATCH, and a graphql send's safety comes from its
-/// declared query kind alone.
+/// declared query kind alone. A `postgres:` send is a read-only query
+/// (section 8.10, the SQL row), so it counts as safe; the `file:` and
+/// `sftp:` job sources are refused as sends outright.
 fn is_non_safe_upstream(
     component: SendComponent,
     endpoint: &str,
@@ -2428,6 +2898,7 @@ fn is_non_safe_upstream(
                     && operation_claims_safe_upstream(endpoint, parameters, pack))
         }
         SendComponent::GraphQl => !is_declared_graphql_query(endpoint, parameters, pack),
+        SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => false,
     }
 }
 
@@ -2649,7 +3120,11 @@ fn http_uri_member_faults(
             }
             members
         }
-        SendComponent::GraphQl | SendComponent::Direct => vec!["httpUri"],
+        SendComponent::GraphQl
+        | SendComponent::Direct
+        | SendComponent::Postgres
+        | SendComponent::File
+        | SendComponent::Sftp => vec!["httpUri"],
     }
 }
 
@@ -2774,9 +3249,9 @@ fn send_claims_idempotent(
         .any(|op| op.id.as_str() == operation_id.as_str() && op.idempotent_upstream)
 }
 
-/// Whether any upstream component send (`http:` or `graphql:`) is
-/// reachable from the body, through composite steps and `direct:`
-/// expansion. Redelivery applies only to component sends, so a
+/// Whether any upstream component send (`http:`, `graphql:`, or a
+/// `postgres:` source send) is reachable from the body, through
+/// composite steps and `direct:` expansion. Redelivery applies only to component sends, so a
 /// declaration whose reachable sends are all `direct:` has no effect.
 /// The depth bound counts `direct:` hops only: composite nesting is
 /// unbounded here and the cycle check guards the graph.
@@ -2786,13 +3261,15 @@ fn reaches_component_send(steps: &[Step], bodies: &HashMap<&str, &[Step]>, depth
     }
     steps.iter().any(|step| match step {
         Step::To(to) => match to.uri.component {
-            SendComponent::Http | SendComponent::GraphQl => true,
+            SendComponent::Http | SendComponent::GraphQl | SendComponent::Postgres => true,
+            SendComponent::File | SendComponent::Sftp => false,
             SendComponent::Direct => bodies
                 .get(to.uri.id.as_str())
                 .is_some_and(|target| reaches_component_send(target, bodies, depth + 1)),
         },
         Step::Enrich(enrich) => match enrich.uri.component {
             SendComponent::Http | SendComponent::GraphQl => true,
+            SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => false,
             SendComponent::Direct => bodies
                 .get(enrich.uri.id.as_str())
                 .is_some_and(|target| reaches_component_send(target, bodies, depth + 1)),
@@ -3279,6 +3756,7 @@ pub fn step_expressions(step: &Step) -> Vec<Expression> {
             }
             expressions
         }
+        Step::PollEnrich(poll) => aggregation_expressions(&poll.aggregation_strategy),
         Step::To(to) => {
             let Some(parameters) = to.parameters.as_ref() else {
                 return Vec::new();
@@ -3452,6 +3930,12 @@ pub fn script_references(pack: &AdapterPack) -> Vec<ScriptSite> {
             .enumerate()
             .map(|(index, t)| (format!("/routeTemplates/{index}"), t.steps.as_slice())),
     );
+    bodies.extend(
+        pack.source_routes
+            .iter()
+            .enumerate()
+            .map(|(index, source)| (format!("/sourceRoutes/{index}"), source.steps.as_slice())),
+    );
     for (prefix, steps) in bodies {
         walk_steps(steps, &mut |step, path| {
             let base = format!("{prefix}/steps{path}");
@@ -3515,6 +3999,18 @@ pub fn script_references(pack: &AdapterPack) -> Vec<ScriptSite> {
                                 &mut refs,
                             );
                         }
+                    }
+                }
+                Step::PollEnrich(poll) => {
+                    if let Some(crate::model::AggregationStrategy::Rhai { expression }) =
+                        &poll.aggregation_strategy
+                    {
+                        push(
+                            Some(expression),
+                            ScriptRole::EnrichAggregation,
+                            format!("{base}/aggregationStrategy"),
+                            &mut refs,
+                        );
                     }
                 }
                 Step::Choice(choice) => {
@@ -4104,6 +4600,38 @@ fn route_worst_case(
     )
 }
 
+/// The static worst-case upstream call count of one source route over
+/// the pack's own route graph: the same walk [`route_worst_case`]
+/// performs for the facade binding budget, with the `direct:`-expansion
+/// bodies drawn from the pack's internal routes and templates alone,
+/// because a job runs beside no project. A source route `direct:` target
+/// that names another source route resolves to nothing, so it counts no
+/// send. The returned flag reports the walk saturating past the reader's
+/// depth bound, where the count is uncountable and the caller must
+/// refuse rather than pass.
+pub(crate) fn source_route_worst_case(pack: &AdapterPack, steps: &[Step]) -> (u64, bool) {
+    let mut bodies: HashMap<&str, &[Step]> = HashMap::new();
+    for route in pack.routes.iter() {
+        bodies.insert(route.id.as_str(), route.steps.as_slice());
+    }
+    for template in pack.route_templates.iter() {
+        bodies.insert(template.id.as_str(), template.steps.as_slice());
+    }
+    let oauth_endpoints: HashSet<&str> = pack
+        .endpoints
+        .iter()
+        .filter(|endpoint| {
+            matches!(
+                endpoint.authentication,
+                EndpointAuthentication::Oauth2ClientCredentials { .. }
+                    | EndpointAuthentication::Oauth2PrivateKeyJwt { .. }
+            )
+        })
+        .map(|endpoint| endpoint.id.as_str())
+        .collect();
+    route_worst_case(steps, &bodies, &oauth_endpoints)
+}
+
 /// The redeliveries a body declares: the widest `maximumRedeliveries`
 /// across its error handler and `onException` clauses. A `retryWhile`
 /// predicate only stops redelivery earlier; `maximumRedeliveries` remains
@@ -4187,6 +4715,14 @@ fn worst_body(
                     }
                     total = total.saturating_add(attempts.saturating_mul(multiplier));
                 }
+                // The read-only postgres source send counts against the
+                // run's upstream-call budget at run time, and a failing
+                // one is redelivered like any other component send, so it
+                // counts here the same way. It names no OAuth endpoint.
+                SendComponent::Postgres => {
+                    total = total.saturating_add(attempts.saturating_mul(multiplier));
+                }
+                SendComponent::File | SendComponent::Sftp => {}
                 SendComponent::Direct => {
                     if let Some(target) = walk.bodies.get(to.uri.id.as_str()) {
                         let target_redeliveries = redeliveries.max(declared_redeliveries(target));
@@ -4208,6 +4744,9 @@ fn worst_body(
                     }
                     total = total.saturating_add(attempts.saturating_mul(multiplier));
                 }
+                // The engine refuses a job component as an enrich resource
+                // before any send, so none of them makes a call.
+                SendComponent::Postgres | SendComponent::File | SendComponent::Sftp => {}
                 SendComponent::Direct => {
                     if let Some(target) = walk.bodies.get(enrich.uri.id.as_str()) {
                         let target_redeliveries = redeliveries.max(declared_redeliveries(target));
@@ -4379,18 +4918,23 @@ fn worst_body(
     total
 }
 
-/// Runtime checks (`products/adapter/CONCEPT.md` sections 10.2 and
-/// 13.7): endpoint coverage, credential-kind match, `none` confined to
-/// the numeric loopback or `https` with an mTLS identity, and the
-/// plain-HTTP confinement to the loopback exception and the declared
-/// private CIDRs (decision D36), the rule load's own destination
-/// policy enforces on resolved addresses.
+/// The endpoint-binding checks every mode runs
+/// (`products/adapter/CONCEPT.md` sections 10.2 and 17): endpoint
+/// coverage, credential-kind match, `none` confined to the numeric
+/// loopback or `https` with an mTLS identity, and the plain-HTTP
+/// confinement to the loopback exception and the declared private CIDRs
+/// (decision D36), the rule load's own destination policy enforces on
+/// resolved addresses. The facade's runtime check adds its own members
+/// to these findings.
 #[must_use]
-pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
+pub fn check_endpoint_bindings(
+    workspace: &Workspace<'_>,
+    bindings: &crate::runtime::AdapterEndpointBindings,
+) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     let pack = workspace.pack;
 
-    for (index, binding) in runtime.endpoints.iter().enumerate() {
+    for (index, binding) in bindings.endpoints.iter().enumerate() {
         let prefix = format!("/endpoints/{index}");
         let endpoint = pack.endpoints.get(binding.endpoint.as_str());
         if endpoint.is_none() {
@@ -4444,7 +4988,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
                 check_token_endpoint(&prefix, credential, &mut findings);
             }
         }
-        if !plain_http_origin_admitted(&binding.base_url, &runtime.allowed_private_cidrs) {
+        if !plain_http_origin_admitted(&binding.base_url, &bindings.allowed_private_cidrs) {
             findings.push(finding(
                 CheckCode::RuntimeInsecureOrigin,
                 &format!("{prefix}/baseUrl"),
@@ -4461,7 +5005,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             ));
         }
         if let Some(profile) = &binding.tls_trust_profile {
-            if !runtime
+            if !bindings
                 .outbound_tls
                 .as_ref()
                 .is_some_and(|tls| tls.trust_profiles.contains_key(profile.as_str()))
@@ -4476,7 +5020,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
         }
     }
     for endpoint in pack.endpoints.iter() {
-        if runtime.endpoints.get(endpoint.id.as_str()).is_none() {
+        if bindings.endpoints.get(endpoint.id.as_str()).is_none() {
             findings.push(finding(
                 CheckCode::RuntimeMissingEndpoint,
                 "/endpoints",
@@ -4485,7 +5029,7 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             ));
         }
     }
-    if runtime.allowed_private_cidrs.len() > crate::naming::MAX_ALLOWED_PRIVATE_CIDRS {
+    if bindings.allowed_private_cidrs.len() > crate::naming::MAX_ALLOWED_PRIVATE_CIDRS {
         findings.push(finding(
             CheckCode::RuntimeInsecureOrigin,
             "/allowedPrivateCidrs",
@@ -4493,7 +5037,17 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
             "Reduce the allowlist to the platform bound.",
         ));
     }
-    check_outbound_tls(runtime, &mut findings);
+    check_outbound_tls(bindings, &mut findings);
+    findings
+}
+
+/// Runtime checks (`products/adapter/CONCEPT.md` sections 10.2 and
+/// 13.7): the endpoint-binding checks every mode runs, plus the OIDC
+/// issuer block that authenticates facade callers, which the facade
+/// alone configures.
+#[must_use]
+pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
+    let mut findings = check_endpoint_bindings(workspace, &runtime.endpoint_bindings());
     if let Err(error) = runtime.oidc.check("oidc", true) {
         findings.push(finding(
             CheckCode::RuntimeInvalidOrigin,
@@ -4509,8 +5063,11 @@ pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) 
 /// own (`registry-evidence` `OutboundTlsConfig`): at most the shared
 /// bound of named profiles, and each profile's `caBundleFile` an
 /// absolute operator path the runtime may read.
-fn check_outbound_tls(runtime: &AdapterRuntimeConfig, findings: &mut Vec<Diagnostic>) {
-    let Some(tls) = &runtime.outbound_tls else {
+fn check_outbound_tls(
+    bindings: &crate::runtime::AdapterEndpointBindings,
+    findings: &mut Vec<Diagnostic>,
+) {
+    let Some(tls) = &bindings.outbound_tls else {
         return;
     };
     if tls.trust_profiles.len() > crate::naming::MAX_TLS_TRUST_PROFILES {
@@ -4923,6 +5480,7 @@ mod tests {
                 ok_status_code_range: None,
                 http_uri: None,
                 resume_bindings: Vec::new(),
+                query_parameters: BTreeMap::new(),
             }),
         })
     }
@@ -4941,6 +5499,7 @@ mod tests {
                 ok_status_code_range: None,
                 http_uri: None,
                 resume_bindings: Vec::new(),
+                query_parameters: BTreeMap::new(),
             }),
         })
     }
@@ -4996,6 +5555,7 @@ mod tests {
             endpoints: UniqueIdList::new(endpoints).expect("unique"),
             route_templates: UniqueIdList::<RouteTemplate>::new(Vec::new()).expect("empty"),
             routes: UniqueIdList::new(routes).expect("unique"),
+            source_routes: UniqueIdList::new(Vec::new()).expect("empty"),
             code_maps: UniqueIdList::new(Vec::new()).expect("empty"),
             scripts: UniqueList::new(vec![crate::model::ScriptReference {
                 path: "scripts/map.rhai".to_string(),
@@ -5350,6 +5910,7 @@ mod tests {
                         ok_status_code_range: None,
                         http_uri: None,
                         resume_bindings: Vec::new(),
+                        query_parameters: BTreeMap::new(),
                     }),
                 }),
             ],
@@ -6985,6 +7546,7 @@ mod tests {
                 ok_status_code_range: None,
                 http_uri: None,
                 resume_bindings: Vec::new(),
+                query_parameters: BTreeMap::new(),
             }),
         });
         let template = RouteTemplate {
@@ -7043,6 +7605,7 @@ mod tests {
                 ok_status_code_range: None,
                 http_uri: None,
                 resume_bindings: Vec::new(),
+                query_parameters: BTreeMap::new(),
             }),
         });
         let route = RouteDefinition {
@@ -7094,6 +7657,7 @@ mod tests {
                     ok_status_code_range: None,
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             }),
             Step::OnException(OnExceptionStep {
@@ -7202,6 +7766,7 @@ mod tests {
                     ok_status_code_range: None,
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             })
         };
@@ -7272,6 +7837,7 @@ mod tests {
                     ok_status_code_range: None,
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             })],
         };
@@ -7306,6 +7872,7 @@ mod tests {
                     ok_status_code_range: None,
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             })],
         };
@@ -7419,6 +7986,7 @@ mod tests {
                     ok_status_code_range: None,
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             });
             let route = RouteDefinition {
@@ -9514,6 +10082,7 @@ mod tests {
                 ok_status_code_range: None,
                 http_uri: None,
                 resume_bindings: Vec::new(),
+                query_parameters: BTreeMap::new(),
             }),
         })
     }
@@ -9652,6 +10221,7 @@ mod tests {
                     ok_status_code_range: None,
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             })],
         };
@@ -9830,6 +10400,7 @@ mod tests {
                     ok_status_code_range: None,
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             })],
         };
@@ -10577,6 +11148,7 @@ mod tests {
                         ok_status_code_range: None,
                         http_uri: None,
                         resume_bindings: Vec::new(),
+                        query_parameters: BTreeMap::new(),
                     }),
                 }),
             ],
@@ -10655,6 +11227,7 @@ mod tests {
             ok_status_code_range: None,
             http_uri: None,
             resume_bindings: Vec::new(),
+            query_parameters: BTreeMap::new(),
         };
         let cases: Vec<(&str, ToParameters)> = vec![
             (
@@ -10938,6 +11511,7 @@ mod tests {
             ok_status_code_range: None,
             http_uri: None,
             resume_bindings: Vec::new(),
+            query_parameters: BTreeMap::new(),
         }
     }
 
@@ -11022,6 +11596,7 @@ mod tests {
                     ok_status_code_range: Some(range.to_string()),
                     http_uri: None,
                     resume_bindings: Vec::new(),
+                    query_parameters: BTreeMap::new(),
                 }),
             })
         };
@@ -12378,5 +12953,564 @@ mod tests {
         .expect("unique");
         let ws = workspace(&profile, &pack, &project);
         assert_clean(check_workspace(&ws));
+    }
+
+    /// A pack built from its wire form, so job-surface fixtures stay
+    /// readable.
+    fn job_pack(json: &str) -> AdapterPack {
+        serde_json::from_str(json).expect("pack")
+    }
+
+    fn bound_project(pack: &AdapterPack, route: &str) -> AdapterProject {
+        let mut project = project_builder(pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: local("find-cases"),
+            operation: id("cases-find"),
+            record_type: local("case"),
+            route: ExternalId::new(route).expect("route"),
+            filters: UniqueList::new(Vec::new()).expect("unique"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+        }])
+        .expect("unique");
+        project
+    }
+
+    fn has_job_code(findings: &[Diagnostic], code: JobCode) -> bool {
+        findings.iter().any(|finding| finding.code == code.code())
+    }
+
+    /// The job-source and postgres endpoint components pass the pack
+    /// checks; a non-producer, non-job component still refuses; a postgres
+    /// endpoint without a query file refuses under its own job code.
+    #[test]
+    fn job_endpoints_check_through_the_pack_checks() {
+        let clean = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "submissions", "component": "file", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 16777216 },
+                    { "id": "dropbox", "component": "sftp", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 },
+                    { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
+                      "queryFile": "queries/ledger.sql" }
+                ],
+                "queryFiles": [
+                    { "path": "queries/ledger.sql", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+                ]
+            }"#,
+        );
+        assert_clean(check_pack(&clean));
+
+        let unpinned = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&unpinned);
+        assert!(
+            has_job_code(&findings, JobCode::PostgresQueryUnpinned),
+            "a postgres endpoint without a query file refuses: {findings:?}"
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .find(|finding| finding.code == JobCode::PostgresQueryUnpinned.code())
+                .and_then(|finding| finding.artifact.as_deref()),
+            Some("AdapterPack")
+        );
+
+        let direct = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "loop", "component": "direct", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&direct);
+        assert!(
+            codes(&findings).contains(&CheckCode::PackEndpointComponentInvalid.code()),
+            "a direct endpoint component still refuses: {findings:?}"
+        );
+    }
+
+    /// A source route declares its scan, recovery, and edit-finding
+    /// mode, spells its edits in the closed set, pairs a rescan delay
+    /// with rescan alone, keeps the delay in range, and never collides
+    /// with an internal route or template id.
+    #[test]
+    fn source_route_declarations_check_through_the_pack_checks() {
+        let clean = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "ordered" }
+                ]
+            }"#,
+        );
+        assert_clean(check_pack(&clean));
+
+        let undeclared = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [ { "id": "kobo-submissions" } ]
+            }"#,
+        );
+        let findings = check_pack(&undeclared);
+        assert!(
+            has_job_code(&findings, JobCode::SourceScanRequired)
+                && has_job_code(&findings, JobCode::SourceRecoveryRequired)
+                && has_job_code(&findings, JobCode::SourceEditsRequired),
+            "every mandatory declaration refuses by name: {findings:?}"
+        );
+
+        let unknown_edits = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "sweeping" }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&unknown_edits);
+        assert!(
+            has_job_code(&findings, JobCode::SourceEditsUnknown),
+            "an edit mode outside the closed set refuses: {findings:?}"
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .find(|finding| finding.code == JobCode::SourceEditsUnknown.code())
+                .map(|finding| finding.path.as_str()),
+            Some("/sourceRoutes/0/edits"),
+            "the finding points at the edits declaration"
+        );
+
+        let rescan_without_delay = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan" }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&rescan_without_delay);
+        assert!(
+            has_job_code(&findings, JobCode::SourceRescanDelay),
+            "a rescan route without its delay refuses: {findings:?}"
+        );
+
+        // The reader holds the range itself: a delay below it refuses at
+        // the pack's own reader, before any check runs, the same
+        // refusal the check arm carries for a pack that bypassed the
+        // reader.
+        assert!(
+            serde_json::from_str::<AdapterPack>(
+                r#"{
+                    "id": "kobo-pack",
+                    "version": "1",
+                    "testedVersions": [],
+                    "sourceRoutes": [
+                        { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 59 }
+                    ]
+                }"#,
+            )
+            .is_err(),
+            "a delay below its range refuses at the reader"
+        );
+
+        let delay_beside_ordered = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "ordered", "rescanDelaySeconds": 3600 }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&delay_beside_ordered);
+        assert!(
+            has_job_code(&findings, JobCode::SourceRescanDelay),
+            "a delay beside an ordered route refuses: {findings:?}"
+        );
+
+        let rescan_at_bounds = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "a", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 60 },
+                    { "id": "b", "scan": "ongoing", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 86400 }
+                ]
+            }"#,
+        );
+        assert_clean(check_pack(&rescan_at_bounds));
+
+        let collision = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "routes": [
+                    { "id": "shared", "from": { "uri": "direct:shared" }, "steps": [] }
+                ],
+                "sourceRoutes": [
+                    { "id": "shared", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered" }
+                ]
+            }"#,
+        );
+        let findings = check_pack(&collision);
+        assert!(
+            has_job_code(&findings, JobCode::SourceIdCollision),
+            "a colliding source id refuses: {findings:?}"
+        );
+    }
+
+    /// The job constructs stay inside the source route: a bound facade
+    /// route sharing an internal route with the source route stays clean
+    /// when the shared route carries no job construct, and the source
+    /// route's poll and postgres send stay unrefused.
+    #[test]
+    fn a_source_route_with_shared_protocol_logic_stays_clean() {
+        let pack = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "submissions", "component": "file", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 16777216 },
+                    { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
+                      "queryFile": "queries/ledger.sql" }
+                ],
+                "routes": [
+                    { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] },
+                    { "id": "normalize", "from": { "uri": "direct:normalize" },
+                      "steps": [ { "setBody": { "jsonpath": "$.items" } } ] }
+                ],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated", "edits": "ordered",
+                      "steps": [
+                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5000, "decoder": { "delimiter": ";" } } },
+                        { "to": { "uri": "direct:normalize" } },
+                        { "to": { "uri": "postgres:ledger" } }
+                      ] }
+                ]
+            }"#,
+        );
+        let project = bound_project(&pack, "facade-route");
+        let findings = check_job_boundaries(&pack, &project);
+        assert!(
+            findings.is_empty(),
+            "the shared normalize route and the source route stay clean: {findings:?}"
+        );
+    }
+
+    /// The engine redelivers a failing `postgres:` send like any other
+    /// non-direct send, so a redelivery declared over a route whose only
+    /// send is `postgres:` takes effect and is not refused as reaching no
+    /// upstream send.
+    #[test]
+    fn redelivery_over_a_postgres_send_reaches_an_upstream_send() {
+        let pack = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
+                      "queryFile": "queries/ledger.sql" }
+                ],
+                "routes": [
+                    { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] },
+                    { "id": "lookup", "from": { "uri": "direct:lookup" },
+                      "steps": [
+                        { "onException": { "exception": ["upstream.timeout"],
+                                           "redeliveryPolicy": { "maximumRedeliveries": 1 } } },
+                        { "to": { "uri": "postgres:ledger" } }
+                      ] }
+                ],
+                "sourceRoutes": [
+                    { "id": "ledger-rows", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
+                      "steps": [ { "to": { "uri": "direct:lookup" } } ] }
+                ]
+            }"#,
+        );
+        let project = bound_project(&pack, "facade-route");
+        let findings = check_routes(&pack, &project);
+        assert!(
+            !codes(&findings).contains(&CheckCode::RouteRedeliveryWithoutUpstreamSend.code()),
+            "a postgres send is an upstream send redelivery reaches: {:?}",
+            codes(&findings)
+        );
+    }
+
+    /// A job construct inside a facade-reachable route refuses under its
+    /// own code: a pollEnrich under the poll code, a postgres send under
+    /// the component code, a file send under the send code.
+    #[test]
+    fn job_constructs_refuse_in_facade_reachable_routes() {
+        let pack = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "submissions", "component": "file", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 },
+                    { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
+                      "queryFile": "queries/ledger.sql" }
+                ],
+                "routes": [
+                    { "id": "facade-route", "from": { "uri": "direct:facadeRoute" },
+                      "steps": [
+                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5000 } },
+                        { "to": { "uri": "postgres:ledger" } },
+                        { "to": { "uri": "file:submissions" } }
+                      ] }
+                ]
+            }"#,
+        );
+        let project = bound_project(&pack, "facade-route");
+        let findings = check_job_boundaries(&pack, &project);
+        assert!(
+            has_job_code(&findings, JobCode::PollFacadeRefused),
+            "the poll refuses in a bound route: {findings:?}"
+        );
+        assert!(
+            has_job_code(&findings, JobCode::ComponentFacadeRefused),
+            "the postgres send refuses in a bound route: {findings:?}"
+        );
+        assert!(
+            has_job_code(&findings, JobCode::SendComponentRefused),
+            "the file send refuses wherever it sits: {findings:?}"
+        );
+    }
+
+    /// A source route stays an entry point: a binding naming one refuses,
+    /// and a direct send targeting one refuses, both with their own codes.
+    #[test]
+    fn source_routes_refuse_bindings_and_direct_calls() {
+        let pack = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "routes": [
+                    { "id": "caller", "from": { "uri": "direct:caller" },
+                      "steps": [ { "to": { "uri": "direct:kobo-submissions" } } ] }
+                ],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered" }
+                ]
+            }"#,
+        );
+        let project = bound_project(&pack, "kobo-submissions");
+        let findings = check_job_boundaries(&pack, &project);
+        assert!(
+            has_job_code(&findings, JobCode::SourceBoundRefused),
+            "a binding naming a source route refuses: {findings:?}"
+        );
+        assert!(
+            has_job_code(&findings, JobCode::SourceCalledRefused),
+            "a direct send into a source route refuses: {findings:?}"
+        );
+    }
+
+    /// A poll names a declared endpoint of its scheme under a mandatory
+    /// timeout and a closed decoder name; the sound polls stay unrefused.
+    #[test]
+    fn poll_steps_check_their_uri_timeout_and_decoder() {
+        let pack = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "submissions", "component": "file", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 },
+                    { "id": "dropbox", "component": "sftp", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576 }
+                ],
+                "routes": [
+                    { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] }
+                ],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
+                      "steps": [
+                        { "pollEnrich": { "uri": "file:nope", "timeoutMilliseconds": 5 } },
+                        { "pollEnrich": { "uri": "file:dropbox", "timeoutMilliseconds": 5 } },
+                        { "pollEnrich": { "uri": "sftp:submissions", "timeoutMilliseconds": 5 } },
+                        { "pollEnrich": { "uri": "sftp:dropbox" } },
+                        { "pollEnrich": { "uri": "sftp:dropbox", "timeoutMilliseconds": 5, "decoder": "parquet" } },
+                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5, "decoder": "jsonl" } }
+                      ] }
+                ]
+            }"#,
+        );
+        let project = bound_project(&pack, "facade-route");
+        let findings = check_job_boundaries(&pack, &project);
+        assert!(
+            has_job_code(&findings, JobCode::PollEndpointUnknown),
+            "an unknown poll endpoint refuses: {findings:?}"
+        );
+        assert!(
+            has_job_code(&findings, JobCode::PollEndpointKind),
+            "a scheme and component mismatch refuses: {findings:?}"
+        );
+        assert!(
+            has_job_code(&findings, JobCode::PollTimeout),
+            "a poll without its timeout refuses: {findings:?}"
+        );
+        assert!(
+            has_job_code(&findings, JobCode::DecoderUnknown),
+            "an unknown decoder name refuses: {findings:?}"
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.code.starts_with("adapter.job."))
+                .count(),
+            5,
+            "the sound polls stay unrefused: {findings:?}"
+        );
+    }
+
+    /// A postgres send stays within its shape: the named parameters ride
+    /// queryParameters within the bound, and the HTTP request members
+    /// refuse.
+    #[test]
+    fn postgres_sends_check_their_shape_and_parameter_bound() {
+        let pack = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "ledger", "component": "postgres", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 1048576,
+                      "queryFile": "queries/ledger.sql" }
+                ],
+                "routes": [
+                    { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] }
+                ],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
+                      "steps": [
+                        { "to": { "uri": "postgres:ledger", "parameters": { "httpMethod": "GET", "query": { "limit": { "constant": 10 } } } } },
+                        { "to": { "uri": "postgres:ledger", "parameters": { "queryParameters": { "p00": { "constant": 0 }, "p01": { "constant": 1 }, "p02": { "constant": 2 }, "p03": { "constant": 3 }, "p04": { "constant": 4 }, "p05": { "constant": 5 }, "p06": { "constant": 6 }, "p07": { "constant": 7 }, "p08": { "constant": 8 }, "p09": { "constant": 9 }, "p10": { "constant": 10 }, "p11": { "constant": 11 }, "p12": { "constant": 12 }, "p13": { "constant": 13 }, "p14": { "constant": 14 }, "p15": { "constant": 15 }, "p16": { "constant": 16 } } } } }
+                      ] }
+                ]
+            }"#,
+        );
+        let project = bound_project(&pack, "facade-route");
+        let findings = check_job_boundaries(&pack, &project);
+        assert!(
+            has_job_code(&findings, JobCode::PostgresParametersUnbounded),
+            "seventeen named parameters refuse: {findings:?}"
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.code == CheckCode::RouteGraphQlSendMembers.code())
+                .count(),
+            2,
+            "the httpMethod member and the url query refuse on a postgres send: {findings:?}"
+        );
+    }
+
+    /// A facade-reachable endpoint keeps the facade response ceiling; an
+    /// endpoint only a source route reaches may carry the platform cap.
+    #[test]
+    fn the_response_ceiling_follows_facade_reachability() {
+        let pack = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "submissions", "component": "file", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 16777216 },
+                    { "id": "big", "component": "http", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 16777216 }
+                ],
+                "routes": [
+                    { "id": "facade-route", "from": { "uri": "direct:facadeRoute" },
+                      "steps": [ { "to": { "uri": "http:big" } } ] }
+                ],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
+                      "steps": [
+                        { "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5 } }
+                      ] }
+                ]
+            }"#,
+        );
+        let project = bound_project(&pack, "facade-route");
+        let findings = check_job_boundaries(&pack, &project);
+        assert!(
+            has_job_code(&findings, JobCode::EndpointResponseBound),
+            "the facade-reachable endpoint above the facade ceiling refuses: {findings:?}"
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .find(|finding| finding.code == JobCode::EndpointResponseBound.code())
+                .map(|finding| finding.path.as_str()),
+            Some("/endpoints/1/maximumResponseBytes"),
+            "the source-only endpoint's platform cap stays unrefused"
+        );
+        // The same shape with the big endpoint reachable only from the
+        // source route carries the cap cleanly.
+        let source_only = job_pack(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "endpoints": [
+                    { "id": "big", "component": "http", "authentication": { "type": "none" },
+                      "attemptTimeoutMilliseconds": 10000, "maximumResponseBytes": 16777216 }
+                ],
+                "routes": [
+                    { "id": "facade-route", "from": { "uri": "direct:facadeRoute" }, "steps": [] }
+                ],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "finite", "nextRecovery": "exact-replay", "edits": "ordered",
+                      "steps": [ { "to": { "uri": "http:big" } } ] }
+                ]
+            }"#,
+        );
+        let project = bound_project(&source_only, "facade-route");
+        let findings = check_job_boundaries(&source_only, &project);
+        assert!(
+            !has_job_code(&findings, JobCode::EndpointResponseBound),
+            "a source-route-only endpoint carries the platform cap: {findings:?}"
+        );
     }
 }

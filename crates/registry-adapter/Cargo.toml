@@ -22,6 +22,16 @@ path = "src/main.rs"
 # that drive it (tests/egress_tls_wiring.rs), the way registry-breg gates
 # its equivalent loopback TLS lane.
 postgres-test = ["registry-platform-httputil/test-support"]
+# The governed-ingestion job sources (CONCEPT.md sections 17.1 and 17.2),
+# each off by default: `cargo build -p registry-adapter` compiles neither.
+# Cargo unifies features across one build, so a build that includes
+# registry-adapterctl (which turns both on), a workspace build among them,
+# compiles both into the facade binary too. `job-file` gates the file source runtime, the pollEnrich read,
+# and the CSV and JSONL decoders; `job-postgres` gates the read-only
+# postgres send component. A job whose source needs an ungated component
+# refuses at compile under adapter.job.component-unavailable.
+job-file = ["dep:csv", "dep:rustix"]
+job-postgres = ["dep:pg_query"]
 
 [dependencies]
 # The continuation cursor codec (CONCEPT.md section 8.11.2): XChaCha20-Poly1305
@@ -34,6 +44,11 @@ registry-platform-canonical-json.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
 deadpool-postgres.workspace = true
+# The file source's CSV decoder (feature job-file) and the postgres
+# source's query parser (feature job-postgres): optional, so the default
+# build links neither.
+csv = { workspace = true, optional = true }
+pg_query = { workspace = true, optional = true }
 http.workspace = true
 jsonpath-rust.workspace = true
 # Steering pin, unused in code: holds jsonpath-rust's pest at 2.8.5; see
@@ -53,6 +68,7 @@ registry-platform-ratelimit.workspace = true
 registry-platform-resilience.workspace = true
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
+rustix = { workspace = true, optional = true }
 axum.workspace = true
 clap.workspace = true
 jsonwebtoken.workspace = true
@@ -65,6 +81,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The live postgres-source tests iterate the driver's row stream over
+# the seam, test-only, never a runtime dependency.
+futures.workspace = true
 jsonschema.workspace = true
 proptest.workspace = true
 # The loopback TLS doubles of tests/egress_tls_wiring.rs: a locally

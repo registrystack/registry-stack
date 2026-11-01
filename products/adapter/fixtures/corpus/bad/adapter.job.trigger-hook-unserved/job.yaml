@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
+# exactly adapter.job.trigger-hook-unserved. The job declares a hook trigger, the contract-only seam no engine serves yet.
+#
+# The job definition is refused by the job compiler's check_job over the
+# pinned pack beside this file (the workspace itself stays clean):
+#   job check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/job.yaml
+#     --pack products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/pack.yaml
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobo-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: sha256:6f7f60b98182428b3144c371ca1b28041f6243cd4177de825702b8b938110505
+  route: kobo-submissions
+projection:
+  fields:
+    - submission.id
+    - submission.status
+triggers:
+  - kind: hook
+    path: submissions
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 16777216
+  maximumPageItems: 500
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 4
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 500

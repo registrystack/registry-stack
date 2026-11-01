@@ -12,7 +12,7 @@
 //! capability and refuses, with the uncatchable `egress.refused`, every
 //! link that leaves the configured origin or base path.
 
-use registry_adapter::component::http::uri::{LinkRefusal, OriginError, PinnedOrigin};
+use registry_adapter::engine::component::http::uri::{LinkRefusal, OriginError, PinnedOrigin};
 use registry_adapter_core::ErrorClass;
 use registry_platform_httputil::destination::{
     DataDestinationRequestTemplate, DestinationAuthorizationTemplate,

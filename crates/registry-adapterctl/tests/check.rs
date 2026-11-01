@@ -669,10 +669,10 @@ fn check_refuses_a_missing_explicit_fixture_path() {
     );
 }
 
-/// `schemas` writes the closed set of six generated files into any
+/// `schemas` writes the closed set of eight generated files into any
 /// directory it is given.
 #[test]
-fn schemas_writes_six_files_into_the_given_directory() {
+fn schemas_writes_eight_files_into_the_given_directory() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("schemas").to_str().unwrap().to_owned();
     let (exit, report, stderr) = run_json(&["schemas", "--output-dir", &output]);
@@ -680,6 +680,8 @@ fn schemas_writes_six_files_into_the_given_directory() {
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     assert_eq!(report["command"], "schemas");
     let expected = BTreeSet::from([
+        "job.v1alpha1.schema.json".to_owned(),
+        "job-runtime.v1alpha1.schema.json".to_owned(),
         "effective-contract.v1alpha1.schema.json".to_owned(),
         "fixture.v1alpha1.schema.json".to_owned(),
         "pack.v1alpha1.schema.json".to_owned(),

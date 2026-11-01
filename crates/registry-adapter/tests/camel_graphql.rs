@@ -10,16 +10,16 @@
 
 use std::collections::BTreeMap;
 
-use registry_adapter::component::graphql::{GraphQlLoadError, GraphQlQuery};
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::component::graphql::{GraphQlLoadError, GraphQlQuery};
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     check_servable, run_route, EndpointRuntime, RouteContext, RouteFailure, RouteOutcome,
     RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterPack, AdapterRuntimeConfig, ComponentKind, Endpoint, EndpointAuthentication,
+    AdapterEndpointBindings, AdapterPack, ComponentKind, Endpoint, EndpointAuthentication,
     EndpointBinding, EndpointOperation, Expression, GraphQlOperationKind, RuntimeCredential, Step,
 };
 use registry_platform_config::{sha256_uri, SecretProvider, SecretResolver};
@@ -29,7 +29,7 @@ use registry_platform_yaml::{
 use serde_json::{json, Value};
 
 /// The empty code-map table: no test lane here converts.
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     std::sync::Arc::new(std::collections::BTreeMap::new())
 }
 
@@ -63,7 +63,7 @@ fn graphql_endpoints(
         maximum_response_bytes: None,
     };
     let endpoint = declared_endpoint();
-    let config = AdapterRuntimeConfig {
+    let config = AdapterEndpointBindings {
         id: LocalId::new("graphql").expect("deployment id"),
         endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(vec![registry_adapter_core::Cidr::new(
@@ -72,28 +72,6 @@ fn graphql_endpoints(
         .expect("cidrs")])
         .expect("cidrs"),
         outbound_tls: None,
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/GRAPHQL_DB",
-                "migrationUrlRef": "secret:env/GRAPHQL_DB"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "graphql" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("graphql-client").expect("client")])
-            .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("the binding");
     let mut runtime = EndpointRuntime::compile(binding, &endpoint, &config, resolver)
@@ -187,6 +165,7 @@ impl Lane {
             routes: &self.routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: 12,
+            job: registry_adapter::engine::job_sources::JobPageState::default(),
         };
         run_route(&context, &self.steps, Exchange::new("graphql".to_owned())).await
     }
@@ -212,7 +191,7 @@ fn failed_class(outcome: &RouteOutcome) -> &'static str {
     failed(outcome).class.class()
 }
 
-fn ok(outcome: &RouteOutcome) -> &registry_adapter::exchange::Exchange {
+fn ok(outcome: &RouteOutcome) -> &registry_adapter::engine::exchange::Exchange {
     outcome.result.as_ref().expect("the exchange completes")
 }
 
@@ -454,6 +433,7 @@ fn pack_pinning(directory: &std::path::Path, text: &str, path: &str) -> AdapterP
         endpoints: UniqueIdList::new(Vec::new()).expect("empty"),
         route_templates: UniqueIdList::new(Vec::new()).expect("empty"),
         routes: UniqueIdList::new(Vec::new()).expect("empty"),
+        source_routes: UniqueIdList::new(Vec::new()).expect("empty"),
         code_maps: UniqueIdList::new(Vec::new()).expect("empty"),
         scripts: UniqueList::new(Vec::new()).expect("empty"),
         query_files: UniqueList::new(vec![registry_adapter_core::ScriptReference {

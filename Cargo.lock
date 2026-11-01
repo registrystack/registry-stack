@@ -5072,7 +5072,9 @@ dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
  "clap",
+ "csv",
  "deadpool-postgres",
+ "futures",
  "getrandom 0.4.3",
  "hmac",
  "http",
@@ -5080,6 +5082,7 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "pest",
+ "pg_query",
  "proptest",
  "rcgen",
  "registry-adapter-core",
@@ -5095,6 +5098,7 @@ dependencies = [
  "registry-platform-testing",
  "registry-platform-yaml",
  "rhai",
+ "rustix 1.1.5",
  "rustls",
  "serde",
  "serde_json",
@@ -5113,6 +5117,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-adapter-connectors"
+version = "0.45.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "registry-adapter-core",
+ "registry-breg-client",
+ "registry-platform-crypto",
+ "registry-platform-testing",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "registry-adapter-core"
 version = "0.45.0"
 dependencies = [
@@ -5123,6 +5151,30 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "registry-adapter-job"
+version = "0.45.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "clap",
+ "deadpool-postgres",
+ "registry-adapter",
+ "registry-adapter-core",
+ "registry-platform-config",
+ "registry-platform-yaml",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing",
 ]
 
 [[package]]
@@ -5653,6 +5705,7 @@ version = "0.45.0"
 dependencies = [
  "clap",
  "registry-adapter",
+ "registry-adapter-job",
  "registry-adapterctl",
  "registry-breg",
  "registry-breg-mcp",
