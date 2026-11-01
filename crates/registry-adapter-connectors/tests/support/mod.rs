@@ -266,12 +266,32 @@ impl Mock {
         tombstone: bool,
         responses: Vec<MockResponse>,
     ) -> Self {
+        Self::start_serving(
+            metadata(action_mode, tombstone),
+            action_mode,
+            tombstone,
+            responses,
+        )
+        .await
+    }
+
+    /// Start an immediate-mode deployment whose metadata names another
+    /// registry revision, so every binding it resolves differs in identity.
+    pub async fn start_at_revision(revision: &str) -> Self {
+        let mut served = metadata("immediate", false);
+        served["revision"] = json!(revision);
+        Self::start_serving(served, "immediate", false, Vec::new()).await
+    }
+
+    async fn start_serving(
+        served: Value,
+        action_mode: &str,
+        tombstone: bool,
+        responses: Vec<MockResponse>,
+    ) -> Self {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let mut queue = VecDeque::from(responses);
-        queue.push_front(MockResponse::json(
-            StatusCode::OK,
-            metadata(action_mode, tombstone),
-        ));
+        queue.push_front(MockResponse::json(StatusCode::OK, served));
         let responses = Arc::new(Mutex::new(queue));
         let state = MockState {
             requests: requests.clone(),

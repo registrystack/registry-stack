@@ -7,7 +7,8 @@
 //! `prepare` with [`ConnectorFault::InvalidInput`]; the runner chunks.
 //!
 //! The prepared form is this module's sealed envelope: the exact item
-//! list and optional change context, and the key. The closed input shape
+//! list and optional change context, the key, and the identity of the
+//! batch binding it was prepared under. The closed input shape
 //! (`breg.batch.records/v1`):
 //!
 //! ```json
@@ -19,7 +20,9 @@
 //! ```
 //!
 //! `send` and `recover` rebuild the identical request and send it under
-//! the same key. Observation reads the receipt's snapshot reference back
+//! the same key, against the binding the attempt was prepared under: a
+//! deployment whose batch binding now differs in identity answers
+//! [`ConnectorFault::BindingChanged`] and nothing is sent. Observation reads the receipt's snapshot reference back
 //! through the destination's own snapshot read.
 
 use std::sync::{Arc, LazyLock};
@@ -29,8 +32,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use registry_breg_client::{
-    BRegBatchBuilder, BRegBatchRequest, BRegChangeContext, BRegCreateRequest, BRegEtag,
-    BRegIdempotencyKey, BRegSnapshotListRequest,
+    BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest, BRegChangeContext, BRegCreateRequest,
+    BRegEtag, BRegIdempotencyKey, BRegSnapshotListRequest,
 };
 
 use crate::operation::{
@@ -91,11 +94,41 @@ struct ChangeContextShape {
     source_reference: Option<String>,
 }
 
+/// The identity of the batch binding an attempt was prepared under: the
+/// members that place its items in one collection of one registry
+/// revision under one access profile.
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BindingIdentity {
+    registry: String,
+    dataset: String,
+    revision: String,
+    operation: String,
+    profile: String,
+    entity: String,
+    path: String,
+}
+
+impl BindingIdentity {
+    fn of(binding: &BRegBatchBinding) -> Self {
+        Self {
+            registry: binding.registry_identifier().to_owned(),
+            dataset: binding.dataset_identifier().to_owned(),
+            revision: binding.registry_revision().to_owned(),
+            operation: binding.operation_identifier().to_owned(),
+            profile: binding.access_profile().to_owned(),
+            entity: binding.record_type_identifier().to_owned(),
+            path: binding.path(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct BatchEnvelope {
     version: u8,
     operation: String,
     key: String,
+    binding: BindingIdentity,
     items: Vec<BatchItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     change_context: Option<ChangeContextShape>,
@@ -247,8 +280,8 @@ impl Operation for BatchRecords {
     }
 
     fn prepare(&self, input: &Value, key: CommandKey) -> Result<PreparedBatch, ConnectorFault> {
-        // Touch the binding so an absent batch grant answers at prepare.
-        self.connector.batch_binding()?;
+        // Read the binding so an absent batch grant answers at prepare.
+        let binding = BindingIdentity::of(self.connector.batch_binding()?);
         let items: Vec<BatchItem> = serde_json::from_value(
             input
                 .get("items")
@@ -269,6 +302,7 @@ impl Operation for BatchRecords {
             version: 1,
             operation: OPERATION.to_owned(),
             key: key.as_str().to_owned(),
+            binding,
             items,
             change_context,
         };
@@ -290,6 +324,9 @@ impl Operation for BatchRecords {
             serde_json::from_slice(&prepared.envelope).map_err(|_| ConnectorFault::NotPrepared)?;
         if envelope.version != 1 || envelope.operation != OPERATION {
             return Err(ConnectorFault::NotPrepared);
+        }
+        if envelope.binding != BindingIdentity::of(self.connector.batch_binding()?) {
+            return Err(ConnectorFault::BindingChanged);
         }
         let request = self.build_request(&envelope)?;
         let key =
