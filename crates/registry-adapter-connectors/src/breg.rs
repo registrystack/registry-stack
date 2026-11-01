@@ -568,6 +568,45 @@ pub(crate) fn refused_state(state: &str) -> SendOutcome {
     }
 }
 
+/// Recovery's reading of a keyed exchange's answer.
+///
+/// Recovery repeats an attempt whose first answer was lost, so a
+/// receipt-horizon answer no longer proves the attempt never ran. The
+/// destination answers `idempotency.expired` to an exact retry whose
+/// first attempt committed before the receipt horizon passed, and
+/// `idempotency.key-reused` to a retry whose held response a retention
+/// erase removed, whose first attempt committed under another package
+/// activation, access profile, or claims, or (for a guarded Action) whose
+/// body was rebuilt after the first attempt moved its target. Either
+/// answer is [`OutcomeCategory::Uncertain`] on recovery, settled by reading
+/// the destination and never by a resend under another key. A first send
+/// keeps the refusal: its key carried no earlier attempt, so the answer
+/// is a genuine collision.
+pub(crate) fn recovered(
+    answer: Result<SendOutcome, ConnectorFault>,
+) -> Result<SendOutcome, ConnectorFault> {
+    let outcome = answer?;
+    if outcome.category != OutcomeCategory::Refused {
+        return Ok(outcome);
+    }
+    let note = match outcome.native_problem.as_deref() {
+        Some(problems::IDEMPOTENCY_EXPIRED) => {
+            "the destination answered that the first attempt committed before its receipt \
+             horizon; settle by reading the destination"
+        }
+        Some(problems::IDEMPOTENCY_KEY_REUSED) => {
+            "the key is spent and the first attempt may have committed; settle by reading the \
+             destination"
+        }
+        _ => return Ok(outcome),
+    };
+    Ok(SendOutcome {
+        category: OutcomeCategory::Uncertain,
+        note: Some(note),
+        ..outcome
+    })
+}
+
 /// The problem code words the connector surfaces verbatim.
 pub mod problems {
     /// The key is bound to another request (409).

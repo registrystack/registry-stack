@@ -283,6 +283,36 @@ impl Mock {
         Self::start_serving(served, "immediate", false, Vec::new()).await
     }
 
+    /// Start a deployment whose action is guarded: it takes a `targetId`
+    /// reference input and requires that target's condition, so every send
+    /// and recovery reads the conditions before its one keyed exchange.
+    pub async fn start_guarded(action_mode: &str) -> Self {
+        let mut served = metadata(action_mode, false);
+        let action = &mut served["actions"][0];
+        action["conditionRoute"] = json!(format!(
+            "{}/target-conditions",
+            action["route"].as_str().unwrap()
+        ));
+        action["inputs"].as_array_mut().unwrap().push(json!({
+            "id": "target", "apiName": "targetId", "required": true,
+            "nullable": false, "classification": "internal",
+            "schema": {"type": "string", "format": "uuid"},
+            "fieldType": {"type": "reference", "target": "company", "onDelete": "restrict"}}));
+        action["referenceInputs"] =
+            json!([{"input": "target", "apiName": "targetId", "targetRecordType": "company"}]);
+        action["requiredConditionKeys"] = json!(["targetId"]);
+        let id = action["id"].as_str().unwrap().to_owned();
+        action["routes"]["targetConditions"] = json!({
+            "method": "POST",
+            "path": format!("/v1/actions/{id}/target-conditions"),
+            "operationId": format!("actions.{id}.target-conditions"),
+            "requiresIdempotencyKey": false,
+            "inputSchema": format!("action-{id}-target-conditions-input"),
+            "responseSchema": format!("action-{id}-target-conditions-response")
+        });
+        Self::start_serving(served, action_mode, false, Vec::new()).await
+    }
+
     async fn start_serving(
         served: Value,
         action_mode: &str,
@@ -697,6 +727,15 @@ pub fn proposal(state: &str, revision: u64) -> Value {
 }
 
 /// The immediate Action receipt for the fixture's one result effect.
+/// The target-conditions answer for a guarded action: one opaque
+/// condition for its `targetId`.
+pub fn target_conditions(condition: &str) -> MockResponse {
+    mutation_json(
+        StatusCode::OK,
+        json!({"preconditions": {"targetId": {"ifMatch": format!("\"{condition}\"")}}}),
+    )
+}
+
 pub fn action_receipt() -> Value {
     json!({
         "action": IMMEDIATE_ACTION,

@@ -472,3 +472,101 @@ async fn observation_reads_the_record_revision_back() {
         .iter()
         .any(|(name, value)| name == "revision" && value == "3"));
 }
+
+/// Recovery that meets a spent key: the destination proves only that the
+/// key was used, not whether the first attempt committed.
+fn spent_key_on_recovery(mock: &Mock) {
+    mock.push(problem(BRegProblemCode::IdempotencyConflict));
+}
+
+fn assert_uncertain(outcome: &registry_adapter_connectors::operation::SendOutcome) {
+    assert_eq!(outcome.category, OutcomeCategory::Uncertain, "{outcome:?}");
+    assert_eq!(
+        outcome.native_problem.as_deref(),
+        Some(problems::IDEMPOTENCY_KEY_REUSED)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_recovery_under_a_spent_key_is_uncertain() {
+    let mock = Mock::start("immediate", false).await;
+    let prepared = mock
+        .connector
+        .record_create()
+        .prepare(
+            &json!({"data": {"legalName": "Created Ltd"}}),
+            key("create"),
+        )
+        .expect("prepares");
+    spent_key_on_recovery(&mock);
+    let recovered = mock
+        .connector
+        .record_create()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_uncertain(&recovered);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn patch_recovery_under_a_spent_key_is_uncertain() {
+    let mock = Mock::start("immediate", false).await;
+    let prepared = mock
+        .connector
+        .record_patch()
+        .prepare(
+            &json!({
+                "record": RECORD_ID,
+                "etag": SERVER_ETAG,
+                "operations": [{"op": "remove", "field": "legalName"}]
+            }),
+            key("patch"),
+        )
+        .expect("prepares");
+    spent_key_on_recovery(&mock);
+    let recovered = mock
+        .connector
+        .record_patch()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_uncertain(&recovered);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tombstone_recovery_under_a_spent_key_is_uncertain() {
+    let mock = Mock::start("immediate", true).await;
+    let prepared = mock
+        .connector
+        .record_tombstone()
+        .prepare(
+            &json!({"record": RECORD_ID, "etag": SERVER_ETAG}),
+            key("tombstone"),
+        )
+        .expect("prepares");
+    spent_key_on_recovery(&mock);
+    let recovered = mock
+        .connector
+        .record_tombstone()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_uncertain(&recovered);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_first_send_under_a_spent_key_stays_refused() {
+    let mock = Mock::start("immediate", false).await;
+    let prepared = mock
+        .connector
+        .record_create()
+        .prepare(
+            &json!({"data": {"legalName": "Created Ltd"}}),
+            key("create"),
+        )
+        .expect("prepares");
+    spent_key_on_recovery(&mock);
+    let sent = mock
+        .connector
+        .record_create()
+        .send(&prepared)
+        .expect("send answers");
+    assert_eq!(sent.category, OutcomeCategory::Refused, "{sent:?}");
+}

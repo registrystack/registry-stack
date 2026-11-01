@@ -679,3 +679,24 @@ async fn ingestion_refusal_surfaces_the_product_word() {
         Some("ingestion.run_not_open")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_recovery_under_a_spent_key_is_uncertain() {
+    let mock = Mock::start("immediate", false).await;
+    let prepared = mock
+        .connector
+        .batch_records()
+        .prepare(&batch_input(), key("batch"))
+        .expect("prepares");
+    mock.push(problem(BRegProblemCode::IdempotencyConflict));
+    let recovered = mock
+        .connector
+        .batch_records()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_eq!(
+        recovered.category,
+        OutcomeCategory::Uncertain,
+        "{recovered:?}"
+    );
+}

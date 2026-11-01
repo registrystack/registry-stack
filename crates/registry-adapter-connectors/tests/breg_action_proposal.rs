@@ -466,3 +466,160 @@ async fn proposal_status_read_and_observation_agree() {
         .iter()
         .any(|(name, value)| name == "submissionVersion" && value == "1"));
 }
+
+/// A spent key answered on recovery of a guarded attempt. The body was
+/// rebuilt from a fresh conditions read, so the destination's
+/// `idempotency.key-reused` cannot tell the first attempt's own committed
+/// effect (which moved the target) from another writer's change: the
+/// outcome is uncertain, never a refusal.
+fn guarded_recovery_meets_a_spent_key(mock: &Mock) {
+    mock.push(support::target_conditions("after-the-first-attempt"));
+    mock.push(problem(BRegProblemCode::IdempotencyConflict));
+}
+
+fn guarded_input() -> Value {
+    json!({"input": {"targetId": RECORD_ID, "legalName": "Guarded Ltd"}})
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guarded_action_recovery_under_a_spent_key_is_uncertain() {
+    let mock = Mock::start_guarded("immediate").await;
+    let prepared = mock
+        .connector
+        .action_invoke()
+        .prepare(&guarded_input(), key("invoke"))
+        .expect("prepares");
+    guarded_recovery_meets_a_spent_key(&mock);
+    let recovered = mock
+        .connector
+        .action_invoke()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_eq!(
+        recovered.category,
+        OutcomeCategory::Uncertain,
+        "{recovered:?}"
+    );
+    assert_eq!(
+        recovered.native_problem.as_deref(),
+        Some("idempotency.key-reused")
+    );
+    // The conditions read went first and unkeyed; the one keyed exchange
+    // carried the prepared key.
+    let exchanges = mock.exchanges();
+    assert_eq!(exchanges.len(), 2);
+    assert_eq!(exchanges[0].idempotency_key, None);
+    assert_eq!(
+        exchanges[1].idempotency_key.as_deref(),
+        Some("adapter-unit/company/invoke")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guarded_action_first_send_under_a_spent_key_stays_refused() {
+    let mock = Mock::start_guarded("immediate").await;
+    let prepared = mock
+        .connector
+        .action_invoke()
+        .prepare(&guarded_input(), key("invoke"))
+        .expect("prepares");
+    guarded_recovery_meets_a_spent_key(&mock);
+    let sent = mock
+        .connector
+        .action_invoke()
+        .send(&prepared)
+        .expect("send answers");
+    assert_eq!(sent.category, OutcomeCategory::Refused, "{sent:?}");
+    assert_eq!(
+        sent.native_problem.as_deref(),
+        Some("idempotency.key-reused")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unguarded_action_recovery_under_a_spent_key_is_uncertain() {
+    // An unguarded recovery resends the saved bytes exactly, yet the
+    // destination also answers a byte-identical body with a spent key
+    // when the first attempt committed under another package activation,
+    // access profile or claims: the first attempt may have committed.
+    let mock = Mock::start("immediate", false).await;
+    let prepared = mock
+        .connector
+        .action_invoke()
+        .prepare(
+            &json!({"input": {"legalName": "Action Ltd"}}),
+            key("invoke"),
+        )
+        .expect("prepares");
+    mock.push(problem(BRegProblemCode::IdempotencyConflict));
+    let recovered = mock
+        .connector
+        .action_invoke()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_eq!(
+        recovered.category,
+        OutcomeCategory::Uncertain,
+        "{recovered:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proposal_start_recovery_under_a_spent_key_is_uncertain() {
+    let mock = Mock::start("proposal", false).await;
+    let prepared = mock
+        .connector
+        .proposal_start()
+        .prepare(
+            &json!({"input": {"legalName": "Proposed Ltd"}}),
+            key("start"),
+        )
+        .expect("prepares");
+    mock.push(problem(BRegProblemCode::IdempotencyConflict));
+    let recovered = mock
+        .connector
+        .proposal_start()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_eq!(
+        recovered.category,
+        OutcomeCategory::Uncertain,
+        "{recovered:?}"
+    );
+    assert_eq!(
+        recovered.native_problem.as_deref(),
+        Some("idempotency.key-reused")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proposal_submit_recovery_past_the_receipt_horizon_is_uncertain() {
+    // The read shows the transition does not hold yet, and the keyed
+    // exchange answers that the key's receipt expired: whether the first
+    // attempt committed is not proven either way.
+    let mock = Mock::start("proposal", false).await;
+    mock.push(support::mutation_json(StatusCode::OK, proposal("draft", 2)));
+    mock.push(problem(BRegProblemCode::IdempotencyExpired));
+    let prepared = mock
+        .connector
+        .proposal_submit()
+        .prepare(
+            &json!({"proposal": PROPOSAL_ID, "submissionVersion": 1, "body": {}}),
+            key("submit"),
+        )
+        .expect("prepares");
+    let recovered = mock
+        .connector
+        .proposal_submit()
+        .recover(&prepared)
+        .expect("recovery answers");
+    assert_eq!(
+        recovered.category,
+        OutcomeCategory::Uncertain,
+        "{recovered:?}"
+    );
+    assert_eq!(
+        recovered.native_problem.as_deref(),
+        Some("idempotency.expired")
+    );
+}

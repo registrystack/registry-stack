@@ -225,14 +225,15 @@ async fn immediate_action_invokes_once_and_recovery_proves_no_duplicate() {
 
     // Recovery under the same key: the action's target conditions moved
     // with the first application, so the same-key replay arrives with a
-    // different body and the destination answers the typed conflict. That
-    // refusal is the receipt-horizon discipline working: no second
-    // application, no silent duplicate.
+    // different body and the destination answers the typed conflict. No
+    // second application and no silent duplicate; the answer cannot tell
+    // this attempt's own effect from another writer's, so the outcome is
+    // uncertain and settles by reading the target.
     let second = connector
         .action_invoke()
         .recover(&prepared)
         .expect("recovery answers");
-    assert_eq!(second.category, OutcomeCategory::Refused, "{second:?}");
+    assert_eq!(second.category, OutcomeCategory::Uncertain, "{second:?}");
     assert_eq!(
         second.native_problem.as_deref(),
         Some("idempotency.key-reused")
