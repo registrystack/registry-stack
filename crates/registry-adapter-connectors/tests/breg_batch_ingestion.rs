@@ -11,6 +11,7 @@ mod support;
 use axum::http::StatusCode;
 use registry_adapter_connectors::operation::{
     CommandKey, ConnectorFault, Observable, Operation, OutcomeCategory, PreparedAttempt,
+    SendOutcome,
 };
 use registry_breg_client::BRegProblemCode;
 use serde_json::{json, Value};
@@ -291,6 +292,139 @@ async fn ingestion_create_run_recovery_reads_before_it_announces_again() {
             "/tenant/prefix/v1/records/companies/ingestion-runs?accessProfile={PROFILE}&status=open&inputDigest={INPUT_DIGEST}"
         )
     );
+}
+
+/// Announce a run whose answer is lost, and return the stored prepared
+/// form for recovery.
+async fn lost_announcement(mock: &Mock) -> Vec<u8> {
+    mock.push(support::mutation_json(StatusCode::CREATED, json!({})).hanging());
+    let stored = {
+        let prepared = mock
+            .connector
+            .ingestion_create_run()
+            .prepare(
+                &json!({
+                    "profile": PROFILE, "operation": "create",
+                    "packageRevision": PACKAGE_REVISION,
+                    "schemaFingerprint": SCHEMA_FINGERPRINT,
+                    "inputDigest": INPUT_DIGEST, "inputLength": 64,
+                    "itemCount": 2, "chunkCount": 1
+                }),
+                key("create-run"),
+            )
+            .expect("prepares");
+        prepared.as_bytes().to_vec()
+    };
+    let uncertain = {
+        let prepared =
+            registry_adapter_connectors::breg::ingestion::PreparedCreateRun::from_bytes(&stored)
+                .expect("restores");
+        mock.connector.ingestion_create_run().send(&prepared)
+    }
+    .expect("uncertainty is an outcome");
+    assert_eq!(uncertain.category, OutcomeCategory::Uncertain);
+    stored
+}
+
+fn recover_run(mock: &Mock, stored: &[u8]) -> SendOutcome {
+    let prepared =
+        registry_adapter_connectors::breg::ingestion::PreparedCreateRun::from_bytes(stored)
+            .expect("restores");
+    mock.connector
+        .ingestion_create_run()
+        .recover(&prepared)
+        .expect("recovery answers")
+}
+
+/// An open run under the same input digest whose announcement differs
+/// (here: two chunks instead of one), under its own run id.
+fn other_announcement(run_id: &str) -> Value {
+    let mut run = ingestion_run("open", 0, 0, &support::empty_prefix_digest());
+    run["runId"] = json!(run_id);
+    run["chunkCount"] = json!(2);
+    run
+}
+
+const OTHER_RUN_ID: &str = "0b9e9a0e-7c55-4a8f-9d8e-2f2a3c4b5d6e";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_recovery_settles_only_on_the_matching_announcement() {
+    let mock = Mock::start("immediate", false).await;
+    let stored = lost_announcement(&mock).await;
+    // The caller holds an older open run under the same digest announced
+    // with a different chunk count; recovery skips it.
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        json!({
+            "runs": [
+                other_announcement(OTHER_RUN_ID),
+                ingestion_run("open", 0, 0, &support::empty_prefix_digest())
+            ],
+            "hasMore": false,
+            "nextCursor": null
+        }),
+    ));
+    let recovered = recover_run(&mock, &stored);
+    assert_eq!(recovered.category, OutcomeCategory::Accepted);
+    assert_eq!(
+        recovered.correlation.as_deref(),
+        Some(format!("{RUN_ID}/{PROFILE}").as_str())
+    );
+    assert_eq!(mock.exchanges().len(), 2, "no new announcement");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_recovery_announces_again_when_no_listed_run_matches() {
+    let mock = Mock::start("immediate", false).await;
+    let stored = lost_announcement(&mock).await;
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        json!({
+            "runs": [other_announcement(OTHER_RUN_ID)],
+            "hasMore": false,
+            "nextCursor": null
+        }),
+    ));
+    mock.push(support::mutation_json(
+        StatusCode::CREATED,
+        json!({"run": ingestion_run("open", 0, 0, &support::empty_prefix_digest())}),
+    ));
+    let recovered = recover_run(&mock, &stored);
+    assert_eq!(recovered.category, OutcomeCategory::Accepted);
+    assert_eq!(
+        recovered.correlation.as_deref(),
+        Some(format!("{RUN_ID}/{PROFILE}").as_str())
+    );
+    let requests = mock.exchanges();
+    assert_eq!(
+        requests.len(),
+        3,
+        "the lost announcement, the listing, the announcement"
+    );
+    assert_eq!(
+        requests[2].uri,
+        "/tenant/prefix/v1/records/companies/ingestion-runs?accessProfile=writer"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingestion_create_run_recovery_is_uncertain_when_two_runs_match() {
+    let mock = Mock::start("immediate", false).await;
+    let stored = lost_announcement(&mock).await;
+    let mut twin = ingestion_run("open", 0, 0, &support::empty_prefix_digest());
+    twin["runId"] = json!(OTHER_RUN_ID);
+    mock.push(support::mutation_json(
+        StatusCode::OK,
+        json!({
+            "runs": [ingestion_run("open", 0, 0, &support::empty_prefix_digest()), twin],
+            "hasMore": false,
+            "nextCursor": null
+        }),
+    ));
+    let recovered = recover_run(&mock, &stored);
+    assert_eq!(recovered.category, OutcomeCategory::Uncertain);
+    assert!(recovered.correlation.is_none());
+    assert_eq!(mock.exchanges().len(), 2, "no new announcement");
 }
 
 #[tokio::test(flavor = "multi_thread")]

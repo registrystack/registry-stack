@@ -35,14 +35,14 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use registry_breg_client::{
-    BRegBatchOperation, BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest,
-    BRegIngestionRunStatus, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+    BRegBatchOperation, BRegIngestionChunk, BRegIngestionRun, BRegIngestionRunListQuery,
+    BRegIngestionRunRequest, BRegIngestionRunStatus, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
 };
 
 use crate::operation::{
     BodyKind, CommandKey, ConnectorFault, CredentialRequirements, IdempotencyRule, InputSchema,
-    MutationBehavior, NativeState, Observable, Operation, OperationDescriptor, PreparedAttempt,
-    Product, RecoveryRule, SendOutcome,
+    MutationBehavior, NativeState, Observable, Operation, OperationDescriptor, OutcomeCategory,
+    PreparedAttempt, Product, RecoveryRule, SendOutcome,
 };
 
 use super::{accepted, classify, completed, fault};
@@ -210,13 +210,8 @@ impl PreparedAttempt for PreparedSubmitChunk {
 fn build_run_request(
     envelope: &CreateRunEnvelope,
 ) -> Result<BRegIngestionRunRequest, ConnectorFault> {
-    let operation_kind = match envelope.operation_kind.as_str() {
-        "create" => BRegBatchOperation::Create,
-        "patch" => BRegBatchOperation::Patch,
-        _ => return Err(ConnectorFault::InvalidInput),
-    };
     BRegIngestionRunRequest::builder()
-        .operation(operation_kind)
+        .operation(operation_kind(envelope)?)
         .profile(envelope.profile.clone())
         .map_err(|_| ConnectorFault::InvalidInput)?
         .package_revision(envelope.package_revision.clone())
@@ -234,6 +229,32 @@ fn build_run_request(
         .map_err(|_| ConnectorFault::InvalidInput)?
         .build()
         .map_err(|_| ConnectorFault::InvalidInput)
+}
+
+fn operation_kind(envelope: &CreateRunEnvelope) -> Result<BRegBatchOperation, ConnectorFault> {
+    match envelope.operation_kind.as_str() {
+        "create" => Ok(BRegBatchOperation::Create),
+        "patch" => Ok(BRegBatchOperation::Patch),
+        _ => Err(ConnectorFault::InvalidInput),
+    }
+}
+
+/// Whether a listed run is the one this envelope announces: every member
+/// the announcement states, not the input digest alone.
+fn announces(
+    run: &BRegIngestionRun,
+    envelope: &CreateRunEnvelope,
+    operation: BRegBatchOperation,
+) -> bool {
+    run.operation() == operation
+        && run.profile_id() == envelope.profile
+        && run.package_revision() == envelope.package_revision
+        && run.schema_fingerprint() == envelope.schema_fingerprint
+        && run.input_digest() == envelope.input_digest
+        && run.input_length() == envelope.input_length
+        && run.item_count() == envelope.item_count
+        && run.chunk_count() == envelope.chunk_count
+        && run.chunk_algorithm_version() == BREG_INGESTION_CHUNK_ALGORITHM_VERSION
 }
 
 fn require_opened(connector: &super::BregConnector) -> Result<(), ConnectorFault> {
@@ -359,10 +380,13 @@ impl Operation for IngestionCreateRun {
 
     fn recover(&self, prepared: &PreparedCreateRun) -> Result<SendOutcome, ConnectorFault> {
         let envelope = self.unseal(prepared)?;
+        let operation = operation_kind(&envelope).map_err(|_| ConnectorFault::NotPrepared)?;
         // Read what the destination proves: the caller's open runs under
-        // the announced input digest. An existing run is the outcome; only
-        // silence announces again, under the same ledger key and no
-        // destination key.
+        // the announced input digest. Only a run whose announcement matches
+        // this envelope in every member is the outcome; a run another
+        // announcement opened over the same input is not. No match announces
+        // again, under the same ledger key and no destination key. More than
+        // one match cannot be settled from here and stays uncertain.
         let query = BRegIngestionRunListQuery::default()
             .access_profile(envelope.profile.clone())
             .map_err(|_| ConnectorFault::NotPrepared)?
@@ -374,13 +398,29 @@ impl Operation for IngestionCreateRun {
                 .client()
                 .list_ingestion_runs(self.connector.route(), &query),
         );
-        match listed {
-            Ok(page) if !page.value.runs().is_empty() => Ok(accepted(correlation(
-                &page.value.runs()[0].run_id().to_string(),
+        let page = match listed {
+            Ok(page) => page,
+            Err(error) => return classify(&error),
+        };
+        let mut matching = page
+            .value
+            .runs()
+            .iter()
+            .filter(|run| announces(run, &envelope, operation));
+        match (matching.next(), matching.next()) {
+            (Some(run), None) => Ok(accepted(correlation(
+                &run.run_id().to_string(),
                 &envelope.profile,
             ))),
-            Ok(_) => self.announce(&envelope),
-            Err(error) => classify(&error),
+            (None, _) => self.announce(&envelope),
+            (Some(_), Some(_)) => Ok(SendOutcome {
+                category: OutcomeCategory::Uncertain,
+                native_problem: None,
+                correlation: None,
+                note: Some(
+                    "more than one open ingestion run matches the announcement; settle it by reading the runs",
+                ),
+            }),
         }
     }
 }
