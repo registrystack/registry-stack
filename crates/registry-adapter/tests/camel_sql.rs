@@ -82,6 +82,25 @@ fn the_query_compile_refuses_everything_but_one_plain_select() {
     }
 }
 
+#[test]
+fn a_parameter_reference_over_the_bound_refuses_before_any_allocation() {
+    // The bound is on the reference's index, not only on the count of
+    // carried parameters, so a single huge reference refuses at once.
+    for sql in ["SELECT $17 ORDER BY 1", "SELECT $100000000 ORDER BY 1"] {
+        let fault = compile_query(sql).expect_err(sql).0;
+        assert!(
+            fault.contains("$16"),
+            "{sql} refuses for the parameter bound: {fault}"
+        );
+    }
+    let at_bound = (1..=16)
+        .map(|index| format!("${index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    compile_query(&format!("SELECT {at_bound} ORDER BY 1"))
+        .expect("references up to the bound compile");
+}
+
 /// The scripted client: the seam impersonated, no database. It records
 /// the reads it received and answers from a script.
 #[derive(Debug)]
