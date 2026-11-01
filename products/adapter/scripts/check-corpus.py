@@ -7,14 +7,16 @@ own code. The directory name is the expected code; the manifest's five
 suffixed members (products/adapter/fixtures/corpus/README.md) expect the
 longest registered code their name starts with, at a kebab or segment
 boundary (`config.unknown-key-predicate` -> `config.unknown-key`). The
-base/ control must pass with zero findings. Members are discovered from
+base/ and base-job/ controls must pass with zero findings. Members are discovered from
 the corpus directory and the code vocabulary is read from the owning
 registries (the authoring codes in the core crate's diagnostics.rs and
 the platform reader codes in registry-platform-yaml's messages.rs);
 neither is listed here. Every reachable authoring code must have a
-member. The only exception is `adapter.route.nesting-depth-exceeded`:
-the YAML reader refuses the same 128-level nesting before that semantic
-check can run.
+member, job codes included. The exceptions are listed in
+UNCORPUSABLE_CODES with their reasons: `adapter.route.nesting-depth-exceeded`
+(the YAML reader refuses the same 128-level nesting before that semantic
+check can run) and the `adapter.job.page-*` codes, which a source page
+trips only while a job runs.
 
 TRANSITIONAL: a member may additionally emit a partner code while the
 workspace derivation's cascade co-fires (X1 F4-3) last. A partner code is
@@ -44,15 +46,19 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CORPUS = REPO_ROOT / "products" / "adapter" / "fixtures" / "corpus"
 
 #: The owning registries of the codes a corpus refusal can carry: the
-#: authoring diagnostics catalog of the core crate and the platform YAML
-#: reader's code catalog.
+#: authoring diagnostics catalog of the core crate, the ingestion-job
+#: code catalog beside it (job.rs, same arm shape), and the platform
+#: YAML reader's code catalog.
 AUTHORING_REGISTRY = (
     REPO_ROOT / "crates" / "registry-adapter-core" / "src" / "diagnostics.rs"
+)
+JOB_REGISTRY = (
+    REPO_ROOT / "crates" / "registry-adapter-core" / "src" / "job.rs"
 )
 READER_REGISTRY = (
     REPO_ROOT / "crates" / "registry-platform-yaml" / "src" / "messages.rs"
 )
-REGISTRIES = (AUTHORING_REGISTRY, READER_REGISTRY)
+REGISTRIES = (AUTHORING_REGISTRY, JOB_REGISTRY, READER_REGISTRY)
 
 #: A registered code as a quoted literal: dot-separated lowercase kebab
 #: segments, at least two. The inner dots must be matched: a scan whose
@@ -67,8 +73,17 @@ AUTHORING_CODE = re.compile(
     re.MULTILINE,
 )
 
-UNCORPUSABLE_AUTHORING_CODES = {
-    "adapter.route.nesting-depth-exceeded",
+#: Registered codes that no authored corpus member can reach, each with
+#: the reason. Every other authoring and job code needs a member.
+UNCORPUSABLE_CODES = {
+    "adapter.route.nesting-depth-exceeded": (
+        "the YAML reader refuses the same 128-level nesting first"
+    ),
+    "adapter.job.page-shape": "runtime-only: a source page refused while a job runs",
+    "adapter.job.page-key": "runtime-only: a source page refused while a job runs",
+    "adapter.job.page-items-bound": "runtime-only: a source page refused while a job runs",
+    "adapter.job.page-bytes-bound": "runtime-only: a source page refused while a job runs",
+    "adapter.job.page-next-bound": "runtime-only: a source page refused while a job runs",
 }
 
 
@@ -83,18 +98,27 @@ def authoring_codes(source: str | None = None) -> set[str]:
     return set(AUTHORING_CODE.findall(source[start:end]))
 
 
+def job_codes() -> set[str]:
+    """The ingestion-job code arms, read live from job.rs.
+
+    The file holds the same arm shape as the diagnostics catalog but no
+    artifact sentinel to slice on, so the scan stops where the test
+    module starts: test-only invented codes are not registry members.
+    """
+    source = JOB_REGISTRY.read_text(encoding="utf-8")
+    return set(AUTHORING_CODE.findall(source.split("#[cfg(test)]", 1)[0]))
+
+
 def registered_codes() -> set[str]:
     """The codes the owning registries register, read live."""
-    codes = authoring_codes()
+    codes = authoring_codes() | job_codes()
     codes.update(CODE.findall(READER_REGISTRY.read_text(encoding="utf-8")))
     return codes
 
 
-def uncovered_authoring_codes(
-    codes: set[str], member_expectations: set[str]
-) -> list[str]:
-    """Reachable authoring codes without a corresponding corpus member."""
-    return sorted(codes - member_expectations - UNCORPUSABLE_AUTHORING_CODES)
+def uncovered_codes(codes: set[str], member_expectations: set[str]) -> list[str]:
+    """Authoring and job codes without a corresponding corpus member."""
+    return sorted(codes - member_expectations - UNCORPUSABLE_CODES.keys())
 
 
 def expectation(member: str, codes: set[str]) -> str | None:
@@ -133,6 +157,30 @@ def member_failures(
             "transitionally, another member's expectation"
         ]
     return []
+
+
+def member_command(bin_path: str, directory: Path) -> list[str]:
+    """Select the checker that owns the member's authored artifact."""
+    job = directory / "job.yaml"
+    if job.is_file():
+        return [
+            bin_path,
+            "--format=json",
+            "job",
+            "check",
+            str(directory / "pack.yaml"),
+            str(job),
+            "--runtime",
+            str(CORPUS / "base-job" / "job-runtime.yaml"),
+            "--profile",
+            str(directory / "profile.yaml"),
+            "--project",
+            str(directory / "project.yaml"),
+        ]
+    command = [bin_path, "--format=json", "check", str(directory / "project.yaml")]
+    if (directory / "runtime.yaml").is_file():
+        command += ["--runtime", str(directory / "runtime.yaml")]
+    return command
 
 
 def self_test() -> tuple[int, list[str]]:
@@ -211,13 +259,35 @@ def self_test() -> tuple[int, list[str]]:
         ({"adapter.route.simple"}, {"adapter.route.simple"}, []),
         ({"adapter.route.simple"}, set(), ["adapter.route.simple"]),
         ({"adapter.route.nesting-depth-exceeded"}, set(), []),
+        # Job codes are held to the same gate; only the listed runtime-only
+        # codes are exempt.
+        ({"adapter.job.route-unknown"}, set(), ["adapter.job.route-unknown"]),
+        ({"adapter.job.page-shape"}, set(), []),
     ]
     for registry, covered, want in reverse_cases:
-        if uncovered_authoring_codes(registry, covered) != want:
+        if uncovered_codes(registry, covered) != want:
             problems.append(
                 "FAIL: self-test: reverse authoring coverage decided a synthetic case incorrectly"
             )
         checked += 1
+
+    job_member = CORPUS / "bad" / "adapter.job.route-unknown"
+    if member_command("adapterctl", job_member) != [
+        "adapterctl",
+        "--format=json",
+        "job",
+        "check",
+        str(job_member / "pack.yaml"),
+        str(job_member / "job.yaml"),
+        "--runtime",
+        str(CORPUS / "base-job" / "job-runtime.yaml"),
+        "--profile",
+        str(job_member / "profile.yaml"),
+        "--project",
+        str(job_member / "project.yaml"),
+    ]:
+        problems.append("FAIL: self-test: job members must run through job check")
+    checked += 1
 
     return checked, problems
 
@@ -265,19 +335,19 @@ def main(argv: list[str]) -> int:
             return 1
         expected[member] = code
 
-    missing_members = uncovered_authoring_codes(authoring_codes(), set(expected.values()))
+    missing_members = uncovered_codes(
+        authoring_codes() | job_codes(), set(expected.values())
+    )
     if missing_members:
         for code in missing_members:
-            print(f"FAIL: {code}: registered authoring code has no corpus member")
+            print(f"FAIL: {code}: registered code has no corpus member")
         return 1
 
     bin_path = argv[1]
     failures: list[str] = []
     for member in members:
         directory = CORPUS / "bad" / member
-        command = [bin_path, "--format=json", "check", str(directory / "project.yaml")]
-        if (directory / "runtime.yaml").is_file():
-            command += ["--runtime", str(directory / "runtime.yaml")]
+        command = member_command(bin_path, directory)
         run = subprocess.run(command, capture_output=True, text=True)
         if run.returncode == 0:
             failures.append(f"FAIL: {member}: the check passed, expected refusal")
@@ -311,12 +381,34 @@ def main(argv: list[str]) -> int:
                 emitted = sorted({finding["code"] for finding in findings})
                 failures.append(f"FAIL: base: the control emitted {emitted}")
 
+    job_control = CORPUS / "base-job"
+    run = subprocess.run(
+        member_command(bin_path, job_control), capture_output=True, text=True
+    )
+    if run.returncode != 0:
+        try:
+            emitted = sorted(
+                {finding["code"] for finding in json.loads(run.stdout)["diagnostics"]}
+            )
+        except (json.JSONDecodeError, KeyError):
+            failures.append(
+                f"FAIL: base-job: the control exited {run.returncode} without a JSON report: "
+                f"{run.stderr.strip()}"
+            )
+        else:
+            failures.append(
+                f"FAIL: base-job: the control emitted {emitted}, expected pass"
+            )
+
     for line in failures:
         print(line)
     if failures:
         print(f"{len(failures)} failed")
         return 1
-    print(f"corpus holds: {len(members)} members refuse with their own code, base control clean")
+    print(
+        f"corpus holds: {len(members)} members refuse with their own code, "
+        "base controls clean"
+    )
     return 0
 
 

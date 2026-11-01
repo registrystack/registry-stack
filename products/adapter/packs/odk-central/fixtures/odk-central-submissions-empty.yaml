@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real ODK Central
+# server): empty pages: at the tail the reply carries only the
+# boundary submission, already read, so no item comes back and the
+# cursor comes back unchanged; on a first run over a form with no
+# submissions there is no position to keep, so no cursor comes back.
+# The upstream shape follows the documented Central OData page
+# (https://docs.getodk.org/central-api-odata-endpoints/: `value`,
+# `$filter` and `$orderby` on `__system/submissionDate`, `$top`;
+# `__system/updatedAt` is null until a submission is edited,
+# https://docs.getodk.org/central-api-submission-management/). Every
+# value is a made-up stand-in; the reply's own `@odata.nextLink` is
+# synthetic and unread by the route.
+# The entry shape is the provisional job replay contract: `jobRun`
+# carries the cursor the job restores, `upstream` the request the
+# route sends and the scripted reply, `expected` the item page or
+# problem class. crates/registry-adapter/tests/job_pack_replay.rs
+# replays every entry through the job compiler.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: odk-central-submissions-empty
+pack: odk-central
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://docs.getodk.org/central-api-odata-endpoints/
+intercepts:
+- type: endpoint
+  endpoint: odk-odata
+entries:
+- jobRun:
+    cursor:
+      submissionDate: '2026-08-06T08:12:00.000Z'
+      seen:
+      - uuid:00000000-0000-4000-8000-000000000132
+  upstream:
+  - request:
+      endpoint: odk-odata
+      method: GET
+      path: /
+      query: '%24filter=__system%2FsubmissionDate%20ge%202026-08-06T08%3A12%3A00.000Z&%24orderby=__system%2FsubmissionDate%20asc&%24top=100'
+    response:
+      status: 200
+      body:
+        '@odata.context': https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/$metadata#Submissions
+        value:
+        - __id: uuid:00000000-0000-4000-8000-000000000132
+          meta:
+            instanceID: uuid:00000000-0000-4000-8000-000000000132
+          respondent_name: Fixture Respondent 132
+          household:
+            household_size: 7
+            has_water: false
+          __system:
+            submissionDate: '2026-08-06T08:12:00.000Z'
+            updatedAt: null
+            submitterId: '7'
+            submitterName: fixture-enumerator
+            attachmentsPresent: 0
+            attachmentsExpected: 0
+            status: null
+            reviewState: null
+            deviceId: null
+            edits: 0
+            formVersion: '1'
+  expected:
+    type: page
+    page:
+      items: []
+      next:
+        submissionDate: '2026-08-06T08:12:00.000Z'
+        seen:
+        - uuid:00000000-0000-4000-8000-000000000132
+- jobRun:
+    cursor: null
+  upstream:
+  - request:
+      endpoint: odk-odata
+      method: GET
+      path: /
+      query: '%24orderby=__system%2FsubmissionDate%20asc&%24top=100'
+    response:
+      status: 200
+      body:
+        '@odata.context': https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/$metadata#Submissions
+        value: []
+  expected:
+    type: page
+    page:
+      items: []

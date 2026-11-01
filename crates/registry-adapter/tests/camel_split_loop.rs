@@ -7,14 +7,14 @@
 
 use std::collections::BTreeMap;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::route::{
     check_direct_targets, check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome,
     RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterPack, AdapterRuntimeConfig, ComponentKind, Endpoint, EndpointAuthentication,
+    AdapterEndpointBindings, AdapterPack, ComponentKind, Endpoint, EndpointAuthentication,
     EndpointBinding, ErrorClass, RuntimeCredential, Step,
 };
 use registry_platform_config::{sha256_uri, SecretProvider, SecretResolver};
@@ -24,7 +24,7 @@ use registry_platform_yaml::{
 use serde_json::{json, Value};
 
 /// The empty code-map table: no test lane here converts.
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     std::sync::Arc::new(std::collections::BTreeMap::new())
 }
 
@@ -38,7 +38,7 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> RouteOutcome {
     let endpoints = BTreeMap::new();
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -48,6 +48,7 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> RouteOutcome {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 8,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("test".to_owned());
     exchange.message.body = json!({"records": [{"id": "a"}, {"id": "b"}, {"id": "c"}]});
@@ -1262,7 +1263,7 @@ fn enrich_endpoints(
         operation_name: None,
         variables: None,
     };
-    let config = AdapterRuntimeConfig {
+    let config = AdapterEndpointBindings {
         id: LocalId::new("split-loop").expect("deployment id"),
         endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
         allowed_private_cidrs: UniqueList::new(vec![registry_adapter_core::Cidr::new(
@@ -1271,30 +1272,6 @@ fn enrich_endpoints(
         .expect("cidr")])
         .expect("cidrs"),
         outbound_tls: None,
-        listener: serde_json::from_str(r#"{ "bind": "127.0.0.1:8080" }"#).expect("listener"),
-        database: serde_json::from_str(
-            r#"{
-                "runtimeUrlRef": "secret:env/SPLIT_LOOP_DB",
-                "migrationUrlRef": "secret:env/SPLIT_LOOP_DB"
-            }"#,
-        )
-        .expect("database"),
-        oidc: serde_json::from_str(
-            r#"{ "issuer": "https://issuer.example.invalid", "audience": "split-loop" }"#,
-        )
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![
-            ExternalId::new("split-loop-client").expect("client")
-        ])
-        .expect("clients"),
-        audit: registry_adapter_core::AuditRetention {
-            retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
-                .expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     };
     let binding = config.endpoints.iter().next().expect("the binding");
     let runtime = EndpointRuntime::compile(binding, &endpoint, &config, resolver)
@@ -1316,7 +1293,7 @@ async fn run_enrich(
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment resolver builds");
     let endpoints = enrich_endpoints(&double.url("/"), "SPLIT_LOOP_KEY", &resolver);
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -1326,6 +1303,7 @@ async fn run_enrich(
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 8,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("enrich".to_owned());
     exchange.message.body = json!({"q": 1});
@@ -1353,7 +1331,7 @@ async fn direct_enrich_runs_the_resource_route_on_a_copy() {
         .expect("the environment resolver builds");
     let endpoints = enrich_endpoints(&double.url("/"), "SPLIT_LOOP_KEY", &resolver);
     let scripts = ScriptSet::default();
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::from([(
         "fetch-page".to_owned(),
         std::sync::Arc::new(steps(json!([
@@ -1372,6 +1350,7 @@ async fn direct_enrich_runs_the_resource_route_on_a_copy() {
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let route = steps(json!([{
         "enrich": {

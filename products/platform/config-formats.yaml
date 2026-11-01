@@ -4023,6 +4023,45 @@ formats:
     securityMembers: []
     restrictingMembers: []
 
+  - id: adapter/job
+    product: adapter
+    title: Registry Adapter ingestion job
+    files: [job.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+      kind: AdapterJob
+      checkedBy:
+        file: crates/registry-adapter-core/src/job.rs
+        symbol: ADAPTER_JOB_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+      kind: AdapterJob
+    schema:
+      path: products/adapter/schemas/job.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapter
+      file: crates/registry-adapter/src/engine/job.rs
+      function: compile_job
+      type: AdapterJob
+    check: adapterctl job check {pack}/pack.yaml {file} --runtime {runtime} --profile {project}/profile.yaml --project {project}/project.yaml
+    example: products/adapter/examples/kobotoolbox-job/job.yaml
+    conformance:
+      requiredText: /source/route
+      optionalText: none
+      integer: /profile/pageDeadlineMilliseconds
+      boolean: none
+    securityMembers:
+      - pointer: /profile/maximumResponseBytes
+        whenOmitted: refused
+    restrictingMembers: []
+
   - id: adapter/fixture
     product: adapter
     title: Registry Adapter fixture suite
@@ -4117,6 +4156,55 @@ formats:
         whenOmitted: closed
     restrictingMembers: [/allowedPrivateCidrs, /oidc/audience, /oidc/issuer]
 
+  - id: adapter/job-runtime
+    product: adapter
+    title: Registry Adapter ingestion job runtime configuration
+    files: [job-runtime.yaml, job-runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+      kind: AdapterJobRuntimeConfig
+      checkedBy:
+        file: crates/registry-adapter-core/src/job.rs
+        symbol: ADAPTER_JOB_RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+      kind: AdapterJobRuntimeConfig
+    schema:
+      path: products/adapter/schemas/job-runtime.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapter
+      file: crates/registry-adapter/src/engine/job_sources.rs
+      function: load
+      type: JobRuntimeConfig
+    check: adapterctl job check {pack}/pack.yaml {project}/job.yaml --runtime {file} --profile {project}/profile.yaml --project {project}/project.yaml
+    example: products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml
+    conformance:
+      requiredText: /id
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - pointer: /endpoints/*/baseUrl
+        whenOmitted: refused
+      - pointer: /endpoints/*/credential
+        whenOmitted: refused
+      - pointer: /endpoints/*/anonymousHttps
+        whenOmitted: closed
+      - pointer: /allowedPrivateCidrs
+        whenOmitted: closed
+      - pointer: /store/runtimeUrlRef
+        whenOmitted: refused
+      - pointer: /store/testOnlyPlaintext
+        whenOmitted: closed
+    restrictingMembers: [/allowedPrivateCidrs]
+
   - id: adapter/effective-contract
     product: adapter
     title: Registry Adapter effective operation contract
@@ -4128,7 +4216,7 @@ formats:
       apiVersion: id.registrystack.org/formats/adapter/effective-contract/v1alpha1
       kind: AdapterEffectiveContract
       checkedBy:
-        file: crates/registry-adapter/src/effective_contract.rs
+        file: crates/registry-adapter/src/engine/effective_contract.rs
         symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/adapter/effective-contract/v1alpha1
@@ -4141,7 +4229,7 @@ formats:
       driftCheck: products/adapter/scripts/check-contracts.sh
     reader: none
     emittedBy:
-      file: crates/registry-adapter/src/effective_contract.rs
+      file: crates/registry-adapter/src/engine/effective_contract.rs
       symbol: to_pretty_json
     check: none
     example: products/adapter/examples/formats/effective-contract.json

@@ -15,7 +15,7 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use registry_adapter::effective_contract::{PIN_HEADER, WELL_KNOWN_PATH};
+use registry_adapter::engine::effective_contract::{PIN_HEADER, WELL_KNOWN_PATH};
 use registry_adapter_core::{
     derive_operation_request_schema, AdapterProfile, AdapterProject, ADAPTER_PROFILE_API_VERSION,
     ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND,

@@ -9,13 +9,13 @@ mod upstream;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::route::{
     run_route_within, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    AdapterRuntimeConfig, ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication,
+    AdapterEndpointBindings, ComponentKind, CredentialPlacement, Endpoint, EndpointAuthentication,
     EndpointBinding, ErrorClass, RuntimeCredential, Step,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -61,17 +61,12 @@ fn binding(double: &UpstreamDouble, credential: Option<RuntimeCredential>) -> En
     }
 }
 
-fn config(binding: EndpointBinding) -> AdapterRuntimeConfig {
-    AdapterRuntimeConfig {
-        id: LocalId::new("oauth-route").expect("id"), endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
-        allowed_private_cidrs: UniqueList::new(Vec::new()).expect("cidrs"), outbound_tls: None,
-        listener: serde_json::from_str(r#"{"bind":"127.0.0.1:8080"}"#).expect("listener"),
-        database: serde_json::from_str(r#"{"runtimeUrlRef":"secret:env/OAUTH_ROUTE_DB","migrationUrlRef":"secret:env/OAUTH_ROUTE_DB"}"#).expect("database"),
-        oidc: serde_json::from_str(r#"{"issuer":"https://issuer.example.invalid","audience":"oauth-route"}"#).expect("oidc"),
-        allowed_clients: UniqueList::new(vec![ExternalId::new("oauth-route-client").expect("client")]).expect("clients"),
-        idempotency: None,
-        audit: registry_adapter_core::AuditRetention { retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90).expect("retention") },
-        cursor_key_ref: None, previous_cursor_key_ref: None, cursor_ttl_seconds: None,
+fn config(binding: EndpointBinding) -> AdapterEndpointBindings {
+    AdapterEndpointBindings {
+        id: LocalId::new("oauth-route").expect("id"),
+        endpoints: UniqueIdList::new(vec![binding]).expect("bindings"),
+        allowed_private_cidrs: UniqueList::new(Vec::new()).expect("cidrs"),
+        outbound_tls: None,
     }
 }
 
@@ -121,7 +116,7 @@ async fn run(
     .expect("endpoint compiles");
     let endpoints = BTreeMap::from([("source".to_owned(), runtime)]);
     let scripts = ScriptSet::default();
-    let resilience = registry_adapter::resilience::ResilienceRuntime::empty();
+    let resilience = registry_adapter::engine::resilience::ResilienceRuntime::empty();
     let routes = RouteTable::new();
     let context = RouteContext {
         endpoints: &endpoints,
@@ -131,6 +126,7 @@ async fn run(
         routes: &routes,
         code_maps: std::sync::Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 12,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let send: Step = serde_json::from_value(
         json!({"to":{"uri":"http:source","parameters":{"httpMethod":"GET","path":"/data"}}}),
@@ -369,13 +365,17 @@ async fn token_acquisition_obeys_the_route_deadline_before_any_data_send() {
         200,
         r#"{"access_token":"late","token_type":"Bearer","expires_in":600}"#,
     )]);
-    double.delay_answers(Duration::from_millis(100));
+    // The margins carry the invariant, not the absolute numbers: the
+    // token answer sits four deadlines out, so the deadline expires
+    // while the token request is in flight under the parallel matrix's
+    // own scheduling jitter, and the acquisition is still charged.
+    double.delay_answers(Duration::from_millis(1_000));
     let outcome = run(
         &double,
         EndpointAuthentication::Oauth2ClientCredentials {},
         Some(oauth(&double)),
         1,
-        Duration::from_millis(10),
+        Duration::from_millis(250),
     )
     .await;
     assert_eq!(

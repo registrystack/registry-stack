@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 registry-adapter.workspace = true
+registry-adapter-job.workspace = true
 clap.workspace = true
 registry-adapterctl.workspace = true
 registry-coordinator.workspace = true

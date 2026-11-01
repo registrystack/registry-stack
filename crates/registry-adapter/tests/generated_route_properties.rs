@@ -14,15 +14,15 @@ use std::sync::Arc;
 
 use proptest::prelude::*;
 use proptest::test_runner::{FileFailurePersistence, RngSeed, TestCaseError, TestRunner};
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     check_servable, run_route, EndpointRuntime, RouteContext, RouteOutcome, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    check_project, check_routes, AccessProfile, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, AuditRetention, Binding, Capabilities, Cidr, ComponentKind, Endpoint,
+    check_project, check_routes, AccessProfile, AdapterEndpointBindings, AdapterPack,
+    AdapterProfile, AdapterProject, Binding, Capabilities, Cidr, ComponentKind, Endpoint,
     EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef,
     Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType,
     RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace,
@@ -215,6 +215,7 @@ fn pack(case: &GeneratedRoute) -> AdapterPack {
             route("shared", case.direct_steps()),
         ])
         .expect("unique routes"),
+        source_routes: UniqueIdList::new(Vec::new()).expect("empty source routes"),
         code_maps: UniqueIdList::new(Vec::new()).expect("empty maps"),
         scripts: UniqueList::new(Vec::new()).expect("empty scripts"),
         query_files: UniqueList::new(Vec::new()).expect("empty queries"),
@@ -358,8 +359,8 @@ fn lowest_accepted_budget(profile: &AdapterProfile, pack: &AdapterPack) -> Resul
     Err("generated route has no admitted budget in the bounded probe".to_owned())
 }
 
-fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
-    AdapterRuntimeConfig {
+fn runtime_config(base_url: &str) -> AdapterEndpointBindings {
+    AdapterEndpointBindings {
         id: local("generated-runtime"),
         endpoints: UniqueIdList::new(vec![EndpointBinding {
             endpoint: external("source"),
@@ -377,26 +378,6 @@ fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
         ])
         .expect("one CIDR"),
         outbound_tls: None,
-        listener: serde_json::from_value(json!({"bind": "127.0.0.1:8080"})).expect("listener"),
-        database: serde_json::from_value(json!({
-            "runtimeUrlRef": "secret:env/GENERATED_PROPERTY_DB",
-            "migrationUrlRef": "secret:env/GENERATED_PROPERTY_DB"
-        }))
-        .expect("database"),
-        oidc: serde_json::from_value(json!({
-            "issuer": "https://issuer.example.invalid",
-            "audience": "generated-properties"
-        }))
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![external("generated-property-client")])
-            .expect("one client"),
-        audit: AuditRetention {
-            retention_days: BoundedU32::new(90).expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 
@@ -429,6 +410,7 @@ async fn run_once(case: &GeneratedRoute, accepted: u64) -> Result<(usize, Vec<u8
         routes: &routes,
         code_maps,
         maximum_upstream_calls: accepted,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let outcome = run_route(&context, &root.steps, Exchange::new("generated".to_owned())).await;
     let exchange = outcome.result.map_err(|failure| {
@@ -490,6 +472,7 @@ async fn run_pages(pages: &[Value]) -> Result<(usize, Result<Value, ErrorClass>)
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: pages.len() as u64,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let mut exchange = Exchange::new("generated-pagination".to_owned());
     exchange.message.body = json!({"records": []});
@@ -573,6 +556,7 @@ async fn run_local_route(route: &[Step]) -> RouteOutcome {
         routes: &routes,
         code_maps: Arc::new(BTreeMap::new()),
         maximum_upstream_calls: 1,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     run_route(&context, route, Exchange::new("generated-split".to_owned())).await
 }

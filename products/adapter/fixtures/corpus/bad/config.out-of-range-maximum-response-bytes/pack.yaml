@@ -1,7 +1,9 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
 #
 # Bad-corpus member config.out-of-range-maximum-response-bytes: this artifact set must be refused with
-# exactly config.out-of-range-maximum-response-bytes. The pack is the clean baseline.
+# exactly config.out-of-range-maximum-response-bytes. The endpoint exceeds the
+# 16 MiB platform format bound. The separate adapter.job.endpoint-response-bound
+# member exercises the tighter 1 MiB facade ceiling.
 #
 # Verify with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/config.out-of-range-maximum-response-bytes/project.yaml
@@ -17,7 +19,7 @@ endpoints:
     authentication:
       type: basic
     attemptTimeoutMilliseconds: 10000
-    maximumResponseBytes: 1048577
+    maximumResponseBytes: 16777217
 routeTemplates:
   - id: find-cases
     parameters:

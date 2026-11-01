@@ -1,0 +1,1404 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real KoboToolbox
+# server): continuation: cursor `{afterId: 100}`, the `query` filter
+# on `_id` past it, the remaining 30 submissions, the cursor
+# `{afterId: 130}` back, which holds the tail of the ongoing scan.
+# The upstream shape follows the documented v2 data endpoint ({count,
+# next, previous, results} over GET /api/v2/assets/<uid>/data/ with
+# format, limit, sort, and query;
+# https://support.kobotoolbox.org/api.html and the kpi API
+# documentation kpi/docs/api/v2/data/list.md). Every value is a
+# made-up stand-in; the reply's own `next` URL is synthetic and unread
+# by the route. Group and repeat answers arrive as slash-separated
+# names (`household/household_size`) and the expected item value
+# carries them nested.
+# The entry shape is the provisional job replay contract: `jobRun`
+# carries the cursor the job restores, `upstream` the request the
+# route sends and the scripted reply, `expected` the item page or
+# problem class. crates/registry-adapter/tests/job_pack_replay.rs
+# replays every entry through the job compiler.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: kobotoolbox-submissions-page-two
+pack: kobotoolbox
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://support.kobotoolbox.org/api.html
+intercepts:
+- type: endpoint
+  endpoint: kobo-api
+entries:
+- jobRun:
+    cursor:
+      afterId: 100
+  upstream:
+  - request:
+      endpoint: kobo-api
+      method: GET
+      path: /
+      query: format=json&limit=100&query=%7B%22_id%22%3A%7B%22%24gt%22%3A100%7D%7D&sort=%7B%22_id%22%3A1%7D
+    response:
+      status: 200
+      body:
+        count: 30
+        next: null
+        previous: null
+        results:
+        - _id: 101
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000065-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000065-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 101
+          household/household_size: 4
+          household/has_water: true
+          _uuid: 00000065-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T19:47:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 102
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000066-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000066-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 102
+          household/household_size: 5
+          household/has_water: false
+          _uuid: 00000066-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T19:54:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 103
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000067-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000067-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 103
+          household/household_size: 6
+          household/has_water: true
+          _uuid: 00000067-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:01:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 104
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000068-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000068-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 104
+          household/household_size: 7
+          household/has_water: true
+          _uuid: 00000068-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:08:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 105
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000069-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000069-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 105
+          household/household_size: 1
+          household/has_water: false
+          _uuid: 00000069-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:15:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 106
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000006a-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000006a-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 106
+          household/household_size: 2
+          household/has_water: true
+          _uuid: 0000006a-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:22:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 107
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000006b-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000006b-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 107
+          household/household_size: 3
+          household/has_water: true
+          _uuid: 0000006b-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:29:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 108
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000006c-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000006c-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 108
+          household/household_size: 4
+          household/has_water: false
+          _uuid: 0000006c-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:36:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 109
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000006d-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000006d-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 109
+          household/household_size: 5
+          household/has_water: true
+          _uuid: 0000006d-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:43:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 110
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000006e-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000006e-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 110
+          household/household_size: 6
+          household/has_water: true
+          household/member:
+          - household/member/member_name: Fixture Member 110-1
+            household/member/member_age: 43
+          - household/member/member_name: Fixture Member 110-2
+            household/member/member_age: 56
+          _uuid: 0000006e-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:50:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 111
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000006f-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000006f-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 111
+          household/household_size: 7
+          household/has_water: false
+          _uuid: 0000006f-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:57:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 112
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000070-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000070-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 112
+          household/household_size: 1
+          household/has_water: true
+          _uuid: 00000070-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:04:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 113
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000071-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000071-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 113
+          household/household_size: 2
+          household/has_water: true
+          _uuid: 00000071-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:11:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 114
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000072-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000072-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 114
+          household/household_size: 3
+          household/has_water: false
+          _uuid: 00000072-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:18:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 115
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000073-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000073-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 115
+          household/household_size: 4
+          household/has_water: true
+          _uuid: 00000073-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:25:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 116
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000074-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000074-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 116
+          household/household_size: 5
+          household/has_water: true
+          _uuid: 00000074-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:32:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 117
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000075-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000075-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 117
+          household/household_size: 6
+          household/has_water: false
+          _uuid: 00000075-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:39:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 118
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000076-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000076-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 118
+          household/household_size: 7
+          household/has_water: true
+          _uuid: 00000076-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:46:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 119
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000077-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000077-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 119
+          household/household_size: 1
+          household/has_water: true
+          _uuid: 00000077-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:53:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 120
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000078-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000078-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 120
+          household/household_size: 2
+          household/has_water: false
+          household/member:
+          - household/member/member_name: Fixture Member 120-1
+            household/member/member_age: 53
+          - household/member/member_name: Fixture Member 120-2
+            household/member/member_age: 66
+          _uuid: 00000078-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:00:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 121
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000079-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000079-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 121
+          household/household_size: 3
+          household/has_water: true
+          _uuid: 00000079-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:07:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 122
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000007a-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000007a-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 122
+          household/household_size: 4
+          household/has_water: true
+          _uuid: 0000007a-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:14:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 123
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000007b-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000007b-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 123
+          household/household_size: 5
+          household/has_water: false
+          _uuid: 0000007b-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:21:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 124
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000007c-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000007c-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 124
+          household/household_size: 6
+          household/has_water: true
+          _uuid: 0000007c-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:28:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 125
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000007d-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000007d-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 125
+          household/household_size: 7
+          household/has_water: true
+          _uuid: 0000007d-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:35:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 126
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000007e-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000007e-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 126
+          household/household_size: 1
+          household/has_water: false
+          _uuid: 0000007e-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:42:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 127
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:0000007f-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:0000007f-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 127
+          household/household_size: 2
+          household/has_water: true
+          _uuid: 0000007f-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:49:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 128
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000080-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000080-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 128
+          household/household_size: 3
+          household/has_water: true
+          _uuid: 00000080-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:56:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 129
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000081-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000081-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 129
+          household/household_size: 4
+          household/has_water: false
+          _uuid: 00000081-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:03:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 130
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000082-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000082-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 130
+          household/household_size: 5
+          household/has_water: true
+          household/member:
+          - household/member/member_name: Fixture Member 130-1
+            household/member/member_age: 63
+          - household/member/member_name: Fixture Member 130-2
+            household/member/member_age: 76
+          _uuid: 00000082-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:10:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+  expected:
+    type: page
+    page:
+      items:
+      - key: '101'
+        revision: 00000065-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 101
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000065-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000065-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 101
+          household:
+            household_size: 4
+            has_water: true
+          _uuid: 00000065-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T19:47:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '102'
+        revision: 00000066-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 102
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000066-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000066-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 102
+          household:
+            household_size: 5
+            has_water: false
+          _uuid: 00000066-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T19:54:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '103'
+        revision: 00000067-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 103
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000067-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000067-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 103
+          household:
+            household_size: 6
+            has_water: true
+          _uuid: 00000067-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:01:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '104'
+        revision: 00000068-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 104
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000068-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000068-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 104
+          household:
+            household_size: 7
+            has_water: true
+          _uuid: 00000068-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:08:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '105'
+        revision: 00000069-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 105
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000069-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000069-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 105
+          household:
+            household_size: 1
+            has_water: false
+          _uuid: 00000069-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:15:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '106'
+        revision: 0000006a-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 106
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000006a-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000006a-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 106
+          household:
+            household_size: 2
+            has_water: true
+          _uuid: 0000006a-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:22:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '107'
+        revision: 0000006b-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 107
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000006b-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000006b-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 107
+          household:
+            household_size: 3
+            has_water: true
+          _uuid: 0000006b-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:29:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '108'
+        revision: 0000006c-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 108
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000006c-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000006c-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 108
+          household:
+            household_size: 4
+            has_water: false
+          _uuid: 0000006c-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:36:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '109'
+        revision: 0000006d-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 109
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000006d-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000006d-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 109
+          household:
+            household_size: 5
+            has_water: true
+          _uuid: 0000006d-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:43:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '110'
+        revision: 0000006e-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 110
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000006e-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000006e-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 110
+          household:
+            household_size: 6
+            has_water: true
+            member:
+            - member_name: Fixture Member 110-1
+              member_age: 43
+            - member_name: Fixture Member 110-2
+              member_age: 56
+          _uuid: 0000006e-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:50:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '111'
+        revision: 0000006f-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 111
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000006f-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000006f-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 111
+          household:
+            household_size: 7
+            has_water: false
+          _uuid: 0000006f-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T20:57:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '112'
+        revision: 00000070-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 112
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000070-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000070-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 112
+          household:
+            household_size: 1
+            has_water: true
+          _uuid: 00000070-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:04:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '113'
+        revision: 00000071-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 113
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000071-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000071-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 113
+          household:
+            household_size: 2
+            has_water: true
+          _uuid: 00000071-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:11:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '114'
+        revision: 00000072-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 114
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000072-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000072-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 114
+          household:
+            household_size: 3
+            has_water: false
+          _uuid: 00000072-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:18:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '115'
+        revision: 00000073-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 115
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000073-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000073-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 115
+          household:
+            household_size: 4
+            has_water: true
+          _uuid: 00000073-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:25:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '116'
+        revision: 00000074-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 116
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000074-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000074-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 116
+          household:
+            household_size: 5
+            has_water: true
+          _uuid: 00000074-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:32:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '117'
+        revision: 00000075-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 117
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000075-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000075-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 117
+          household:
+            household_size: 6
+            has_water: false
+          _uuid: 00000075-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:39:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '118'
+        revision: 00000076-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 118
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000076-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000076-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 118
+          household:
+            household_size: 7
+            has_water: true
+          _uuid: 00000076-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:46:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '119'
+        revision: 00000077-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 119
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000077-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000077-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 119
+          household:
+            household_size: 1
+            has_water: true
+          _uuid: 00000077-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T21:53:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '120'
+        revision: 00000078-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 120
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000078-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000078-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 120
+          household:
+            household_size: 2
+            has_water: false
+            member:
+            - member_name: Fixture Member 120-1
+              member_age: 53
+            - member_name: Fixture Member 120-2
+              member_age: 66
+          _uuid: 00000078-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:00:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '121'
+        revision: 00000079-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 121
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000079-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000079-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 121
+          household:
+            household_size: 3
+            has_water: true
+          _uuid: 00000079-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:07:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '122'
+        revision: 0000007a-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 122
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000007a-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000007a-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 122
+          household:
+            household_size: 4
+            has_water: true
+          _uuid: 0000007a-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:14:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '123'
+        revision: 0000007b-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 123
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000007b-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000007b-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 123
+          household:
+            household_size: 5
+            has_water: false
+          _uuid: 0000007b-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:21:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '124'
+        revision: 0000007c-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 124
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000007c-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000007c-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 124
+          household:
+            household_size: 6
+            has_water: true
+          _uuid: 0000007c-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:28:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '125'
+        revision: 0000007d-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 125
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000007d-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000007d-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 125
+          household:
+            household_size: 7
+            has_water: true
+          _uuid: 0000007d-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:35:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '126'
+        revision: 0000007e-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 126
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000007e-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000007e-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 126
+          household:
+            household_size: 1
+            has_water: false
+          _uuid: 0000007e-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:42:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '127'
+        revision: 0000007f-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 127
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:0000007f-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:0000007f-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 127
+          household:
+            household_size: 2
+            has_water: true
+          _uuid: 0000007f-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:49:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '128'
+        revision: 00000080-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 128
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000080-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000080-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 128
+          household:
+            household_size: 3
+            has_water: true
+          _uuid: 00000080-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T22:56:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '129'
+        revision: 00000081-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 129
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000081-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000081-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 129
+          household:
+            household_size: 4
+            has_water: false
+          _uuid: 00000081-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:03:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '130'
+        revision: 00000082-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 130
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000082-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000082-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 130
+          household:
+            household_size: 5
+            has_water: true
+            member:
+            - member_name: Fixture Member 130-1
+              member_age: 63
+            - member_name: Fixture Member 130-2
+              member_age: 76
+          _uuid: 00000082-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:10:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      next:
+        afterId: 130

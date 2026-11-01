@@ -539,7 +539,7 @@
       "owner": "adapter",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, and effective contract JSON Schema."
+      "description": "Registry Adapter project, profile, pack, fixture, runtime configuration, ingestion job, job runtime configuration, and effective contract JSON Schema."
     },
     {
       "glob": "products/render/schemas/*.schema.json",

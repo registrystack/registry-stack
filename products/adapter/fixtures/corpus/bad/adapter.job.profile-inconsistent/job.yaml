@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.profile-inconsistent: this artifact set must be refused with
+# exactly adapter.job.profile-inconsistent. The profile's maximumPageBytes exceeds its own maximumResponseBytes.
+#
+# The job definition is refused by the job compiler's check_job over the
+# pinned pack beside this file (the workspace itself stays clean):
+#   job check products/adapter/fixtures/corpus/bad/adapter.job.profile-inconsistent/job.yaml
+#     --pack products/adapter/fixtures/corpus/bad/adapter.job.profile-inconsistent/pack.yaml
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: kobo-daily
+  version: "1"
+source:
+  pack:
+    id: case-api-pack
+    version: "1"
+    digest: sha256:52fe57414d4a71615b365129eab87dfc6cb755d091626f6da6bdc9060365f1bc
+  route: kobo-submissions
+projection:
+  fields:
+    - submission.id
+    - submission.status
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 1048576
+  maximumPageItems: 500
+  maximumPageBytes: 2097152
+  maximumUpstreamCalls: 4
+  read:
+    maximumFileBytes: 1073741824
+    maximumRowBytes: 1048576
+    maximumFieldBytes: 65536
+    maximumRowsPerPage: 500

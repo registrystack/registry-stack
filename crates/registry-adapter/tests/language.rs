@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use registry_adapter::language::{
+use registry_adapter::engine::language::{
     compile_selector, CodeMapIndex, JsonPathResult, LanguageError, MATCHED_NODE_MAXIMUM,
     SELECTOR_MAXIMUM_BYTES, SELECTOR_MAXIMUM_DEPTH,
 };

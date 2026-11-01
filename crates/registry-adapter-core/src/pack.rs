@@ -6,8 +6,9 @@
 //! project's declared model.
 
 use crate::auth::EndpointAuthentication;
+use crate::job::MAXIMUM_JOB_RESPONSE_BYTES;
 use crate::model::{ComponentKind, Eip, Language};
-use crate::route::{RouteDefinition, RouteTemplate};
+use crate::route::{RouteDefinition, RouteTemplate, Step};
 use registry_platform_yaml::{BoundedU64, Digest, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
 
@@ -19,9 +20,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Endpoint {
-    /// The endpoint identifier `http:` and `graphql:` URIs name.
+    /// The endpoint identifier `http:`, `graphql:`, `postgres:`, and the
+    /// `pollEnrich` URIs name.
     pub id: LocalId,
-    /// The producer component: `http` or `graphql`.
+    /// The producer component: `http`, `graphql`, or the read-only
+    /// `postgres` source; or the job-only `file` and `sftp` sources a
+    /// `pollEnrich` step reads (section 17.1).
     pub component: ComponentKind,
     /// The upstream authentication kind, with its non-secret parameters.
     pub authentication: EndpointAuthentication,
@@ -31,10 +35,13 @@ pub struct Endpoint {
     /// it, never raise it.
     pub attempt_timeout_milliseconds: BoundedU64<1, 10_000>,
     /// The largest response body one send to this endpoint may take in, in
-    /// bytes. Required, no default; a value above the platform ceiling is
+    /// bytes. Required, no default; a value above the platform cap is
     /// refused, never shortened. The runtime binding may lower it, never
-    /// raise it.
-    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
+    /// raise it. A facade-reachable endpoint stays within the facade
+    /// ceiling and a source-route-only endpoint may declare up to the
+    /// platform cap (D39); the checks refuse the facade-reachable excess
+    /// under `adapter.job.endpoint-response-bound`.
+    pub maximum_response_bytes: BoundedU64<1, MAXIMUM_JOB_RESPONSE_BYTES>,
     /// The response headers the engine copies onto the exchange, Camel's
     /// `HeaderFilterStrategy` as an allowlist, unique (CFG-ID-6).
     #[serde(default, skip_serializing_if = "headers_empty")]
@@ -138,6 +145,104 @@ pub struct CodeMap {
     pub entries: std::collections::BTreeMap<ExternalId, serde_json::Value>,
 }
 
+/// Whether a source route's scan ends: the closed set CONCEPT 17.2 pins
+/// for the item contract.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceScan {
+    /// The scan ends: `next` is absent at the end.
+    Finite,
+    /// The scan continues: the job re-runs the route until stopped.
+    Ongoing,
+}
+
+/// The recovery semantics of a source route's `next` cursor, the closed
+/// set CONCEPT 17.2 pins.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceRecovery {
+    /// A replayed cursor re-reads the same bytes, such as a file digest
+    /// and position.
+    ExactReplay,
+    /// Upstream pages may shift between reads; the consumer deduplicates
+    /// by key.
+    KeyDeduplicated,
+}
+
+/// The closed edit-finding declarations a source route carries in its
+/// `edits` property (`products/adapter/CONCEPT.md` section 17.2): the
+/// position only moves forward, so each source declares how
+/// an edit to an already-read item becomes visible again. The values are
+/// validated by the checks rather than the reader, so a value outside the
+/// closed set refuses under `adapter.job.source-edits-unknown` and the
+/// corpus can hold the fault like every other declared-code refusal.
+pub const SOURCE_EDIT_VALUES: &[&str] = &["ordered", "rescan"];
+
+/// The shortest rescan delay, in seconds: one minute, so a misconfigured
+/// delay cannot drive an ordinary pass from the first page against the
+/// source every few seconds.
+pub const MINIMUM_SOURCE_RESCAN_DELAY_SECONDS: u64 = 60;
+
+/// The longest rescan delay, in seconds: one day, so a rescan stays an
+/// operator-visible cadence a deployment can reason about, never a
+/// background sweep no one named.
+pub const MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS: u64 = 86_400;
+
+/// One source route of the governed-ingestion mode
+/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): a route
+/// definition's steps plus the item-contract declaration. A source route
+/// is an entry point of the job mode, never a subroutine: a facade
+/// binding naming it, or a `direct:` send targeting it, refuses
+/// (`adapter.job.source-bound-refused`,
+/// `adapter.job.source-called-refused`). There is no `from`: the
+/// `from: file:` consumer form was rejected with the job's read step
+/// (section 17.2).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceRouteDecl {
+    /// The source route identifier the job definition names.
+    pub id: LocalId,
+    /// Whether the scan ends. Mandatory; the checks refuse its absence
+    /// under `adapter.job.source-scan-required`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<SourceScan>,
+    /// The recovery semantics of `next`. Mandatory; the checks refuse its
+    /// absence under `adapter.job.source-recovery-required`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_recovery: Option<SourceRecovery>,
+    /// How the source reports edits to items the scan has already read,
+    /// one of [`SOURCE_EDIT_VALUES`]: `ordered`, where an edit moves the
+    /// item past the read position or items never change so an ordinary
+    /// pass suffices, or `rescan`, where an edit can stay behind the
+    /// position and the declared `rescanDelaySeconds` starts an ordinary
+    /// pass from the first page. Mandatory; the checks refuse its absence
+    /// under `adapter.job.source-edits-required` and a value outside the
+    /// closed set under `adapter.job.source-edits-unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edits: Option<String>,
+    /// The seconds between a `rescan` source route's ordinary passes from
+    /// the first page, from
+    /// [`MINIMUM_SOURCE_RESCAN_DELAY_SECONDS`] to
+    /// [`MAXIMUM_SOURCE_RESCAN_DELAY_SECONDS`] (one minute to one day).
+    /// Mandatory beside `edits: rescan`, refused beside `edits: ordered`,
+    /// and range-checked; the checks police all three under
+    /// `adapter.job.source-rescan-delay`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rescan_delay_seconds: Option<registry_platform_yaml::BoundedU64<60, 86_400>>,
+    /// The ordered steps, as an internal route's body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<Step>,
+}
+
+impl registry_platform_yaml::Identified for SourceRouteDecl {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+}
+
 impl registry_platform_yaml::Identified for CodeMap {
     fn id(&self) -> &str {
         self.id.as_str()
@@ -197,6 +302,11 @@ pub struct AdapterPack {
     /// The internal `direct:` routes shared sub-flows call.
     #[serde(default)]
     pub routes: UniqueIdList<RouteDefinition>,
+    /// The governed-ingestion source routes the job mode runs
+    /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Entry
+    /// points of the job mode; a facade route never reaches one.
+    #[serde(default)]
+    pub source_routes: UniqueIdList<SourceRouteDecl>,
     /// The code maps routes convert values through.
     #[serde(default)]
     pub code_maps: UniqueIdList<CodeMap>,
@@ -254,7 +364,10 @@ mod tests {
     }
 
     /// An endpoint declares both limits; neither has a default, and a value
-    /// outside its range is refused, never shortened.
+    /// outside its range is refused, never shortened. The response bound's
+    /// reader ceiling is the platform cap a source-route-only endpoint may
+    /// declare (D39); a facade-reachable endpoint stays at the facade
+    /// ceiling, which the checks refuse past.
     #[test]
     fn endpoint_requires_both_limits_within_their_ceilings() {
         let read = |attempt: &str, bytes: &str| {
@@ -266,6 +379,7 @@ mod tests {
         let attempt = r#","attemptTimeoutMilliseconds":10000"#;
         let bytes = r#","maximumResponseBytes":1048576"#;
         read(attempt, bytes).expect("both limits at their ceilings parse");
+        read(attempt, r#","maximumResponseBytes":16777216"#).expect("the platform cap parses");
         assert!(read("", bytes).is_err(), "the attempt timeout is required");
         assert!(read(attempt, "").is_err(), "the response bound is required");
         assert!(
@@ -277,8 +391,12 @@ mod tests {
             "a zero attempt timeout is refused"
         );
         assert!(
-            read(attempt, r#","maximumResponseBytes":1048577"#).is_err(),
-            "a response bound above the ceiling is refused"
+            read(attempt, r#","maximumResponseBytes":16777217"#).is_err(),
+            "a response bound above the platform cap is refused"
+        );
+        assert!(
+            read(attempt, r#","maximumResponseBytes":0"#).is_err(),
+            "a zero response bound is refused"
         );
     }
 
@@ -400,6 +518,15 @@ mod tests {
                 .expect("digest"),
             }])
             .expect("unique"),
+            source_routes: UniqueIdList::new(vec![SourceRouteDecl {
+                id: LocalId::new("kobo-submissions").expect("id"),
+                scan: Some(SourceScan::Ongoing),
+                next_recovery: Some(SourceRecovery::KeyDeduplicated),
+                edits: Some("ordered".to_string()),
+                rescan_delay_seconds: None,
+                steps: Vec::new(),
+            }])
+            .expect("unique"),
             capabilities: Capabilities {
                 components: UniqueList::new(vec![ComponentKind::Http]).expect("unique"),
                 languages: UniqueList::new(vec![Language::JsonPath]).expect("unique"),
@@ -408,7 +535,94 @@ mod tests {
         };
         let json = serde_json::to_string(&pack).expect("serialize");
         assert!(json.contains("idempotentUpstream"));
+        assert!(json.contains("sourceRoutes"));
+        assert!(json.contains("nextRecovery"));
         assert_eq!(serde_json::from_str::<AdapterPack>(&json).ok(), Some(pack));
+    }
+
+    /// A source route declares its scan and recovery semantics, spells
+    /// them in the closed kebab/lowercase sets, declares its edit-finding
+    /// mode beside them, and refuses an unknown member. Repeated source
+    /// route ids refuse at the reader (CFG-ID-5).
+    #[test]
+    fn source_routes_round_trip_and_declare_their_contract() {
+        let pack: AdapterPack = serde_json::from_str(
+            r#"{
+                "id": "kobo-pack",
+                "version": "1",
+                "testedVersions": [],
+                "sourceRoutes": [
+                    { "id": "kobo-submissions", "scan": "ongoing", "nextRecovery": "key-deduplicated", "edits": "ordered" },
+                    { "id": "exports", "scan": "finite", "nextRecovery": "exact-replay", "edits": "rescan", "rescanDelaySeconds": 3600 }
+                ]
+            }"#,
+        )
+        .expect("parse");
+        let source = pack.source_routes.get("kobo-submissions").expect("route");
+        assert_eq!(source.scan, Some(SourceScan::Ongoing));
+        assert_eq!(source.next_recovery, Some(SourceRecovery::KeyDeduplicated));
+        assert_eq!(source.edits.as_deref(), Some("ordered"));
+        assert_eq!(source.rescan_delay_seconds, None);
+        let finite = pack.source_routes.get("exports").expect("route");
+        assert_eq!(finite.scan, Some(SourceScan::Finite));
+        assert_eq!(finite.next_recovery, Some(SourceRecovery::ExactReplay));
+        assert_eq!(finite.edits.as_deref(), Some("rescan"));
+        assert_eq!(
+            finite
+                .rescan_delay_seconds
+                .map(registry_platform_yaml::BoundedU64::get),
+            Some(3600)
+        );
+        let wire = serde_json::to_value(&pack).expect("serialize");
+        assert_eq!(wire["sourceRoutes"][0]["scan"], "ongoing");
+        assert_eq!(wire["sourceRoutes"][0]["nextRecovery"], "key-deduplicated");
+        assert_eq!(wire["sourceRoutes"][0]["edits"], "ordered");
+        assert_eq!(wire["sourceRoutes"][1]["rescanDelaySeconds"], 3600);
+        assert!(wire["sourceRoutes"][0].get("steps").is_none());
+        assert!(
+            serde_json::from_str::<AdapterPack>(
+                r#"{
+                    "id": "kobo-pack",
+                    "version": "1",
+                    "testedVersions": [],
+                    "sourceRoutes": [
+                        { "id": "a", "scan": "ongoing", "nextRecovery": "exact-replay", "bogus": 1 }
+                    ]
+                }"#,
+            )
+            .is_err(),
+            "an unknown member is refused"
+        );
+        assert!(
+            serde_json::from_str::<SourceScan>("\"sweeping\"").is_err(),
+            "scan is a closed set"
+        );
+        assert!(
+            serde_json::from_str::<SourceRecovery>("\"replay\"").is_err(),
+            "recovery is a closed set"
+        );
+        assert!(
+            UniqueIdList::new(vec![
+                SourceRouteDecl {
+                    id: LocalId::new("same").expect("id"),
+                    scan: None,
+                    next_recovery: None,
+                    edits: None,
+                    rescan_delay_seconds: None,
+                    steps: Vec::new(),
+                },
+                SourceRouteDecl {
+                    id: LocalId::new("same").expect("id"),
+                    scan: None,
+                    next_recovery: None,
+                    edits: None,
+                    rescan_delay_seconds: None,
+                    steps: Vec::new(),
+                },
+            ])
+            .is_err(),
+            "a repeated source route id is refused"
+        );
     }
 
     /// The safe-upstream claim round trips under its camelCase name and
@@ -515,6 +729,7 @@ mod tests {
             }])
             .expect("unique"),
             query_files: UniqueList::new(Vec::new()).expect("empty"),
+            source_routes: UniqueIdList::new(Vec::new()).expect("empty"),
             capabilities: Capabilities::default(),
         };
         assert!(pack.pinned_file("scripts/map.rhai").is_some());

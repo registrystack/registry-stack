@@ -1,0 +1,20 @@
+# The workspace the job's checks run over: the profile above, the
+# pinned pack, no facade binding, and no record type, because a job
+# serves no facade operation (CONCEPT 17.1). The pack digest is the
+# sha256 of products/adapter/packs/odk-central/pack.yaml; repin it when
+# the pack changes.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: odk-central-job-example
+  version: "1"
+profile:
+  id: odk-central
+  version: "1"
+  digest: sha256:55d0aeae9d3318d356c3986a048aefc94391c08a6dbe1df8f1102657345c53f7
+pack:
+  id: odk-central
+  version: "1"
+  digest: sha256:070300cfce78200e2d967aebcef76f40348e305ab15de42374049c334993f324
+recordTypes: []
+bindings: []

@@ -14,15 +14,15 @@ mod upstream;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use registry_adapter::exchange::Exchange;
-use registry_adapter::resilience::ResilienceRuntime;
-use registry_adapter::route::{
+use registry_adapter::engine::exchange::Exchange;
+use registry_adapter::engine::resilience::ResilienceRuntime;
+use registry_adapter::engine::route::{
     check_servable, run_route, EndpointRuntime, RouteContext, RouteTable,
 };
-use registry_adapter::scripts::ScriptSet;
+use registry_adapter::engine::scripts::ScriptSet;
 use registry_adapter_core::{
-    check_project, check_routes, AccessProfile, AdapterPack, AdapterProfile, AdapterProject,
-    AdapterRuntimeConfig, AuditRetention, Binding, Capabilities, Cidr, ComponentKind, Endpoint,
+    check_project, check_routes, AccessProfile, AdapterEndpointBindings, AdapterPack,
+    AdapterProfile, AdapterProject, Binding, Capabilities, Cidr, ComponentKind, Endpoint,
     EndpointAuthentication, EndpointBinding, EnvelopeTemplate, ErrorClass, HttpMethod, PinnedRef,
     Problem, ProfileOperation, ProjectIdentity, RecordField, RecordFieldType, RecordType,
     RouteDefinition, RouteFrom, RuntimeCredential, Step, Workspace,
@@ -187,6 +187,7 @@ fn pack(case: &RouteCase) -> AdapterPack {
         endpoints: UniqueIdList::new(vec![endpoint()]).expect("unique endpoints"),
         route_templates: UniqueIdList::new(Vec::new()).expect("empty templates"),
         routes: UniqueIdList::new(routes).expect("unique routes"),
+        source_routes: UniqueIdList::new(Vec::new()).expect("empty source routes"),
         code_maps: UniqueIdList::new(Vec::new()).expect("empty maps"),
         scripts: UniqueList::new(Vec::new()).expect("empty scripts"),
         query_files: UniqueList::new(Vec::new()).expect("empty queries"),
@@ -332,8 +333,8 @@ fn lowest_accepted_budget(profile: &AdapterProfile, pack: &AdapterPack, case: &R
     panic!("{} has no admitted budget in the bounded probe", case.name)
 }
 
-fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
-    AdapterRuntimeConfig {
+fn runtime_config(base_url: &str) -> AdapterEndpointBindings {
+    AdapterEndpointBindings {
         id: local("soundness-runtime"),
         endpoints: UniqueIdList::new(vec![EndpointBinding {
             endpoint: external("source"),
@@ -349,30 +350,10 @@ fn runtime_config(base_url: &str) -> AdapterRuntimeConfig {
         allowed_private_cidrs: UniqueList::new(vec![Cidr::new("192.168.0.0/16").expect("cidr")])
             .expect("one cidr"),
         outbound_tls: None,
-        listener: serde_json::from_value(json!({"bind": "127.0.0.1:8080"})).expect("listener"),
-        database: serde_json::from_value(json!({
-            "runtimeUrlRef": "secret:env/READ_PROPERTY_DB",
-            "migrationUrlRef": "secret:env/READ_PROPERTY_DB"
-        }))
-        .expect("database"),
-        oidc: serde_json::from_value(json!({
-            "issuer": "https://issuer.example.invalid",
-            "audience": "read-properties"
-        }))
-        .expect("oidc"),
-        allowed_clients: UniqueList::new(vec![external("read-property-client")])
-            .expect("one client"),
-        audit: AuditRetention {
-            retention_days: BoundedU32::new(90).expect("retention"),
-        },
-        cursor_key_ref: None,
-        previous_cursor_key_ref: None,
-        cursor_ttl_seconds: None,
-        idempotency: None,
     }
 }
 
-fn empty_code_maps() -> registry_adapter::scripts::CodeMaps {
+fn empty_code_maps() -> registry_adapter::engine::scripts::CodeMaps {
     Arc::new(BTreeMap::new())
 }
 
@@ -412,6 +393,7 @@ async fn checker_accepted_read_budgets_bound_actual_interpreter_sends() {
             routes: &routes,
             code_maps: empty_code_maps(),
             maximum_upstream_calls: accepted,
+            job: registry_adapter::engine::job_sources::JobPageState::default(),
         };
         let outcome = run_route(
             &context,
@@ -472,6 +454,7 @@ async fn an_oversized_http_body_is_a_too_large_failure_with_no_partial_result() 
         routes: &routes,
         code_maps: empty_code_maps(),
         maximum_upstream_calls: 1,
+        job: registry_adapter::engine::job_sources::JobPageState::default(),
     };
     let route = steps(json!([get()]));
     let outcome = run_route(&context, &route, Exchange::new("oversized-body".to_owned())).await;

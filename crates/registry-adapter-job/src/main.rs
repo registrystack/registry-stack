@@ -1,0 +1,674 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! The `adapter-job` binary entry point: the operator surface of the
+//! governed-ingestion job (`products/adapter/CONCEPT.md` section 17.4).
+//! Check compiles a job the engine compiles, pass runs one bounded pass
+//! or the trigger loop, status counts what the item table holds, inspect
+//! reads one item's row, and rescan marks a rescan due and runs it. The
+//! output is value-free by default: no item value, no projection, no
+//! secret. The store holds no payload to leak.
+
+use clap::Parser;
+use deadpool_postgres::Pool;
+use registry_adapter::engine::job::{compile_job_with, JobError, JobProgram};
+use registry_adapter_core::{AdapterJob, ComponentKind};
+use registry_adapter_job::cli::{Cli, Command, WorkspaceArgs};
+use registry_adapter_job::destination::{FixtureDestination, NullDestination};
+use registry_adapter_job::pass::{run_pass, PassOptions, PassReport, StopReason};
+use registry_adapter_job::store;
+use registry_adapter_job::trigger::{self, Edits, JobState, LastPass, Step};
+use registry_platform_config::{SecretProvider, SecretResolver};
+use std::path::Path;
+use std::process::ExitCode;
+use std::time::Duration;
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("adapter-job: the async runtime could not start: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let outcome = match &cli.command {
+        Command::Check {
+            job_yaml,
+            pack,
+            runtime: runtime_path,
+            workspace,
+        } => check(job_yaml, pack, runtime_path, workspace),
+        Command::Status {
+            job_yaml,
+            runtime: runtime_path,
+        } => runtime.block_on(status(job_yaml, runtime_path)),
+        Command::Inspect {
+            job_yaml,
+            runtime: runtime_path,
+            key,
+        } => runtime.block_on(inspect(job_yaml, runtime_path, key)),
+        Command::Pass {
+            job_yaml,
+            pack,
+            runtime: runtime_path,
+            workspace,
+            fixture,
+            fixture_url,
+            dry_run,
+            r#loop,
+            refusal_limit,
+        } => runtime.block_on(pass(
+            job_yaml,
+            pack,
+            runtime_path,
+            workspace,
+            *fixture,
+            fixture_url.as_deref(),
+            *dry_run,
+            !*r#loop,
+            *refusal_limit,
+            cli.show_values,
+        )),
+        Command::Rescan {
+            job_yaml,
+            pack,
+            runtime: runtime_path,
+            workspace,
+            fixture,
+            fixture_url,
+            dry_run,
+            refusal_limit,
+        } => runtime.block_on(rescan(
+            job_yaml,
+            pack,
+            runtime_path,
+            workspace,
+            *fixture,
+            fixture_url.as_deref(),
+            *dry_run,
+            *refusal_limit,
+            cli.show_values,
+        )),
+    };
+    match outcome {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("adapter-job: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Compile the job the way the engine compiles it and print the
+/// value-free report.
+fn check(
+    job_yaml: &Path,
+    pack: &Path,
+    runtime: &Path,
+    workspace: &WorkspaceArgs,
+) -> Result<ExitCode, String> {
+    let program = compile(pack, job_yaml, runtime, workspace)?;
+    let report = serde_json::json!({
+        "ok": true,
+        "job": {
+            "id": program.job.job.id.as_str(),
+            "version": program.job.job.version,
+        },
+        "source": {
+            "pack": {
+                "id": program.job.source.pack.id.as_str(),
+                "version": program.job.source.pack.version,
+            },
+            "route": program.job.source.route,
+        },
+        "projectionDigest": program.job.projection_digest(),
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("a plain object renders")
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// One bounded pass or the trigger loop.
+#[allow(clippy::too_many_arguments)]
+async fn pass(
+    job_yaml: &Path,
+    pack: &Path,
+    runtime_path: &Path,
+    workspace: &WorkspaceArgs,
+    fixture: bool,
+    fixture_url: Option<&str>,
+    dry_run: bool,
+    once: bool,
+    refusal_limit: u32,
+    show_values: bool,
+) -> Result<ExitCode, String> {
+    let program = compile(pack, job_yaml, runtime_path, workspace)?;
+    let pool = pass_pool(runtime_path, dry_run).await?;
+    let preview = NullDestination::new();
+    if once {
+        let options = PassOptions {
+            refusal_limit,
+            dry_run,
+            ..PassOptions::default()
+        };
+        let report = bounded_pass(
+            &program,
+            &pool,
+            &preview,
+            options,
+            fixture,
+            fixture_url,
+            dry_run,
+        )
+        .await?;
+        print_pass_report(&report, dry_run, show_values, &preview);
+        return Ok(pass_exit_code(&report));
+    }
+    // The loop: the interval trigger decides when a pass starts, a
+    // rescan source's declared delay decides when a scan runs from the
+    // first page, and greedy restarts after a pass that read at least
+    // one item. Only a settled page bypasses the schedule; the decision
+    // itself is `trigger::next_step`.
+    let edits = source_edits(&program)?;
+    if trigger::interval_trigger(&program.job).is_none() {
+        return Err(
+            "the job declares no interval trigger, so the loop has no schedule; declare one interval trigger".to_string(),
+        );
+    }
+    let mut last = LastPass::NotYet;
+    let started = std::time::SystemTime::now();
+    loop {
+        let now = std::time::SystemTime::now();
+        let state = job_state(&pool, &program.job).await?;
+        let step = trigger::next_step(&program.job, &edits, &state, last, now, started)
+            .ok_or_else(|| "the job declares no interval trigger".to_string())?;
+        let rescan = match step {
+            Step::Wait(wait) => {
+                tokio::select! {
+                    _ = tokio::time::sleep(wait) => {}
+                    _ = tokio::signal::ctrl_c() => return Ok(ExitCode::SUCCESS),
+                }
+                last = LastPass::NotYet;
+                continue;
+            }
+            Step::Run { rescan } => rescan,
+        };
+        let options = PassOptions {
+            refusal_limit,
+            rescan,
+            dry_run: false,
+        };
+        let report = bounded_pass(
+            &program,
+            &pool,
+            &preview,
+            options,
+            fixture,
+            fixture_url,
+            false,
+        )
+        .await?;
+        print_pass_report(&report, false, show_values, &preview);
+        last = match report.stopped {
+            None => LastPass::Settled {
+                items_read: report.items_read,
+                rescan,
+            },
+            Some(StopReason::LeaseHeld) => LastPass::LeaseHeld,
+            Some(_) => LastPass::Stopped,
+        };
+    }
+}
+
+/// Mark a rescan due now, then run one rescan pass from the first page.
+#[allow(clippy::too_many_arguments)]
+async fn rescan(
+    job_yaml: &Path,
+    pack: &Path,
+    runtime_path: &Path,
+    workspace: &WorkspaceArgs,
+    fixture: bool,
+    fixture_url: Option<&str>,
+    dry_run: bool,
+    refusal_limit: u32,
+    show_values: bool,
+) -> Result<ExitCode, String> {
+    let program = compile(pack, job_yaml, runtime_path, workspace)?;
+    let edits = source_edits(&program)?;
+    if !matches!(edits, Edits::Rescan { .. }) {
+        return Err(
+            "the job's source route declares edits: ordered, whose edits the position finds; only an edits: rescan source rescans".to_string(),
+        );
+    }
+    let pool = pass_pool(runtime_path, dry_run).await?;
+    let preview = NullDestination::new();
+    if !dry_run {
+        let client = pool
+            .get()
+            .await
+            .map_err(|error| format!("the job store could not be reached: {error}"))?;
+        store::ensure_state(&client, program.job.job.id.as_str())
+            .await
+            .map_err(|error| format!("the job store refused: {error}"))?;
+        store::mark_rescan_due(&client, program.job.job.id.as_str())
+            .await
+            .map_err(|error| format!("the job store refused: {error}"))?;
+    }
+    let options = PassOptions {
+        refusal_limit,
+        rescan: true,
+        dry_run,
+    };
+    let report = bounded_pass(
+        &program,
+        &pool,
+        &preview,
+        options,
+        fixture,
+        fixture_url,
+        dry_run,
+    )
+    .await?;
+    print_pass_report(&report, dry_run, show_values, &preview);
+    Ok(pass_exit_code(&report))
+}
+
+/// One bounded pass with the named destination: the fixture destination
+/// at its loopback URL, or the preview destination of the dry run. A
+/// real destination is its own brief; the seam is the hand-off point it
+/// plugs into.
+async fn bounded_pass(
+    program: &JobProgram,
+    pool: &Pool,
+    preview: &NullDestination,
+    options: PassOptions,
+    fixture: bool,
+    fixture_url: Option<&str>,
+    dry_run: bool,
+) -> Result<PassReport, String> {
+    if !dry_run && !fixture {
+        return Err(
+            "name a destination: --destination with --fixture-url, or --dry-run for the operator preview; a real destination plugs into the same seam".to_string(),
+        );
+    }
+    if fixture {
+        let url =
+            fixture_url.ok_or_else(|| "--fixture-url names the fixture receiver".to_string())?;
+        let destination = FixtureDestination::new(url)
+            .map_err(|reason| format!("the fixture url was refused: {reason}"))?;
+        Ok(run_pass(pool, program, &destination, options).await)
+    } else {
+        Ok(run_pass(pool, program, preview, options).await)
+    }
+}
+
+/// Print one pass report, value-free unless the caller asked for the
+/// dry-run's recorded projections.
+fn print_pass_report(
+    report: &PassReport,
+    dry_run: bool,
+    show_values: bool,
+    preview: &NullDestination,
+) {
+    let stopped = report.stopped.as_ref().map(|reason| {
+        serde_json::json!({
+            "reason": stop_reason_name(reason),
+            "code": reason.stop_text(),
+        })
+    });
+    let mut body = serde_json::json!({
+        "itemsRead": report.items_read,
+        "itemsNew": report.items_new,
+        "itemsChanged": report.items_changed,
+        "itemsRedelivered": report.items_redelivered,
+        "itemsSkipped": report.items_skipped,
+        "itemsAcknowledged": report.items_acknowledged,
+        "itemsRefused": report.items_refused,
+        "refusalsByCode": report.refusals_by_code,
+        "malformedLines": report.malformed_lines,
+        "stopped": stopped,
+        "stopNotRecorded": report.stop_record_failure,
+        "overdue": report.overdue,
+    });
+    if dry_run {
+        let delivered = preview
+            .recorded()
+            .into_iter()
+            .map(|(job_id, item)| {
+                let mut entry = serde_json::json!({
+                    "jobId": job_id,
+                    "key": item.key,
+                    "sequence": item.sequence,
+                    "digest": item.digest,
+                    "priorRunId": item.prior_run_id,
+                    "admittedBefore": item.admitted_before,
+                });
+                if show_values {
+                    entry
+                        .as_object_mut()
+                        .expect("an object")
+                        .insert("projected".to_string(), item.projected);
+                }
+                entry
+            })
+            .collect::<Vec<_>>();
+        let members = body.as_object_mut().expect("an object");
+        members.insert("dryRun".to_string(), serde_json::json!(true));
+        members.insert("wouldDeliver".to_string(), serde_json::json!(delivered));
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&body).expect("a plain object renders")
+    );
+}
+
+fn stop_reason_name(reason: &StopReason) -> &'static str {
+    match reason {
+        StopReason::LeaseHeld => "lease-held",
+        StopReason::PageFault { .. } => "page-fault",
+        StopReason::DestinationStop { .. } => "destination-stop",
+        StopReason::RefusalLimit { .. } => "refusal-limit",
+    }
+}
+
+/// A pass leaves the operator's exit code at failure: a stopped pass is
+/// a condition an operator or a CronJob acts on.
+fn pass_exit_code(report: &PassReport) -> ExitCode {
+    if report.stopped.is_some() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Count what the item table holds, value-free.
+async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String> {
+    let job = read_job(job_yaml)?;
+    let pool = read_pool(runtime_path)?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    // Status is a read: a job no pass has run yet reports the default
+    // state, and no row is written for it.
+    let job_id = job.job.id.as_str();
+    let counts = store::item_counts(&client, job_id)
+        .await
+        .map_err(|error| format!("the job store refused: {error}"))?;
+    let row = store::read_state(&client, job_id)
+        .await
+        .map_err(|error| format!("the job store refused: {error}"))?
+        .unwrap_or_default();
+    let state = trigger_state(&row);
+    // A never-run job anchors its initial delay to this read's own
+    // start, so status reports not yet due rather than overdue.
+    let now = std::time::SystemTime::now();
+    let overdue =
+        trigger::next_due(&job, &state, now, now).is_some_and(|due| due == Duration::ZERO);
+    let report = serde_json::json!({
+        "job": {"id": job.job.id.as_str(), "version": job.job.version},
+        "items": {
+            "pending": counts.pending,
+            "acknowledged": counts.acknowledged,
+            "refused": counts.refused,
+        },
+        "refusalsByCode": counts.refusals_by_code,
+        "schedule": {
+            "overdue": overdue,
+            "lastPassAt": optional_time(row.last_pass_at),
+            "lastPassStop": row.last_pass_stop,
+            "leaseExpires": optional_time(row.lease_expires),
+            "positionPresent": row.position.is_some(),
+            "lastRescanAt": optional_time(row.last_rescan_at),
+            "idleStreak": row.idle_streak,
+            "errorStreak": row.error_streak,
+            "projectionDigest": row.projection_digest,
+        },
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("a plain object renders")
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Read one item's row, value-free.
+async fn inspect(job_yaml: &Path, runtime_path: &Path, key: &str) -> Result<ExitCode, String> {
+    let job = read_job(job_yaml)?;
+    let pool = read_pool(runtime_path)?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    let record = store::inspect_item(&client, job.job.id.as_str(), key)
+        .await
+        .map_err(|error| format!("the job store refused: {error}"))?;
+    let report = match record {
+        Some(record) => serde_json::json!({
+            "found": true,
+            "item": {
+                "key": record.key,
+                "lastDigest": record.last_digest,
+                "sequence": record.sequence,
+                "status": record.status.as_str(),
+                "code": record.code,
+                "runId": record.run_id,
+                "priorRunId": record.prior_run_id,
+                "admittedBefore": record.admitted_before,
+                "firstSeen": optional_time(Some(record.first_seen)),
+                "lastSeen": optional_time(Some(record.last_seen)),
+            },
+        }),
+        None => serde_json::json!({"found": false, "key": key}),
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("a plain object renders")
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Compile the job the engine compiles.
+fn compile(
+    pack: &Path,
+    job_yaml: &Path,
+    runtime: &Path,
+    workspace: &WorkspaceArgs,
+) -> Result<JobProgram, String> {
+    let directory = pack.parent().unwrap_or_else(|| Path::new("."));
+    let profile = workspace
+        .profile
+        .clone()
+        .unwrap_or_else(|| directory.join("profile.yaml"));
+    let project = workspace
+        .project
+        .clone()
+        .unwrap_or_else(|| directory.join("project.yaml"));
+    refuse_unserved_sources(pack)?;
+    compile_job_with(pack, job_yaml, runtime, &profile, &project)
+        .map_err(|error| job_error_message(&error))
+}
+
+/// Refuse a pack that declares a file, sftp, or postgres endpoint: this
+/// host serves HTTP and GraphQL sources only, whatever source features a
+/// workspace build compiled into the engine. A pack that does not read
+/// is left to the compiler, which reports its own diagnostics.
+fn refuse_unserved_sources(pack: &Path) -> Result<(), String> {
+    let Ok((declared, _bytes)) =
+        registry_adapter::engine::load::read_artifact::<registry_adapter_core::AdapterPack>(
+            pack,
+            registry_adapter_core::ADAPTER_PACK_KIND,
+            registry_adapter_core::ADAPTER_PACK_API_VERSION,
+        )
+    else {
+        return Ok(());
+    };
+    let unserved = declared
+        .endpoints
+        .iter()
+        .filter(|endpoint| {
+            matches!(
+                endpoint.component,
+                ComponentKind::File | ComponentKind::Sftp | ComponentKind::Postgres
+            )
+        })
+        .map(|endpoint| {
+            format!(
+                "adapter.job.component-unavailable at /endpoints/{} this host serves no file, sftp, or postgres source",
+                endpoint.id.as_str()
+            )
+        })
+        .collect::<Vec<_>>();
+    if unserved.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("the job was refused: {}", unserved.join("; ")))
+    }
+}
+
+/// The value-free rendering of a compile refusal: every diagnostic the
+/// compiler carried, code first.
+fn job_error_message(error: &JobError) -> String {
+    let rendered = error
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            format!(
+                "{} at {} {}",
+                diagnostic.code, diagnostic.path, diagnostic.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("the job was refused: {rendered}")
+}
+
+/// The job's source route edit property, from the compiled program's
+/// resolved declaration: the declaration the rescan gate runs on, read
+/// at compile so the host never re-reads the pack file.
+fn source_edits(program: &JobProgram) -> Result<Edits, String> {
+    Edits::of(&program.source_route)
+}
+
+/// The job state the schedule reads, from the store row.
+async fn job_state(pool: &Pool, job: &AdapterJob) -> Result<JobState, String> {
+    let client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    let row = store::read_state(&client, job.job.id.as_str())
+        .await
+        .map_err(|error| format!("the job store refused: {error}"))?
+        .unwrap_or_default();
+    Ok(trigger_state(&row))
+}
+
+fn trigger_state(row: &store::JobStateRow) -> JobState {
+    JobState {
+        position: row.position.clone(),
+        projection_digest: row.projection_digest.clone(),
+        lease_expires: row.lease_expires,
+        last_pass_at: row.last_pass_at,
+        last_pass_stop: row.last_pass_stop.clone(),
+        last_rescan_at: row.last_rescan_at,
+        rescan_active: row.rescan_active,
+        idle_streak: u32::try_from(row.idle_streak.max(0)).unwrap_or(u32::MAX),
+        error_streak: u32::try_from(row.error_streak.max(0)).unwrap_or(u32::MAX),
+    }
+}
+
+/// Open the job store: one pool from the store block's connection
+/// reference, migrated before it serves.
+async fn open_pool(runtime_path: &Path) -> Result<Pool, String> {
+    let store_config = read_store(runtime_path)?;
+    let resolver = secret_resolver()?;
+    let pool = store::build_pool(&store_config, &resolver).map_err(|error| error.to_string())?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store migration could not connect: {error}"))?;
+    store::migrate(&client)
+        .await
+        .map_err(|error| format!("the job store migration failed: {error}"))?;
+    Ok(pool)
+}
+
+/// The pool a pass or rescan runs on: migrated before it serves, or,
+/// for a dry run, read-only and refused unless the store already holds
+/// this release's schema, so a preview never changes the database.
+async fn pass_pool(runtime_path: &Path, dry_run: bool) -> Result<Pool, String> {
+    if !dry_run {
+        return open_pool(runtime_path).await;
+    }
+    let pool = read_pool(runtime_path)?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    match store::schema_current(&client).await {
+        Ok(()) => {}
+        Err(error @ store::StoreError::SchemaBehind { .. }) => {
+            return Err(format!(
+                "the dry run refused: {error}; run a pass without --dry-run to migrate it"
+            ))
+        }
+        Err(error) => return Err(format!("the dry run refused: {error}")),
+    }
+    drop(client);
+    Ok(pool)
+}
+
+/// The read-only pool of the status and inspect surfaces, from the
+/// runtime config's store block.
+fn read_pool(runtime_path: &Path) -> Result<Pool, String> {
+    let store_config = read_store(runtime_path)?;
+    let resolver = secret_resolver()?;
+    store::build_pool(&store_config, &resolver).map_err(|error| error.to_string())
+}
+
+fn secret_resolver() -> Result<SecretResolver, String> {
+    SecretResolver::new([SecretProvider::Environment], "")
+        .map_err(|error| format!("the secret resolver could not start: {error:?}"))
+}
+
+/// Read the job definition: the engine boundary's public artifact
+/// read, the same envelope, expression, and unknown-key discipline the
+/// compile path reads the job through.
+fn read_job(path: &Path) -> Result<AdapterJob, String> {
+    registry_adapter::engine::load::read_artifact::<AdapterJob>(
+        path,
+        registry_adapter_core::ADAPTER_JOB_KIND,
+        registry_adapter_core::ADAPTER_JOB_API_VERSION,
+    )
+    .map(|(job, _bytes)| job)
+    .map_err(|error| format!("the job definition was refused: {error}"))
+}
+
+/// Read the job store block of the operator runtime config through the
+/// one reader the compile path shares (`engine::job_sources`), which
+/// refuses an undeclared member of the block like any other.
+fn read_store(path: &Path) -> Result<store::JobStoreConfig, String> {
+    let document = registry_adapter::engine::job_sources::JobRuntimeConfig::load(path)
+        .map_err(|error| format!("the runtime config was refused: {error}"))?;
+    document
+        .store
+        .ok_or_else(|| "the runtime config carries no store block for the job store".to_string())
+}
+
+/// One timestamp in the operator output: UTC, RFC 3339, or absent.
+fn optional_time(at: Option<std::time::SystemTime>) -> Option<String> {
+    at.map(|at| {
+        let seconds = at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs() as i64)
+            .unwrap_or(0);
+        chrono::DateTime::from_timestamp(seconds, 0)
+            .unwrap_or(chrono::DateTime::UNIX_EPOCH)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    })
+}

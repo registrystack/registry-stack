@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use registry_adapter::component::rest::continuation::{
+use registry_adapter::engine::component::rest::continuation::{
     filter_digest, ContinuationCodec, ContinuationConfigError, CursorBinding, CursorKey,
     CursorRefusal, CursorTtl, FilterDigest, SealError, CONTINUATION_MAXIMUM_BYTES,
     CURSOR_KEY_BYTES, CURSOR_MAXIMUM_TOKEN_BYTES, CURSOR_TTL_DEFAULT_SECONDS,

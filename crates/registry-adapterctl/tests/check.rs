@@ -669,10 +669,10 @@ fn check_refuses_a_missing_explicit_fixture_path() {
     );
 }
 
-/// `schemas` writes the closed set of six generated files into any
+/// `schemas` writes the closed set of eight generated files into any
 /// directory it is given.
 #[test]
-fn schemas_writes_six_files_into_the_given_directory() {
+fn schemas_writes_eight_files_into_the_given_directory() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("schemas").to_str().unwrap().to_owned();
     let (exit, report, stderr) = run_json(&["schemas", "--output-dir", &output]);
@@ -680,6 +680,8 @@ fn schemas_writes_six_files_into_the_given_directory() {
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     assert_eq!(report["command"], "schemas");
     let expected = BTreeSet::from([
+        "job.v1alpha1.schema.json".to_owned(),
+        "job-runtime.v1alpha1.schema.json".to_owned(),
         "effective-contract.v1alpha1.schema.json".to_owned(),
         "fixture.v1alpha1.schema.json".to_owned(),
         "pack.v1alpha1.schema.json".to_owned(),
@@ -1661,5 +1663,157 @@ fn a_declared_graphql_kind_must_match_the_pinned_operation() {
         diagnostic_path(&report, "adapter.pack.graphql-operation-kind-mismatch"),
         "/endpoints/1/operations/0/graphql",
         "{report}"
+    );
+}
+
+/// A passing `job check` report carries the same `diagnostics` list every
+/// other check report does, empty when nothing was found, so a consumer
+/// reads one report shape across commands.
+#[test]
+fn a_passing_job_check_reports_an_empty_diagnostics_list() {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/fixtures/corpus/base-job");
+    let path = |name: &str| base.join(name).to_str().unwrap().to_owned();
+    let (exit, report, stderr) = run_json(&[
+        "job",
+        "check",
+        &path("pack.yaml"),
+        &path("job.yaml"),
+        "--runtime",
+        &path("job-runtime.yaml"),
+        "--profile",
+        &path("profile.yaml"),
+        "--project",
+        &path("project.yaml"),
+    ]);
+    assert_eq!(
+        exit,
+        ExitCode::SUCCESS,
+        "{report} {}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(report["diagnostics"], json!([]), "{report}");
+    assert_eq!(report["filesChecked"], 5, "{report}");
+}
+
+/// Run `job check` over the base job with one artifact replaced by
+/// `text`; the other artifacts stay where the fixture keeps them.
+fn job_check_with(replaced: &str, text: &str, extra: &[&str]) -> (ExitCode, Value, Vec<u8>) {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/fixtures/corpus/base-job");
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(replaced), text).unwrap();
+    let path = |name: &str| {
+        let chosen = if name == replaced {
+            root.path().join(name)
+        } else {
+            base.join(name)
+        };
+        chosen.to_str().unwrap().to_owned()
+    };
+    let (pack, job, runtime, profile, project) = (
+        path("pack.yaml"),
+        path("job.yaml"),
+        path("job-runtime.yaml"),
+        path("profile.yaml"),
+        path("project.yaml"),
+    );
+    let mut arguments = vec![
+        "job",
+        "check",
+        pack.as_str(),
+        job.as_str(),
+        "--runtime",
+        runtime.as_str(),
+        "--profile",
+        profile.as_str(),
+        "--project",
+        project.as_str(),
+    ];
+    arguments.extend_from_slice(extra);
+    run_json(&arguments)
+}
+
+fn base_job_text(name: &str) -> String {
+    std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/fixtures/corpus/base-job")
+            .join(name),
+    )
+    .unwrap()
+}
+
+/// The located findings of a refusal, as (code, path) pairs.
+fn located(report: &Value) -> Vec<(String, String)> {
+    report["diagnostics"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no diagnostics list: {report}"))
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic["code"].as_str().unwrap_or_default().to_owned(),
+                diagnostic["path"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A job the reader refuses reports the reader's own located finding,
+/// the code and pointer an author fixes, not one folded root refusal.
+#[test]
+fn a_job_the_reader_refuses_reports_the_located_finding() {
+    let text = format!("{}conformanceFirst: 1\n", base_job_text("job.yaml"));
+    let (exit, report, _) = job_check_with("job.yaml", &text, &[]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let found = located(&report);
+    assert!(
+        found.contains(&(
+            "config.unknown-key".to_owned(),
+            "/conformanceFirst".to_owned()
+        )),
+        "{report}"
+    );
+    assert!(
+        !found
+            .iter()
+            .any(|(code, _)| code == "adapter.artifact.refused"),
+        "{report}"
+    );
+}
+
+/// A job runtime config the loader refuses reports the loader's located
+/// finding, not one folded runtime refusal.
+#[test]
+fn a_job_runtime_the_loader_refuses_reports_the_located_finding() {
+    let text = format!("{}conformanceFirst: 1\n", base_job_text("job-runtime.yaml"));
+    let (exit, report, _) = job_check_with("job-runtime.yaml", &text, &[]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let found = located(&report);
+    assert!(
+        found.contains(&(
+            "config.unknown-key".to_owned(),
+            "/conformanceFirst".to_owned()
+        )),
+        "{report}"
+    );
+    assert!(
+        !found
+            .iter()
+            .any(|(code, _)| code == "platform.runtime-config.refused"),
+        "{report}"
+    );
+}
+
+/// `job check` takes `--deny-warnings` like every checking command, and a
+/// job with no warning still passes with it.
+#[test]
+fn job_check_accepts_deny_warnings() {
+    let (exit, report, stderr) =
+        job_check_with("job.yaml", &base_job_text("job.yaml"), &["--deny-warnings"]);
+    assert_eq!(
+        exit,
+        ExitCode::SUCCESS,
+        "{report} {}",
+        String::from_utf8_lossy(&stderr)
     );
 }

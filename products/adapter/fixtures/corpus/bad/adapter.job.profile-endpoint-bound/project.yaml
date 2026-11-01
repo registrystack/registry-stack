@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.job.profile-endpoint-bound: this artifact set must be refused with
+# exactly adapter.job.profile-endpoint-bound. Clean baseline project; the defect sits in the job definition.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.profile-endpoint-bound/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:dc81e8c74e168065e920df4c8e2d494cc70194536c090821e6e28bbecbc06a02
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:deb1a8fab94e667a756a6dd7cfb686f2d8ba995ed92ff525155773d6a8e1a08f
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

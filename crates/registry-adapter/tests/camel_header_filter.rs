@@ -11,7 +11,7 @@
 //! allowlist first and by Camel only where Camel's rule still applies.
 
 use http::{HeaderName, HeaderValue};
-use registry_adapter::component::http::header_filter::{
+use registry_adapter::engine::component::http::header_filter::{
     AllowlistError, HeaderFilter, HeaderSide, InboundHeaderError, OutboundHeaderError,
 };
 use registry_adapter_core::{
@@ -634,6 +634,7 @@ fn check_pack_and_the_filter_build_refuse_the_same_allowlists() {
             endpoints: UniqueIdList::new(vec![endpoint.clone()]).expect("unique"),
             route_templates: UniqueIdList::<RouteTemplate>::new(Vec::new()).expect("empty"),
             routes: UniqueIdList::<RouteDefinition>::new(Vec::new()).expect("empty"),
+            source_routes: UniqueIdList::new(Vec::new()).expect("empty"),
             code_maps: UniqueIdList::<CodeMap>::new(Vec::new()).expect("empty"),
             scripts: UniqueList::new(Vec::new()).expect("empty"),
             query_files: UniqueList::new(Vec::new()).expect("empty"),

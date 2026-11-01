@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real KoboToolbox
+# server): a later pass at the tail: cursor `{afterId: 130}`, two
+# submissions arrived since, the cursor `{afterId: 132}` back.
+# The upstream shape follows the documented v2 data endpoint ({count,
+# next, previous, results} over GET /api/v2/assets/<uid>/data/ with
+# format, limit, sort, and query;
+# https://support.kobotoolbox.org/api.html and the kpi API
+# documentation kpi/docs/api/v2/data/list.md). Every value is a
+# made-up stand-in; the reply's own `next` URL is synthetic and unread
+# by the route. Group and repeat answers arrive as slash-separated
+# names (`household/household_size`) and the expected item value
+# carries them nested.
+# The entry shape is the provisional job replay contract: `jobRun`
+# carries the cursor the job restores, `upstream` the request the
+# route sends and the scripted reply, `expected` the item page or
+# problem class. crates/registry-adapter/tests/job_pack_replay.rs
+# replays every entry through the job compiler.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: kobotoolbox-submissions-page-short
+pack: kobotoolbox
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://support.kobotoolbox.org/api.html
+intercepts:
+- type: endpoint
+  endpoint: kobo-api
+entries:
+- jobRun:
+    cursor:
+      afterId: 130
+  upstream:
+  - request:
+      endpoint: kobo-api
+      method: GET
+      path: /
+      query: format=json&limit=100&query=%7B%22_id%22%3A%7B%22%24gt%22%3A130%7D%7D&sort=%7B%22_id%22%3A1%7D
+    response:
+      status: 200
+      body:
+        count: 2
+        next: null
+        previous: null
+        results:
+        - _id: 131
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000083-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000083-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 131
+          household/household_size: 6
+          household/has_water: true
+          _uuid: 00000083-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:17:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+        - _id: 132
+          formhub/uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta/instanceID: uuid:00000084-0000-4000-8000-0000000f1c7e
+          meta/rootUuid: uuid:00000084-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 132
+          household/household_size: 7
+          household/has_water: false
+          _uuid: 00000084-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:24:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+  expected:
+    type: page
+    page:
+      items:
+      - key: '131'
+        revision: 00000083-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 131
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000083-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000083-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 131
+          household:
+            household_size: 6
+            has_water: true
+          _uuid: 00000083-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:17:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      - key: '132'
+        revision: 00000084-0000-4000-8000-0000000f1c7e
+        value:
+          _id: 132
+          formhub:
+            uuid: f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+          __version__: vFixtureVersion0000000001
+          meta:
+            instanceID: uuid:00000084-0000-4000-8000-0000000f1c7e
+            rootUuid: uuid:00000084-0000-4000-8000-0000000f1c7e
+          respondent_name: Fixture Respondent 132
+          household:
+            household_size: 7
+            has_water: false
+          _uuid: 00000084-0000-4000-8000-0000000f1c7e
+          _submission_time: '2026-09-01T23:24:00'
+          _status: submitted_via_web
+          _submitted_by: fixture_enumerator
+          _tags: []
+          _notes: []
+          _attachments: []
+          _geolocation:
+          - null
+          - null
+          _validation_status: {}
+      next:
+        afterId: 132

@@ -51,6 +51,8 @@ remain supporting services beside their product, not products of their own.
 | `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks |
 | `crates/registry-adapter` | Adapter runtime: governed facade, call-plan interpreter, security surface, and audit journal |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
+| `crates/registry-adapter-job` | Adapter ingestion-job host and the `adapter-job` binary: item table, pass, interval trigger, and destination seam; identity and position only, never payloads |
+| `crates/registry-adapter-connectors` | Parked BReg connector over `registry-breg-client`, behind an off-by-default feature; linked by no facade binary and no job path while the governed-ingestion delivery design is decided, and `products/adapter/scripts/check_dependency_direction.py` holds that boundary |
 | `products/adapter` | Adapter product contract (`CONCEPT.md`), delivery plan, schemas, profiles, packs, examples, fixtures, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
@@ -300,12 +302,18 @@ resolve, validate, and persist inert exact selections, but never turn catalog
 metadata into trust or credentials.
 
 **Registry Adapter** (`registry-adapter-core`, `registry-adapter`,
-`registry-adapterctl`) exposes a compiled, standard registry API over a
-source an institution already operates, from a reviewed, digest-pinned
-pack. The core is the source-neutral model and authoring checks; the
-runtime is a bounded port of Apache Camel concepts whose port table is
-the contract (`products/adapter/CONCEPT.md` section 8.10); `adapterctl`
-is authoring and operator tooling. The adapter inherits no authorization
+`registry-adapterctl`, `registry-adapter-job`, `registry-adapter-connectors`) exposes a compiled,
+standard registry API over a source an institution already operates, from a
+reviewed, digest-pinned pack. The core is the source-neutral model and
+authoring checks; the runtime is a bounded port of Apache Camel concepts
+whose port table is the contract (`products/adapter/CONCEPT.md` section
+8.10); `adapterctl` is authoring and operator tooling. The connector crate
+is parked: it reaches exactly `registry-breg-client` behind an
+off-by-default feature, is linked by no facade binary and no job path,
+never reaches a product runtime, CLI, database crate, or any Coordinator
+crate, and
+`products/adapter/scripts/check_dependency_direction.py` enforces that
+split. The adapter inherits no authorization
 from any product and grants none to any source: upstream calls run under
 the deployment's own credential, or without an application credential for
 numeric loopback, HTTPS with mTLS, or a fixed HTTPS source carrying the
@@ -350,7 +358,7 @@ Each owning guide lists its own gates. The entry points:
 | Coordinator | `products/coordinator/scripts/check_dependency_direction.py`, `check-schemas.sh`, `test-postgres.sh` | `products/coordinator/AGENTS.md` |
 | Document Store | `products/documents/scripts/check-checkpoint.sh`, `check-contracts.sh`, the PostgreSQL suites (`postgres_journey` also needs `REGISTRY_RENDER_BIN`) | `products/documents/AGENTS.md`, `products/documents/README.md` |
 | Discovery | `products/discovery/scripts/check-contracts.sh`, `test-http.sh` | `products/discovery/AGENTS.md` |
-| Adapter | `products/adapter/scripts/check-contracts.sh`, `check-port-table.py`, `test-postgres.sh` | `products/adapter/AGENTS.md` |
+| Adapter | `products/adapter/scripts/check-contracts.sh`, `check-port-table.py`, `check_dependency_direction.py`, `test-postgres.sh` | `products/adapter/AGENTS.md` |
 | Clients, bindings, unified packages | per-binding `npm test` and `unittest` runs, `release/scripts/sync-registry-client-node.py --check` | `crates/CLIENTS.md` |
 | Release | `release/scripts/registry-release validate release/manifests/<current>.yaml`, `check-release-source-model.sh` | `CONTRIBUTING.md`, `release/VERIFY.md` |
 | Docs site | `npm test` and `npm run check` in `docs/site/` | `docs/site/AGENTS.md` |

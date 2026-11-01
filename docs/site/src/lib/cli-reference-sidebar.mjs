@@ -29,6 +29,7 @@ const binaries = [
   'evidence-oid4vci',
   'registry-render',
   'adapter',
+  'adapter-job',
   'adapterctl',
 ];
 

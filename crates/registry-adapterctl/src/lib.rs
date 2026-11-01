@@ -17,6 +17,8 @@
 mod check;
 mod compile;
 mod fixtures;
+mod job;
+mod job_runtime;
 mod project;
 mod report;
 mod schemas;
@@ -54,6 +56,8 @@ enum Command {
     /// Check an authored adapter project, its pinned profile and pack, and
     /// its fixtures, offline, and print the findings.
     Check(check::CheckArgs),
+    /// Operate one authored ingestion job.
+    Job(job::JobArgs),
     /// Operate one authored adapter project.
     Project(project::ProjectArgs),
     /// Write the generated JSON Schemas of the five Adapter formats, or
@@ -132,6 +136,7 @@ where
     let Cli { format, command } = cli;
     let command_name = match &command {
         Command::Check(_) => "check",
+        Command::Job(_) => "job check",
         Command::Project(project) => match project.command {
             project::ProjectCommand::Lock(_) => "project lock",
         },
@@ -144,6 +149,9 @@ where
     };
     let outcome = match command {
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
+        Command::Job(job) => match job.command {
+            job::JobCommand::Check(args) => job_command(args, format, command_name, stdout, stderr),
+        },
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
         Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
@@ -249,6 +257,83 @@ fn check_command(
         envelope["fixtures"] = json!("contracts only, replay not run");
     }
     write_success(&envelope, &checked, format, stdout)
+}
+
+/// Run `job check` and write its verdict: the compiled artifacts, a
+/// refusal carrying the compile's own diagnostics, or a failure naming
+/// the broken environment.
+fn job_command(
+    args: job::JobCheckArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    match job::run(&args) {
+        Ok(run) if refused(&run.warnings, args.deny_warnings) => {
+            let mut checked = Report::new(run.warnings);
+            checked.set_files_checked(run.files_checked);
+            let exit = DOMAIN_REFUSAL_EXIT;
+            let envelope = json!({
+                "ok": false,
+                "command": command_name,
+                "status": failure_status(exit),
+                "diagnostics": checked.to_json_value(),
+            });
+            write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
+                .map(|()| ExitCode::from(exit))
+        }
+        Ok(run) => {
+            let mut report = json!({
+                "command": command_name,
+                "pack": run.pack,
+                "job": run.job,
+                "runtime": run.runtime,
+                "filesChecked": run.files_checked,
+                "diagnostics": Report::new(run.warnings).to_json_value(),
+                "compiled": "validated offline; no send ran and no read executed",
+            });
+            report["ok"] = json!(true);
+            report["status"] = json!("complete");
+            let mut out = Vec::new();
+            report::write(&report, &mut out).map_err(|_| ())?;
+            if format == OutputFormat::Json {
+                let _ = stdout.write_all(&out);
+            } else {
+                let _ = writeln!(stdout, "{}", human_lead(&report));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(job::JobCheckFailure::Io { path, source }) => {
+            let exit = OPERATIONAL_FAILURE_EXIT;
+            let report = failure(
+                command_name,
+                exit,
+                vec![json!({
+                    "severity": "error",
+                    "code": "adapterctl.io-failure",
+                    "artifact": "filesystem",
+                    "path": path,
+                    "message": format!("the file could not be read: {source}"),
+                    "suggestedAction": "Correct the path or permissions, then retry.",
+                })],
+            );
+            write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
+        }
+        Err(job::JobCheckFailure::Refused { diagnostics, .. }) => {
+            let mut checked = Report::new(diagnostics);
+            checked.set_files_checked(0);
+            let exit = DOMAIN_REFUSAL_EXIT;
+            let envelope = json!({
+                "ok": false,
+                "command": command_name,
+                "status": failure_status(exit),
+                "diagnostics": checked.to_json_value(),
+            });
+            write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
+                .map(|()| ExitCode::from(exit))
+        }
+    }
 }
 
 /// Run `project lock` and write its verdict: the rewritten pins, a refusal
@@ -560,6 +645,7 @@ fn render_human(report: &Value, checked: &Report, stdout: &mut dyn io::Write) ->
 
 fn human_lead(report: &Value) -> String {
     match report["command"].as_str().unwrap_or("command") {
+        "job check" => "The job compiled offline; nothing ran.".to_owned(),
         "check" => "Authoring check passed.".to_owned(),
         "schemas" if report["check"] == json!(true) => "Schema drift check passed.".to_owned(),
         "schemas" => "Generated schemas written; nothing drifted.".to_owned(),

@@ -71,7 +71,7 @@ export const PRODUCT_CLI_BINARIES = Object.freeze({
   'registry-messaging': Object.freeze(['messaging', 'messagingctl']),
   'registry-coordinator': Object.freeze(['coordinator', 'coordinatorctl']),
   'registry-documents': Object.freeze(['documents', 'documentsctl']),
-  'registry-adapter': Object.freeze(['adapter', 'adapterctl']),
+  'registry-adapter': Object.freeze(['adapter', 'adapter-job', 'adapterctl']),
 });
 
 /**

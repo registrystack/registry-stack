@@ -11,11 +11,26 @@
 //! (`products/adapter/CONCEPT.md` section 5.5); the authoring checks in
 //! `crate::checks` refuse their absence.
 
+use crate::job::CsvDecoder;
 use crate::model::{
     AggregationStrategy, ErrorClass, Expression, HttpMethod, RhaiExpression, SendUri,
 };
+use crate::project::RecordFieldType;
 use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId, LocalId, UniqueList};
 use serde::{Deserialize, Serialize};
+
+/// A filter one served operation declares: the record field it names
+/// and that field's type. The operation's binding declares the filters;
+/// the engine compiles them into the effective contract, and the
+/// facade's request template matches a caller's filter values against
+/// them (`products/adapter/CONCEPT.md` sections 8.9 and 9).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServedFilter {
+    /// The filter's name, as the caller writes it.
+    pub name: String,
+    /// The record field type the filter's values must carry.
+    pub field_type: RecordFieldType,
+}
 
 /// A percentage the reader bounds to 1 through 100 (CFG-QTY-4).
 pub(crate) type Percentage = BoundedU32<1, 100>;
@@ -107,6 +122,12 @@ pub enum Step {
     Loop(LoopStep),
     /// Call a static endpoint and merge its reply.
     Enrich(EnrichStep),
+    /// Poll a job source through a static `file:` or `sftp:` URI and merge
+    /// or replace the body with one bounded page
+    /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Job-only:
+    /// the authoring checks refuse the step in every facade-reachable
+    /// route.
+    PollEnrich(PollEnrichStep),
     /// Wrap steps in a resilience4j circuit breaker with `onFallback`.
     CircuitBreaker(CircuitBreakerStep),
     /// Throttle sends; a waiting exchange waits at most until its
@@ -188,6 +209,18 @@ pub struct ToParameters {
         schemars(schema_with = "crate::model::external_id_map_schema::<Expression>")
     )]
     pub query: std::collections::BTreeMap<ExternalId, Expression>,
+    /// Named parameter name to expression of a `postgres:` send, each key
+    /// a parameter the endpoint's digest-pinned query file declares
+    /// (`products/adapter/CONCEPT.md` section 8.10, the SQL row; CFG-ID-1
+    /// keys, engine-evaluated expressions). The checks refuse more than
+    /// sixteen parameters (`adapter.job.postgres-parameters-unbounded`)
+    /// and the member on any non-postgres send.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::external_id_map_schema::<Expression>")
+    )]
+    pub query_parameters: std::collections::BTreeMap<ExternalId, Expression>,
     /// The request body expression, marshalled to JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Expression>,
@@ -602,8 +635,7 @@ impl LoopStep {
 }
 
 /// An `enrich` step: call a static endpoint and merge the reply. Static URI
-/// only; no `pollEnrich`. Absent a strategy, the reply replaces the body
-/// (Camel's default).
+/// only; absent a strategy, the reply replaces the body (Camel's default).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -622,6 +654,71 @@ pub struct EnrichStep {
     /// `crate::checks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<ToParameters>,
+}
+
+/// A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher
+/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one
+/// bounded page from a static `file:` or `sftp:` endpoint the pack
+/// declares; no dynamic endpoint expression and no `consumerSendTo` are
+/// ported. Absent a strategy, the page replaces the body, as `enrich`
+/// replaces it. `timeoutMilliseconds` is mandatory: the checks refuse its
+/// absence under `adapter.job.poll-timeout`, and the reader refuses a
+/// value outside 1 to 10000 (D39 keeps the platform-frozen per-attempt
+/// ceiling for every endpoint). The step never appears in a
+/// facade-reachable route (`adapter.job.poll-facade-refused`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PollEnrichStep {
+    /// The static job source URI: `file:<endpointId>` or
+    /// `sftp:<endpointId>`, naming a declared pack endpoint of the matching
+    /// component. The authoring checks refuse an unknown endpoint
+    /// (`adapter.job.poll-endpoint-unknown`) and an endpoint whose
+    /// component does not match the scheme
+    /// (`adapter.job.poll-endpoint-kind`).
+    pub uri: String,
+    /// The mandatory poll timeout in milliseconds, bounded 1 to 10000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_milliseconds: Option<BoundedU64<1, 10_000>>,
+    /// The decoder the read applies: absent, `raw`, the file bytes' digest
+    /// page; `csv` decodes rows with the options of [`CsvDecoder`], written
+    /// either as the bare name `csv` or as a mapping of its options;
+    /// `jsonl` decodes one bounded JSON value per line. The checks refuse
+    /// any other name under `adapter.job.decoder-unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder: Option<PollDecoder>,
+    /// The aggregation strategy, Camel's Poll Enricher aggregation;
+    /// absent, the page replaces the body, like `enrich` with no strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregation_strategy: Option<AggregationStrategy>,
+}
+
+/// The decoder a `pollEnrich` step selects. A mapping form is a `csv`
+/// declaration with its options, the only decoder that carries options; a
+/// bare string names one of `csv`, `jsonl`, or `raw`. One member carries
+/// both forms, so `decoder: csv` and `decoder: {"delimiter": ";"}` read
+/// the same way.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PollDecoder {
+    /// A `csv` declaration with its options; an empty mapping selects csv
+    /// at Camel's defaults.
+    Csv(CsvDecoder),
+    /// A bare decoder name.
+    Named(String),
+}
+
+impl PollDecoder {
+    /// The decoder name the selection carries: `csv` for the options
+    /// mapping form, otherwise the written name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Csv(_) => "csv",
+            Self::Named(name) => name.as_str(),
+        }
+    }
 }
 
 /// A `circuitBreaker` step: resilience4j semantics and defaults
@@ -1311,6 +1408,7 @@ fn is_default_collision_avoidance_factor(value: &f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::job::DecoderEncoding;
     use crate::model::{RhaiExpression, SendComponent};
 
     fn rhai(file: &str, entrypoint: &str) -> Expression {
@@ -1428,6 +1526,46 @@ mod tests {
         );
         let back = serde_json::to_string(&step).expect("serialize");
         assert_eq!(serde_json::from_str::<Step>(&back).ok(), Some(step));
+    }
+
+    /// The named parameters of a `postgres:` send (CONCEPT 8.10, the SQL
+    /// row): parameter name to expression, keys the pinned query file
+    /// documents. An empty map stays off the wire.
+    #[test]
+    fn to_parameters_carry_postgres_named_parameters() {
+        let step: Step = serde_json::from_str(
+            r#"{
+                "to": {
+                    "uri": "postgres:ledger",
+                    "parameters": {
+                        "queryParameters": {
+                            "since": { "exchangeProperty": "cursor" },
+                            "limit": { "constant": 200 }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("parse");
+        let Step::To(to) = &step else {
+            panic!("expected a to step");
+        };
+        let parameters = to.parameters.as_ref().expect("parameters");
+        assert_eq!(parameters.query_parameters.len(), 2);
+        assert!(parameters.query.is_empty());
+        let json = serde_json::to_value(&step).expect("serialize");
+        assert_eq!(
+            json["to"]["parameters"]["queryParameters"]["limit"],
+            serde_json::json!({"constant": 200})
+        );
+        let plain: Step =
+            serde_json::from_str(r#"{ "to": { "uri": "postgres:ledger", "parameters": {} } }"#)
+                .expect("parse");
+        let wire = serde_json::to_string(&plain).expect("serialize");
+        assert!(
+            !wire.contains("queryParameters"),
+            "an empty named-parameter map stays off the wire"
+        );
     }
 
     /// `setBody` and `transform`, ported from
@@ -1732,7 +1870,7 @@ mod tests {
 
     /// The Content Enricher, ported from
     /// <https://camel.apache.org/components/next/eips/enrich-eip.html>;
-    /// static URI only, no `pollEnrich`.
+    /// static URI only.
     #[test]
     fn enrich_step_round_trips() {
         let step: Step = serde_json::from_str(
@@ -1752,6 +1890,113 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Step>(&back).ok().as_ref(),
             Some(&step)
+        );
+    }
+
+    /// The Poll Enricher, ported from
+    /// <https://camel.apache.org/components/next/eips/pollEnrich-eip.html>
+    /// as the job-only read step of CONCEPT 17.2: a static `file:` or
+    /// `sftp:` URI, a mandatory timeout, an optional decoder, and the
+    /// enrich aggregation strategies. Absent a decoder the read is raw;
+    /// absent a strategy the page replaces the body.
+    #[test]
+    fn poll_enrich_step_round_trips() {
+        let step: Step = serde_json::from_str(
+            r#"{
+                "pollEnrich": {
+                    "uri": "file:submissions",
+                    "timeoutMilliseconds": 5000,
+                    "decoder": { "delimiter": ";", "quote": "'" },
+                    "aggregationStrategy": { "type": "json-merge", "from": "page", "into": "records" }
+                }
+            }"#,
+        )
+        .expect("parse");
+        let Step::PollEnrich(poll) = &step else {
+            panic!("expected a pollEnrich step");
+        };
+        assert_eq!(poll.uri, "file:submissions");
+        assert_eq!(
+            poll.timeout_milliseconds.map(|bound| bound.get()),
+            Some(5000)
+        );
+        assert_eq!(
+            poll.decoder.as_ref().map(PollDecoder::name),
+            Some("csv"),
+            "the options mapping form selects csv"
+        );
+        let Some(PollDecoder::Csv(csv)) = poll.decoder.as_ref() else {
+            panic!("expected csv options");
+        };
+        assert_eq!(csv.delimiter, ';');
+        assert_eq!(csv.quote, '\'');
+        assert!(csv.header, "Camel reads the header record by default");
+        assert_eq!(csv.encoding, DecoderEncoding::Utf8);
+        let back = serde_json::to_string(&step).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<Step>(&back).ok().as_ref(),
+            Some(&step)
+        );
+
+        // The bare names and the absent member.
+        let bare: Step = serde_json::from_str(
+            r#"{ "pollEnrich": { "uri": "sftp:dropbox", "timeoutMilliseconds": 5 } }"#,
+        )
+        .expect("parse");
+        let Step::PollEnrich(poll) = &bare else {
+            panic!("expected a pollEnrich step");
+        };
+        assert!(poll.decoder.is_none(), "absent decoder reads raw");
+        let named: PollEnrichStep = serde_json::from_str(
+            r#"{ "uri": "file:submissions", "timeoutMilliseconds": 5, "decoder": "jsonl" }"#,
+        )
+        .expect("parse");
+        assert_eq!(named.decoder.as_ref().map(PollDecoder::name), Some("jsonl"));
+        let bare_csv: PollEnrichStep = serde_json::from_str(
+            r#"{ "uri": "file:submissions", "timeoutMilliseconds": 5, "decoder": "csv" }"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            bare_csv.decoder.as_ref().map(PollDecoder::name),
+            Some("csv")
+        );
+
+        // The empty mapping selects csv at Camel's defaults.
+        let defaults: PollDecoder = serde_json::from_str("{}").expect("parse");
+        assert_eq!(defaults.name(), "csv");
+        let PollDecoder::Csv(csv) = defaults else {
+            panic!("expected csv");
+        };
+        assert_eq!(csv.delimiter, ',');
+        assert_eq!(csv.quote, '"');
+
+        // An unknown member inside the csv options is refused by the
+        // reader (CFG-SCHEMA-8); a name outside the closed set parses and
+        // is refused by the checks under adapter.job.decoder-unknown.
+        assert!(
+            serde_json::from_str::<PollDecoder>(r#"{"bogus": 1}"#).is_err(),
+            "an unknown csv option is refused"
+        );
+        let unchecked: PollDecoder = serde_json::from_str("\"parquet\"").expect("parse");
+        assert_eq!(unchecked.name(), "parquet");
+
+        // The timeout is typed: the reader refuses zero and anything over
+        // the platform-frozen ceiling.
+        assert!(serde_json::from_str::<PollEnrichStep>(
+            r#"{ "uri": "file:submissions", "timeoutMilliseconds": 0 }"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<PollEnrichStep>(
+            r#"{ "uri": "file:submissions", "timeoutMilliseconds": 10001 }"#
+        )
+        .is_err());
+        // Unknown members refuse.
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "pollEnrich": { "uri": "file:submissions", "timeoutMilliseconds": 5, "consumerSendTo": "direct:x" } }"#,
+            )
+            .is_err(),
+            "consumerSendTo is not ported"
         );
     }
 

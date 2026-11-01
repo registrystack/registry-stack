@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Synthetic fixture (NOT captured, and NOT from a real ODK Central
+# server): repeat table: the `household/member` repeat entity set
+# (`Submissions.household.member`), read by offset in parent
+# submission order. Each row keys on its own `__id` and carries the
+# `__Submissions-id` parent reference in its value; repeat rows carry
+# no `__system`, so no revision. The first run reads three rows and
+# the cursor `{offset: 3}` comes back; at the tail the empty page
+# hands the cursor back unchanged.
+# The upstream shape follows the documented Central OData page
+# (https://docs.getodk.org/central-api-odata-endpoints/: `value`,
+# repeat entity sets, `$orderby` on
+# `$root/Submissions/__system/submissionDate`, `$skip`, `$top`). Every
+# value is a made-up stand-in; the reply's own `@odata.nextLink` is
+# synthetic and unread by the route.
+# The entry shape is the provisional job replay contract: `jobRun`
+# carries the cursor the job restores, `upstream` the request the
+# route sends and the scripted reply, `expected` the item page or
+# problem class. crates/registry-adapter/tests/job_pack_replay.rs
+# replays every entry through the job compiler.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: odk-central-repeats-page
+pack: odk-central
+upstreamVersion: unverified
+provenance:
+  type: documented
+  reference: https://docs.getodk.org/central-api-odata-endpoints/
+intercepts:
+- type: endpoint
+  endpoint: odk-odata
+entries:
+- jobRun:
+    cursor: null
+  upstream:
+  - request:
+      endpoint: odk-odata
+      method: GET
+      path: /
+      query: '%24orderby=%24root%2FSubmissions%2F__system%2FsubmissionDate%20asc&%24skip=0&%24top=100'
+    response:
+      status: 200
+      body:
+        '@odata.context': https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/$metadata#Submissions.household.member
+        value:
+        - &id001
+          member_name: Fixture Member 1-1
+          member_age: 14
+          __id: c3c6af3e9636aebd6f5c431f3aa219b107544ba1
+          __Submissions-id: uuid:00000000-0000-4000-8000-000000000001
+        - &id002
+          member_name: Fixture Member 1-2
+          member_age: 27
+          __id: e73d6d89251710f319d19e915b2d2bda79273345
+          __Submissions-id: uuid:00000000-0000-4000-8000-000000000001
+        - &id003
+          member_name: Fixture Member 2-1
+          member_age: 15
+          __id: f11f667bb3f9b56662318b203bf7f0797818329d
+          __Submissions-id: uuid:00000000-0000-4000-8000-000000000002
+  expected:
+    type: page
+    page:
+      items:
+      - key: c3c6af3e9636aebd6f5c431f3aa219b107544ba1
+        value: *id001
+      - key: e73d6d89251710f319d19e915b2d2bda79273345
+        value: *id002
+      - key: f11f667bb3f9b56662318b203bf7f0797818329d
+        value: *id003
+      next:
+        offset: 3
+- jobRun:
+    cursor:
+      offset: 3
+  upstream:
+  - request:
+      endpoint: odk-odata
+      method: GET
+      path: /
+      query: '%24orderby=%24root%2FSubmissions%2F__system%2FsubmissionDate%20asc&%24skip=3&%24top=100'
+    response:
+      status: 200
+      body:
+        '@odata.context': https://central.example.invalid/v1/projects/1/forms/fixture-form.svc/$metadata#Submissions.household.member
+        value: []
+  expected:
+    type: page
+    page:
+      items: []
+      next:
+        offset: 3
