@@ -3375,6 +3375,30 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn("docs: {", text)
         self.assertNotIn("docs-dispatch", text)
 
+    def test_canary_manifest_carries_components_from_the_first_rstack_release(
+        self,
+    ) -> None:
+        # The candidate validator requires `components` on every stack
+        # candidate at or after the first rstack release, so a canary
+        # version past that release must build the member the same way
+        # release-candidate.yml does.
+        _, document = workflow("release-canary.yml")
+        script = "\n".join(
+            step.get("run", "")
+            for job in document["jobs"].values()
+            for step in job.get("steps", [])
+        )
+        version = re.search(r"^version=(\d+)\.(\d+)\.(\d+)$", script, re.M)
+        self.assertIsNotNone(version)
+        canary_version = tuple(int(part) for part in version.groups())
+        self.assertIsNotNone(release_roster.RSTACK_FIRST_RELEASE)
+        self.assertGreaterEqual(canary_version, release_roster.RSTACK_FIRST_RELEASE)
+        self.assertIn(
+            'python3 release/scripts/rstack_components.py --version "${version}"',
+            script,
+        )
+        self.assertIn("components: $components[0]", script)
+
     def test_scorecard_is_schedule_or_manual_only(self) -> None:
         text, _ = workflow("scorecard.yml")
         trigger = text.split("permissions:", 1)[0]

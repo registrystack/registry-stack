@@ -149,6 +149,8 @@ jobs:
               encoding="utf-8",
           )
           PY
+          python3 release/scripts/rstack_components.py --version "${version}" \
+            < canary/payloads.json > canary/components.json
           for name in "${image_names[@]}"; do
             jq -n \
               --arg name "${name}" \
@@ -199,6 +201,7 @@ jobs:
             --slurpfile payloads canary/payloads.json \
             --slurpfile images canary/images.json \
             --slurpfile scans canary/scans.json \
+            --slurpfile components canary/components.json \
             '{
               schema_version: "registry-stack.release-candidate.v2",
               repository: $repository,
@@ -238,7 +241,8 @@ jobs:
                 name: ("registry-stack-" + $tag + "-candidate.tar.gz"),
                 size: $bundle_size,
                 sha256: $bundle_sha
-              }
+              },
+              components: $components[0]
             }' > canary/candidate-manifest.draft.json
           python3 release/scripts/release_candidate.py seal-candidate \
             --draft canary/candidate-manifest.draft.json \
