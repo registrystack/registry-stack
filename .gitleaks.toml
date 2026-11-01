@@ -36,9 +36,16 @@ regexes = [
 [[allowlists]]
 description = "Allow the throwaway ECDSA client key generated for the Adapter mTLS unit tests; it exists only under #[cfg(test)] and no deployment has trusted its self-signed certificate."
 condition = "AND"
-paths = ["^crates/registry-adapter/src/auth/tls\\.rs$"]
+paths = ["^crates/registry-adapter/src/engine/auth/tls\\.rs$"]
 regexTarget = "line"
 regexes = ['''const CLIENT_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcu64hV3YOzpMTbrA''']
+
+[[allowlists]]
+description = "Allow the ODK Central repeat instance ids in the odk-central repeats fixture; they are 40-character hex row ids the source route uses as item keys, not credentials."
+condition = "AND"
+paths = ["^products/adapter/packs/odk-central/fixtures/odk-central-repeats-page\\.yaml$"]
+regexTarget = "line"
+regexes = ['''^\s*(- )?(key|__id): [0-9a-f]{40}$''']
 
 [[allowlists]]
 description = "Allow the reconstructed GraphQL page-state token in the Adapter GraphQL cursor source-shape fixture; it is a documented synthetic value, not a credential."

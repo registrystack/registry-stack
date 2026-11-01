@@ -278,11 +278,11 @@ test('drops a gated product\'s pages and CLI references from the docs collection
   assert.deepEqual(omittedCliBinaries(withoutMessaging), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render',
     'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
-    'adapter', 'adapterctl',
+    'adapter', 'adapter-job', 'adapterctl',
   ]);
   assert.deepEqual(omittedCliBinaries(withMessaging), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
-    'adapter', 'adapterctl',
+    'adapter', 'adapter-job', 'adapterctl',
   ]);
 });
 
@@ -305,7 +305,7 @@ test('drops Registry Scheduling\'s and Registry Render\'s pages and CLI referenc
   }
   assert.deepEqual(omittedCliBinaries(withSchedulingAndRender), [
     'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
-    'adapter', 'adapterctl',
+    'adapter', 'adapter-job', 'adapterctl',
   ]);
 });
 
@@ -331,7 +331,7 @@ test('drops the citizen services\' pages and CLI references from the docs collec
   }
   assert.deepEqual(omittedCliBinaries(withBregServices), [
     'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
-    'adapter', 'adapterctl',
+    'adapter', 'adapter-job', 'adapterctl',
   ]);
 });
 
@@ -350,7 +350,7 @@ test('drops Registry Coordinator\'s pages and CLI references from the docs colle
   }
   assert.deepEqual(omittedCliBinaries(withCoordinator), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl',
-    'documents', 'documentsctl', 'adapter', 'adapterctl',
+    'documents', 'documentsctl', 'adapter', 'adapter-job', 'adapterctl',
   ]);
 });
 
