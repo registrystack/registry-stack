@@ -467,8 +467,9 @@ fn the_compile_holds_the_read_lock_bounds() {
         error
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "platform.runtime-config.refused"),
-        "the reader's bound carries the refusal: {:?}",
+            .any(|diagnostic| diagnostic.code == "config.out-of-range"
+                && diagnostic.path == "/sources/file/dropbox/readLockCheckIntervalMilliseconds"),
+        "the reader's bound carries the located refusal: {:?}",
         error.diagnostics
     );
     let stray = write_fixture(

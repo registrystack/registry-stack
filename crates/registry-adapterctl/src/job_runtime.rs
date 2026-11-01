@@ -9,8 +9,8 @@
 //! `sources` block, and the job host's `store` block. The tests below
 //! hold every member list of the `sources` block to the reader's own, so
 //! a source member the reader gains or drops fails them. The `store`
-//! block mirrors `registry_adapter_job`'s store reader, which this crate
-//! does not depend on, so its member list is held by review.
+//! block mirrors the reader's `JobStoreConfig`; its member list is held
+//! by review.
 
 use std::collections::BTreeMap;
 

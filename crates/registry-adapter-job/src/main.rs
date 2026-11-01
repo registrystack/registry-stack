@@ -649,19 +649,15 @@ fn read_job(path: &Path) -> Result<AdapterJob, String> {
     .map_err(|error| format!("the job definition was refused: {error}"))
 }
 
-/// Read the job store block of the operator runtime config: the one
-/// reader the compile path shares (`engine::job_sources`), then the
-/// host's own strict decode of the `store` member alone. The endpoint
-/// bindings and the job sources block refuse in that reader; the store
-/// block refuses here.
+/// Read the job store block of the operator runtime config through the
+/// one reader the compile path shares (`engine::job_sources`), which
+/// refuses an undeclared member of the block like any other.
 fn read_store(path: &Path) -> Result<store::JobStoreConfig, String> {
     let document = registry_adapter::engine::job_sources::JobRuntimeConfig::load(path)
         .map_err(|error| format!("the runtime config was refused: {error}"))?;
-    let store = document
+    document
         .store
-        .ok_or_else(|| "the runtime config carries no store block for the job store".to_string())?;
-    serde_json::from_value::<store::JobStoreConfig>(store)
-        .map_err(|error| format!("the store block was refused: {error}"))
+        .ok_or_else(|| "the runtime config carries no store block for the job store".to_string())
 }
 
 /// One timestamp in the operator output: UTC, RFC 3339, or absent.

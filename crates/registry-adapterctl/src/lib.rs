@@ -270,6 +270,19 @@ fn job_command(
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
     match job::run(&args) {
+        Ok(run) if refused(&run.warnings, args.deny_warnings) => {
+            let mut checked = Report::new(run.warnings);
+            checked.set_files_checked(run.files_checked);
+            let exit = DOMAIN_REFUSAL_EXIT;
+            let envelope = json!({
+                "ok": false,
+                "command": command_name,
+                "status": failure_status(exit),
+                "diagnostics": checked.to_json_value(),
+            });
+            write_configuration_report(&checked, command_name, format, envelope, stdout, stderr)
+                .map(|()| ExitCode::from(exit))
+        }
         Ok(run) => {
             let mut report = json!({
                 "command": command_name,
@@ -277,6 +290,7 @@ fn job_command(
                 "job": run.job,
                 "runtime": run.runtime,
                 "filesChecked": run.files_checked,
+                "diagnostics": Report::new(run.warnings).to_json_value(),
                 "compiled": "validated offline; no send ran and no read executed",
             });
             report["ok"] = json!(true);
