@@ -1576,7 +1576,7 @@ mod tests {
         let facts = export
             .artifacts
             .iter()
-            .find(|artifact| artifact.path == "schemas/registry-facts.yaml")
+            .find(|artifact| artifact.path == "adapter-packs/registry/schemas/facts.json")
             .unwrap();
         let facts: Value = serde_json::from_slice(&facts.bytes).unwrap();
         assert_eq!(
