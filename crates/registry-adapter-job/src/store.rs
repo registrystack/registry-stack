@@ -757,6 +757,7 @@ pub async fn stage_item(
     token: i64,
     ttl: Duration,
 ) -> Result<Option<StagedItem>, StoreError> {
+    let now = storage_time(now);
     let tx = client.transaction().await?;
     renew_lease(&tx, job_id, token, ttl).await?;
     let prior = read_prior(&tx, job_id, key, true).await?;
@@ -866,6 +867,7 @@ pub async fn peek_item(
     retry_refused: bool,
     now: SystemTime,
 ) -> Result<Option<StagedItem>, StoreError> {
+    let now = storage_time(now);
     let prior = read_prior(client, job_id, key, false).await?;
     let decision = decide(prior.as_ref(), digest, retry_refused);
     Ok(match (decision, prior) {
@@ -1797,6 +1799,17 @@ pub async fn inspect_item(
     }))
 }
 
+/// PostgreSQL `timestamptz` keeps microseconds, so a staged time is cut to
+/// that precision before it is written or handed off. A re-delivery read
+/// back from the row then carries the same event time the first hand-off
+/// did, on hosts whose clock has finer resolution.
+fn storage_time(time: SystemTime) -> SystemTime {
+    match time.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(since) => time - Duration::from_nanos(u64::from(since.subsec_nanos() % 1_000)),
+        Err(_) => time,
+    }
+}
+
 #[cfg(test)]
 mod identity_tests {
     use super::{identity_verdict, IdentityVerdict};
@@ -1831,5 +1844,22 @@ mod identity_tests {
             IdentityVerdict::Refused,
             "a legacy state with items needs the explicit rebind"
         );
+    }
+}
+
+#[cfg(test)]
+mod storage_time_tests {
+    use super::storage_time;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn a_staged_time_keeps_only_the_microseconds_postgresql_stores() {
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_793_696_979);
+        assert_eq!(
+            storage_time(base + Duration::from_nanos(56_268_933)),
+            base + Duration::from_micros(56_268)
+        );
+        let exact = base + Duration::from_micros(56_268);
+        assert_eq!(storage_time(exact), exact);
     }
 }

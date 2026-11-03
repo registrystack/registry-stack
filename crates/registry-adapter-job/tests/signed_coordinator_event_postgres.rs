@@ -603,7 +603,6 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
         }
     );
 
-    assert_eq!(first.event_time, original_time);
     assert_eq!(
         original_time
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -611,18 +610,16 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
             .subsec_nanos()
             % 1_000,
         789,
-        "the first delivery carries an intentionally sub-microsecond fraction"
+        "the staged clock reading carries an intentionally sub-microsecond fraction"
     );
-    assert_ne!(retry.event_time, original_time);
     assert_eq!(
-        retry
-            .event_time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("the stored fixture time follows epoch")
-            .subsec_nanos()
-            % 1_000,
-        0,
-        "PostgreSQL returns its microsecond timestamp precision"
+        first.event_time,
+        SystemTime::UNIX_EPOCH + Duration::new(1_767_225_600, 123_456_000),
+        "the first hand-off carries the microsecond time PostgreSQL stores"
+    );
+    assert_eq!(
+        retry.event_time, first.event_time,
+        "the redelivery read back from the row carries the first hand-off's time"
     );
     let bodies = receiver.bodies.lock().expect("the receiver body lock");
     assert_eq!(bodies.len(), 2);
