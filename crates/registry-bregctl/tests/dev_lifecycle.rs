@@ -159,6 +159,87 @@ fn docker_line(args: &[&str]) -> String {
         .to_owned()
 }
 
+/// The registry lookup an exported Evidence source makes, read back from the
+/// Adapter pack the export wrote: the route's registry call and constant
+/// headers, the fields its response schema admits, and the unresolved problem
+/// its host protocol declares.
+struct ExportedLookup {
+    method: String,
+    path: String,
+    access_profile: String,
+    /// The `$select` list: every field the response schema admits.
+    select: String,
+    headers: Vec<(String, String)>,
+    /// The authored selector field of each source input.
+    selector_fields: Vec<String>,
+    response: Value,
+    unresolved: Value,
+}
+
+fn exported_lookup(export: &Path, source_id: &str) -> ExportedLookup {
+    let read = |path: PathBuf| -> Value {
+        let bytes =
+            fs::read(&path).unwrap_or_else(|_| panic!("the export writes {}", path.display()));
+        serde_norway::from_slice(&bytes)
+            .unwrap_or_else(|_| panic!("{} is readable YAML or JSON", path.display()))
+    };
+    let source = read(export.join(format!("sources/{source_id}.yaml")));
+    let pack_root = export.join("adapter-packs").join(source_id);
+    let pack = read(pack_root.join("pack.yaml"));
+    let route = pack["sourceRoutes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|route| route["id"] == source["route"])
+        .expect("the pack holds the route the source names");
+    let steps = route["steps"].as_array().unwrap();
+    let call = &steps
+        .iter()
+        .find_map(|step| step.get("to"))
+        .expect("the route calls the registry")["parameters"];
+    let headers = steps
+        .iter()
+        .filter_map(|step| step.get("setHeader"))
+        .map(|header| {
+            (
+                header["name"].as_str().unwrap().to_owned(),
+                header["value"]["constant"]
+                    .as_str()
+                    .expect("a constant header value")
+                    .to_owned(),
+            )
+        })
+        .collect();
+    let response = read(pack_root.join("schemas/response.json"));
+    let select = response["properties"]["data"]["properties"]["domainData"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(",");
+    let selector_fields = source["inputs"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|input| input["selector"]["field"].as_str().unwrap().to_owned())
+        .collect();
+    let protocol = read(pack_root.join("protocols/registry-lookup.json"));
+    ExportedLookup {
+        method: call["httpMethod"].as_str().unwrap().to_owned(),
+        path: call["path"].as_str().unwrap().to_owned(),
+        access_profile: call["query"]["accessProfile"]["constant"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        select,
+        headers,
+        selector_fields,
+        response,
+        unresolved: protocol["unresolvedProblem"].clone(),
+    }
+}
+
 /// The most recent modification time of one retained record, following a
 /// directory to the newest file it holds.
 fn newest(path: &Path) -> std::time::SystemTime {
@@ -1370,26 +1451,21 @@ seed:
         "--output",
         exports.to_str().unwrap(),
     ]);
-    let exported: Value =
-        serde_norway::from_slice(&fs::read(exports.join("sources/registry-status.yaml")).unwrap())
-            .unwrap();
-    let schema: Value = serde_norway::from_slice(
-        &fs::read(exports.join("schemas/registry-status-response.yaml")).unwrap(),
-    )
-    .unwrap();
+    let exported = exported_lookup(&exports, "registry-status");
     let manifest: Value =
         serde_json::from_slice(&fs::read(exports.join("source-export.json")).unwrap()).unwrap();
-    let unresolved = exported["unresolvedProblem"].clone();
-    let request = exported["request"].clone();
-    assert_eq!(request["method"], "POST");
+    assert_eq!(
+        manifest["provenance"]["accessProfile"],
+        exported.access_profile.as_str()
+    );
+    let unresolved = exported.unresolved.clone();
+    assert_eq!(exported.method, "POST");
     // `code` names both the authored selector field and its HTTP property in
     // this model, so the export's identity name addresses the response too.
-    let identity = request["selectorInputs"][0]["alternatives"][0]["fields"][0]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let declared = schema["properties"]["data"]["properties"]["domainData"]["properties"]
-        [&identity]["type"]
+    let [identity] =
+        <[String; 1]>::try_from(exported.selector_fields.clone()).expect("one selector input");
+    let declared = exported.response["properties"]["data"]["properties"]["domainData"]
+        ["properties"][&identity]["type"]
         .as_array()
         .unwrap()
         .iter()
@@ -1397,13 +1473,6 @@ seed:
         .find(|name| *name != "null")
         .expect("the export declares a scalar type for the identity field")
         .to_owned();
-    let select = request["projection"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|pointer| pointer.as_str().unwrap().rsplit('/').next().unwrap())
-        .collect::<Vec<_>>()
-        .join(",");
     runtime.block_on(async {
         let token = fs::read_to_string(project.join(".breg/dev/secrets/source-token")).unwrap();
         let client = reqwest::Client::builder()
@@ -1413,21 +1482,15 @@ seed:
             .unwrap();
         let lookup = |value: &str| {
             let mut sent = client
-                .post(format!("{origin}{}", request["path"].as_str().unwrap()))
+                .post(format!("{origin}{}", exported.path))
                 .bearer_auth(&token)
                 .query(&[
-                    (
-                        "accessProfile",
-                        manifest["provenance"]["accessProfile"].as_str().unwrap(),
-                    ),
-                    ("$select", select.as_str()),
+                    ("accessProfile", exported.access_profile.as_str()),
+                    ("$select", exported.select.as_str()),
                 ])
                 .json(&json!({"selector": "by-code", "values": {&identity: value}}));
-            for header in request["fixedHeaders"].as_array().unwrap() {
-                sent = sent.header(
-                    header["name"].as_str().unwrap().to_owned(),
-                    header["value"].as_str().unwrap().to_owned(),
-                );
+            for (name, value) in &exported.headers {
+                sent = sent.header(name, value);
             }
             sent.send()
         };
@@ -1742,17 +1805,9 @@ seed:
         "--output",
         export.to_str().unwrap(),
     ]);
-    let source: Value =
-        serde_norway::from_slice(&fs::read(export.join("sources/source-reader.yaml")).unwrap())
-            .unwrap();
-    let request = &source["request"];
-    let select = request["projection"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|pointer| pointer.as_str().unwrap().rsplit('/').next().unwrap())
-        .collect::<Vec<_>>()
-        .join(",");
+    let exported = exported_lookup(&export, "source-reader");
+    assert_eq!(exported.method, "POST");
+    assert_eq!(exported.access_profile, "source-reader");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1760,15 +1815,15 @@ seed:
     runtime.block_on(async {
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let mut request_builder = client
-            .post(format!("http://127.0.0.1:{breg_port}{}", request["path"].as_str().unwrap()))
+            .post(format!("http://127.0.0.1:{breg_port}{}", exported.path))
             .bearer_auth(&token)
-            .query(&[("accessProfile", "source-reader"), ("$select", select.as_str())])
+            .query(&[
+                ("accessProfile", exported.access_profile.as_str()),
+                ("$select", exported.select.as_str()),
+            ])
             .json(&json!({"selector":"by-code-source-reader","values":{"code":"synthetic-source-successor"}}));
-        for header in request["fixedHeaders"].as_array().unwrap() {
-            request_builder = request_builder.header(
-                header["name"].as_str().unwrap(),
-                header["value"].as_str().unwrap(),
-            );
+        for (name, value) in &exported.headers {
+            request_builder = request_builder.header(name, value);
         }
         let response = request_builder.send().await.unwrap();
         assert_eq!(response.status().as_u16(), 200);
