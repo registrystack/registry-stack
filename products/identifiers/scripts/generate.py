@@ -393,6 +393,12 @@ def explicit_entries(
         has_artifact = "artifactPath" in record
         if has_artifact != ("mediaType" in record):
             raise CatalogError(f"records[{index}] has an incomplete artifact")
+        # The identifier publisher serves a slash-terminated URI as a directory
+        # page, so it has no path left for an artifact at that URI.
+        if has_artifact and str(record["uri"]).endswith("/"):
+            raise CatalogError(
+                f"records[{index}]: a slash-terminated URI cannot carry an artifact"
+            )
         source_path = repo_root / record["sourcePath"]
         entry = {
             "uri": record["uri"],

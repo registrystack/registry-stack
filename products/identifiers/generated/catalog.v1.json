@@ -5695,11 +5695,6 @@
       "source": {
         "path": "products/breg/contracts/odrl-profile.jsonld",
         "sha256": "24d0950eb2c1a76d5005850e1145f675ad65df5231867907b41d11fdd2979cdc"
-      },
-      "artifact": {
-        "path": "products/breg/contracts/odrl-profile.jsonld",
-        "sha256": "24d0950eb2c1a76d5005850e1145f675ad65df5231867907b41d11fdd2979cdc",
-        "mediaType": "application/ld+json"
       }
     },
     {
