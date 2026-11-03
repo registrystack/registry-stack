@@ -95,6 +95,20 @@ struct RawResponse {
     body: Vec<u8>,
 }
 
+/// A response head without its `Date` header, which the server stamps from
+/// the wall clock and so differs between two requests that straddle a second
+/// boundary. Every other header stays in the comparison.
+fn without_date(head: &str) -> String {
+    head.split("\r\n")
+        .filter(|line| {
+            !line
+                .split_once(':')
+                .is_some_and(|(name, _)| name.eq_ignore_ascii_case("date"))
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n")
+}
+
 fn async_project(directory: &Path) {
     served_harness::copy_example_project(directory);
     served_harness::replace_profile_text(directory, CREATE_PROFILE, ASYNC_CREATE_PROFILE);
@@ -723,7 +737,11 @@ async fn status_get_returns_exact_pending_then_commits_and_replays_terminal_proo
 
     let journal_before_replay = served.journal_kinds().await;
     let replay = served.get(status_path, Some(&token));
-    assert_eq!(replay, terminal, "terminal status custody replays exactly");
+    assert_eq!(
+        (replay.0, without_date(&replay.1), replay.2),
+        (terminal.0, without_date(&terminal.1), terminal.2),
+        "terminal status custody replays exactly"
+    );
     let journal_after_replay = served.journal_kinds().await;
     assert_eq!(
         journal_after_replay.len(),
