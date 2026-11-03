@@ -84,6 +84,7 @@ rstack evidence test . --target local-target.yaml --deny-warnings
 Evidence project check: complete
 Project: .
 Target: local-target.yaml
+Deployment inputs missing: signer.publicJwkFile; the compiled-target bundle check was skipped. Supply them and rerun check to prove the target.
 0 errors, 0 warnings in 1 file
 PASS: check
 PASS: fixtures/coverage-status.yaml (8 cases)
@@ -92,8 +93,10 @@ PASS: fixtures/healthcare-establishment.yaml (11 cases)
 Proof: offline synthetic fixture evaluation; no live dependency readiness was checked
 ```
 
-You request `fhir-coverage-status`, one of its two assertion definitions. `test` also wrote
-disposable, owner-only keys under `.generated/secrets`; keep that directory out of version control.
+You request `fhir-coverage-status`, one of its two assertion definitions. `check` runs before any
+signing key exists, so it reports the missing public key and skips the compiled-target check. `test`
+then wrote disposable, owner-only keys under `.generated/secrets`; keep that directory out of
+version control.
 
 Inspect the acquisition and derivation that the checked project will use:
 
