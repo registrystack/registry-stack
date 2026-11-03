@@ -1547,8 +1547,12 @@ async fn database_session_loss_recovery(harness: &mut NativeTimerHarness) -> Res
     if terminated == 0 {
         return Err("target replica had no PostgreSQL session to terminate".to_owned());
     }
-    harness.expect_non_info_code(owner, "record_timer.worker.iteration_failed", 1)?;
-    harness.expect_non_info_code_range(owner, "hook.worker.iteration_failed", 0, 1)?;
+    // Every pooled session of the owner is gone, so each worker loop may draw
+    // a dead session once more before the pool notices, including the timer
+    // worker after the owner is resumed.
+    harness.expect_non_info_code_range(owner, "record_timer.worker.iteration_failed", 1, 2)?;
+    harness.expect_non_info_code_range(owner, "hook.worker.iteration_failed", 0, 2)?;
+    harness.expect_non_info_code_range(owner, "review.worker.iteration_failed", 0, 2)?;
     harness.release_checkpoint(owner)?;
     harness.release_checkpoints_except(owner)?;
     harness

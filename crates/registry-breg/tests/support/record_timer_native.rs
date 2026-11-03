@@ -3701,8 +3701,9 @@ impl NativeTimerHarness {
             Ok(retained)
         } else {
             Err(format!(
-                "native timer cleanup found {} failure(s); logs retained at {}",
+                "native timer cleanup found {} failure(s): {}; logs retained at {}",
                 failures.len(),
+                failures.join("; "),
                 retained
                     .as_deref()
                     .map(Path::display)
