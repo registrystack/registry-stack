@@ -23,9 +23,40 @@ mod shared_broker;
 
 use shared_broker::{
     build_source, fixture_connection, next_dead_letter, next_message, passive_source, publish,
-    publish_nonpersistent, source_with_principal, source_with_principal_passive, source_with_tls,
-    BrokerFixture, TopologyNames, BROKER_MAXIMUM_MESSAGE_BYTES,
+    publish_nonpersistent, run_bounded, source_with_principal, source_with_principal_passive,
+    source_with_tls, BoundedFailure, BrokerFixture, TopologyNames, BROKER_MAXIMUM_MESSAGE_BYTES,
 };
+
+#[test]
+fn a_command_past_its_deadline_is_killed_and_reported() {
+    let started = std::time::Instant::now();
+    let failure = run_bounded(
+        std::process::Command::new("sleep").arg("5"),
+        Duration::from_millis(200),
+    )
+    .expect_err("a command that outlives its bound is refused");
+    assert!(
+        matches!(failure, BoundedFailure::TimedOut(timeout) if timeout == Duration::from_millis(200)),
+        "{failure}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "the child was killed at the deadline, not waited for: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_command_within_its_deadline_returns_its_output_and_status() {
+    let output = run_bounded(
+        std::process::Command::new("sh").args(["-c", "printf out; printf err >&2; exit 3"]),
+        Duration::from_secs(10),
+    )
+    .expect("a quick command completes");
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.stdout, b"out");
+    assert_eq!(output.stderr, b"err");
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn least_privileged_principal_can_verify_topology_read_and_dead_letter() {

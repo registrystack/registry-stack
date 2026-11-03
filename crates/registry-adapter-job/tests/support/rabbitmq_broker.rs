@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #![allow(dead_code)]
 
-use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::fmt;
+use std::io::Read;
+use std::process::{Child, Command, Output, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lapin::options::{BasicGetOptions, BasicPublishOptions, ConfirmSelectOptions};
 use lapin::uri::{AMQPAuthority, AMQPQueryString, AMQPScheme, AMQPUri, AMQPUserInfo};
@@ -24,6 +27,118 @@ const RABBITMQ_IMAGE: &str =
     "rabbitmq:4.1.8-alpine@sha256:153322e3974e6365c50e523e5eadd5a7fae231f0e8c58f67c03bb3e02056e34e";
 const LEAST_PRIVILEGED_USER: &str = "adapter_source_least_privileged";
 const LEAST_PRIVILEGED_PASSWORD: &str = "fixture-least-privileged-password";
+/// Bound for a docker call that only inspects or signals a running container.
+const DOCKER_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+/// Bound for `docker run`, which may pull the broker image first.
+const DOCKER_RUN_TIMEOUT: Duration = Duration::from_secs(300);
+/// Attempts for a `rabbitmqctl` call that times out; a call that fails with
+/// its own exit status is never retried.
+const RABBITMQCTL_ATTEMPTS: u32 = 3;
+
+/// Why a bounded command produced no output.
+#[derive(Debug)]
+pub enum BoundedFailure {
+    Spawn(std::io::Error),
+    TimedOut(Duration),
+}
+
+impl fmt::Display for BoundedFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Spawn(error) => write!(formatter, "could not start: {error}"),
+            Self::TimedOut(timeout) => write!(formatter, "timed out after {timeout:?}"),
+        }
+    }
+}
+
+/// Run a command to completion within `timeout`. A command still running at
+/// the deadline is killed and reaped, so a wedged docker client never stalls
+/// the suite or outlives it.
+pub fn run_bounded(command: &mut Command, timeout: Duration) -> Result<Output, BoundedFailure> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(BoundedFailure::Spawn)?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().map_err(BoundedFailure::Spawn)? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                kill_and_reap(&mut child);
+                let _ = (stdout.join(), stderr.join());
+                return Err(BoundedFailure::TimedOut(timeout));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    Ok(Output {
+        status,
+        stdout: stdout.join().expect("the stdout reader finishes"),
+        stderr: stderr.join().expect("the stderr reader finishes"),
+    })
+}
+
+fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            // A pipe that fails mid-read leaves what was captured so far.
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
+}
+
+fn kill_and_reap(child: &mut Child) {
+    child.kill().expect("the timed-out command can be killed");
+    child.wait().expect("the killed command can be reaped");
+}
+
+/// A docker call bounded by `timeout`; `label` names it in the failure
+/// without repeating its arguments, which may carry fixture credentials.
+fn docker(args: &[&str], timeout: Duration, label: &str) -> Output {
+    run_bounded(Command::new("docker").args(args), timeout)
+        .unwrap_or_else(|failure| panic!("`{label}` {failure}"))
+}
+
+/// Run `rabbitmqctl` in the container, retrying only when an attempt times
+/// out. After a timeout the first attempt may have taken effect, so
+/// `already_applied` names the output of a non-idempotent call that did
+/// (`add_user` reporting the user exists); a later attempt that fails with it
+/// counts as success.
+fn rabbitmqctl(container: &str, args: &[&str], already_applied: Option<&str>) -> Output {
+    let label = format!("docker exec {container} rabbitmqctl {}", args[0]);
+    let mut timed_out = false;
+    for attempt in 1..=RABBITMQCTL_ATTEMPTS {
+        let mut command = Command::new("docker");
+        command.args(["exec", container, "rabbitmqctl"]).args(args);
+        match run_bounded(&mut command, DOCKER_COMMAND_TIMEOUT) {
+            Ok(output) if output.status.success() => return output,
+            Ok(output) => {
+                let report = String::from_utf8_lossy(&output.stderr).into_owned()
+                    + &String::from_utf8_lossy(&output.stdout);
+                if timed_out && already_applied.is_some_and(|marker| report.contains(marker)) {
+                    return output;
+                }
+                panic!("`{label}` failed with {}: {report}", output.status);
+            }
+            Err(BoundedFailure::TimedOut(timeout)) => {
+                timed_out = true;
+                eprintln!(
+                    "`{label}` timed out after {timeout:?} (attempt {attempt} of {RABBITMQCTL_ATTEMPTS})"
+                );
+            }
+            Err(failure) => panic!("`{label}` {failure}"),
+        }
+    }
+    panic!(
+        "`{label}` timed out after {DOCKER_COMMAND_TIMEOUT:?} on each of {RABBITMQCTL_ATTEMPTS} attempts"
+    );
+}
 
 pub struct BrokerFixture {
     pub port: u16,
@@ -45,8 +160,8 @@ impl BrokerFixture {
             .expect("the system clock follows the epoch")
             .as_nanos();
         let container = format!("adapter-rabbitmq-{}-{suffix}", std::process::id());
-        let run = Command::new("docker")
-            .args([
+        let run = docker(
+            &[
                 "run",
                 "--detach",
                 "--rm",
@@ -63,17 +178,19 @@ impl BrokerFixture {
                     "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit max_message_size {BROKER_MAXIMUM_MESSAGE_BYTES}"
                 ),
                 RABBITMQ_IMAGE,
-            ])
-            .output()
-            .expect("docker must be available for the native RabbitMQ suite");
+            ],
+            DOCKER_RUN_TIMEOUT,
+            "docker run (RabbitMQ fixture)",
+        );
         assert!(
             run.status.success(),
             "the synthetic RabbitMQ container starts"
         );
-        let port = Command::new("docker")
-            .args(["port", &container, "5672/tcp"])
-            .output()
-            .expect("the fixture port can be inspected");
+        let port = docker(
+            &["port", &container, "5672/tcp"],
+            DOCKER_COMMAND_TIMEOUT,
+            "docker port (RabbitMQ fixture)",
+        );
         assert!(port.status.success(), "the fixture port is published");
         let port = String::from_utf8(port.stdout)
             .expect("docker reports a UTF-8 port")
@@ -129,8 +246,8 @@ impl BrokerFixture {
             .as_nanos();
         let container = format!("adapter-rabbitmq-tls-{}-{suffix}", std::process::id());
         let mount = format!("{}:/fixture-tls:ro", tls_directory.path().display());
-        let run = Command::new("docker")
-            .args([
+        let run = docker(
+            &[
                 "run",
                 "--detach",
                 "--rm",
@@ -147,14 +264,16 @@ impl BrokerFixture {
                 "--env",
                 "RABBITMQ_CONFIG_FILE=/fixture-tls/rabbitmq",
                 RABBITMQ_IMAGE,
-            ])
-            .output()
-            .expect("docker must be available for the native AMQPS suite");
+            ],
+            DOCKER_RUN_TIMEOUT,
+            "docker run (AMQPS fixture)",
+        );
         assert!(run.status.success(), "the synthetic AMQPS container starts");
-        let port = Command::new("docker")
-            .args(["port", &container, "5671/tcp"])
-            .output()
-            .expect("the AMQPS fixture port can be inspected");
+        let port = docker(
+            &["port", &container, "5671/tcp"],
+            DOCKER_COMMAND_TIMEOUT,
+            "docker port (AMQPS fixture)",
+        );
         assert!(port.status.success(), "the AMQPS fixture port is published");
         let port = String::from_utf8(port.stdout)
             .expect("docker reports a UTF-8 port")
@@ -178,10 +297,11 @@ impl BrokerFixture {
         let Some(container) = &self.container else {
             return String::new();
         };
-        let output = Command::new("docker")
-            .args(["logs", container])
-            .output()
-            .expect("the broker logs can be inspected");
+        let output = docker(
+            &["logs", container],
+            DOCKER_COMMAND_TIMEOUT,
+            "docker logs (RabbitMQ fixture)",
+        );
         let mut logs = String::from_utf8_lossy(&output.stdout).into_owned();
         logs.push_str(&String::from_utf8_lossy(&output.stderr));
         logs
@@ -191,21 +311,10 @@ impl BrokerFixture {
         let Some(container) = &self.container else {
             return 0;
         };
-        let output = Command::new("docker")
-            .args([
-                "exec",
-                container,
-                "rabbitmqctl",
-                "list_queues",
-                "--quiet",
-                "name",
-                "messages_unacknowledged",
-            ])
-            .output()
-            .expect("the broker queue state can be inspected");
-        assert!(
-            output.status.success(),
-            "rabbitmqctl reads the owned fixture"
+        let output = rabbitmqctl(
+            container,
+            &["list_queues", "--quiet", "name", "messages_unacknowledged"],
+            None,
         );
         String::from_utf8(output.stdout)
             .expect("rabbitmqctl output is UTF-8")
@@ -246,23 +355,17 @@ impl BrokerFixture {
             names.dead_letter_queue.as_str(),
         ]);
         let read = resource_regex([names.queue.as_str(), names.dead_letter_exchange.as_str()]);
-        let add = Command::new("docker")
-            .args([
-                "exec",
-                container,
-                "rabbitmqctl",
-                "add_user",
-                LEAST_PRIVILEGED_USER,
-                LEAST_PRIVILEGED_PASSWORD,
-            ])
-            .output()
-            .expect("the owned broker can add its least-privileged fixture user");
-        assert!(add.status.success(), "the least-privileged user is added");
-        let permissions = Command::new("docker")
-            .args([
-                "exec",
-                container,
-                "rabbitmqctl",
+        // `add_user` is not idempotent: a retry after a timeout may find the
+        // user the first attempt created. `set_permissions` replaces any
+        // earlier grant, so its retries are safe.
+        rabbitmqctl(
+            container,
+            &["add_user", LEAST_PRIVILEGED_USER, LEAST_PRIVILEGED_PASSWORD],
+            Some("already exists"),
+        );
+        rabbitmqctl(
+            container,
+            &[
                 "set_permissions",
                 "--vhost",
                 "/",
@@ -270,12 +373,8 @@ impl BrokerFixture {
                 &configure,
                 &write,
                 &read,
-            ])
-            .output()
-            .expect("the owned broker can scope its fixture permissions");
-        assert!(
-            permissions.status.success(),
-            "the least-privileged permissions are installed"
+            ],
+            None,
         );
         FixturePrincipal {
             username: LEAST_PRIVILEGED_USER,
@@ -324,7 +423,12 @@ fn pem(label: &str, der: &[u8]) -> String {
 impl Drop for BrokerFixture {
     fn drop(&mut self) {
         if let Some(container) = &self.container {
-            let _ = Command::new("docker").args(["stop", container]).output();
+            if let Err(failure) = run_bounded(
+                Command::new("docker").args(["stop", container]),
+                DOCKER_COMMAND_TIMEOUT,
+            ) {
+                eprintln!("`docker stop {container}` {failure}");
+            }
         }
     }
 }
