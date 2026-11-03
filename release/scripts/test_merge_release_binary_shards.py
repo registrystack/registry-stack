@@ -448,6 +448,55 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertNotIn("coordinator", dict(images_held))
 
+    def test_adapter_joins_the_core_shard_from_v0_45_1_without_an_image(self) -> None:
+        rosters_045, _ = MODULE.rosters("0.45.0")
+        self.assertFalse(
+            any(
+                name.startswith("adapter")
+                for names in rosters_045.values()
+                for name in names
+            )
+        )
+        rosters, images = MODULE.rosters("0.45.1")
+        self.assertEqual(
+            [
+                "adapter-v0.45.1-linux-amd64",
+                "adapterctl-v0.45.1-linux-amd64",
+                "adapter-job-v0.45.1-linux-amd64",
+            ],
+            rosters["core"][-3:],
+        )
+        self.assertFalse(any(name.startswith("adapter") for name, _ in images))
+
+    def test_core_recipe_builds_each_adapter_binary_in_its_own_invocation(self) -> None:
+        # Cargo unifies features within one invocation: building the facade
+        # beside adapterctl or adapter-job would compile the job sources into it.
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        block = recipe.split('if [[ "${include_adapter}" -eq 1 ]]; then\n', 1)[1]
+        block = block.split("\n    fi\n", 1)[0]
+        invocations = [
+            " ".join(part.split()).replace("\\ ", "")
+            for part in block.split("cargo build")[1:]
+        ]
+        self.assertEqual(3, len(invocations))
+        self.assertTrue(
+            invocations[0].startswith("--release --locked -p registry-adapter --bin adapter cp ")
+        )
+        self.assertTrue(
+            invocations[1].startswith(
+                "--release --locked -p registry-adapterctl --bin adapterctl cp "
+            )
+        )
+        self.assertTrue(
+            invocations[2].startswith(
+                "--release --locked -p registry-adapter-job --bin adapter-job "
+                "--features job-file,job-postgres cp "
+            )
+        )
+        self.assertNotIn("dist/image-bin", block)
+
     def test_no_shard_carries_the_document_store_while_it_is_held_out(self) -> None:
         # The Document Store is held out by DOCUMENTS_FIRST_RELEASE and has no
         # release packaging yet, so no shard roster or image may name it.

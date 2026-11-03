@@ -28,6 +28,7 @@ class ReleaseUnitsTest(TestCase):
         registry = self.module.load_registry()
         self.assertEqual(
             {
+                "adapter",
                 "breg-casework-evidence",
                 "breg-mcp",
                 "breg-review",
@@ -133,6 +134,21 @@ class ReleaseUnitsTest(TestCase):
                     registry.artifact_owner(name),
                     set(registry.names) | {"distribution"},
                 )
+        for name in candidate._release_payload_inventory("0.45.1"):
+            with self.subTest(name=name):
+                self.assertIn(
+                    registry.artifact_owner(name),
+                    set(registry.names) | {"distribution"},
+                )
+        for name in (
+            "adapter-v0.45.1-linux-amd64",
+            "adapterctl-v0.45.1-macos-arm64.tar.gz",
+            "adapter-job-v0.45.1-linux-arm64",
+            "adapter-v0.45.1-install.sh",
+            "adapter-install.sh",
+        ):
+            with self.subTest(name=name):
+                self.assertEqual("adapter", registry.artifact_owner(name))
         self.assertEqual("clients", registry.artifact_owner("registrystack-client-0.45.0.tgz"))
         self.assertEqual("clients", registry.artifact_owner("registry_stack_client-0.45.0-cp311-abi3-manylinux.whl"))
         self.assertEqual("distribution", registry.artifact_owner("registry-docs-v0.45.0.tar.gz"))

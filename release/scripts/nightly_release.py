@@ -147,11 +147,24 @@ V2_2_PAYLOAD_TEMPLATES = tuple(sorted((
     "coordinatorctl-{tag}-linux-amd64", "coordinatorctl-{tag}-linux-arm64", "coordinatorctl-{tag}-macos-arm64.tar.gz",
 )))
 V2_3_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.3"
+# Adapter binaries and their installer join from the release that
+# release_roster.ADAPTER_FIRST_RELEASE names; the facade has no image.
+V2_4_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.4"
+V2_4_INSTALLERS = tuple(sorted((*V2_2_INSTALLERS, "adapter")))
+V2_4_PAYLOAD_TEMPLATES = tuple(sorted((
+    *V2_2_PAYLOAD_TEMPLATES,
+    "adapter-{tag}-linux-amd64", "adapter-{tag}-linux-arm64", "adapter-{tag}-macos-arm64.tar.gz",
+    "adapterctl-{tag}-linux-amd64", "adapterctl-{tag}-linux-arm64", "adapterctl-{tag}-macos-arm64.tar.gz",
+    "adapter-job-{tag}-linux-amd64", "adapter-job-{tag}-linux-arm64", "adapter-job-{tag}-macos-arm64.tar.gz",
+)))
+V2_5_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.5"
 V2_ROSTER_PROFILES = {
     V2_ROSTER_PROFILE: (V2_IMAGES, V2_INSTALLERS, V2_PAYLOAD_TEMPLATES),
     V2_1_ROSTER_PROFILE: (V2_1_IMAGES, V2_INSTALLERS, V2_1_PAYLOAD_TEMPLATES),
     V2_2_ROSTER_PROFILE: (V2_IMAGES, V2_2_INSTALLERS, V2_2_PAYLOAD_TEMPLATES),
     V2_3_ROSTER_PROFILE: (V2_1_IMAGES, V2_2_INSTALLERS, V2_2_PAYLOAD_TEMPLATES),
+    V2_4_ROSTER_PROFILE: (V2_IMAGES, V2_4_INSTALLERS, V2_4_PAYLOAD_TEMPLATES),
+    V2_5_ROSTER_PROFILE: (V2_1_IMAGES, V2_4_INSTALLERS, V2_4_PAYLOAD_TEMPLATES),
 }
 INSTALLERS.update(release_roster.ADDITIONAL_INSTALLERS)
 
@@ -335,7 +348,11 @@ def current_roster(version: str, tag: str) -> dict:
         raise NightlyError("nightly roster version does not match its tag")
     parsed = tuple(int(part) for part in version.split("."))
     if parsed >= release_roster.ALL_PLATFORMS_FIRST_RELEASE:
-        profile = V2_3_ROSTER_PROFILE if release_roster.coordinator_in_release(parsed) else V2_2_ROSTER_PROFILE
+        coordinator_image = release_roster.coordinator_in_release(parsed)
+        if release_roster.adapter_in_release(parsed):
+            profile = V2_5_ROSTER_PROFILE if coordinator_image else V2_4_ROSTER_PROFILE
+        else:
+            profile = V2_3_ROSTER_PROFILE if coordinator_image else V2_2_ROSTER_PROFILE
         return frozen_roster(profile, tag)
     if release_roster.coordinator_in_release(parsed):
         return frozen_roster(V2_1_ROSTER_PROFILE, tag)
