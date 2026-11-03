@@ -47,7 +47,11 @@ the v0.44.0 binary roster for all supported platforms and additional installers
 that support nightly builds. The roster includes the `rstack` launcher on Linux
 amd64, Linux arm64, and macOS arm64.
 `registry-stack.nightly-roster.v2.3` adds the Coordinator image to that same
-binary and installer roster when its image release is enabled. No profile
+binary and installer roster when its image release is enabled.
+`registry-stack.nightly-roster.v2.4` and `registry-stack.nightly-roster.v2.5`
+add the `adapter`, `adapterctl`, and `adapter-job` binaries on all three
+platforms and the `adapter` installer to v2.2 and v2.3 respectively, from the
+base version that `ADAPTER_FIRST_RELEASE` names. No profile
 carries the Registry Document Store, which stays held out while
 `DOCUMENTS_FIRST_RELEASE` is `None`. An incompatible inventory requires a
 new schema and profile. The reader still accepts frozen
