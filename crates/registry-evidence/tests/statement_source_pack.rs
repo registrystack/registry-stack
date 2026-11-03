@@ -43,10 +43,10 @@ fn instant(text: &str) -> DateTime<Utc> {
 }
 
 fn scratch_root() -> PathBuf {
-    let root = PathBuf::from(
-        std::env::var_os("CARGO_TARGET_DIR").expect("tests require a volume target directory"),
-    )
-    .join("registry-evidence-statement-source-pack");
+    let root = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("registry-evidence-statement-source-pack");
     std::fs::create_dir_all(&root).expect("the test scratch root is available");
     root
 }

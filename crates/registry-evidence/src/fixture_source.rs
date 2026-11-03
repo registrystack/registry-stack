@@ -365,10 +365,10 @@ mod tests {
     use super::{compile_sources, FixtureAcquisition, FixtureAssets};
 
     fn scratch_root() -> PathBuf {
-        let root = PathBuf::from(
-            std::env::var_os("CARGO_TARGET_DIR").expect("fixture tests require a volume target"),
-        )
-        .join("registry-evidence-fixture-assets");
+        let root = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("registry-evidence-fixture-assets");
         std::fs::create_dir_all(&root).expect("fixture scratch root");
         root
     }
