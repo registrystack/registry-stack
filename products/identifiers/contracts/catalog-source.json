@@ -655,9 +655,7 @@
       "owner": "breg",
       "title": "BReg partial read-policy vocabulary",
       "description": "Experimental BReg ODRL constraint and projection terms, defined by the shipped read-policy export profile.",
-      "sourcePath": "products/breg/contracts/odrl-profile.jsonld",
-      "artifactPath": "products/breg/contracts/odrl-profile.jsonld",
-      "mediaType": "application/ld+json"
+      "sourcePath": "products/breg/contracts/odrl-profile.jsonld"
     },
     {
       "uri": "https://id.registrystack.org/profiles/registry-record/v1",

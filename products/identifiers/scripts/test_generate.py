@@ -262,6 +262,31 @@ class CatalogGeneratorTest(unittest.TestCase):
         with self.assertRaisesRegex(generate.CatalogError, "requires an artifact"):
             self.build()
 
+    def test_slash_terminated_record_cannot_carry_an_artifact(self) -> None:
+        profile = self.root / "profile.md"
+        profile.write_text("Example vocabulary terms\n")
+        self.track("profile.md")
+        self.write_config(
+            [
+                {
+                    "uri": f"{generate.BASE_URL}/vocab/example/",
+                    "kind": "vocabulary",
+                    "status": "active",
+                    "compatibilityLine": "v1",
+                    "owner": "example",
+                    "title": "Example vocabulary",
+                    "description": "Example vocabulary base.",
+                    "sourcePath": "profile.md",
+                    "artifactPath": "profile.md",
+                    "mediaType": "text/markdown",
+                }
+            ]
+        )
+        with self.assertRaisesRegex(
+            generate.CatalogError, "slash-terminated URI cannot carry an artifact"
+        ):
+            self.build()
+
     def test_duplicate_identifier_is_rejected(self) -> None:
         self.write_config(
             [
