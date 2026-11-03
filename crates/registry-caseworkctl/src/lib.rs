@@ -953,6 +953,41 @@ pub(crate) fn configuration_report(
 pub(crate) fn canonical_tempdir() -> tempfile::TempDir {
     tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
 }
+/// Write an executable shell stub and return only once it can be exec'd.
+/// On Linux a concurrent test's fork can inherit the writer descriptor of a
+/// freshly written file until its own exec closes it, and exec of that file
+/// fails with ETXTBSY meanwhile. The stub must answer `--version` without side
+/// effects; once that probe runs, no later exec of the stub can be refused.
+#[cfg(all(test, unix))]
+pub(crate) fn write_executable_stub(path: &std::path::Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::write(path, script).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    wait_until_executable(path);
+}
+#[cfg(all(test, unix))]
+fn wait_until_executable(path: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    retry_while_busy(
+        || ProcessCommand::new(path).arg("--version").output(),
+        || std::time::Instant::now() < deadline,
+    )
+    .unwrap();
+}
+#[cfg(all(test, unix))]
+fn retry_while_busy<T>(
+    mut run: impl FnMut() -> io::Result<T>,
+    mut keep_waiting: impl FnMut() -> bool,
+) -> io::Result<T> {
+    loop {
+        match run() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && keep_waiting() => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,6 +1014,77 @@ mod tests {
         assert!(diagnostic["suggestedAction"]
             .as_str()
             .is_some_and(|action| !action.is_empty()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_busy_stub_is_retried_until_it_runs() {
+        let mut attempts = 0;
+        let result = retry_while_busy(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(io::ErrorKind::ExecutableFileBusy.into())
+                } else {
+                    Ok("ran")
+                }
+            },
+            || true,
+        );
+        assert_eq!(result.unwrap(), "ran");
+        assert_eq!(attempts, 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_busy_stub_is_waited_for() {
+        let error = retry_while_busy::<()>(
+            || Err(io::ErrorKind::PermissionDenied.into()),
+            || panic!("only an executable-busy failure may wait"),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+        let error =
+            retry_while_busy::<()>(|| Err(io::ErrorKind::ExecutableFileBusy.into()), || false)
+                .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ExecutableFileBusy);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_written_stub_answers_the_readiness_probe() {
+        let directory = canonical_tempdir();
+        let stub = directory.path().join("stub");
+        write_executable_stub(&stub, "#!/bin/sh\nprintf '%s\\n' \"$1\"\n");
+        let output = ProcessCommand::new(&stub)
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert_eq!(output.stdout, b"--version\n");
+    }
+
+    /// The race [`write_executable_stub`] exists for, made deterministic: hold
+    /// the stub open for writing exactly as a forked sibling would, and
+    /// release it only after the first exec has been refused.
+    ///
+    /// Linux only. macOS executes a file that is open for writing, so the same
+    /// test there would pass without the wait.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_stub_still_held_open_for_writing_is_waited_for() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = canonical_tempdir();
+        let stub = directory.path().join("stub");
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let held = std::fs::OpenOptions::new().write(true).open(&stub).unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            drop(held);
+        });
+        wait_until_executable(&stub);
+        assert!(ProcessCommand::new(&stub).status().unwrap().success());
     }
 
     #[test]
