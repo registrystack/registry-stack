@@ -6,9 +6,11 @@
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -126,15 +128,49 @@ fn start_server_at(runtime_path: &Path, current_dir: Option<&Path>) -> Server {
     spawn_server(runtime_path, current_dir, Stdio::null)
 }
 
-/// Start a server whose standard output the test reads: the audit stream
-/// of a `stdout` destination.
-fn start_server_with_stdout(runtime_path: &Path) -> (Server, ChildStdout) {
-    let mut server = spawn_server(runtime_path, None, Stdio::piped);
-    let stdout = server.child.stdout.take().expect("piped stdout");
-    (server, stdout)
+/// The audit stream of a `stdout` destination: a socket pair whose server end
+/// is the server's standard output and whose other end the test reads.
+struct AuditStream {
+    reader: BufReader<UnixStream>,
+    server_end: UnixStream,
 }
 
-fn spawn_server(runtime_path: &Path, current_dir: Option<&Path>, stdout: fn() -> Stdio) -> Server {
+impl AuditStream {
+    /// Refuse every later audit write. Shutting the server's end down breaks
+    /// the stream for the server whatever else still holds the reading end
+    /// open (a concurrently forked child keeps a closed pipe's reader alive
+    /// until it execs), so the refusal does not depend on timing.
+    fn refuse(&self) {
+        self.server_end
+            .shutdown(Shutdown::Both)
+            .expect("shut down the server's audit stream");
+    }
+}
+
+/// Start a server whose standard output the test reads: the audit stream
+/// of a `stdout` destination.
+fn start_server_with_stdout(runtime_path: &Path) -> (Server, AuditStream) {
+    let (reading_end, server_end) = UnixStream::pair().expect("audit stream pair");
+    reading_end
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("audit stream read timeout");
+    let server = spawn_server(runtime_path, None, || {
+        Stdio::from(OwnedFd::from(
+            server_end.try_clone().expect("server audit stream handle"),
+        ))
+    });
+    let audit = AuditStream {
+        reader: BufReader::new(reading_end),
+        server_end,
+    };
+    (server, audit)
+}
+
+fn spawn_server(
+    runtime_path: &Path,
+    current_dir: Option<&Path>,
+    mut stdout: impl FnMut() -> Stdio,
+) -> Server {
     // Another socket can take the port before the child binds it, so retry on a fresh one.
     let mut retries = 0;
     loop {
@@ -982,7 +1018,7 @@ fn a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation() {
 }
 
 /// Read one audit line from a `stdout` destination.
-fn next_audit_entry(reader: &mut BufReader<ChildStdout>) -> serde_json::Value {
+fn next_audit_entry(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
     let mut line = String::new();
     reader.read_line(&mut line).expect("audit line");
     serde_json::from_str(&line).unwrap_or_else(|err| panic!("audit entry {line:?}: {err}"))
@@ -995,7 +1031,7 @@ fn a_refused_response_entry_withholds_the_pdf() {
         &repo_root().join("products/render/bundles/receipt"),
     );
     audit_to_stdout(&home, &runtime);
-    let (server, stdout) = start_server_with_stdout(&runtime);
+    let (server, mut audit) = start_server_with_stdout(&runtime);
     let port = server.port;
     let body = receipt_body();
     let render = std::thread::spawn(move || {
@@ -1010,12 +1046,11 @@ fn a_refused_response_entry_withholds_the_pdf() {
             Some(&body),
         )
     });
-    // The request entry arrives before the render; closing the stream then
+    // The request entry arrives before the render; refusing the stream then
     // makes the response entry the write that fails.
-    let mut reader = BufReader::new(stdout);
-    let entry = next_audit_entry(&mut reader);
+    let entry = next_audit_entry(&mut audit.reader);
     assert_eq!(entry["phase"], "request", "{entry}");
-    drop(reader);
+    audit.refuse();
     let reply = render.join().expect("render thread");
     let text = String::from_utf8_lossy(&reply.body);
     assert_eq!(reply.status, 503, "{text}");
@@ -1042,11 +1077,11 @@ fn a_refused_request_entry_prevents_the_render() {
         &repo_root().join("products/render/bundles/receipt"),
     );
     audit_to_stdout(&home, &runtime);
-    let (server, stdout) = start_server_with_stdout(&runtime);
+    let (server, audit) = start_server_with_stdout(&runtime);
     let ready = request(server.port, "GET", "/ready", &[], None);
     assert_eq!(ready.status, 200);
-    // Nobody reads the audit stream any more: the request entry fails.
-    drop(stdout);
+    // The audit stream refuses every write: the request entry fails.
+    audit.refuse();
     let reply = request(
         server.port,
         "POST",
