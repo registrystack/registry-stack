@@ -319,6 +319,16 @@ audit:
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
+sourceConnections:
+  provider:
+    id: provider
+    endpoints:
+      - endpoint: provider
+        baseUrl: {source_origin}
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-a-token
+    allowedPrivateCidrs: []
 "#,
             bundle = bundle_root.display(),
             secrets = secret_root.display(),
@@ -387,7 +397,7 @@ fn rewrite_evidence_fixture(
             "uri: https://identity.invalid/.well-known/jwks.json",
             &format!("uri: {issuer_jwks_uri}"),
         ),
-        ("algorithms: [ES256]", "algorithms: [RS256]"),
+        ("    algorithms:\n      - ES256\n", "    algorithms: [RS256]\n"),
         (
             "allowedClients: unrestricted",
             "allowedClients: [evidence-task-agent, other-agent]",
@@ -397,8 +407,8 @@ fn rewrite_evidence_fixture(
             "  casework:\n    requesterClients: [evidence-task-agent, other-agent]\n    grantSourceIssuer: https://casework.example\n    kind: statutory",
         ),
         (
-            "        subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]",
-            "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: authenticated-grant\n            valueClaims: {given_name: identity.given_name, family_name: identity.family_name, birth_date: identity.birth_date}",
+            "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: request\n",
+            "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: authenticated-grant\n            valueClaims: {given_name: identity.given_name, family_name: identity.family_name, birth_date: identity.birth_date}\n",
         ),
     ] {
         assert_eq!(document.matches(from).count(), 1, "fixture drift for {from}");
@@ -441,13 +451,7 @@ fn refresh_package_envelope(root: &Path) {
     registry_platform_config::write_sum_file(
         root,
         None,
-        &registry_platform_config::PackageLimits {
-            max_files: registry_evidence::bundle::MAX_BUNDLE_FILES,
-            max_file_bytes: registry_evidence::bundle::MAX_ARTIFACT_BYTES,
-            max_total_bytes: registry_evidence::bundle::MAX_BUNDLE_BYTES,
-            max_depth: 3,
-            max_path_bytes: 128,
-        },
+        &registry_evidence::bundle::evidence_package_limits(),
         "evidencectl package",
     )
     .unwrap();
