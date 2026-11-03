@@ -798,6 +798,13 @@ async fn a_status_get_that_loses_the_lease_to_a_terminal_commit_replays_the_stor
     };
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
+        // The poller reads pg_stat_activity inside its open transaction, where
+        // PostgreSQL keeps the first read's snapshot. A GET on a connection
+        // opened after that read stays invisible unless each read clears it.
+        poller
+            .batch_execute("SELECT pg_stat_clear_snapshot()")
+            .await
+            .expect("clear the activity snapshot");
         let waiting: i64 = poller
             .query_one(
                 "SELECT count(*) FROM pg_stat_activity \
