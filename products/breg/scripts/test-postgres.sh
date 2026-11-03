@@ -253,6 +253,9 @@ print(binaries[0])
     }
     export BREG_TEST_EVIDENCECTL_BINARY="$evidencectl_binary"
     python_environment="${CARGO_TARGET_DIR:-target}/breg-test-python"
+    # cargo runs the proof from the crate directory, so the exported
+    # interpreter path must not be relative to this one.
+    [[ "$python_environment" == /* ]] || python_environment="$PWD/$python_environment"
     python_binary="$python_environment/bin/python"
     if [[ ! -x "$python_binary" ]] || ! "$python_binary" -c 'import yaml; assert yaml.__version__ == "6.0.2"' >/dev/null 2>&1; then
       uv venv --clear "$python_environment"
