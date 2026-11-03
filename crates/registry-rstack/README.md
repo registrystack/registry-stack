@@ -22,8 +22,8 @@ rstack evidence check --help
 The first command installs the launcher alone. Pass component names to the
 installer, or use `--all`, to install them during bootstrap. The installable
 product names are `breg`, `casework`, `discovery`, `evidence`, `manifest`,
-`messaging`, `render`, `scheduling`, and `coordinator`, subject to availability
-in the exact release and platform. A selection that mixes available and
+`messaging`, `render`, `scheduling`, `coordinator`, and `adapter`, subject to
+availability in the exact release and platform. A selection that mixes available and
 unavailable products fails as a whole. A component's release payload includes
 its required runtime and companion files, with a capability inventory in the
 release manifest.
@@ -113,6 +113,7 @@ offline. See [Generate ThunderID configuration](../../docs/site/src/content/docs
 | `registry-render` | `rstack render` |
 | `schedulingctl` | `rstack scheduling` |
 | `coordinatorctl` | `rstack coordinator` |
+| `adapterctl` | `rstack adapter` |
 | `breg-mcp` | `rstack breg mcp` |
 | `breg-review` | `rstack breg review` |
 | `evidence-oid4vci` | `rstack evidence oid4vci` |
