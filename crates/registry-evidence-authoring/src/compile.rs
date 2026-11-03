@@ -170,6 +170,28 @@ pub fn compile_with_pack_routes(
                 ));
             }
         }
+        // A root `oneOf` of required sets lists the route's lookup keys. The
+        // binding must map every input of at least one of them; each target
+        // grant then supplies exactly one (checked at activation).
+        let alternatives = route_input_alternatives(&route.inputs_schema);
+        if !alternatives.is_empty()
+            && !alternatives.iter().any(|alternative| {
+                alternative
+                    .iter()
+                    .all(|input| source.inputs.keys().any(|mapped| mapped.as_str() == *input))
+            })
+        {
+            let listed = alternatives
+                .iter()
+                .map(|alternative| alternative.join(" and "))
+                .collect::<Vec<_>>()
+                .join(", or ");
+            findings.push(Finding::new(
+                source_at.clone().key("inputs"),
+                "source-route-input-alternative",
+                format!("map every input of one route input alternative: {listed}"),
+            ));
+        }
         for (input_name, binding) in &source.inputs {
             let input_at = source_at
                 .clone()
@@ -596,6 +618,30 @@ fn closed_schema_properties(schema: &Value) -> Option<&Map<String, Value>> {
     .then(|| schema.get("properties")?.as_object())?
 }
 
+/// The required sets of a root `oneOf` whose members each name a `required`
+/// list, in schema order. Any other shape yields none; the runtime presence
+/// contract still checks it when the package loads.
+fn route_input_alternatives(schema: &Value) -> Vec<Vec<&str>> {
+    let Some(members) = schema.get("oneOf").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let alternatives = members
+        .iter()
+        .map(|member| {
+            member
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|required| {
+                    required
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+        })
+        .collect::<Option<Vec<_>>>();
+    alternatives.unwrap_or_default()
+}
+
 fn input_schema_accepts(contract: &Value, selector: &Value) -> bool {
     if contract.get("type") != selector.get("type") {
         return false;
@@ -736,11 +782,14 @@ fn verify_pack_closure(route: &CheckedPackRoute, at: FieldPath) -> Vec<Finding> 
             ));
             continue;
         };
-        if sha256_uri(bytes) != *digest {
+        let actual = sha256_uri(bytes);
+        if actual != *digest {
             findings.push(Finding::new(
                 at.clone().key("pack"),
                 "source-pack-artifact-digest",
-                "every supplied pack artifact must match its digest-pinned reference",
+                format!(
+                    "pack artifact {path} does not match its pinned digest: the pack pins {digest} but the file has {actual}; after reviewing the change, update the pin in the pack document to {actual}"
+                ),
             ));
         }
     }

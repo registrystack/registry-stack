@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+# The households view job's runtime configuration, in the example form: every
+# secret is a reference into the operator's provider, never a value.
+#
+# `sources.postgres.households` binds the pack endpoint `households` to the
+# source database. The login is the read-only `adapter_reader` of
+# households-view.sql. TLS is required and defaults to the system roots; for a
+# database whose certificate comes from a private CA, set
+# `tls: {type: ca-bundle, caBundleFile: /etc/ssl/registry-ca.pem}` (an absolute
+# path to a PEM file).
+apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+kind: AdapterJobRuntimeConfig
+id: households-view-example
+endpoints: []
+sources:
+  postgres:
+    households:
+      host: source-db.example.invalid
+      port: 5432
+      database: registry
+      user: adapter_reader
+      passwordRef: secret:env/SOURCE_DB_PASSWORD
+      # Names the source in item keys and the item store. Do not change it
+      # after the first pass.
+      namespace: households-view
+      tls:
+        type: system-roots
+allowedPrivateCidrs:
+  # The private ranges this deployment may call. The example range stands in
+  # for the deployment's own.
+  - 10.0.0.0/8
+destinations:
+  household-registry:
+    type: direct-breg
+    baseUrl: https://breg.example.invalid
+    tokenEndpoint: https://identity.example.invalid/oauth2/token
+    clientId: adapter-kobo-ingestion
+    privateKeyRef: secret:env/BREG_PRIVATE_KEY
+    scopes: [registry:write]
+    resource: urn:example:base-registry
+    attemptTimeoutMilliseconds: 5000
+store:
+  runtimeUrlRef: secret:env/ADAPTER_JOB_DB

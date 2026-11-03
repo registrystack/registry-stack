@@ -74,12 +74,15 @@ fn scripts() -> BTreeMap<String, String> {
 }
 
 fn checked_route() -> compile::CheckedPackRoute {
-    let inputs_schema = json!({
+    checked_route_with_inputs(json!({
         "type":"object",
         "additionalProperties":false,
         "required":["personId"],
         "properties":{"personId":{"type":"string","minLength":1,"maxLength":64}}
-    });
+    }))
+}
+
+fn checked_route_with_inputs(inputs_schema: serde_json::Value) -> compile::CheckedPackRoute {
     let facts_schema = json!({
         "type":"object",
         "additionalProperties":false,
@@ -212,6 +215,44 @@ fn source_inputs_must_be_authorized_known_route_inputs() {
     assert!(findings
         .iter()
         .any(|finding| finding.code == "source-route-input-unknown"));
+}
+
+#[test]
+fn a_source_must_map_one_complete_route_input_alternative() {
+    // The shape the Stack generator emits: no root `required`, one `oneOf`
+    // member per lookup key.
+    let alternatives = checked_route_with_inputs(json!({
+        "type":"object",
+        "additionalProperties":false,
+        "properties":{
+            "personId":{"type":"string","minLength":1,"maxLength":64},
+            "householdId":{"type":"string","minLength":1,"maxLength":64},
+            "region":{"type":"string","minLength":1,"maxLength":64}
+        },
+        "oneOf":[
+            {"required":["personId"]},
+            {"required":["householdId","region"]}
+        ]
+    }));
+    compile::compile_with_pack_routes(&project(), &scripts(), std::slice::from_ref(&alternatives))
+        .expect("mapping personId completes one alternative");
+
+    let mut partial_project = project();
+    let source = partial_project.sources.values_mut().next().expect("source");
+    let binding = source.inputs.remove("personId").expect("binding");
+    source.inputs.insert("householdId".to_owned(), binding);
+    let findings = compile::compile_with_pack_routes(&partial_project, &scripts(), &[alternatives])
+        .expect_err("householdId alone completes no alternative");
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code == "source-route-input-alternative")
+        .unwrap_or_else(|| panic!("no alternative finding: {findings:#?}"));
+    assert_eq!(finding.field.to_json_pointer(), "/sources/family/inputs");
+    assert!(
+        finding.message.contains("personId") && finding.message.contains("householdId and region"),
+        "{}",
+        finding.message
+    );
 }
 
 #[test]
@@ -383,6 +424,62 @@ fn compiler_rechecks_pack_identity_and_every_pinned_artifact() {
             findings.iter().any(|finding| finding.code == code),
             "missing {code}: {findings:#?}"
         );
+    }
+}
+
+#[test]
+fn a_changed_pack_artifact_names_the_digest_to_pin_after_review() {
+    let base_project = project();
+
+    let mut schema = checked_route();
+    let pinned = sha256_uri(&schema.artifacts["schemas/facts.schema.json"]);
+    let edited = b"{}".to_vec();
+    let actual = sha256_uri(&edited);
+    schema
+        .artifacts
+        .insert("schemas/facts.schema.json".to_owned(), edited);
+
+    let mut statement = checked_route();
+    let pinned_statement = b"SELECT id FROM records WHERE id = :id".to_vec();
+    let edited_statement = b"SELECT tampered FROM records".to_vec();
+    let mut document: serde_json::Value = serde_json::from_slice(&statement.pack_bytes).unwrap();
+    document["endpoints"] = json!([{
+        "id":"records", "component":"sqlite-extract", "authentication":{"type":"none"}, "maximumResponseBytes":8192,
+        "sqliteExtract":{
+            "extractProfile":"records",
+            "statement":{"path":"queries/records.sql","digest":sha256_uri(&pinned_statement)},
+            "columns":[{"name":"id","type":"string"}], "parameters":[{"name":"id","required":true}],
+            "maximumExtractAgeSeconds":3600,"maximumRows":2,"maximumCellBytes":1024,"maximumStatementSteps":100000,"concurrency":1
+        }
+    }]);
+    statement.pack_bytes = serde_json::to_vec(&document).unwrap();
+    statement.digest = sha256_uri(&statement.pack_bytes);
+    statement
+        .artifacts
+        .insert("queries/records.sql".to_owned(), edited_statement.clone());
+
+    for (route, path, pinned, actual) in [
+        (schema, "schemas/facts.schema.json", pinned, actual),
+        (
+            statement,
+            "queries/records.sql",
+            sha256_uri(&pinned_statement),
+            sha256_uri(&edited_statement),
+        ),
+    ] {
+        let findings = compile::compile_with_pack_routes(&base_project, &scripts(), &[route])
+            .expect_err("a changed artifact is refused");
+        let finding = findings
+            .iter()
+            .find(|finding| finding.code == "source-pack-artifact-digest")
+            .unwrap_or_else(|| panic!("no digest finding for {path}: {findings:#?}"));
+        for needle in [path, pinned.as_str(), actual.as_str(), "after reviewing"] {
+            assert!(
+                finding.message.contains(needle),
+                "{path}: {needle} missing from: {}",
+                finding.message
+            );
+        }
     }
 }
 

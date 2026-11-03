@@ -86,6 +86,12 @@ fn main() -> ExitCode {
             *refusal_limit,
             cli.show_values,
         )),
+        Command::RebindIdentity {
+            job_yaml,
+            pack,
+            runtime: runtime_path,
+            workspace,
+        } => runtime.block_on(rebind_identity(job_yaml, pack, runtime_path, workspace)),
         Command::Rescan {
             job_yaml,
             pack,
@@ -152,6 +158,9 @@ fn check(
         workspace,
     )?;
     check_hook_runtime(&program.job, &runtime_config)?;
+    #[cfg(feature = "job-hook")]
+    registry_adapter_job::hook_ingress::preflight(&program.job, &runtime_config, &resolver)
+        .map_err(|error| error.to_string())?;
     #[cfg(feature = "job-sftp")]
     registry_adapter_job::sftp_source::validate_sftp_host_bindings(&program)?;
     check_destination_runtime(&program.job, &runtime_config)?;
@@ -232,28 +241,32 @@ async fn pass(
         return Ok(pass_exit_code(&report));
     }
     let edits = source_edits(&program)?;
+    let shutdown = shutdown_requests()?;
     if trigger::interval_trigger(&program.job).is_none() {
         return Err(
             "the job declares no interval trigger, so the loop has no schedule; declare one interval trigger".to_string(),
         );
     }
-    let destination =
-        activate_pass_destination(&program, &runtime, &resolver, fixture, fixture_url, dry_run)
-            .await?;
     let gate = Arc::new(HookPassGate::default());
+    // The hook credentials resolve before the destination activates, so a
+    // credential fault is not hidden behind an unreachable destination.
     #[cfg(feature = "job-hook")]
-    if let Some(plan) = registry_adapter_job::hook_ingress::activate(
+    let hook_plan = registry_adapter_job::hook_ingress::activate(
         &program.job,
         &runtime,
         &resolver,
         Arc::clone(&gate),
     )
-    .map_err(|error| error.to_string())?
-    {
+    .map_err(|error| error.to_string())?;
+    let destination =
+        activate_pass_destination(&program, &runtime, &resolver, fixture, fixture_url, dry_run)
+            .await?;
+    #[cfg(feature = "job-hook")]
+    if let Some(plan) = hook_plan {
         let server = plan.bind().await.map_err(|error| error.to_string())?;
         let hook_address = server.local_addr().map_err(|error| error.to_string())?;
         eprintln!("adapter.job.hook-listening address={hook_address}");
-        let shutdown = Arc::new(tokio::sync::Notify::new());
+        let ingress_stop = Arc::new(tokio::sync::Notify::new());
         let loop_future = run_pass_loop(
             &program,
             &pool,
@@ -263,18 +276,19 @@ async fn pass(
                 .expect("a loop always has a non-preview destination"),
             &edits,
             gate,
+            shutdown,
             refusal_limit,
             show_values,
         );
-        let shutdown_for_server = Arc::clone(&shutdown);
+        let ingress_stop_for_server = Arc::clone(&ingress_stop);
         let server_future = server.serve(async move {
-            shutdown_for_server.notified().await;
+            ingress_stop_for_server.notified().await;
         });
         tokio::pin!(loop_future);
         tokio::pin!(server_future);
         return tokio::select! {
             result = &mut loop_future => {
-                shutdown.notify_one();
+                ingress_stop.notify_one();
                 server_future.await.map_err(|error| error.to_string())?;
                 result
             }
@@ -293,10 +307,33 @@ async fn pass(
             .expect("a loop always has a non-preview destination"),
         &edits,
         gate,
+        shutdown,
         refusal_limit,
         show_values,
     )
     .await
+}
+
+/// A stop request for the long-running loop: SIGTERM, which service managers,
+/// `docker stop` and Kubernetes send, or SIGINT (Ctrl+C). The handlers are
+/// installed before the first pass, so a request that arrives while a pass is
+/// running is kept and the loop stops when that pass ends, rather than the
+/// process dying mid-send or the request being lost.
+fn shutdown_requests() -> Result<tokio::sync::watch::Receiver<bool>, String> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let refused =
+        |error: std::io::Error| format!("the stop signal handlers could not be installed: {error}");
+    let mut terminate = signal(SignalKind::terminate()).map_err(refused)?;
+    let mut interrupt = signal(SignalKind::interrupt()).map_err(refused)?;
+    let (requested, observed) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+        requested.send_replace(true);
+    });
+    Ok(observed)
 }
 
 /// Run the one serialized pass loop. Hook requests only wake this loop; all
@@ -309,14 +346,32 @@ async fn run_pass_loop(
     destination: &dyn DestinationSeam,
     edits: &Edits,
     gate: Arc<HookPassGate>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
     refusal_limit: u32,
     show_values: bool,
 ) -> Result<ExitCode, String> {
     let mut last = LastPass::NotYet;
     let started = SystemTime::now();
+    let delay = trigger::interval_trigger(&program.job)
+        .map(|trigger| Duration::from_millis(trigger.delay_milliseconds))
+        .ok_or_else(|| "the job declares no interval trigger".to_string())?;
     loop {
         let now = std::time::SystemTime::now();
-        let state = job_state(pool, &program.job).await?;
+        // A store that cannot be read (a restart, a failover) does not end
+        // the loop: name the closed cause, wait one delay, read again.
+        let state = match job_state(pool, &program.job).await {
+            Ok(state) => state,
+            Err(cause) => {
+                eprintln!("{}", store_unreachable_line(&cause, delay));
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {
+                        last = LastPass::NotYet;
+                        continue;
+                    }
+                    _ = shutdown.wait_for(|requested| *requested) => return Ok(ExitCode::SUCCESS),
+                }
+            }
+        };
         let step = trigger::next_step(&program.job, edits, &state, last, now, started)
             .ok_or_else(|| "the job declares no interval trigger".to_string())?;
         let rescan = match step {
@@ -326,11 +381,11 @@ async fn run_pass_loop(
                         last = LastPass::NotYet;
                         continue;
                     }
-                    _ = gate.wait_for_hook() => {
+                    _ = gate.wait_for_hook(), if trigger::hook_ends_the_wait(last) => {
                         let now = SystemTime::now();
                         state.rescan_active || trigger::rescan_due(edits, &state, now)
                     }
-                    _ = tokio::signal::ctrl_c() => return Ok(ExitCode::SUCCESS),
+                    _ = shutdown.wait_for(|requested| *requested) => return Ok(ExitCode::SUCCESS),
                 }
             }
             Step::Run { rescan } => rescan,
@@ -347,6 +402,9 @@ async fn run_pass_loop(
         gate.end_pass();
         let report = report?;
         print_pass_report(&report, false, show_values, preview);
+        if *shutdown.borrow() {
+            return Ok(ExitCode::SUCCESS);
+        }
         last = match report.stopped {
             None => LastPass::Settled {
                 items_read: report.items_read,
@@ -409,6 +467,56 @@ async fn rescan(
     Ok(pass_exit_code(&report))
 }
 
+/// Accept an intended item-identity change. The receipt goes to standard
+/// output for the operator and one audit line to standard error for the
+/// supervisor's log, both value-free.
+async fn rebind_identity(
+    job_yaml: &Path,
+    pack: &Path,
+    runtime_path: &Path,
+    workspace: &WorkspaceArgs,
+) -> Result<ExitCode, String> {
+    let runtime = load_runtime(runtime_path)?;
+    let resolver = runtime_secret_resolver(&runtime)?;
+    let program = compile(pack, job_yaml, &runtime, Arc::clone(&resolver), workspace)?;
+    let pool = open_pool(&runtime, &resolver).await?;
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    let job_id = program.job.job.id.as_str();
+    let rebound = store::rebind_item_identity(
+        &mut client,
+        job_id,
+        program.item_identity_digest().as_ref(),
+    )
+    .await
+    .map_err(|error| match error {
+        store::StoreError::LeaseHeld => {
+            "a pass holds the job lease; stop the running pass or loop, then run rebind-identity again".to_string()
+        }
+        error => format!("the job store refused: {error}"),
+    })?;
+    if rebound.changed {
+        eprintln!(
+            "adapter.job.identity-rebound job={job_id} itemsKept={} at={}",
+            rebound.items_kept,
+            optional_time(Some(SystemTime::now())).unwrap_or_default()
+        );
+    }
+    let report = serde_json::json!({
+        "ok": true,
+        "jobId": job_id,
+        "changed": rebound.changed,
+        "itemsKept": rebound.items_kept,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("a plain object renders")
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 /// Activate one immutable destination client for this command or loop.
 /// Preview never resolves destination credentials, and an explicit fixture
 /// never falls through to an operational destination.
@@ -452,6 +560,16 @@ async fn bounded_pass(
     }
 }
 
+/// A preview acknowledges nothing: the preview destination's would-be
+/// deliveries are listed under `wouldDeliver`, not counted as acknowledged.
+fn acknowledged_count(report: &PassReport, dry_run: bool) -> u32 {
+    if dry_run {
+        0
+    } else {
+        report.items_acknowledged
+    }
+}
+
 /// Print one pass report, value-free unless the caller asked for the
 /// dry-run's recorded projections.
 fn print_pass_report(
@@ -465,6 +583,12 @@ fn print_pass_report(
             "reason": stop_reason_name(reason),
             "code": reason.stop_text(),
         });
+        if let Some(next) = stop_next_step(reason) {
+            stopped
+                .as_object_mut()
+                .expect("a stop report is an object")
+                .insert("next".to_string(), serde_json::json!(next));
+        }
         if let StopReason::PageFault {
             record: Some(record),
             ..
@@ -475,7 +599,7 @@ fn print_pass_report(
                 .expect("a stop report is an object")
                 .insert(
                     "record".to_string(),
-                    serde_json::json!({"ordinal": record.ordinal}),
+                    serde_json::to_value(record).expect("a record locator is JSON"),
                 );
         }
         stopped
@@ -486,7 +610,7 @@ fn print_pass_report(
         "itemsChanged": report.items_changed,
         "itemsRedelivered": report.items_redelivered,
         "itemsSkipped": report.items_skipped,
-        "itemsAcknowledged": report.items_acknowledged,
+        "itemsAcknowledged": acknowledged_count(report, dry_run),
         "itemsRefused": report.items_refused,
         "itemsHeld": report.items_held,
         "refusalsByCode": report.refusals_by_code,
@@ -526,6 +650,26 @@ fn print_pass_report(
         "{}",
         serde_json::to_string_pretty(&body).expect("a plain object renders")
     );
+}
+
+/// The one step that clears a stop an operator can clear, for the stop
+/// report. Value-free and fixed per code.
+fn stop_next_step(reason: &StopReason) -> Option<&'static str> {
+    next_step_for_stop_text(&reason.stop_text())
+}
+
+/// The next step for a recorded stop text (`page-fault:<code>`,
+/// `destination-stop:<code>`), so `status` can repeat what the pass printed.
+fn next_step_for_stop_text(text: &str) -> Option<&'static str> {
+    if text.contains(registry_adapter_job::pass::ITEM_IDENTITY_MIGRATION_REQUIRED) {
+        Some("If the keyPointer or CSV change is intended, run adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>; stored items are kept and the new identity reads them as new. Otherwise restore the previous job definition.")
+    } else if text.contains(registry_adapter_job::pass::COORDINATOR_IDENTITY_UNRECORDED) {
+        Some("A pending signed delivery was staged before store schema 103 recorded its receiver and body identity, so this binary cannot prove a retry is the same event. Restore the pre-upgrade database backup, run passes with the previous binary until adapter-job status lists no pending items, then upgrade and run init-store again.")
+    } else if text.contains(registry_adapter_job::pass::COORDINATOR_BODY_CHANGED) {
+        Some("A pending delivery was first attempted under a different job.version or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else {
+        None
+    }
 }
 
 fn stop_reason_name(reason: &StopReason) -> &'static str {
@@ -618,11 +762,16 @@ async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String
         "refusalsByCode": counts.refusals_by_code,
         "holdsByCode": counts.holds_by_code,
         "holdGuidance": hold_guidance,
+        "pendingKeys": counts.pending_keys,
         "receiptHorizon": receipt_horizon,
         "schedule": {
             "overdue": overdue,
             "lastPassAt": optional_time(row.last_pass_at),
             "lastPassStop": row.last_pass_stop,
+            "lastPassStopNext": row
+                .last_pass_stop
+                .as_deref()
+                .and_then(next_step_for_stop_text),
             "leaseExpires": optional_time(row.lease_expires),
             "positionPresent": row.position.is_some(),
             "lastRescanAt": optional_time(row.last_rescan_at),
@@ -845,20 +994,16 @@ fn activate_sources(
 }
 
 /// The value-free rendering of a compile refusal: every diagnostic the
-/// compiler carried, code first.
+/// compiler carried, in the same human form `adapterctl` prints (code, file
+/// position, pointer, message, and the next step).
 fn job_error_message(error: &JobError) -> String {
     let rendered = error
         .diagnostics
         .iter()
-        .map(|diagnostic| {
-            format!(
-                "{} at {} {}",
-                diagnostic.code, diagnostic.path, diagnostic.message
-            )
-        })
+        .map(|diagnostic| diagnostic.render_human().trim_end().to_string())
         .collect::<Vec<_>>()
-        .join("; ");
-    format!("the job was refused: {rendered}")
+        .join("\n");
+    format!("the job was refused:\n{rendered}")
 }
 
 /// The job's source route edit property, from the compiled program's
@@ -869,16 +1014,26 @@ fn source_edits(program: &JobProgram) -> Result<Edits, String> {
 }
 
 /// The job state the schedule reads, from the store row.
+/// Read the trigger state. The error is the store's closed, value-free cause
+/// token (`sqlstate-57P01`, `connection-closed`, `pool-timeout`).
 async fn job_state(pool: &Pool, job: &AdapterJob) -> Result<JobState, String> {
     let client = pool
         .get()
         .await
-        .map_err(|error| format!("the job store could not be reached: {error}"))?;
+        .map_err(|error| store::pool_cause(&error))?;
     let row = store::read_state(&client, job.job.id.as_str())
         .await
-        .map_err(|error| format!("the job store refused: {error}"))?
+        .map_err(|error| error.cause())?
         .unwrap_or_default();
     Ok(trigger_state(&row))
+}
+
+/// The loop's stderr line for a job store it could not read.
+fn store_unreachable_line(cause: &str, retry: Duration) -> String {
+    format!(
+        "adapter.job.store-unreachable cause={cause}: the loop could not read the job state and retries in {} ms; next: check that the store connection reaches PostgreSQL and that the job role can read adapter_job_state (run init-store if the schema is missing)",
+        retry.as_millis()
+    )
 }
 
 fn trigger_state(row: &store::JobStateRow) -> JobState {
@@ -985,7 +1140,14 @@ fn read_job(path: &Path) -> Result<AdapterJob, String> {
 /// one reader the compile path shares (`engine::job_sources`), which
 /// refuses an undeclared member of the block like any other.
 fn load_runtime(path: &Path) -> Result<JobRuntimeConfig, String> {
-    JobRuntimeConfig::load(path).map_err(|error| format!("the runtime config was refused: {error}"))
+    JobRuntimeConfig::load(path).map_err(|error| {
+        let mut message = format!("the runtime config was refused: {error}");
+        if let Some(hint) = JobRuntimeConfig::facade_kind_hint(path, &error) {
+            message.push_str("\nhint: ");
+            message.push_str(&hint);
+        }
+        message
+    })
 }
 
 fn runtime_store(runtime: &JobRuntimeConfig) -> Result<&store::JobStoreConfig, String> {
@@ -1022,6 +1184,114 @@ mod tests {
                 .join(file),
         )
         .expect("the maintained example job reads")
+    }
+
+    #[test]
+    fn a_refused_job_definition_names_the_member_and_the_fix() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = std::fs::read_to_string(
+            root.join("products/adapter/examples/kobotoolbox-job/job.yaml"),
+        )
+        .expect("the maintained example job reads");
+        let refused = source.replacen(
+            "  id: kobotoolbox-submissions-example\n",
+            "  id: kobotoolbox-submissions-example\n  owner: ops\n",
+            1,
+        );
+        assert_ne!(refused, source, "the fixture edit applied");
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let path = directory.path().join("job.yaml");
+        std::fs::write(&path, refused).expect("write the job");
+
+        let message = read_job(&path).expect_err("an undeclared member refuses");
+        assert!(
+            message.contains("/job/owner"),
+            "names the member: {message}"
+        );
+        assert!(
+            message.to_lowercase().contains("remove"),
+            "names the fix: {message}"
+        );
+    }
+
+    #[test]
+    fn a_preview_reports_no_acknowledged_items() {
+        let report = PassReport {
+            items_acknowledged: 3,
+            ..PassReport::default()
+        };
+        assert_eq!(acknowledged_count(&report, true), 0);
+        assert_eq!(acknowledged_count(&report, false), 3);
+    }
+
+    #[test]
+    fn body_drift_and_the_identity_fence_each_carry_a_next_step() {
+        let drift = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::COORDINATOR_BODY_CHANGED.to_owned(),
+        };
+        let next = stop_next_step(&drift).expect("body drift names its recovery");
+        assert!(
+            next.contains("Restore the previous job definition"),
+            "{next}"
+        );
+        assert_eq!(
+            next_step_for_stop_text("destination-stop:adapter.job.coordinator-body-changed"),
+            Some(next),
+            "status repeats the pass's next step from the recorded text"
+        );
+        assert_eq!(next_step_for_stop_text("lease-held"), None);
+    }
+
+    #[test]
+    fn an_unrecorded_delivery_identity_names_the_settle_first_recovery() {
+        let stop = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::COORDINATOR_IDENTITY_UNRECORDED.to_owned(),
+        };
+        let next = stop_next_step(&stop).expect("an unrecorded identity names its recovery");
+        for step in [
+            "schema 103",
+            "backup",
+            "previous binary",
+            "status",
+            "init-store",
+        ] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        assert_eq!(
+            next_step_for_stop_text("destination-stop:adapter.job.coordinator-identity-unrecorded"),
+            Some(next)
+        );
+    }
+
+    #[test]
+    fn an_unreadable_store_line_names_the_cause_the_retry_and_the_fix() {
+        let line = store_unreachable_line("sqlstate-57P01", Duration::from_millis(3000));
+        assert!(
+            line.starts_with("adapter.job.store-unreachable cause=sqlstate-57P01:"),
+            "{line}"
+        );
+        assert!(line.contains("retries in 3000 ms"), "{line}");
+        assert!(
+            line.contains("next: check that the store connection"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_job_refusal_prints_the_next_step_and_no_empty_pointer() {
+        let error = JobError {
+            diagnostics: vec![registry_platform_yaml::Diagnostic::error(
+                "config.missing-key",
+                "",
+                "the required member `destination` is missing",
+                "Add `destination`.",
+            )],
+        };
+        let message = job_error_message(&error);
+        assert!(message.starts_with("the job was refused:\n"), "{message}");
+        assert!(message.contains("config.missing-key"), "{message}");
+        assert!(message.contains("next: Add `destination`."), "{message}");
+        assert!(!message.contains("  at  "), "{message}");
     }
 
     #[test]

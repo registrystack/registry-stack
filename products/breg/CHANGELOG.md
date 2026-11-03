@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- BREAKING: `bregctl generate evidence-source` exports a reviewed Adapter pack
+  under `adapter-packs/<source>/` in place of the `adapters/*.rhai` and
+  `schemas/*.yaml` artifacts, to match Evidence sources moving into Adapter
+  packs. The export `apiVersion` is unchanged, so nothing in the file marks
+  the new layout: regenerate every export with this `bregctl` and import it
+  with a matching `evidencectl`. The pack changes the export's
+  `behaviorRevision` for an unchanged registry, so expect a new
+  `behaviorRevision` against the same `registryRevision` and review the import
+  as a new revision. Source inputs are named `<selector>--<field>`, hashed only
+  when that name is over 64 bytes, so a reviewer can read which selector field
+  each input binds.
+- BREAKING: `bregctl generate evidence-source --authentication` selects the
+  authentication the generated pack endpoint declares, and the default stays
+  `static-authorization`. A target that authenticates with
+  `oauth2-private-key-jwt` needs
+  `--authentication oauth2-private-key-jwt` at export time; the selection also
+  changes the pack version. `evidencectl check --target` refuses a pack and
+  target that name different types with `evidence.source.authentication-mismatch`
+  and names the flag to regenerate with.
 - Permit an explicit standing-agent `get-review-context` grant for a verified
   trusted actor and exact nonempty requester-client ceiling, including on
   submitted Proposals. This is an opt-in source service permission, independent

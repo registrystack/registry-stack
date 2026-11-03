@@ -200,18 +200,20 @@ fact.
 
 An Adapter pack endpoint that selects the `registry-lookup-v1` host protocol may
 declare one unresolved Problem tuple: status `404`, an absolute HTTPS `type`,
-and a closed `code`. Only an HTTP `404` with exactly one `Content-Type` header
-whose value is exactly `application/problem+json`, and an exact six-member JSON
-object containing `type`, `title`, `status`, `detail`, `code`, and `traceId`, may
-be classified as data-free `unresolved`. The body `type`, `status`, and `code`
-must match the declared tuple, the five text members must be strings, and the
-body must be non-empty and at most 64 KiB.
+and a closed `code`. Only an HTTP `404` with exactly one `Content-Type` header whose media type is
+`application/problem+json` (compared case-insensitively, parameters such as
+`charset` ignored), and a JSON object containing the string members `type`,
+`title`, `detail`, `code`, and `traceId` and the number `status`, may be
+classified as data-free `unresolved`. Members the classifier does not know are
+ignored, so a later minor release of the source may add some. The body `type`,
+`status`, and `code` must match the declared tuple, and the body must be
+non-empty and at most 64 KiB.
 
-Missing, duplicate, or noncanonical media types and malformed, missing-member,
-extra-member, duplicate-member, mistyped, tuple-mismatched, empty, or oversized
-bodies remain protocol or dependency failures. A non-`404` response does not
-enter this classifier. Provider error content never downgrades any of these
-failures to `unresolved`.
+Missing, duplicate, or other media types and malformed, missing-member,
+duplicate-member, mistyped, tuple-mismatched, empty, or oversized bodies remain
+protocol or dependency failures. A non-`404` response does not enter this
+classifier. Provider error content never downgrades any of these failures to
+`unresolved`.
 
 The shared cases are:
 

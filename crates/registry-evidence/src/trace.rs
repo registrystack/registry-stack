@@ -306,6 +306,11 @@ pub struct CaseFailure {
     /// The value class the evaluation observed, reduced the same way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_class: Option<ValueClass>,
+    /// The detail lines of the stages the case failed, such as the fact names
+    /// an expectation missed or the endpoint and status a source answered.
+    /// They are the same value-free lines the trace records.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<String>,
 }
 
 impl CaseFailure {
@@ -438,9 +443,8 @@ impl FixtureTrace {
     ///
     /// Read after [`Self::fail`] attributed the run's message, so each entry
     /// carries the identifier that message belongs to beside the classes its
-    /// comparison reached. A run stops at its first failure, so the vec holds
-    /// one entry today; the shape is a vec because nothing about the
-    /// attribution promises it always will.
+    /// comparison reached. A coequal fixture run settles every case before it
+    /// fails, so the vec holds one entry per failing case.
     pub fn case_failures(&self) -> Vec<CaseFailure> {
         self.cases
             .iter()
@@ -457,6 +461,12 @@ impl FixtureTrace {
                         .observed_result
                         .as_ref()
                         .and_then(|result| result.value_classes.first().copied()),
+                    details: case
+                        .stages
+                        .iter()
+                        .filter(|stage| matches!(stage.status, StageStatus::Failed))
+                        .flat_map(|stage| stage.details.iter().cloned())
+                        .collect(),
                 })
             })
             .collect()
@@ -821,6 +831,7 @@ mod tests {
             cause: "reference concept value did not match".to_owned(),
             expected_class: Some(ValueClass::String),
             observed_class: None,
+            details: Vec::new(),
         };
         assert_eq!(
             absent.render_line(),

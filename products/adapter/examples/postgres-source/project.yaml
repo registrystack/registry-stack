@@ -1,0 +1,19 @@
+# The workspace the job's checks run over: the profile, the pinned pack, no
+# facade binding and no record type, because a job serves no facade operation.
+# The pack digest is the sha256 of pack.yaml, and the profile digest is the
+# sha256 of profile.yaml; repin them when either file changes.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: households-view-example
+  version: "1"
+profile:
+  id: households-view
+  version: "1"
+  digest: sha256:77b2ded9c74f4e0a29e0076198e1e463eb03550554fc64a2e48509c8896c13ca
+pack:
+  id: households-view
+  version: "1"
+  digest: sha256:a80b1fc3c988e42d76b981491c7f3eea34607e859e0c2e95c0f45f89c3105d9e
+recordTypes: []
+bindings: []

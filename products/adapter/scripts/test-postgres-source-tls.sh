@@ -15,16 +15,24 @@ db_user=adapter_tls
 db_password=adapter_tls_test
 db_name=adapter_tls
 container_id=
+# Set once this run is about to create the named container, so cleanup can
+# remove it by name when docker run returns something other than an ID.
+owned_name=
 tls_dir=
 
 cleanup() {
 	local status=$?
 	trap - EXIT
-	if [[ -n "$container_id" ]]; then
-		if docker rm -fv "$container_id" >/dev/null; then
-			printf '%s\n' "Removed owned PostgreSQL TLS fixture ${container_id:0:12}." >&2
+	local target=$container_id label=${container_id:0:12}
+	if [[ -z "$target" && -n "$owned_name" && -n "$(docker ps -aq --filter "name=^${owned_name}$")" ]]; then
+		target=$owned_name
+		label=$owned_name
+	fi
+	if [[ -n "$target" ]]; then
+		if docker rm -fv "$target" >/dev/null; then
+			printf '%s\n' "Removed owned PostgreSQL TLS fixture $label." >&2
 		else
-			printf '%s\n' "Failed to remove owned PostgreSQL TLS fixture ${container_id:0:12}." >&2
+			printf '%s\n' "Failed to remove owned PostgreSQL TLS fixture $label." >&2
 			if [[ "$status" == 0 ]]; then
 				status=1
 			fi
@@ -49,6 +57,8 @@ cleanup() {
 	exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 for tool in docker openssl; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
@@ -83,6 +93,7 @@ if [[ -n "$(docker ps -aq --filter "name=^${container_name}$")" ]]; then
 	exit 1
 fi
 printf '%s\n' "Starting $container_name (verified-TLS PostgreSQL 17)." >&2
+owned_name=$container_name
 created_container_id=
 if created_container_id=$(docker run -d --name "$container_name" \
 	-e POSTGRES_USER="$db_user" -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB="$db_name" \

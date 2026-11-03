@@ -23,6 +23,14 @@ properties:
       Names the document type; together with `apiVersion` it tells an Evidence runtime file
       apart from any other product's runtime configuration.
     const: EvidenceRuntimeConfig
+  acquisitionCapabilities:
+    description: >-
+      Retired. An empty list is accepted, and ignored, for one release so a file written for
+      0.44 still loads; any capability is refused. Delete the member: a Source binds a reviewed
+      Adapter pack route, and the pack declares how it reads.
+    deprecated: true
+    type: array
+    maxItems: 0
   package:
     description: >-
       Selects the one governed package this process verifies and loads at startup; no alternate,

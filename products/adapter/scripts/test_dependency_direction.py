@@ -105,7 +105,11 @@ def metadata(**changes: list) -> dict:
     packages = [{"id": package_id, "name": name} for package_id, name in NAMES.items()]
     job = next(package for package in packages if package["name"] == "registry-adapter-job")
     job["dependencies"] = [
-        {"name": "registry-adapter-connectors", "optional": True},
+        {
+            "name": "registry-adapter-connectors",
+            "optional": True,
+            "uses_default_features": False,
+        },
     ]
     job["features"] = {
         "default": [],
@@ -131,6 +135,7 @@ def metadata(**changes: list) -> dict:
         if package["name"] == "registry-adapter-connectors"
     )
     connector["features"] = {
+        "default": [],
         "coordinator-event": [
             "dep:registry-platform-crypto",
             "dep:registry-platform-hooks",
@@ -558,6 +563,32 @@ class JobHostGraphTests(unittest.TestCase):
         self.assertIn("optional normal dependency", "\n".join(
             MODULE.job_feature_violations(document)
         ))
+
+    def test_the_connector_dependency_must_not_take_default_features(self):
+        document = metadata()
+        job = next(
+            package
+            for package in document["packages"]
+            if package["name"] == "registry-adapter-job"
+        )
+        job["dependencies"][0]["uses_default_features"] = True
+        self.assertIn("default-features = false", "\n".join(
+            MODULE.job_feature_violations(document)
+        ))
+
+    def test_a_default_off_feature_cannot_become_a_default_feature(self):
+        for crate in ("registry-adapter-job", "registry-adapter-connectors"):
+            for feature in ("direct-breg", "signed-coordinator-event", "coordinator-event"):
+                document = metadata()
+                package = next(
+                    item for item in document["packages"] if item["name"] == crate
+                )
+                package["features"]["default"] = [feature]
+                self.assertIn(
+                    "default-off feature(s) by default",
+                    "\n".join(MODULE.job_feature_violations(document)),
+                    f"{crate} default [{feature}]",
+                )
 
     def test_the_direct_breg_feature_cannot_gain_another_edge(self):
         document = metadata()

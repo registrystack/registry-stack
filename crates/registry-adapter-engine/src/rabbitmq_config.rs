@@ -41,6 +41,9 @@ pub struct RabbitMqSourceBinding {
     pub dead_letter_queue: String,
     /// The fixed routing key from the dead-letter exchange to its queue.
     pub dead_letter_routing_key: String,
+    /// Whether the host declares the topology itself (durable, with the
+    /// dead-letter arguments) instead of requiring it to exist already.
+    pub declare_topology: bool,
     /// The namespace prepended to the encoded stable message identity.
     pub namespace: String,
     /// The local outstanding-delivery concurrency bound. `basic.get` is not
@@ -55,7 +58,7 @@ pub struct RabbitMqSourceBinding {
 }
 
 /// The TLS posture of one RabbitMQ source.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(
     tag = "type",
     rename_all = "kebab-case",
@@ -63,9 +66,10 @@ pub struct RabbitMqSourceBinding {
     deny_unknown_fields
 )]
 pub enum RabbitMqSourceTls {
-    /// Platform-native roots, with AMQPS required.
-    #[default]
-    SystemRoots,
+    /// Platform-native roots, with AMQPS required. An empty struct variant,
+    /// because serde ignores unknown members on a unit variant of an
+    /// internally tagged enum.
+    SystemRoots {},
     /// Platform-native roots plus one captured private CA bundle.
     CaBundle {
         /// Absolute path of the PEM CA bundle the host captures at activation.
@@ -75,7 +79,13 @@ pub enum RabbitMqSourceTls {
     /// Plain AMQP to numeric loopback, available only in the named broker
     /// fixture feature and absent from production builds and schemas.
     #[cfg(feature = "rabbitmq-test-plaintext")]
-    PlaintextTest,
+    PlaintextTest {},
+}
+
+impl Default for RabbitMqSourceTls {
+    fn default() -> Self {
+        Self::SystemRoots {}
+    }
 }
 
 impl RabbitMqSourceTls {
@@ -84,9 +94,9 @@ impl RabbitMqSourceTls {
     pub fn ca_bundle_file(&self) -> Option<&str> {
         match self {
             Self::CaBundle { ca_bundle_file } => Some(ca_bundle_file),
-            Self::SystemRoots => None,
+            Self::SystemRoots {} => None,
             #[cfg(feature = "rabbitmq-test-plaintext")]
-            Self::PlaintextTest => None,
+            Self::PlaintextTest {} => None,
         }
     }
 }
@@ -113,6 +123,8 @@ pub(crate) struct RabbitMqSourceConfig {
     dead_letter_queue: String,
     #[serde(deserialize_with = "rabbitmq_name")]
     dead_letter_routing_key: String,
+    #[serde(default)]
+    declare_topology: bool,
     #[serde(deserialize_with = "rabbitmq_namespace")]
     namespace: String,
     #[serde(default = "default_maximum_outstanding_deliveries")]
@@ -127,6 +139,11 @@ pub(crate) struct RabbitMqSourceConfig {
 
 #[cfg_attr(not(feature = "job-rabbitmq"), allow(dead_code))]
 impl RabbitMqSourceConfig {
+    /// The reference the broker password resolves from.
+    pub(crate) fn password_ref(&self) -> &SecretReference {
+        &self.password_ref
+    }
+
     pub(crate) fn host_binding(&self, endpoint: &str) -> RabbitMqSourceBinding {
         RabbitMqSourceBinding {
             endpoint: endpoint.to_owned(),
@@ -139,6 +156,7 @@ impl RabbitMqSourceConfig {
             dead_letter_exchange: self.dead_letter_exchange.clone(),
             dead_letter_queue: self.dead_letter_queue.clone(),
             dead_letter_routing_key: self.dead_letter_routing_key.clone(),
+            declare_topology: self.declare_topology,
             namespace: self.namespace.clone(),
             maximum_outstanding_deliveries: u16::try_from(
                 self.maximum_outstanding_deliveries.get(),
@@ -210,7 +228,7 @@ where
     Ok(text)
 }
 
-fn absolute_ca_bundle_path<'de, D>(deserializer: D) -> Result<String, D::Error>
+pub(crate) fn absolute_ca_bundle_path<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -250,5 +268,18 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<RabbitMqSourceTls>(input).is_err());
         }
+    }
+
+    #[test]
+    fn system_roots_refuses_a_misspelt_member() {
+        let tls: RabbitMqSourceTls =
+            serde_json::from_value(serde_json::json!({"type": "system-roots"}))
+                .expect("the bare system-roots posture must deserialize");
+        assert!(tls.ca_bundle_file().is_none());
+        let error = serde_json::from_value::<RabbitMqSourceTls>(
+            serde_json::json!({"type": "system-roots", "caBundelFile": "/run/secrets/ca.pem"}),
+        )
+        .expect_err("a misspelt member must not be ignored");
+        assert!(error.to_string().contains("caBundelFile"), "{error}");
     }
 }

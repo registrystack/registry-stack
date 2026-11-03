@@ -146,8 +146,10 @@ impl HostProtocolRegistry {
 /// passed product review.
 pub trait CompiledHostProtocol: Send + Sync {
     /// Trusted request-header names owned by this built-in protocol. Pure
-    /// compilation adds these only to the frozen transport template, not to
-    /// script authority, and every prepared attempt must supply the exact set.
+    /// compilation adds these to the endpoint's request-header allowlist in
+    /// the frozen transport template, and every prepared attempt must supply
+    /// the exact set. A script header of the same name is not an override:
+    /// the outbound header filter refuses a name that appears twice.
     fn request_header_names(&self) -> &[HeaderName] {
         &[]
     }
@@ -168,6 +170,14 @@ pub trait CompiledHostProtocol: Send + Sync {
     /// read; enabling it still remains subject to the auth plan's one-retry
     /// limit and the shared acquisition operation budget.
     fn allows_credential_refresh_retry(&self) -> bool {
+        false
+    }
+
+    /// Whether an offline fixture may record this protocol's response as a
+    /// readable JSON `body` instead of exact `rawBodyBase64` bytes. Only a
+    /// protocol that verifies no signature over the response bytes may allow
+    /// it; the default keeps replay byte-exact.
+    fn replays_readable_body(&self) -> bool {
         false
     }
 

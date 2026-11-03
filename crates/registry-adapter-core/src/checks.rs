@@ -4154,8 +4154,15 @@ pub fn check_project_pins(
         findings.push(finding(
             CheckCode::ProjectPinDigestMismatch,
             "/profile/digest",
-            "the pinned profile digest does not match the profile bytes",
-            "Pin the sha256 digest of the profile artifact's bytes.",
+            &format!(
+                "the pinned profile digest {} does not match the profile bytes, which hash to {}",
+                project.profile.digest.as_str(),
+                computed_profile_digest.as_str()
+            ),
+            &format!(
+                "Pin {}, the sha256 digest of the profile artifact's bytes, after reviewing the change.",
+                computed_profile_digest.as_str()
+            ),
         ));
     }
     if project.pack.version != computed_pack_version {
@@ -4170,8 +4177,15 @@ pub fn check_project_pins(
         findings.push(finding(
             CheckCode::ProjectPinDigestMismatch,
             "/pack/digest",
-            "the pinned pack digest does not match the pack bytes",
-            "Pin the sha256 digest of the pack artifact's bytes.",
+            &format!(
+                "the pinned pack digest {} does not match the pack bytes, which hash to {}",
+                project.pack.digest.as_str(),
+                computed_pack_digest.as_str()
+            ),
+            &format!(
+                "Pin {}, the sha256 digest of the pack artifact's bytes, after reviewing the change.",
+                computed_pack_digest.as_str()
+            ),
         ));
     }
     findings
@@ -11175,11 +11189,39 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, CheckCode::ProjectPinDigestMismatch.code());
         assert_eq!(findings[0].path, "/profile/digest");
+        assert_names_digest_to_pin(&findings[0], &digest(), &other_digest);
+
+        assert!(
+            findings[0].suggested_action.contains(
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            ),
+            "the refusal names the computed digest: {}",
+            findings[0].suggested_action
+        );
 
         let findings = check_project_pins(&project, "1.0.0", &digest(), "1.0.0", &other_digest);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, CheckCode::ProjectPinDigestMismatch.code());
         assert_eq!(findings[0].path, "/pack/digest");
+        assert_names_digest_to_pin(&findings[0], &digest(), &other_digest);
+    }
+
+    /// The refusal prints the pinned digest and the digest the bytes have,
+    /// so an author copies the new pin after review instead of hashing.
+    fn assert_names_digest_to_pin(finding: &Diagnostic, pinned: &Digest, actual: &Digest) {
+        assert!(
+            finding.message.contains(pinned.as_str()) && finding.message.contains(actual.as_str()),
+            "{}",
+            finding.message
+        );
+        assert!(
+            finding.suggested_action.contains(actual.as_str())
+                && finding
+                    .suggested_action
+                    .contains("after reviewing the change"),
+            "{}",
+            finding.suggested_action
+        );
     }
 
     #[test]

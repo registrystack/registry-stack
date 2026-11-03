@@ -208,14 +208,29 @@ async fn exact_problem_is_data_free_for_get_and_post_with_optional_host_attribut
 }
 
 #[tokio::test]
+async fn additive_members_and_media_type_parameters_do_not_defeat_the_exact_tuple() {
+    let extended = EXACT.replace(
+        "synthetic-private-trace\"",
+        "synthetic-private-trace\",\"instance\":\"/lookups/1\"",
+    );
+    assert_ne!(extended, EXACT);
+    for (body, media) in [
+        (extended.as_str(), "application/problem+json"),
+        (EXACT, "application/problem+json; charset=utf-8"),
+        (EXACT, "Application/Problem+JSON"),
+    ] {
+        assert_eq!(
+            execute_case(body, media, 404, false, false).await,
+            Ok(EvidenceLookup::Unresolved),
+            "media: {media}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn malformed_or_mismatched_problems_cannot_become_unavailable_information() {
     let cases = [
         (EXACT.to_owned(), "application/json", 404),
-        (
-            EXACT.to_owned(),
-            "application/problem+json; charset=utf-8",
-            404,
-        ),
         (
             EXACT.replace(TYPE_URI, "https://id.example.invalid/problems/other"),
             "application/problem+json",
@@ -238,14 +253,6 @@ async fn malformed_or_mismatched_problems_cannot_become_unavailable_information(
         ),
         (
             EXACT.replace(",\"traceId\":\"synthetic-private-trace\"", ""),
-            "application/problem+json",
-            404,
-        ),
-        (
-            EXACT.replace(
-                "synthetic-private-trace\"",
-                "synthetic-private-trace\",\"extra\":true",
-            ),
             "application/problem+json",
             404,
         ),

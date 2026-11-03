@@ -20,6 +20,10 @@ use serde_json::{json, Value};
 const REQUIREMENT: &str = "urn:example:fixture:requirement:professional-licence-status:v1";
 const AUTHORITY_PATH_REFUSAL: &str =
     "an authority path that can activate a source does not supply every required route input";
+const AUTHORITY_PATH_OVERLAP: &str =
+    "an authority path that can activate a source supplies inputs for more than one route input alternative";
+const AUTHORITY_PATH_UNFIT: &str =
+    "an authority path that can activate a source does not fit the route input presence rules";
 
 fn fixture_root(case: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -280,8 +284,12 @@ fn authority_document(profiles: Value) -> AuthorityDocument {
 }
 
 fn assert_value_free_authority_path_refusal(error: &BundleError) {
+    assert_value_free_authority_path_message(error, AUTHORITY_PATH_REFUSAL);
+}
+
+fn assert_value_free_authority_path_message(error: &BundleError, expected: &str) {
     let message = error.to_string();
-    assert!(message.contains(AUTHORITY_PATH_REFUSAL), "{message}");
+    assert!(message.contains(expected), "{message}");
     for prohibited in [
         "licence_reference",
         "registry_region",
@@ -363,7 +371,34 @@ fn nested_one_of_retains_exact_dependent_presence_branches() {
         })),
     )
     .expect_err("both dependent presence branches match the complete authority path");
-    assert_value_free_authority_path_refusal(&error);
+    assert_value_free_authority_path_message(&error, AUTHORITY_PATH_UNFIT);
+}
+
+#[test]
+fn a_grant_that_fills_two_route_input_alternatives_is_refused_as_overlapping() {
+    let alternatives = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "licence_reference": {"type": "string"},
+            "registry_region": {"type": "string"}
+        },
+        "oneOf": [
+            {"required": ["licence_reference"]},
+            {"required": ["registry_region"]}
+        ]
+    });
+    let bundle = staged_two_input_bundle_with_schema(true, &json!({}), Some(alternatives))
+        .expect("pure package compilation has no activated target grants");
+
+    bundle
+        .validate_target_authority("local", &authority_document(disjoint_profiles()))
+        .expect("each disjoint grant fills exactly one alternative");
+
+    let error = bundle
+        .validate_target_authority("local", &authority_document(complete_narrowed_profile()))
+        .expect_err("one grant that fills both alternatives makes the lookup ambiguous");
+    assert_value_free_authority_path_message(&error, AUTHORITY_PATH_OVERLAP);
 }
 
 #[test]
@@ -408,12 +443,12 @@ async fn public_bundle_activation_refuses_route_incomplete_authority_after_reque
         )
         .await;
 
-    assert!(matches!(
-        result,
-        Err(ActivationError::Authority(
-            AuthorityError::SourceRouteInputs
-        ))
-    ));
+    match result {
+        Err(ActivationError::Authority(AuthorityError::SourceRouteInputs(cause))) => {
+            assert!(cause.contains(AUTHORITY_PATH_REFUSAL), "{cause}");
+        }
+        other => panic!("expected the source route input refusal, got {other:?}"),
+    }
     assert!(!authority_root.exists());
     let entries = sink.entries();
     assert_eq!(entries.len(), 2, "the refusal has one durable audit pair");

@@ -402,7 +402,7 @@ impl<'de> Deserialize<'de> for ProfileOperation {
             || (has_async_contract && (wire.method.is_safe() || wire.read_only))
         {
             return Err(registry_platform_yaml::Invalid::expected(
-                "successStatus 202 and asyncCompletion together on one non-read write",
+                "successStatus 202 and asyncCompletion together on one non-read write (a read never answers 202)",
                 "Declare both on an asynchronous write, or omit both for a synchronous operation.",
             )
             .into_error());

@@ -362,9 +362,9 @@ impl Breg {
                             {"action": "register-household", "operations": ["start"], "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
                         ],
                         "proposals": [
-                            {"action": "propose-item", "operations": ["get", "list", "submit", "cancel"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "manual-item", "operations": ["get", "list", "submit", "cancel", "apply"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "register-household", "operations": ["get", "list", "submit", "cancel"], "ownership": "caller", "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
+                            {"action": "propose-item", "operations": ["get", "submit"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                            {"action": "manual-item", "operations": ["get", "submit", "apply"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                            {"action": "register-household", "operations": ["get", "submit"], "ownership": "caller", "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
                         ]
                     }
                 }]
@@ -382,7 +382,6 @@ impl Breg {
             br#"fn plan(ctx) {
     #{effects: [#{
         id: "household",
-        operation: "create",
         set: #{
             owner: "adapter-job-native",
             "source-submission-id": ctx.inputs["source-submission-id"],

@@ -1638,6 +1638,72 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
     assert!(!String::from_utf8_lossy(&output.stderr).contains("source-refused"));
 }
 
+/// A reference case whose source answers an undeclared 404 says so on the
+/// acquisition, as the runtime does for an operator.
+///
+/// A bare 404 is the likeliest pack authoring mistake. Without the endpoint and
+/// the status, the trace says only that the acquisition stopped, and the author
+/// cannot tell an undeclared not-found from a refused response shape.
+#[test]
+fn a_reference_case_whose_source_answers_an_undeclared_404_names_the_endpoint_and_status() {
+    let project = ReferenceProject::stage();
+    project.mutate_yaml("bundle/fixtures/adult-status-cases.yaml", |fixture| {
+        let case = fixture_case_mut(fixture, "positive");
+        let exchange = case["acquisition"]["exchanges"]
+            .as_array_mut()
+            .expect("the reference case carries acquisition exchanges")
+            .iter_mut()
+            .find(|exchange| {
+                exchange
+                    .pointer("/request/endpoint")
+                    .and_then(Value::as_str)
+                    == Some("events")
+                    && exchange.pointer("/request/tokenRequest").is_none()
+            })
+            .expect("the reference case carries its source exchange");
+        exchange["response"]["status"] = json!(404);
+    });
+    let output = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &[
+                "evaluate",
+                "--fixture",
+                "fixtures/adult-status-cases.yaml",
+                "--explain",
+                "--explain-format",
+                "json",
+            ],
+        )
+    });
+
+    assert!(!output.status.success(), "the 404 was accepted");
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    let refused = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the refused case is traced");
+    assert_eq!(
+        stage_outcomes(refused),
+        vec![("prepare", "ok"), ("acquire", "failed")]
+    );
+    assert_eq!(
+        refused["stages"][0]["details"],
+        json!(["source registered-birth-date, pack opencrvs-events, route evidence-birth-date"]),
+        "ids are written as authored, not as Rust values"
+    );
+    assert_eq!(
+        refused["stages"][1]["details"],
+        json!([concat!(
+            "endpoint `events` answered 404 with an undeclared shape; ",
+            "declare the not-found answer in the pack, or correct the recorded response"
+        )])
+    );
+}
+
 /// A reference case whose scalar expectation misses by class says so, and the
 /// run names the case in both output forms without ever naming the value.
 ///
@@ -1782,14 +1848,32 @@ fn a_structured_value_naming_an_undeclared_key_fails_the_fixture_and_names_the_k
         "an undeclared structured key passed the output gate"
     );
     let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
-    assert_eq!(
-        stderr,
-        concat!(
-            "case positive: fixture evaluation failed unexpectedly ",
-            "(expected class boolean-true, observed absent)\n",
-            "evidence: fixture evaluation failed unexpectedly\n",
-        )
+    // Every case that reaches the output gate fails there, and each is
+    // reported with the gate's value-free requirements beneath it.
+    let gate = concat!(
+        "  the gate requires concept \"urn:example:fixture:concept:adult-status\" ",
+        "in declared form Boolean, and it is required\n",
+        "  the gate requires concept \"urn:example:fixture:concept:record-note\" ",
+        "in declared form ReviewedStructuredValue, and it is optional\n",
     );
+    let expected = [
+        ("positive", "boolean-true"),
+        ("negative-false-is-success", "boolean-false"),
+        ("boundary-before", "boolean-false"),
+        ("boundary-on", "boolean-true"),
+        ("boundary-after", "boolean-true"),
+        ("boundary-leap-day", "boolean-true"),
+    ]
+    .iter()
+    .map(|(id, class)| {
+        format!(
+            "case {id}: fixture evaluation failed unexpectedly \
+             (expected class {class}, observed absent)\n{gate}"
+        )
+    })
+    .collect::<String>()
+        + "evidence: fixture evaluation failed unexpectedly\n";
+    assert_eq!(stderr, expected);
     assert!(!stderr.contains(CANARY), "the diagnostic reprinted a value");
 
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
@@ -2208,12 +2292,12 @@ fn explaining_a_failing_fixture_as_json_keeps_its_exit_code_and_keeps_its_messag
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
     let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
     assert_eq!(report["passed"], json!(false));
-    // `no-match` is the ninth case in the fixture's `cases.yaml`, so the run
-    // reaches nine cases before the mutation stops it. A reader counts what the
-    // run got through, whether or not it got through all of them.
+    // A failing case does not stop the run, so the mutated `no-match` case
+    // still leaves all thirteen cases of the fixture's `cases.yaml` traced. A
+    // reader counts what the run got through, failed or not.
     assert_eq!(
         report["evaluatedCases"],
-        json!(9),
+        json!(13),
         "a failed run lost its evaluated-case count"
     );
 
@@ -3471,6 +3555,53 @@ fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_a_broken_statem
     assert!(!String::from_utf8_lossy(&output.stderr).contains(CANARY));
 }
 
+/// A writable bundle is a refusal the caller can parse and act on: under
+/// `--json` the report is the whole of standard output, and in both forms the
+/// diagnostic names the path and the command that fixes it.
+#[test]
+fn bundle_check_reports_a_writable_bundle_naming_the_path_and_the_fix() {
+    let root = tempfile::tempdir().expect("temporary bundle");
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence",
+    );
+    let bundle = root.path().join("bundle");
+    copy_tree(&project.join("bundle"), &bundle);
+    set_tree_mode(&bundle, 0o755, 0o644);
+    let bundle_path = bundle.display().to_string();
+
+    let json = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .arg("bundle-check")
+        .arg("--bundle")
+        .arg(&bundle)
+        .arg("--json")
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .output()
+        .expect("evidence binary starts");
+    assert_eq!(json.status.code(), Some(1));
+    assert!(json.stderr.is_empty(), "{:?}", json.stderr);
+    let report: Value = serde_json::from_slice(&json.stdout)
+        .expect("a writable bundle under --json is a JSON report");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "evidence.bundle.not-immutable");
+    assert_eq!(diagnostic["source"]["file"], bundle_path.as_str());
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("chmod -R a-w") && action.contains(&bundle_path)),
+        "{report}"
+    );
+
+    let human = invoke_bundle_check(&bundle);
+    assert_eq!(human.status.code(), Some(1));
+    assert!(human.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("evidence.bundle.not-immutable"), "{stderr}");
+    assert!(stderr.contains(&bundle_path), "{stderr}");
+    assert!(stderr.contains("chmod -R a-w"), "{stderr}");
+}
+
 /// The operator can admit a reviewed route with a sufficient finite budget.
 /// Retired capability switches remain refused by the closed runtime grammar.
 #[test]
@@ -3484,10 +3615,11 @@ fn check_accepts_a_reviewed_route_with_a_sufficient_operator_budget() {
     assert_one_check_error(
         &refused,
         1,
-        "config.unknown-key",
-        "`acquisitionCapabilities` is not a member of this mapping",
+        "config.invalid-value",
+        "expected no acquisition capability; the member is retired",
     );
     assert!(String::from_utf8_lossy(&refused.stderr).contains("/acquisitionCapabilities"));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("Delete `acquisitionCapabilities`"));
     let deployment = Deployment::stage("surviving-spouse-status");
     deployment.append(
         "runtime.yaml",
@@ -5920,6 +6052,66 @@ fn bundle_check_json_retains_fixture_unknown_duplicate_and_bounded_diagnostics()
             assert_eq!(diagnostics.len(), 101);
         }
     }
+}
+
+/// An author who re-records a source and breaks `expectedFacts` in several
+/// cases sees every failing case in one run, each with the fact names that
+/// differ, are unknown or are missing, and the outcome a non-matching route
+/// gave. Fact names come from the governed facts schema; no value is printed.
+#[test]
+fn coequal_expected_facts_failures_name_the_keys_and_report_every_failing_case() {
+    const WRONG_VALUE: &str = "1901-02-03";
+    let deployment = Deployment::stage("adult-status");
+    let path = deployment.path("bundle/fixtures/cases.yaml");
+    let document = registry_platform_yaml::Reader::new("fixture")
+        .scan(&fs::read(&path).unwrap())
+        .unwrap()
+        .unwrap();
+    let mut fixture = document.to_json_value();
+    for (id, expected_facts) in [
+        ("positive", json!({"date_of_birth": WRONG_VALUE})),
+        (
+            "boundary-before",
+            json!({"date_of_birth": "2000-01-01", "unknown_key": "x"}),
+        ),
+        ("boundary-on", json!({})),
+        ("no-match", json!({"date_of_birth": WRONG_VALUE})),
+    ] {
+        let case = fixture["cases"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|case| case["id"] == json!(id))
+            .unwrap_or_else(|| panic!("the fixture carries case {id}"));
+        case["expectedFacts"] = expected_facts;
+    }
+    deployment.write(
+        "bundle/fixtures/cases.yaml",
+        &serde_norway::to_string(&fixture).unwrap(),
+    );
+
+    let output = deployment.evaluate(&[]);
+    assert!(!output.status.success(), "the wrong expectations passed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "case positive: fixture expected facts did not match actual pack facts",
+        "facts that differ: [\"date_of_birth\"]",
+        "case boundary-before: fixture expected facts do not match the source schema",
+        "facts the source schema does not declare: [\"unknown_key\"]",
+        "case boundary-on: fixture expected facts do not match the source schema",
+        "facts the source schema requires but the case omits: [\"date_of_birth\"]",
+        "case no-match: fixture expected facts require the pack route to match",
+        "the pack route answered no-match",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "missing {expected:?} in:\n{stderr}"
+        );
+    }
+    assert!(
+        !stderr.contains(WRONG_VALUE),
+        "a fact value leaked:\n{stderr}"
+    );
 }
 
 #[test]

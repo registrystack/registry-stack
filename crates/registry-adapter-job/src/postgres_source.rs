@@ -22,9 +22,9 @@ use registry_adapter_engine::component::postgres::{
 };
 use registry_adapter_engine::job::JobProgram;
 use registry_adapter_engine::job_sources::{PostgresSourceBinding, PostgresSourceTls};
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{describe_secret_failure, SecretResolver};
 use registry_platform_yaml::{LocalId, UniqueIdList, UniqueList};
-use tokio_postgres::types::{IsNull, ToSql, Type};
+use tokio_postgres::types::{FromSql, IsNull, ToSql, Type};
 
 use crate::store;
 
@@ -168,11 +168,32 @@ impl fmt::Debug for PooledPostgresSource {
 }
 
 impl PooledPostgresSource {
+    /// Resolve the password and build the pool. Each refusal names the
+    /// endpoint, the step that failed (secret, TLS, pool settings) and the
+    /// runtime member to correct, and carries no reference text or value.
+    /// A connection failure cannot appear here: connections open lazily at
+    /// the first read.
     fn build(binding: PostgresSourceBinding, resolver: &SecretResolver) -> Result<Self, String> {
-        let invalid = || "the PostgreSQL source connection was refused".to_string();
+        let endpoint = binding.endpoint.clone();
+        let member = |name: &str| format!("sources.postgres.{endpoint}.{name}");
         let password = resolver
             .resolve(binding.password_ref.as_str())
-            .map_err(|_| invalid())?;
+            .map_err(|error| {
+                format!(
+                    "the PostgreSQL source {endpoint} was refused at the secret step: {}",
+                    describe_secret_failure(
+                        &member("passwordRef"),
+                        binding.password_ref.as_str(),
+                        &error
+                    )
+                )
+            })?;
+        let tls_refused = |detail: &str| {
+            format!(
+                "the PostgreSQL source {endpoint} was refused at the TLS step: {detail}; correct {}",
+                member("tls")
+            )
+        };
         let mut postgres = tokio_postgres::Config::new();
         postgres
             .host(&binding.host)
@@ -183,7 +204,8 @@ impl PooledPostgresSource {
         let (pool, cancellation) = match binding.tls {
             PostgresSourceTls::SystemRoots => {
                 postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-                let tls = store::native_postgres_tls().map_err(|_| invalid())?;
+                let tls = store::native_postgres_tls()
+                    .map_err(|_| tls_refused("the platform trust roots could not be loaded"))?;
                 (
                     store::build_verified_pool(postgres, tls.clone(), MAXIMUM_SOURCE_CONNECTIONS),
                     PostgresCancellation::Tls(tls),
@@ -191,9 +213,14 @@ impl PooledPostgresSource {
             }
             PostgresSourceTls::CaBundle { ca_bundle_file } => {
                 postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-                let ca = capture_ca_bundle(&ca_bundle_file)?;
+                let ca = capture_ca_bundle(&ca_bundle_file).map_err(|error| {
+                    format!(
+                        "the PostgreSQL source {endpoint} was refused at the TLS step: {error}; correct {}",
+                        member("tls.caBundleFile")
+                    )
+                })?;
                 let tls = store::postgres_tls_from_native_and_pem(ca.as_bytes())
-                    .map_err(|_| invalid())?;
+                    .map_err(|_| tls_refused("the CA bundle holds no usable certificate"))?;
                 (
                     store::build_verified_pool(postgres, tls.clone(), MAXIMUM_SOURCE_CONNECTIONS),
                     PostgresCancellation::Tls(tls),
@@ -206,9 +233,10 @@ impl PooledPostgresSource {
                     .parse::<IpAddr>()
                     .is_ok_and(|address| address.is_loopback());
                 if !loopback {
-                    return Err(
-                        "the plaintext PostgreSQL test source is not numeric loopback".to_string(),
-                    );
+                    return Err(format!(
+                        "the plaintext PostgreSQL test source {endpoint} is not numeric loopback; correct {}",
+                        member("host")
+                    ));
                 }
                 postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
                 (
@@ -221,7 +249,15 @@ impl PooledPostgresSource {
                 )
             }
         };
-        let pool = pool.map_err(|_| invalid())?;
+        let pool = pool.map_err(|error| {
+            format!(
+                "the PostgreSQL source {endpoint} was refused at the pool step ({error}); check {}, {}, {} and {}",
+                member("host"),
+                member("port"),
+                member("database"),
+                member("user")
+            )
+        })?;
         Ok(Self { pool, cancellation })
     }
 }
@@ -329,53 +365,155 @@ fn source_row(
     let mut columns = Vec::with_capacity(row.len());
     for (index, column) in row.columns().iter().enumerate() {
         budget.check_field(column.name())?;
-        let scalar = match *column.type_() {
-            Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => {
-                let value = row
-                    .try_get::<_, &str>(index)
-                    .map_err(|_| PostgresReadFault::Statement)?;
-                budget.check_field(value)?;
-                SourceScalar::Text(value.to_owned())
-            }
-            Type::INT8 => SourceScalar::Integer(
-                row.try_get(index)
-                    .map_err(|_| PostgresReadFault::Statement)?,
-            ),
-            Type::INT4 => SourceScalar::Integer(i64::from(
-                row.try_get::<_, i32>(index)
-                    .map_err(|_| PostgresReadFault::Statement)?,
-            )),
-            Type::INT2 => SourceScalar::Integer(i64::from(
-                row.try_get::<_, i16>(index)
-                    .map_err(|_| PostgresReadFault::Statement)?,
-            )),
-            Type::FLOAT8 => {
-                let value = row
-                    .try_get::<_, f64>(index)
-                    .map_err(|_| PostgresReadFault::Statement)?;
-                if !value.is_finite() {
-                    return Err(PostgresReadFault::Malformed);
-                }
-                SourceScalar::Float(value)
-            }
-            Type::FLOAT4 => {
-                let value = row
-                    .try_get::<_, f32>(index)
-                    .map_err(|_| PostgresReadFault::Statement)?;
-                if !value.is_finite() {
-                    return Err(PostgresReadFault::Malformed);
-                }
-                SourceScalar::Float(f64::from(value))
-            }
-            Type::BOOL => SourceScalar::Boolean(
-                row.try_get(index)
-                    .map_err(|_| PostgresReadFault::Statement)?,
-            ),
-            _ => return Err(PostgresReadFault::Statement),
-        };
+        let scalar = column_scalar(row, index, column.type_(), budget)?;
         columns.push((column.name().to_owned(), scalar));
     }
     Ok(SourceRow { columns })
+}
+
+/// Read one column as its closed scalar. Every supported type reads as
+/// an `Option`, so a SQL NULL of any of them is [`SourceScalar::Null`].
+/// Dates, times and UUIDs cross as canonical text: DATE as `YYYY-MM-DD`,
+/// TIMESTAMP as ISO 8601 without an offset, TIMESTAMPTZ as RFC 3339 in
+/// UTC, and UUID in lowercase hyphenated form. NUMERIC crosses as its
+/// exact decimal text. Any other type refuses with its one-based column
+/// position, never its value.
+fn column_scalar(
+    row: &tokio_postgres::Row,
+    index: usize,
+    column_type: &Type,
+    budget: &PostgresRowBudget,
+) -> Result<SourceScalar, PostgresReadFault> {
+    let finite = |value: f64| {
+        if value.is_finite() {
+            Ok(SourceScalar::Float(value))
+        } else {
+            Err(PostgresReadFault::Malformed)
+        }
+    };
+    Ok(match *column_type {
+        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => {
+            match column::<&str>(row, index)? {
+                Some(value) => {
+                    budget.check_field(value)?;
+                    SourceScalar::Text(value.to_owned())
+                }
+                None => SourceScalar::Null,
+            }
+        }
+        Type::INT8 => column::<i64>(row, index)?.map_or(SourceScalar::Null, SourceScalar::Integer),
+        Type::INT4 => column::<i32>(row, index)?.map_or(SourceScalar::Null, |value| {
+            SourceScalar::Integer(value.into())
+        }),
+        Type::INT2 => column::<i16>(row, index)?.map_or(SourceScalar::Null, |value| {
+            SourceScalar::Integer(value.into())
+        }),
+        Type::FLOAT8 => column::<f64>(row, index)?.map_or(Ok(SourceScalar::Null), finite)?,
+        Type::FLOAT4 => column::<f32>(row, index)?
+            .map_or(Ok(SourceScalar::Null), |value| finite(value.into()))?,
+        Type::BOOL => column::<bool>(row, index)?.map_or(SourceScalar::Null, SourceScalar::Boolean),
+        Type::NUMERIC => column::<NumericText>(row, index)?
+            .map_or(SourceScalar::Null, |value| SourceScalar::Numeric(value.0)),
+        Type::DATE => column::<chrono::NaiveDate>(row, index)?
+            .map_or(SourceScalar::Null, |value| {
+                SourceScalar::Text(value.format("%Y-%m-%d").to_string())
+            }),
+        Type::TIMESTAMP => column::<chrono::NaiveDateTime>(row, index)?
+            .map_or(SourceScalar::Null, |value| {
+                SourceScalar::Text(value.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+            }),
+        Type::TIMESTAMPTZ => column::<chrono::DateTime<chrono::Utc>>(row, index)?
+            .map_or(SourceScalar::Null, |value| {
+                SourceScalar::Text(value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+            }),
+        Type::UUID => column::<uuid::Uuid>(row, index)?.map_or(SourceScalar::Null, |value| {
+            SourceScalar::Text(value.hyphenated().to_string())
+        }),
+        _ => {
+            return Err(PostgresReadFault::UnsupportedColumn {
+                column: u32::try_from(index + 1).unwrap_or(u32::MAX),
+            })
+        }
+    })
+}
+
+/// Decode one column of a supported type. A value the type's own decoder
+/// cannot read, such as an infinite date, is outside the closed form.
+fn column<'a, T: FromSql<'a>>(
+    row: &'a tokio_postgres::Row,
+    index: usize,
+) -> Result<Option<T>, PostgresReadFault> {
+    row.try_get::<_, Option<T>>(index)
+        .map_err(|_| PostgresReadFault::Malformed)
+}
+
+/// A NUMERIC value as its exact decimal text, decoded from the binary wire
+/// form: digit count, weight, sign and display scale, then base-10000
+/// digits. NaN and the infinities have no decimal text and refuse.
+struct NumericText(String);
+
+impl<'a> FromSql<'a> for NumericText {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let word = |at: usize| {
+            raw.get(at..at + 2)
+                .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+                .ok_or("a numeric value is truncated")
+        };
+        let count = usize::from(word(0)?);
+        let weight = i32::from(word(2)?.cast_signed());
+        let negative = match word(4)? {
+            0x0000 => false,
+            0x4000 => true,
+            _ => return Err("a numeric value has no decimal text".into()),
+        };
+        let scale = usize::from(word(6)?);
+        if raw.len() != 8 + 2 * count {
+            return Err("a numeric value has a malformed length".into());
+        }
+        let digits = (0..count)
+            .map(|position| word(8 + 2 * position))
+            .collect::<Result<Vec<_>, _>>()?;
+        if digits.iter().any(|digit| *digit > 9_999) {
+            return Err("a numeric digit is out of range".into());
+        }
+        // The digit at position `p` is worth 10000^(weight - p); a position
+        // outside the transmitted digits is zero.
+        let digit = |position: i32| {
+            usize::try_from(position)
+                .ok()
+                .and_then(|position| digits.get(position))
+                .copied()
+                .unwrap_or(0)
+        };
+        let mut text = String::new();
+        if negative {
+            text.push('-');
+        }
+        if weight < 0 {
+            text.push('0');
+        } else {
+            text.push_str(&digit(0).to_string());
+            for position in 1..=weight {
+                text.push_str(&format!("{:04}", digit(position)));
+            }
+        }
+        if scale > 0 {
+            let mut fraction = String::with_capacity(scale + 4);
+            let mut position = weight + 1;
+            while fraction.len() < scale {
+                fraction.push_str(&format!("{:04}", digit(position)));
+                position += 1;
+            }
+            fraction.truncate(scale);
+            text.push('.');
+            text.push_str(&fraction);
+        }
+        Ok(Self(text))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        *ty == Type::NUMERIC
+    }
 }
 
 fn statement_fault(error: tokio_postgres::Error) -> PostgresReadFault {
@@ -404,6 +542,9 @@ impl NativeParameter {
             // value. Refuse rather than invent an imprecise binary encoding
             // if it ever crosses into a parameter.
             SourceScalar::Numeric(_) => Err(PostgresReadFault::Statement),
+            // The engine refuses a null parameter before the read, so a
+            // NULL here is a seam fault, never a value to bind.
+            SourceScalar::Null => Err(PostgresReadFault::Statement),
         }
     }
 }
@@ -485,6 +626,69 @@ fn capture_ca_bundle(
     };
     registry_adapter_engine::auth::capture_ca_bundle(&runtime, profile)
         .map_err(|_| "the PostgreSQL source CA bundle was refused".to_string())
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use registry_platform_config::SecretProvider;
+    use registry_platform_yaml::SecretReference;
+
+    use super::*;
+
+    fn binding(password_ref: &str, tls: PostgresSourceTls) -> PostgresSourceBinding {
+        PostgresSourceBinding {
+            endpoint: "ledger".to_owned(),
+            host: "db.example.org".to_owned(),
+            port: 5432,
+            database: "registry".to_owned(),
+            user: "reader".to_owned(),
+            password_ref: SecretReference::parse(password_ref).expect("an exact reference"),
+            tls,
+        }
+    }
+
+    /// An activation refusal names the endpoint, the step that failed and
+    /// the member to correct, and never the reference text or a value.
+    #[test]
+    fn activation_refusals_name_the_endpoint_the_step_and_the_member() {
+        let resolver = SecretResolver::new([SecretProvider::Environment], "")
+            .expect("an environment resolver");
+        let missing = "secret:env/RF_P3_POSTGRES_PASSWORD_THAT_IS_NOT_SET";
+        let refused = PooledPostgresSource::build(
+            binding(missing, PostgresSourceTls::SystemRoots),
+            &resolver,
+        )
+        .expect_err("an unset password refuses");
+        assert!(refused.contains("ledger"), "{refused}");
+        assert!(
+            refused.contains("sources.postgres.ledger.passwordRef"),
+            "{refused}"
+        );
+        assert!(refused.contains("no readable secret"), "{refused}");
+        assert!(
+            !refused.contains("RF_P3_POSTGRES_PASSWORD_THAT_IS_NOT_SET"),
+            "{refused}"
+        );
+
+        // The set password passes the secret step, so a bad CA bundle path
+        // is the TLS step and names tls.caBundleFile.
+        let present = "secret:env/PATH";
+        let refused = PooledPostgresSource::build(
+            binding(
+                present,
+                PostgresSourceTls::CaBundle {
+                    ca_bundle_file: "/nonexistent/registry-ca.pem".to_owned(),
+                },
+            ),
+            &resolver,
+        )
+        .expect_err("an unreadable CA bundle refuses");
+        assert!(refused.contains("ledger"), "{refused}");
+        assert!(
+            refused.contains("sources.postgres.ledger.tls.caBundleFile"),
+            "{refused}"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "postgres-test"))]

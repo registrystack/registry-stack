@@ -28,6 +28,11 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registr
 # and PostgreSQL explicitly.
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-connectors --features breg --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-connectors --features breg --no-fail-fast
+# The signed Coordinator event connector is its own default-off feature: its
+# admission matrix, retry byte identity, and signature checks run here, not
+# only behind the job host.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-connectors --features coordinator-event --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-connectors --features coordinator-event --lib
 # The live verifier's HTTPS policy is proven against a deterministic local
 # private-CA server. Keep this feature build after the default suite so the
 # default adapterctl binary used by the product checks remains the production
@@ -66,8 +71,16 @@ PATH="$HOME/.cargo/bin:$PATH" cargo check --locked -p registry-adapter-job --fea
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features job-hook --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-hook --lib
 
+# Each job destination is a default-off host feature with its own clippy and
+# unit-test lane; the PostgreSQL-backed destination suites run in
+# test-job-postgres.sh.
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features direct-breg --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features direct-breg --lib
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features signed-coordinator-event --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features signed-coordinator-event --lib
+
 # The generated schemas are held to their generator (CFG-SCHEMA-2), and the
-# five adapter formats are held to the configuration-format convention
+# adapter formats are held to the configuration-format convention
 # (CFG-SCHEMA-1) with the platform lint that CI also runs.
 PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapterctl -- schemas --check --output-dir products/adapter/schemas
 products/adapter/scripts/generate-effective-contract-example.sh --check
@@ -215,6 +228,25 @@ printf 'OpenCRVS example check passed\n'
   "${ocrvs_flags[@]}" >/dev/null
 printf 'OpenCRVS example fixture replay passed\n'
 
+# The facade recovery example is held to the three commands its README and
+# the product README's "Try an example" give, runtime example included.
+recovery=products/adapter/examples/facade-recovery
+"$adapterctl_bin" check "$recovery/project.yaml" \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack "$recovery/pack.yaml" \
+  --runtime "$recovery/runtime.example.yaml" >/dev/null
+recovery_contract=$(mktemp)
+"$adapterctl_bin" compile "$recovery/project.yaml" \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack "$recovery/pack.yaml" \
+  --output "$recovery_contract" >/dev/null
+rm -f "$recovery_contract"
+"$adapterctl_bin" fixtures replay "$recovery/project.yaml" \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack "$recovery/pack.yaml" \
+  --fixtures "$recovery/fixture.yaml" >/dev/null
+printf 'Facade recovery example check, compile and replay passed\n'
+
 # Each source-shape fixture holds the concrete contract its project compiles
 # to (`generated/openapi.json` beside the project) and at least one fixture
 # that the actual runtime interpreter replays offline. `compile --check` and
@@ -271,13 +303,42 @@ export ODK_EMAIL=check-contracts ODK_PASSWORD=check-contracts
   --runtime products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml \
   --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
   --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
-# The host validates exact hook binding coverage, with no listener or hook
-# secret resolution. The example file-provider root need not exist for check.
+# The host validates exact hook binding coverage and resolves the hook
+# credentials the way a loop start does, without opening the listener. The
+# gate stands in synthetic owner-only secret files under a throwaway
+# file-provider root, beside a copy of the example runtime that names it.
+hook_check_root=$(mktemp -d "${CARGO_TARGET_DIR}/check-contracts-hook.XXXXXX")
+cleanup_hook_check() {
+  rm -f -- "$hook_check_root/secrets/kobo-hook-username" \
+    "$hook_check_root/secrets/kobo-hook-password" "$hook_check_root/runtime.yaml"
+  rmdir -- "$hook_check_root/secrets" "$hook_check_root"
+}
+trap cleanup_hook_check EXIT
+mkdir -m 0700 "$hook_check_root/secrets"
+for hook_secret in kobo-hook-username kobo-hook-password; do
+  (umask 077 && printf 'check-contracts' >"$hook_check_root/secrets/$hook_secret")
+done
+sed "s|root: /run/secrets/adapter-job|root: $hook_check_root/secrets|" \
+  products/adapter/examples/kobotoolbox-job/job-runtime.hook.example.yaml \
+  >"$hook_check_root/runtime.yaml"
+if ! grep -q "root: $hook_check_root/secrets" "$hook_check_root/runtime.yaml"; then
+  printf 'The hook example runtime no longer names /run/secrets/adapter-job; update this gate.\n' >&2
+  exit 1
+fi
 PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapter-job \
   --features job-hook,direct-breg --bin adapter-job -- check \
   products/adapter/examples/kobotoolbox-job/job.hook.yaml \
   --pack products/adapter/packs/kobotoolbox/pack.yaml \
-  --runtime products/adapter/examples/kobotoolbox-job/job-runtime.hook.example.yaml \
+  --runtime "$hook_check_root/runtime.yaml" \
+  --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
+  --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
+# The signed Coordinator event example needs the destination feature in the host
+# that reads it.
+PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapter-job \
+  --features signed-coordinator-event --bin adapter-job -- check \
+  products/adapter/examples/kobotoolbox-job/job.coordinator.yaml \
+  --pack products/adapter/packs/kobotoolbox/pack.yaml \
+  --runtime products/adapter/examples/kobotoolbox-job/job-runtime.coordinator.example.yaml \
   --profile products/adapter/examples/kobotoolbox-job/profile.yaml \
   --project products/adapter/examples/kobotoolbox-job/project.yaml >/dev/null
 "$adapterctl_bin" job check products/adapter/packs/odk-central/pack.yaml \
@@ -285,6 +346,14 @@ PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapter-job \
   --runtime products/adapter/examples/odk-central-job/job-runtime.example.yaml \
   --profile products/adapter/examples/odk-central-job/profile.yaml \
   --project products/adapter/examples/odk-central-job/project.yaml >/dev/null
+# The PostgreSQL view example compiles offline with the job-postgres source and
+# the BReg destination. Its credentials are references the check does not
+# resolve, and it opens no database connection.
+"$adapterctl_bin" job check products/adapter/examples/postgres-source/pack.yaml \
+  products/adapter/examples/postgres-source/job.yaml \
+  --runtime products/adapter/examples/postgres-source/job-runtime.example.yaml \
+  --profile products/adapter/examples/postgres-source/profile.yaml \
+  --project products/adapter/examples/postgres-source/project.yaml >/dev/null
 printf 'Job example checks passed\n'
 
 # The bad-authoring corpus: every discovered bad/ member refuses with its

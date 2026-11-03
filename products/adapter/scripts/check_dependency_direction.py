@@ -106,6 +106,18 @@ CONNECTOR_CLIENTS = frozenset(
     }
 )
 
+# Features that stay off by default on the job host and the connector, so a
+# plain build never links the BReg client or the Coordinator event path.
+DEFAULT_OFF_FEATURES = frozenset(
+    {
+        "breg",
+        "coordinator-event",
+        "direct-breg",
+        "native-test-support",
+        "signed-coordinator-event",
+    }
+)
+
 # The unified Rust facade is never a dependency of the connector.
 UNIFIED_CLIENT = "registry-stack-client"
 
@@ -290,7 +302,17 @@ def job_feature_violations(metadata: dict) -> list[str]:
         failures.append(
             f"{JOB_HOST} must keep {CONNECTOR} as an optional normal dependency"
         )
+    elif connector.get("uses_default_features", True):
+        failures.append(
+            f"{JOB_HOST} must take {CONNECTOR} with default-features = false"
+        )
     features = package.get("features", {})
+    enabled_by_default = sorted(set(features.get("default", [])) & DEFAULT_OFF_FEATURES)
+    if enabled_by_default:
+        failures.append(
+            f"{JOB_HOST} enables default-off feature(s) by default: "
+            + ", ".join(enabled_by_default)
+        )
     direct = set(features.get("direct-breg", []))
     expected_direct = {
         f"dep:{CONNECTOR}",
@@ -332,6 +354,15 @@ def job_feature_violations(metadata: dict) -> list[str]:
     if connector_package is None:
         failures.append(f"{CONNECTOR} is missing from Cargo metadata")
         return failures
+    connector_default = sorted(
+        set(connector_package.get("features", {}).get("default", []))
+        & DEFAULT_OFF_FEATURES
+    )
+    if connector_default:
+        failures.append(
+            f"{CONNECTOR} enables default-off feature(s) by default: "
+            + ", ".join(connector_default)
+        )
     coordinator_event = set(
         connector_package.get("features", {}).get("coordinator-event", [])
     )

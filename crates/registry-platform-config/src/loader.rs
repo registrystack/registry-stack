@@ -142,6 +142,26 @@ impl RuntimeConfigError {
         )]))
     }
 
+    /// A refusal of a rule that spans members, which the reader's types
+    /// cannot carry, found after the file read cleanly. `pointer` is the
+    /// RFC 6901 pointer of the member to correct in `file`.
+    #[must_use]
+    pub fn at_pointer(
+        file: &Path,
+        code: &str,
+        pointer: &str,
+        message: impl Into<String>,
+        suggested_action: impl Into<String>,
+    ) -> Self {
+        Self::from_report(Report::new(vec![Diagnostic::error(
+            code,
+            pointer,
+            message,
+            suggested_action,
+        )]))
+        .in_file(file)
+    }
+
     fn from_report(report: Report) -> Self {
         let diagnostics = report.into_diagnostics();
         assert!(

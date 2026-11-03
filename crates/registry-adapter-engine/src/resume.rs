@@ -167,6 +167,18 @@ fn compile_bindings(bindings: &[ResumeBinding]) -> Result<Vec<CompiledResumeBind
 }
 
 impl ServedResumeOperation {
+    /// A linear plan of `step_count` sends that checkpoint no bindings.
+    #[cfg(test)]
+    pub(crate) fn linear_for_tests(step_count: usize) -> Self {
+        Self {
+            steps: (0..step_count)
+                .map(|_| ServedResumeStep {
+                    bindings: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
     #[must_use]
     pub(crate) fn step_count(&self) -> usize {
         self.steps.len()

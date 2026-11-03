@@ -10,6 +10,51 @@
   the 0.44.0 tools cannot read the pack form. Follow the
   [migration steps](reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project)
   before importing current source exports.
+  0.45.0 is the migration boundary for the retired form: a project authored
+  by 0.44.0 (for example with `evidencectl init --transport sqlite-extract`) is
+  refused with `evidence.project.source-acquisition-retired` and has no in-place
+  upgrade, so the upgrade rehearsal skips its Evidence leg for a run that crosses
+  it. Migrate by hand with the steps above and verify a fresh synthetic
+  assertion before cutover. The project and bundle `apiVersion` values are
+  unchanged; a 0.44.0 bundle read by this runtime is refused with
+  `config.removed-key` at each retired Source member: the full fix at the
+  Source's `type` and a link to the migration steps at each other member.
+- BREAKING: a target connection binds each pack endpoint under
+  `connections.<id>.endpoints.<endpoint id>`. Move the flat 0.44.0 members
+  `origin`, `authentication` and `tlsTrustProfile` into the endpoint entry;
+  `maximumConcurrency`, `admissionTimeoutMilliseconds` and
+  `tokenTimeoutMilliseconds` are retired, with per-attempt time on the
+  endpoint (`attemptTimeoutMilliseconds`) and the acquisition budget in
+  `sourceAcquisition`. A flat connection is refused with `config.removed-key`
+  at each retired member, naming where it moved.
+- BREAKING: an Evidence source route can no longer turn a source failure into
+  a lookup answer. Pack compilation refuses a `doCatch`, or an `onException`
+  clause with steps, `handled` or `continued`, that names an `upstream` class,
+  `breaker.open`, `throttle.rejected`, `script` or `validation`, and a
+  `circuitBreaker` that declares `onFallback`, `ignoreException` or
+  `recordException`. These shapes answered `no-match` for a 503 or a refused
+  connection. Retry-only clauses are unchanged. To answer a declared 404 as
+  `no-match`, catch `upstream.http` with an `onWhen` status test; the
+  `registry-lookup-v1` host protocol answers its declared Problem Details 404
+  as `unresolved`.
+- A coequal fixture run now evaluates every case and prints one `case <id>:`
+  line per failing case instead of stopping at the first; the exit status and
+  the final `evidence:` message are unchanged, and `--explain-format json`
+  traces every case. Each failing case line is followed by indented,
+  value-free details: for `expectedFacts`, the fact names the source schema
+  does not declare or requires, the names whose values differ from the pack
+  facts, or the lookup answer the pack route gave instead of a match.
+- `evidencectl check` reports `source-route-input-alternative` at
+  `sources.<id>.inputs` when a Source maps no complete alternative of a route
+  whose input schema offers `oneOf` lookup keys, instead of the package loader
+  refusing it later without a location. Target authority activation now says
+  whether a grant supplies too few route inputs or enough for more than one
+  alternative.
+- BREAKING: `acquisitionCapabilities` is retired from the bundle and the
+  runtime configuration, and the `source-batch` gate with it. Delete the
+  member. An empty list
+  (`acquisitionCapabilities: []`) is still accepted, and ignored, for one
+  release; any non-empty list is refused. The bundle `apiVersion` is unchanged.
 - BREAKING: new singular and request-batch authorized-material audit entries use
   `registry.evidence.audit/v3` and
   `registry.evidence.audit.request-batch/v3`. Every `/v3` access-attempt record

@@ -18,7 +18,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures::StreamExt as _;
 use registry_adapter_core::AdapterJob;
 use registry_adapter_engine::job_sources::{HookSourceConfig, JobRuntimeConfig};
-use registry_platform_config::{ProtectedSecret, SecretResolver};
+use registry_platform_config::{ProtectedSecret, SecretError, SecretResolver};
 use registry_platform_crypto::mac::constant_time_eq;
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -40,13 +40,15 @@ const MAX_BASIC_PASSWORD_BYTES: usize = 4_096;
 const MAX_BASIC_PAYLOAD_BYTES: usize = 6_000;
 
 /// One closed, value-free hook-ingress startup or serving failure.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum HookIngressError {
     #[error("adapter.job.hook-configuration")]
     Configuration,
-    #[error("adapter.job.hook-credential")]
-    Credential,
+    /// The detail names the source, the runtime member, the secret reference
+    /// and a closed cause with the fix; it never carries a secret value.
+    #[error("adapter.job.hook-credential: {0}")]
+    Credential(String),
     #[error("adapter.job.hook-rate-limit")]
     RateLimit,
     #[error("adapter.job.hook-bind")]
@@ -126,7 +128,7 @@ pub fn activate(
             .get(binding)
             .ok_or(HookIngressError::Configuration)?;
         let source = HookSource {
-            credential: BasicCredential::resolve(config, resolver)?,
+            credential: BasicCredential::resolve(binding, config, resolver)?,
             limiter: TokenBucketLimiter::new(TokenBucketConfig {
                 requests_per_minute: u32::try_from(config.requests_per_minute.get())
                     .map_err(|_| HookIngressError::RateLimit)?,
@@ -146,6 +148,17 @@ pub fn activate(
             gate,
         },
     }))
+}
+
+/// Resolve every hook credential and rate limiter without opening the socket,
+/// so `check` and the loop start-up refuse a broken credential with its named
+/// cause instead of the first sender seeing a bare 401.
+pub fn preflight(
+    job: &AdapterJob,
+    runtime: &JobRuntimeConfig,
+    resolver: &SecretResolver,
+) -> Result<(), HookIngressError> {
+    activate(job, runtime, resolver, Arc::new(HookPassGate::default())).map(|_| ())
 }
 
 /// An activated hook ingress whose secrets are captured but whose socket is
@@ -219,6 +232,47 @@ impl HookIngressServer {
     }
 }
 
+const TRAILING_NEWLINE: &str = "the value ends with a newline, so the sender's credential would never match it; rewrite the secret without one, for example printf '%s' VALUE > FILE";
+
+fn resolve_member(
+    source: &str,
+    member: &str,
+    reference: &str,
+    resolver: &SecretResolver,
+) -> Result<ProtectedSecret, HookIngressError> {
+    resolver.resolve(reference).map_err(|error| {
+        let cause = match error {
+            SecretError::Unavailable if reference.starts_with("secret:env/") => {
+                "the environment variable is not set"
+            }
+            SecretError::Unavailable => "the secret file is missing",
+            SecretError::UnsafeFile => {
+                "the secret file must be a regular file with mode 0400 or 0600"
+            }
+            SecretError::Read => "the secret file could not be read",
+            SecretError::InvalidValue => "the secret is empty or contains a NUL byte",
+            SecretError::ProviderDisabled => {
+                "the reference uses a secret provider that the runtime does not enable"
+            }
+            SecretError::InvalidReference | SecretError::InvalidProviderConfiguration => {
+                "the secret reference or provider configuration is invalid"
+            }
+        };
+        credential_refusal(source, member, reference, cause)
+    })
+}
+
+fn credential_refusal(
+    source: &str,
+    member: &str,
+    reference: &str,
+    cause: &str,
+) -> HookIngressError {
+    HookIngressError::Credential(format!(
+        "hookIngress.sources.{source}.{member} ({reference}): {cause}"
+    ))
+}
+
 struct BasicCredential {
     username: ProtectedSecret,
     password: ProtectedSecret,
@@ -232,23 +286,63 @@ impl std::fmt::Debug for BasicCredential {
 
 impl BasicCredential {
     fn resolve(
+        source: &str,
         config: &HookSourceConfig,
         resolver: &SecretResolver,
     ) -> Result<Self, HookIngressError> {
-        let username = resolver
-            .resolve(config.username_ref.as_str())
-            .map_err(|_| HookIngressError::Credential)?;
-        let password = resolver
-            .resolve(config.password_ref.as_str())
-            .map_err(|_| HookIngressError::Credential)?;
-        if username.len() > MAX_BASIC_USERNAME_BYTES
-            || username
-                .expose_secret()
-                .iter()
-                .any(|byte| *byte == b':' || byte.is_ascii_control())
-            || password.len() > MAX_BASIC_PASSWORD_BYTES
+        let username = resolve_member(
+            source,
+            "usernameRef",
+            config.username_ref.as_str(),
+            resolver,
+        )?;
+        let password = resolve_member(
+            source,
+            "passwordRef",
+            config.password_ref.as_str(),
+            resolver,
+        )?;
+        let refuse = |member: &str, reference: &str, cause: &str| {
+            Err(credential_refusal(source, member, reference, cause))
+        };
+        if username.len() > MAX_BASIC_USERNAME_BYTES {
+            return refuse(
+                "usernameRef",
+                config.username_ref.as_str(),
+                "the username is longer than 256 bytes",
+            );
+        }
+        if username.expose_secret().last() == Some(&b'\n') {
+            return refuse(
+                "usernameRef",
+                config.username_ref.as_str(),
+                TRAILING_NEWLINE,
+            );
+        }
+        if username
+            .expose_secret()
+            .iter()
+            .any(|byte| *byte == b':' || byte.is_ascii_control())
         {
-            return Err(HookIngressError::Credential);
+            return refuse(
+                "usernameRef",
+                config.username_ref.as_str(),
+                "the username contains ':' or a control character, which Basic authentication cannot carry",
+            );
+        }
+        if password.expose_secret().last() == Some(&b'\n') {
+            return refuse(
+                "passwordRef",
+                config.password_ref.as_str(),
+                TRAILING_NEWLINE,
+            );
+        }
+        if password.len() > MAX_BASIC_PASSWORD_BYTES {
+            return refuse(
+                "passwordRef",
+                config.password_ref.as_str(),
+                "the password is longer than 4096 bytes",
+            );
         }
         Ok(Self { username, password })
     }
@@ -471,7 +565,7 @@ mod tests {
     ) {
         let (_root, resolver) = secret_resolver();
         let source = Arc::new(HookSource {
-            credential: BasicCredential::resolve(&source_config(), &resolver)
+            credential: BasicCredential::resolve("kobo-submissions", &source_config(), &resolver)
                 .expect("the credential resolves"),
             limiter: TokenBucketLimiter::new(TokenBucketConfig {
                 requests_per_minute: 60,
@@ -529,8 +623,8 @@ mod tests {
     #[test]
     fn basic_authentication_accepts_only_the_exact_canonical_pair() {
         let (_root, resolver) = secret_resolver();
-        let credential =
-            BasicCredential::resolve(&source_config(), &resolver).expect("the credential resolves");
+        let credential = BasicCredential::resolve("kobo-submissions", &source_config(), &resolver)
+            .expect("the credential resolves");
         let exact = format!(
             "Basic {}",
             STANDARD.encode(b"kobo-webhook:correct horse battery staple")
@@ -569,8 +663,83 @@ mod tests {
             }
             let resolver = SecretResolver::new([SecretProvider::File], root.path())
                 .expect("a file-only resolver");
-            assert!(BasicCredential::resolve(&source_config(), &resolver).is_err());
+            assert!(
+                BasicCredential::resolve("kobo-submissions", &source_config(), &resolver).is_err()
+            );
         }
+    }
+
+    fn refusal_for(files: &[(&str, &[u8], u32)]) -> String {
+        let root = tempfile::tempdir().expect("a secret root");
+        for (name, value, mode) in files {
+            let path = root.path().join(name);
+            std::fs::write(&path, value).expect("write a synthetic secret");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(*mode))
+                .expect("set the synthetic secret mode");
+        }
+        let resolver =
+            SecretResolver::new([SecretProvider::File], root.path()).expect("a file-only resolver");
+        BasicCredential::resolve("kobo-submissions", &source_config(), &resolver)
+            .expect_err("the credential is refused")
+            .to_string()
+    }
+
+    #[test]
+    fn a_missing_credential_file_names_the_member_the_reference_and_the_fix() {
+        let message = refusal_for(&[("username", b"kobo-webhook", 0o600)]);
+        assert!(
+            message.starts_with("adapter.job.hook-credential: "),
+            "{message}"
+        );
+        assert!(
+            message.contains("hookIngress.sources.kobo-submissions.passwordRef"),
+            "{message}"
+        );
+        assert!(message.contains("secret:file/password"), "{message}");
+        assert!(message.contains("missing"), "{message}");
+    }
+
+    #[test]
+    fn an_unsafe_credential_file_names_the_required_mode() {
+        let message = refusal_for(&[
+            ("username", b"kobo-webhook", 0o600),
+            ("password", b"synthetic-password", 0o644),
+        ]);
+        assert!(
+            message.contains("hookIngress.sources.kobo-submissions.passwordRef"),
+            "{message}"
+        );
+        assert!(message.contains("0400 or 0600"), "{message}");
+    }
+
+    #[test]
+    fn a_trailing_newline_is_refused_with_the_fix_not_left_to_fail_as_401() {
+        let message = refusal_for(&[
+            ("username", b"kobo-webhook", 0o600),
+            ("password", b"synthetic-password\n", 0o600),
+        ]);
+        assert!(
+            message.contains("hookIngress.sources.kobo-submissions.passwordRef"),
+            "{message}"
+        );
+        assert!(message.contains("secret:file/password"), "{message}");
+        assert!(message.contains("ends with a newline"), "{message}");
+        assert!(message.contains("printf '%s'"), "{message}");
+        assert!(!message.contains("synthetic-password"), "{message}");
+    }
+
+    #[test]
+    fn a_username_with_a_colon_is_refused_with_its_member() {
+        let message = refusal_for(&[
+            ("username", b"kobo:webhook", 0o600),
+            ("password", b"synthetic-password", 0o600),
+        ]);
+        assert!(
+            message.contains("hookIngress.sources.kobo-submissions.usernameRef"),
+            "{message}"
+        );
+        assert!(message.contains("':'"), "{message}");
+        assert!(!message.contains("kobo:webhook"), "{message}");
     }
 
     #[tokio::test]
@@ -650,7 +819,7 @@ mod tests {
     async fn authenticated_body_that_stalls_is_timed_out_without_waking_a_pass() {
         let (_root, resolver) = secret_resolver();
         let source = Arc::new(HookSource {
-            credential: BasicCredential::resolve(&source_config(), &resolver)
+            credential: BasicCredential::resolve("kobo-submissions", &source_config(), &resolver)
                 .expect("the credential resolves"),
             limiter: TokenBucketLimiter::new(TokenBucketConfig {
                 requests_per_minute: 60,

@@ -21,8 +21,8 @@ use registry_adapter_core::{
     ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
-    sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider,
-    SecretResolver,
+    sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, SecretError,
+    SecretProvider, SecretResolver,
 };
 use registry_platform_yaml::{
     ApiVersion, Digest, EnvelopeRule, Expect, FormatSpec, Reader, Severity,
@@ -335,7 +335,11 @@ pub(crate) fn format_spec(kind: &'static str, api_version: &'static str) -> Form
             api_versions: Box::leak(Box::new([ApiVersion::current(api_version)])),
             retired_api_versions: &[],
         },
-        removed_keys: &[],
+        removed_keys: if kind == ADAPTER_PROJECT_KIND {
+            registry_adapter_core::ADAPTER_PROJECT_REMOVED_KEYS
+        } else {
+            &[]
+        },
     }
 }
 
@@ -369,11 +373,27 @@ pub(crate) fn read<T: DeserializeOwned>(
                 path,
                 reasons: diagnostics
                     .iter()
-                    .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
+                    .map(located_reason)
                     .collect::<Vec<_>>()
                     .join("; "),
             },
         })
+}
+
+/// One reader finding as a sentence an author can act on: the code, the
+/// pointer to the faulty member, the reader's message, and its fix.
+fn located_reason(diagnostic: &registry_platform_yaml::Diagnostic) -> String {
+    let at = if diagnostic.path.is_empty() {
+        String::new()
+    } else {
+        format!(" at {}", diagnostic.path)
+    };
+    let mut reason = format!("{}{at}: {}", diagnostic.code, diagnostic.message);
+    if !diagnostic.suggested_action.is_empty() {
+        reason.push_str(". ");
+        reason.push_str(&diagnostic.suggested_action);
+    }
+    reason
 }
 
 /// Why [`read_located`] could not decode an artifact.
@@ -432,13 +452,48 @@ fn resolve_static_credential(
         None => Vec::new(),
     };
     for reference in references {
-        resolver.resolve(reference).map_err(|_| {
-            LoadError::Runtime(format!(
-                "endpoint {endpoint} credential reference {reference} did not resolve"
-            ))
-        })?;
+        resolve_credential_reference(endpoint, reference, resolver)?;
     }
     Ok(())
+}
+
+/// Resolve one credential reference, naming the value-free cause and the
+/// fix when it does not resolve.
+fn resolve_credential_reference(
+    endpoint: &str,
+    reference: &str,
+    resolver: &SecretResolver,
+) -> Result<(), LoadError> {
+    resolver.resolve(reference).map(drop).map_err(|error| {
+        LoadError::Runtime(format!(
+            "endpoint {endpoint} credential reference {reference} did not resolve: {error}; next: {}",
+            secret_refusal_fix(&error)
+        ))
+    })
+}
+
+fn secret_refusal_fix(error: &SecretError) -> &'static str {
+    match error {
+        SecretError::InvalidReference => {
+            "write the reference as secret:file/<name> or secret:env/<NAME>"
+        }
+        SecretError::ProviderDisabled => {
+            "enable the reference's provider under secretProviders (file.root or environment: {})"
+        }
+        SecretError::InvalidProviderConfiguration => {
+            "declare at least one provider under secretProviders and give file.root an absolute path"
+        }
+        SecretError::Unavailable => {
+            "create the file under secretProviders.file.root or set the variable; a symlink reads as missing"
+        }
+        SecretError::UnsafeFile => {
+            "make it a regular file owned by the service user, mode 0600 or 0400, with one hard link"
+        }
+        SecretError::Read => "check that the service user can read the secret file",
+        SecretError::InvalidValue => {
+            "store a non-empty value with no NUL byte, within the secret size limit"
+        }
+    }
 }
 
 /// Refuse credentials whose local material cannot support the endpoint
@@ -587,9 +642,7 @@ pub fn load(
                 return Ok(EndpointCompilation::Absent);
             };
             let plan = AuthPlan::compile(&declared.authentication, binding).map_err(|fault| {
-                LoadError::Runtime(format!(
-                    "endpoint {id} authentication was refused: {fault:?}"
-                ))
+                LoadError::Runtime(format!("endpoint {id} authentication was refused: {fault}"))
             })?;
             if !is_served_auth(plan.kind()) {
                 return Ok(EndpointCompilation::Unserved {
@@ -1670,6 +1723,46 @@ mod tests {
             .expect("a usable key passes startup");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_unresolved_credential_reference_names_its_cause_and_the_fix() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("secret root");
+        let loose = root.path().join("kobo-password-loose");
+        std::fs::write(&loose, "SECRET-CANARY").expect("loose secret");
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644))
+            .expect("loose mode");
+        let resolver = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
+
+        let unsafe_file =
+            resolve_credential_reference("kobo-api", "secret:file/kobo-password-loose", &resolver)
+                .expect_err("a group-readable secret file refuses")
+                .to_string();
+        let missing =
+            resolve_credential_reference("kobo-api", "secret:file/kobo-password-absent", &resolver)
+                .expect_err("a missing secret file refuses")
+                .to_string();
+        let disabled =
+            resolve_credential_reference("kobo-api", "secret:env/KOBO_PASSWORD", &resolver)
+                .expect_err("a disabled provider refuses")
+                .to_string();
+
+        for refusal in [&unsafe_file, &missing, &disabled] {
+            assert!(refusal.contains("kobo-api"), "{refusal}");
+            assert!(refusal.contains("secret:"), "{refusal}");
+            assert!(!refusal.contains("SECRET-CANARY"), "{refusal}");
+        }
+        assert_ne!(unsafe_file, missing, "the two causes must read differently");
+        assert!(unsafe_file.contains("unsafe"), "{unsafe_file}");
+        assert!(unsafe_file.contains("0600 or 0400"), "{unsafe_file}");
+        assert!(unsafe_file.contains("owned by"), "{unsafe_file}");
+        assert!(missing.contains("unavailable"), "{missing}");
+        assert!(missing.contains("symlink"), "{missing}");
+        assert!(disabled.contains("disabled provider"), "{disabled}");
+        assert!(disabled.contains("secretProviders"), "{disabled}");
+    }
+
     #[test]
     fn send_expression_inventory_includes_dynamic_uri_body_path_and_query() {
         let parameters: ToParameters = serde_json::from_value(json!({
@@ -1738,7 +1831,7 @@ mod tests {
             "recordType": "person",
             "route": "create",
             "maximumUpstreamCalls": 5,
-            "asyncCompletion": {"mode": "status-link"}
+            "asyncCompletion": {"type": "status-link"}
         }))
         .expect("binding");
         let pack: AdapterPack = serde_json::from_value(json!({
@@ -2016,6 +2109,46 @@ mod tests {
             [("records-get", "person"), ("records-get", "household")]
         );
         assert!(authored.unserved.is_empty());
+    }
+
+    /// A refused artifact names where the fault sits and how to fix it,
+    /// not only the reader's code and sentence: a 202 on a read names the
+    /// operation's pointer, the rule (reads never answer 202), and the fix.
+    #[test]
+    fn a_refused_profile_names_the_operation_the_rule_and_the_fix() {
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/adapter/profiles/breg-records/profile.yaml"),
+        )
+        .expect("the maintained profile reads");
+        let refused = source.replacen(
+            "  - id: records-search\n    method: GET\n",
+            "  - id: records-search\n    method: GET\n    successStatus: 202\n",
+            1,
+        );
+        assert_ne!(refused, source, "the fixture edit applied");
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let path = directory.path().join("profile.yaml");
+        std::fs::write(&path, refused).expect("write the profile");
+
+        let error = read::<AdapterProfile>(
+            &path,
+            &format_spec(ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_API_VERSION),
+        )
+        .expect_err("a 202 read is refused");
+        let text = error.to_string();
+        assert!(
+            text.contains("/operations/0"),
+            "names the operation: {text}"
+        );
+        assert!(
+            text.contains("a read never answers 202"),
+            "names the rule: {text}"
+        );
+        assert!(
+            text.contains("Declare both on an asynchronous write"),
+            "names the fix: {text}"
+        );
     }
 
     #[test]

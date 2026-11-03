@@ -7,11 +7,14 @@
 //! secret references, and the private-CIDR allowlist. The facade's
 //! configuration carries those bindings beside its own members (listener,
 //! database, OIDC issuer, admitted clients, audit, idempotency, cursor
-//! custody); a job's runtime document carries the bindings alone.
+//! custody); a job's runtime document (`AdapterJobRuntimeConfig`) carries
+//! the bindings beside its own `sources`, `store`, `destinations`,
+//! `secretProviders`, and `hookIngress` members.
 //! Authored artifacts carry no environment values; substitution and
 //! secrets live here and only here.
 
 use crate::auth::{CredentialPlacement, MtlsIdentity, RuntimeCredential};
+use crate::job::MAXIMUM_JOB_RESPONSE_BYTES;
 use registry_platform_config::{DatabaseConfig, ListenerConfig, OidcIssuerConfig, RemovedKey};
 use registry_platform_yaml::{
     BoundedU64, ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url,
@@ -112,11 +115,12 @@ pub struct EndpointBinding {
     /// facade and job admit only a lower value within their ten-second policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_timeout_milliseconds: Option<BoundedU64<1, { u64::MAX }>>,
-    /// A lower response bound than the pack declares, in bytes; absent, the
+    /// A lower response bound than the pack declares, in bytes (1 to
+    /// 16777216, the largest bound a pack endpoint may declare); absent, the
     /// declared one applies. A value above the declared one is refused when
     /// the deployment loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_response_bytes: Option<BoundedU64<1, 1_048_576>>,
+    pub maximum_response_bytes: Option<BoundedU64<1, MAXIMUM_JOB_RESPONSE_BYTES>>,
     /// The maximum simultaneous physical data operations admitted for this
     /// endpoint. Evidence programs selecting the same named connection share
     /// one permit pool; token acquisition retains its own cache/single-flight
@@ -303,7 +307,9 @@ pub struct IdempotencyRetention {
 
 /// The endpoint bindings of one deployment: the runtime members every
 /// mode shares (`products/adapter/CONCEPT.md` sections 10.2 and 17).
-/// The ingestion job's runtime document states these members alone; the
+/// The ingestion job's runtime document (`AdapterJobRuntimeConfig`)
+/// states these members beside its own `sources`, `store`,
+/// `destinations`, `secretProviders`, and `hookIngress` members; the
 /// facade's document states them beside the facade-only members
 /// (`listener`, `database`, `oidc`, `allowedClients`, `audit`,
 /// `idempotency`, and the cursor custody), which
@@ -558,6 +564,27 @@ mod tests {
         for refused in [0_u64, 257] {
             let mut value = serde_json::to_value(binding()).expect("binding json");
             value["maximumConcurrency"] = serde_json::json!(refused);
+            assert!(serde_json::from_value::<EndpointBinding>(value).is_err());
+        }
+    }
+
+    /// The response-bound override reaches the largest bound a pack
+    /// endpoint may declare, so a 16 MiB job endpoint can be lowered to any
+    /// value below it; the load check refuses a value above the declared one.
+    #[test]
+    fn endpoint_response_bound_override_spans_the_pack_endpoint_range() {
+        for admitted in [1_u64, 4_194_304, 16_777_216] {
+            let mut value = serde_json::to_value(binding()).expect("binding json");
+            value["maximumResponseBytes"] = serde_json::json!(admitted);
+            let binding: EndpointBinding = serde_json::from_value(value).expect("admitted bound");
+            assert_eq!(
+                binding.maximum_response_bytes.map(|bound| bound.get()),
+                Some(admitted)
+            );
+        }
+        for refused in [0_u64, 16_777_217] {
+            let mut value = serde_json::to_value(binding()).expect("binding json");
+            value["maximumResponseBytes"] = serde_json::json!(refused);
             assert!(serde_json::from_value::<EndpointBinding>(value).is_err());
         }
     }

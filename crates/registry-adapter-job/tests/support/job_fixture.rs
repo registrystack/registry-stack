@@ -817,6 +817,7 @@ triggers:
                         "deadLetterExchange": dead_letter_exchange,
                         "deadLetterQueue": dead_letter_queue,
                         "deadLetterRoutingKey": dead_letter_routing_key,
+                        "declareTopology": true,
                         "namespace": "institution-a",
                         "maximumOutstandingDeliveries": 1,
                         "connectionTimeoutMilliseconds": 1000,

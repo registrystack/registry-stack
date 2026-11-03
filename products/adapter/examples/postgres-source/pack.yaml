@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# A pack that reads the `example_registry.households_export` view (see
+# households-view.sql) through one digest-pinned, read-only query. The route
+# sends the query with no parameters. The engine pages it: it appends an
+# OFFSET bound from the job cursor, so the query carries no LIMIT or OFFSET.
+# `ORDER BY id` makes the pages deterministic; `keyColumn: id` names the stable
+# item key.
+#
+# `scan: finite` reads the view to its end and stops. `edits: rescan` starts
+# another pass from the first page after `rescanDelaySeconds`, so rows added or
+# changed behind the read position are found, and unchanged rows are skipped by
+# key and revision.
+#
+# The query file digest is the sha256 of queries/households.sql, and a job and
+# project pin this file's own sha256. Repin both when either file changes.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: households-view
+version: "1"
+testedVersions: []
+endpoints:
+  - id: households
+    component: postgres
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    queryFile: queries/households.sql
+    keyColumn: id
+queryFiles:
+  - path: queries/households.sql
+    digest: sha256:9c9267a84a8a8b16aac69698c3a4ce9184aff435533781f28b8493b2e43dfa19
+sourceRoutes:
+  - id: households-page
+    scan: finite
+    nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 3600
+    steps:
+      - to:
+          uri: postgres:households
+          parameters:
+            queryParameters: {}
+capabilities: {}

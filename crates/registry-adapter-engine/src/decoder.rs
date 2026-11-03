@@ -183,7 +183,7 @@ fn decode_csv(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<DecodedPage, DecoderFault> {
     let mut reader = BoundedCsvReader::new(options)?;
-    let maximum_rows = bounds.maximum_rows_per_page as usize;
+    let maximum_rows = bounds.maximum_rows_per_page.get() as usize;
     let mut items = Vec::new();
     let mut header: Option<Vec<String>> = None;
     let mut key_index: Option<usize> = None;
@@ -218,7 +218,7 @@ fn decode_csv(
             &mut keys,
             &mut key_string_capacity,
             business_key,
-            bounds.maximum_file_bytes as usize,
+            bounds.maximum_file_bytes.get() as usize,
             ordinal,
         )?;
 
@@ -276,8 +276,8 @@ impl BoundedCsvReader {
         bounds: &ReadBounds,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Option<(CsvRecord, u64)>, DecoderFault> {
-        let maximum_field_bytes = bounds.maximum_field_bytes as usize;
-        let maximum_row_bytes = bounds.maximum_row_bytes as usize;
+        let maximum_field_bytes = bounds.maximum_field_bytes.get() as usize;
+        let maximum_row_bytes = bounds.maximum_row_bytes.get() as usize;
         let mut record = Vec::new();
         let mut record_value_bytes = 0_usize;
         let mut field = BoundedCsvField::default();
@@ -620,14 +620,14 @@ fn validate_jsonl_keys(
     let mut keys = HashSet::new();
     let mut key_string_capacity = 0_usize;
     let mut line_ordinal = 0_u64;
-    let mut offset = 0_usize;
+    let mut offset = utf8_bom_length(bytes);
     while offset < bytes.len() {
         let end = line_end(bytes, offset, cancelled)?;
         if let Some(line) = bounded_jsonl_line(&bytes[offset..end], bounds, cancelled)? {
             if let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) {
                 if !crate::json_bounds::json_within_field_bound(
                     &value,
-                    bounds.maximum_field_bytes as usize,
+                    bounds.maximum_field_bytes.get() as usize,
                 ) {
                     return Err(DecoderFault::Bound);
                 }
@@ -637,7 +637,7 @@ fn validate_jsonl_keys(
                     &mut keys,
                     &mut key_string_capacity,
                     business_key,
-                    bounds.maximum_file_bytes as usize,
+                    bounds.maximum_file_bytes.get() as usize,
                     line_ordinal,
                 )?;
             }
@@ -646,6 +646,18 @@ fn validate_jsonl_keys(
         line_ordinal += 1;
     }
     Ok(())
+}
+
+/// The length of one UTF-8 byte-order mark at byte 0, which spreadsheet
+/// and Windows exports write and which is not part of the first line. The
+/// CSV reader (`csv-core`) strips the same mark itself; offsets stay those
+/// of the whole file either way.
+fn utf8_bom_length(bytes: &[u8]) -> usize {
+    if bytes.starts_with(b"\xEF\xBB\xBF") {
+        3
+    } else {
+        0
+    }
 }
 
 /// Decode JSONL lines: one bounded JSON value per line, a malformed line
@@ -661,12 +673,12 @@ fn decode_jsonl(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<DecodedPage, DecoderFault> {
     validate_jsonl_keys(key_pointer, namespace, bytes, bounds, cancelled)?;
-    let maximum_rows = bounds.maximum_rows_per_page as usize;
+    let maximum_rows = bounds.maximum_rows_per_page.get() as usize;
     let mut items = Vec::new();
     let mut malformed_lines = 0_u32;
     let mut emitted_end = 0_u64;
     let mut line_ordinal = 0_u64;
-    let mut offset = 0_u64;
+    let mut offset = utf8_bom_length(bytes) as u64;
     while offset < bytes.len() as u64 {
         let start = offset as usize;
         let end = line_end(bytes, start, cancelled)?;
@@ -686,7 +698,7 @@ fn decode_jsonl(
                     Ok(value) => {
                         if !crate::json_bounds::json_within_field_bound(
                             &value,
-                            bounds.maximum_field_bytes as usize,
+                            bounds.maximum_field_bytes.get() as usize,
                         ) {
                             return Err(DecoderFault::Bound);
                         }
@@ -722,7 +734,7 @@ fn bounded_jsonl_line<'line>(
     bounds: &ReadBounds,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<&'line [u8]>, DecoderFault> {
-    if line.len() > bounds.maximum_row_bytes as usize {
+    if line.len() > bounds.maximum_row_bytes.get() as usize {
         return Err(DecoderFault::Bound);
     }
     let line = line.strip_suffix(b"\r").unwrap_or(line);
@@ -791,11 +803,84 @@ mod tests {
 
     fn bounds(rows: usize) -> ReadBounds {
         ReadBounds {
-            maximum_file_bytes: 1_073_741_824,
-            maximum_row_bytes: 1_048_576,
-            maximum_field_bytes: 65_536,
-            maximum_rows_per_page: rows as u32,
+            maximum_file_bytes: 1_073_741_824.try_into().expect("inside its range"),
+            maximum_row_bytes: 1_048_576.try_into().expect("inside its range"),
+            maximum_field_bytes: 65_536.try_into().expect("inside its range"),
+            maximum_rows_per_page: (rows as u32).try_into().expect("inside its range"),
         }
+    }
+
+    /// A UTF-8 byte-order mark at byte 0, which spreadsheet exports
+    /// write, is not part of the first header or the first JSONL line.
+    /// Positions stay offsets into the whole file, so a page resumes
+    /// after the mark exactly as it would without it.
+    #[test]
+    fn a_leading_utf8_bom_is_not_part_of_the_first_csv_header_or_jsonl_line() {
+        let bytes = b"\xEF\xBB\xBFid,name\n001,alice\n002,bob\n";
+        let first = decode(
+            &csv("/id"),
+            "exports",
+            "sha256:aa",
+            "people.csv",
+            bytes,
+            0,
+            &bounds(1),
+        )
+        .expect("a CSV file with a BOM decodes");
+        assert_eq!(
+            first.items[0].value,
+            serde_json::json!({"id": "001", "name": "alice"})
+        );
+        assert_eq!(
+            first.position,
+            b"\xEF\xBB\xBFid,name\n001,alice\n".len() as u64
+        );
+        let second = decode(
+            &csv("/id"),
+            "exports",
+            "sha256:aa",
+            "people.csv",
+            bytes,
+            first.position,
+            &bounds(1),
+        )
+        .expect("the second page decodes");
+        assert_eq!(
+            second.items[0].value,
+            serde_json::json!({"id": "002", "name": "bob"})
+        );
+
+        let headerless = CsvDecoder {
+            header: false,
+            ..CsvDecoder::default()
+        };
+        let page = decode(
+            &csv_with(headerless, "/0"),
+            "exports",
+            "sha256:aa",
+            "people.csv",
+            b"\xEF\xBB\xBFalice,7\n",
+            0,
+            &bounds(10),
+        )
+        .expect("a headerless CSV file with a BOM decodes");
+        assert_eq!(page.items[0].value, serde_json::json!(["alice", "7"]));
+
+        let bytes = b"\xEF\xBB\xBF{\"id\":\"001\"}\n{\"id\":\"002\"}\n";
+        let page = decode(
+            &jsonl("/id"),
+            "exports",
+            "sha256:aa",
+            "people.jsonl",
+            bytes,
+            0,
+            &bounds(10),
+        )
+        .expect("a JSONL file with a BOM decodes");
+        assert_eq!(page.malformed_lines, 0, "the first line is not lost");
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].value, serde_json::json!({"id": "001"}));
+        assert_eq!(page.position, bytes.len() as u64);
     }
 
     /// The CSV defaults from the CsvDataFormat Java: comma delimiter,
@@ -947,7 +1032,7 @@ mod tests {
         ));
 
         let mut tight = bounds(10);
-        tight.maximum_field_bytes = 8;
+        tight.maximum_field_bytes = 8.try_into().expect("inside its range");
         let late_quoted = format!(
             "id,note\n001,ok\n002,\"{}\"\n",
             "x".repeat(CSV_OUTPUT_CHUNK_BYTES * 3)
@@ -984,7 +1069,7 @@ mod tests {
     #[test]
     fn csv_bounds_hold_on_the_header_record() {
         let mut tight = bounds(10);
-        tight.maximum_field_bytes = 8;
+        tight.maximum_field_bytes = 8.try_into().expect("inside its range");
         assert!(matches!(
             decode(
                 &csv("/name"),
@@ -998,7 +1083,7 @@ mod tests {
             Err(DecoderFault::Bound)
         ));
         let mut narrow = bounds(10);
-        narrow.maximum_row_bytes = 8;
+        narrow.maximum_row_bytes = 8.try_into().expect("inside its range");
         assert!(matches!(
             decode(
                 &csv("/name"),
@@ -1052,7 +1137,7 @@ mod tests {
     #[test]
     fn jsonl_refuses_a_field_over_the_field_bound() {
         let mut tight = bounds(10);
-        tight.maximum_field_bytes = 4;
+        tight.maximum_field_bytes = 4.try_into().expect("inside its range");
         for line in [
             &b"{\"id\":\"1\",\"name\":\"12345\"}\n"[..],
             &b"{\"id\":\"1\",\"a\":{\"b\":[\"12345\"]}}\n"[..],
@@ -1163,7 +1248,7 @@ mod tests {
     #[test]
     fn jsonl_applies_the_row_bound_to_blank_physical_lines() {
         let mut tight = bounds(10);
-        tight.maximum_row_bytes = 8;
+        tight.maximum_row_bytes = 8.try_into().expect("inside its range");
         assert!(matches!(
             decode(
                 &jsonl("/id"),
@@ -1213,7 +1298,7 @@ mod tests {
     #[test]
     fn a_late_oversized_row_refuses_before_the_first_page() {
         let mut tight = bounds(1);
-        tight.maximum_row_bytes = 24;
+        tight.maximum_row_bytes = 24.try_into().expect("inside its range");
         assert!(matches!(
             decode(
                 &csv("/id"),
@@ -1246,7 +1331,7 @@ mod tests {
     #[test]
     fn comma_only_fields_are_charged_to_the_row_budget() {
         let mut tight = bounds(10);
-        tight.maximum_row_bytes = 64;
+        tight.maximum_row_bytes = 64.try_into().expect("inside its range");
         assert!(matches!(
             decode(
                 &csv_with(
@@ -1272,7 +1357,7 @@ mod tests {
     #[test]
     fn business_key_index_is_bounded_before_growth() {
         let mut tight = bounds(1);
-        tight.maximum_file_bytes = 256;
+        tight.maximum_file_bytes = 256.try_into().expect("inside its range");
         assert!(matches!(
             decode(
                 &csv("/id"),

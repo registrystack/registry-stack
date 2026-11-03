@@ -663,16 +663,68 @@ async fn answer_async_status(
             return replay_response(accepted_response);
         }
         Ok(RecoveryLease::Stale) => {
-            return refuse_call(
-                state,
-                operation,
-                &caller,
-                metadata.record_type(),
-                &physical_request_id,
-                ErrorClass::FacadeNotFound,
-                StatusCode::NOT_FOUND,
-            )
-            .await;
+            // A concurrent poller can commit the terminal answer between the
+            // lookup above and this lease. Answer from what custody holds now;
+            // only a link that is gone answers 404.
+            let relookup = store
+                .lookup_status(
+                    StatusLookupRequest {
+                        caller: &caller_identity,
+                        deployment: state.loaded.runtime.id.as_str(),
+                        artifact_digest: state.artifact_digest,
+                        status_id,
+                    },
+                    SystemTime::now(),
+                )
+                .await;
+            let (events, response) = match relookup {
+                Ok(StatusLookup::Terminal {
+                    outcome, response, ..
+                }) => {
+                    let terminal_kind = match outcome {
+                        TerminalOutcome::Completed => "exchangeCompleted",
+                        TerminalOutcome::Failed => "exchangeFailed",
+                    };
+                    (
+                        vec![created, event(terminal_kind, None, SystemTime::now())],
+                        response,
+                    )
+                }
+                Ok(StatusLookup::Accepted(_)) => (vec![created], accepted_response),
+                Ok(StatusLookup::NotFound) => {
+                    return refuse_call(
+                        state,
+                        operation,
+                        &caller,
+                        metadata.record_type(),
+                        &physical_request_id,
+                        ErrorClass::FacadeNotFound,
+                        StatusCode::NOT_FOUND,
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    tracing::error!(%error, "asynchronous status custody failed");
+                    return facade_problem(
+                        profile,
+                        ErrorClass::Facade,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        metadata.record_type(),
+                        &physical_request_id,
+                    );
+                }
+            };
+            if let Err(fault) = append_all(&state.journal, events).await {
+                tracing::error!(%fault, "the status replay after a lost lease could not be journaled");
+                return facade_problem(
+                    profile,
+                    ErrorClass::Facade,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    metadata.record_type(),
+                    &physical_request_id,
+                );
+            }
+            return replay_response(response);
         }
         Err(error) => {
             tracing::error!(%error, "the asynchronous poll lease failed");
@@ -1385,6 +1437,7 @@ async fn answer(
     // journal never records `exchangeCompleted` for an exchange whose body
     // the facade then failed to seal or render.
     let mut resume_host_validation_pending = false;
+    let mut retry_later = false;
     let rendered = match write_resolution.clone() {
         WriteResolution::Replay { outcome, response } => {
             let event = match outcome {
@@ -1408,7 +1461,8 @@ async fn answer(
             ));
             Finished::FacadeProblem(ErrorClass::FacadeConflict, StatusCode::CONFLICT)
         }
-        WriteResolution::ResumePending => {
+        WriteResolution::InFlight | WriteResolution::ResumePending => {
+            retry_later = true;
             events.push((
                 journal_event(
                     "exchangeFailed",
@@ -1501,6 +1555,7 @@ async fn answer(
                             );
                         }
                         resume_host_validation_pending = true;
+                        retry_later = true;
                         events.push((
                             journal_event(
                                 "exchangeFailed",
@@ -1697,6 +1752,9 @@ async fn answer(
     if resume_host_validation_pending {
         terminal = None;
     }
+    if retry_later {
+        response = retryable_conflict(response);
+    }
     let pending_write = (!resume_host_validation_pending
         && matches!(
             write_resolution,
@@ -1768,6 +1826,19 @@ fn exchange_failure_detail(profile: Problems<'_>, class: ErrorClass) -> Value {
         detail["problemCode"] = Value::String(problem.code.as_str().to_owned());
     }
     detail
+}
+
+/// Seconds a caller waits before retrying a 409 that can still succeed: a
+/// duplicate of a write in flight, resumable progress, or an uncertain effect
+/// a later safe check may prove. A spent key's 409 carries no `Retry-After`,
+/// so its absence tells the caller to stop retrying that key.
+const RETRYABLE_CONFLICT_RETRY_AFTER: HeaderValue = HeaderValue::from_static("5");
+
+fn retryable_conflict(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, RETRYABLE_CONFLICT_RETRY_AFTER);
+    response
 }
 
 /// How an exchange ended once the response was built, before the journal
@@ -2349,20 +2420,20 @@ async fn run_uncertainty_recovery(
                 physical_request_id,
             );
         }
-        return facade_problem(
+        return retryable_conflict(facade_problem(
             profile,
             ErrorClass::FacadeConflict,
             StatusCode::CONFLICT,
             &operation.record_type,
             physical_request_id,
-        );
+        ));
     };
     let recovery = match write
         .acquire_uncertain_recovery(SystemTime::now(), deadline_wall)
         .await
     {
         Ok(RecoveryLease::Acquired(recovery)) => recovery,
-        Ok(RecoveryLease::Busy | RecoveryLease::Stale) => {
+        Ok(lease @ (RecoveryLease::Busy | RecoveryLease::Stale)) => {
             if let Err(fault) = append_all(&state.journal, conflict(events)).await {
                 tracing::error!(%fault, "the uncertain-effect journal could not commit");
                 return facade_problem(
@@ -2373,13 +2444,19 @@ async fn run_uncertainty_recovery(
                     physical_request_id,
                 );
             }
-            return facade_problem(
+            let problem = facade_problem(
                 profile,
                 ErrorClass::FacadeConflict,
                 StatusCode::CONFLICT,
                 &operation.record_type,
                 physical_request_id,
             );
+            // Another checker holds the lease and may still prove the outcome;
+            // an expired or uncorrelated effect is spent.
+            return match lease {
+                RecoveryLease::Busy => retryable_conflict(problem),
+                _ => problem,
+            };
         }
         Err(error) => {
             tracing::error!(%error, "the uncertainty recovery lease failed");
@@ -2529,13 +2606,13 @@ async fn run_uncertainty_recovery(
             physical_request_id,
         );
     }
-    facade_problem(
+    retryable_conflict(facade_problem(
         profile,
         ErrorClass::FacadeConflict,
         StatusCode::CONFLICT,
         &operation.record_type,
         physical_request_id,
-    )
+    ))
 }
 
 async fn finish_nonterminal_poll(

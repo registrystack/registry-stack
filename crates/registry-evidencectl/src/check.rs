@@ -301,6 +301,19 @@ pub(crate) fn render_human(
     if let Some(target) = report["target"].as_str() {
         writeln!(out, "Target: {target}")?;
     }
+    if report["deploymentInputs"]["complete"] == false {
+        let missing = report["deploymentInputs"]["missing"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            out,
+            "Deployment inputs missing: {missing}; the compiled-target bundle check was skipped. Supply them and rerun check to prove the target."
+        )?;
+    }
     if report["command"] == "explain" {
         let mut referenced_sources = BTreeSet::new();
         for definition in report["assertionDefinitions"]
@@ -540,7 +553,7 @@ acceptances:
             );
         fs::write(&project_file, authored).unwrap();
         fs::write(
-            temporary.path().join("functions/extract-person.rhai"),
+            temporary.path().join("functions/derive-adult-status.rhai"),
             "fn extract(",
         )
         .unwrap();
@@ -734,14 +747,14 @@ acceptances:
         let mut repeated_functions = String::new();
         for index in 0..102 {
             repeated_functions.push_str(&format!(
-                "- id: repeated-function-{index}\n  label: Indistinguishable Function label\n  interface: assertion-derive/v1\n  source: functions/derive-adult-status.rhai\n"
+                "- id: repeated-function-{index}\n  label: Indistinguishable Function label\n  interface: assertion-derive/v1\n  source: functions/derive-licence-status.rhai\n"
             ));
         }
         repeated_functions.push_str(source_marker);
         let authored = authored.replacen(source_marker, &repeated_functions, 1);
         assert_ne!(authored, fs::read_to_string(&project_file).unwrap());
         fs::write(&project_file, authored).unwrap();
-        let function_file = temporary.path().join("functions/extract-person.rhai");
+        let function_file = temporary.path().join("functions/derive-adult-status.rhai");
         fs::write(&function_file, "fn extract(").unwrap();
 
         let error = check(temporary.path(), None, false, false)
@@ -801,7 +814,7 @@ acceptances:
                 1,
             );
         fs::write(&project_file, authored).unwrap();
-        fs::remove_file(temporary.path().join("functions/extract-person.rhai")).unwrap();
+        fs::remove_file(temporary.path().join("functions/derive-adult-status.rhai")).unwrap();
 
         let error = check(temporary.path(), None, false, false)
             .expect_err("the absent Function asset prevents inspection");
@@ -986,5 +999,36 @@ acceptances:
         assert!(!output.contains("Prepare:"), "{output}");
         assert!(!output.contains("extract:"), "{output}");
         assert!(!output.contains("PRIVATE-SOURCE-CANARY"), "{output}");
+    }
+
+    #[test]
+    fn human_check_names_missing_deployment_inputs_and_the_skipped_proof() {
+        let incomplete = json!({
+            "command": "check",
+            "status": "complete",
+            "project": "project",
+            "target": "target.yaml",
+            "proof": "authoring",
+            "deploymentInputs": {"complete": false, "missing": ["signer.publicJwkFile"]}
+        });
+        let mut output = Vec::new();
+        render_human(&incomplete, &Report::new(Vec::new()), &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("Deployment inputs missing: signer.publicJwkFile"),
+            "{output}"
+        );
+        assert!(output.contains("bundle check was skipped"), "{output}");
+
+        let complete = json!({
+            "command": "check",
+            "status": "complete",
+            "project": "project",
+            "target": "target.yaml",
+            "proof": "compiled-target"
+        });
+        let mut output = Vec::new();
+        render_human(&complete, &Report::new(Vec::new()), &mut output).unwrap();
+        assert!(!String::from_utf8(output).unwrap().contains("missing"));
     }
 }

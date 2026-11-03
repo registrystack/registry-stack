@@ -24,7 +24,7 @@ cleanup() {
 	# here is the one worth seeing, and a container that is already gone
 	# needs no removal.
 	if [[ -n "$container" ]] && [[ -n "$(docker ps -aq --filter "name=^${container}$")" ]]; then
-		docker rm -f "$container" >/dev/null
+		docker rm -fv "$container" >/dev/null
 		printf '%s\n' "Removed $container." >&2
 	fi
 }
@@ -35,6 +35,8 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 		exit 2
 	fi
 	trap cleanup EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM HUP
 	checkout_hash=$(printf '%s' "$repo_root" | openssl dgst -sha256 -r | cut -c1-8)
 	container="adapter-pg-test-${checkout_hash}-$$"
 	printf '%s\n' "Starting $container (loopback PostgreSQL 17)." >&2

@@ -31,6 +31,14 @@ properties:
       Names the document type; together with `apiVersion` it tells a governed package
       configuration apart from every other Registry Stack file.
     const: EvidenceBundle
+  acquisitionCapabilities:
+    description: >-
+      Retired. An empty list is accepted, and ignored, for one release so a file written for
+      0.44 still loads; any capability is refused. Delete the member: a Source binds a reviewed
+      Adapter pack route, and the pack declares how it reads.
+    deprecated: true
+    type: array
+    maxItems: 0
   project:
     description: >-
       Stable normalized EvidenceProject identifier. A package carrying this identifier

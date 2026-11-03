@@ -28,6 +28,8 @@ use crate::engine::exchange::MAX_IDEMPOTENCY_KEY_BYTES;
 use deadpool_postgres::{GenericClient, Pool, PoolError};
 use http::HeaderValue;
 use sha2::{Digest, Sha256};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use tokio_postgres::{Error as PgError, Row};
 
 use crate::engine::route::EXCHANGE_DEADLINE;
@@ -62,6 +64,27 @@ pub const ASYNC_RECOVERY_ID_BYTES: usize = 64;
 /// Random bytes in a non-cloneable per-row recovery lease.
 pub const RECOVERY_LEASE_ID_BYTES: usize = 16;
 
+/// The table grants a runtime role needs when its deployment serves any
+/// write: claim, effect marking, terminal custody and the expiry sweep.
+pub const WRITE_RUNTIME_GRANTS: [(&str, &[&str]); 2] = [
+    (
+        "adapter_idempotency_entries",
+        &["SELECT", "INSERT", "UPDATE", "DELETE"],
+    ),
+    (
+        "adapter_idempotency_resumes",
+        &["SELECT", "INSERT", "UPDATE", "DELETE"],
+    ),
+];
+/// The extra grant an asynchronous or resumable write needs: the durable
+/// artifact fence its activation and effect precommits lock.
+pub const RECOVERY_RUNTIME_GRANTS: (&str, &[&str]) = (
+    "adapter_idempotency_async_artifacts",
+    &["SELECT", "INSERT", "UPDATE"],
+);
+/// The extra grant a resumable write needs: its checkpointed identifiers.
+pub const RESUME_RUNTIME_GRANTS: (&str, &[&str]) =
+    ("adapter_idempotency_resume_bindings", &["SELECT", "INSERT"]);
 const MIN_RESPONSE_RETENTION: Duration = Duration::from_secs(1);
 const SCOPE_DIGEST_DOMAIN: &[u8] = b"registry-adapter:idempotency-scope:v1\0";
 const ASYNC_DEPLOYMENT_DIGEST_DOMAIN: &[u8] = b"registry-adapter:async-deployment:v1\0";
@@ -486,10 +509,17 @@ impl fmt::Debug for StoredResponse {
 
 /// Exclusive permission returned only to the request that inserted a new
 /// claim. It is deliberately not cloneable. Dropping it performs no cleanup:
-/// cancellation and crashes remain fail-closed until explicit recovery.
+/// once an effect is marked, cancellation and crashes remain fail-closed
+/// until explicit recovery. A plain claim that never reached its effect mark
+/// is leased for one exchange deadline; after that the next same-request
+/// claim takes it over, and this execution can no longer mark, release or
+/// finish it.
 pub struct Execution {
     scope_digest: [u8; 32],
     request_digest: [u8; 32],
+    /// The row's `claimed_at`, the fencing token of this claim. A takeover
+    /// sets it at least one exchange deadline later, so it never repeats.
+    claimed_at: SystemTime,
     effect_attempted: bool,
     resume: Option<ResumeExecutionState>,
 }
@@ -540,7 +570,12 @@ pub enum Claim {
     /// The same request has an outstanding claim but no attempted effect.
     InFlight,
     /// A non-safe effect may have happened and no terminal response exists.
-    EffectUnknown,
+    EffectUnknown {
+        /// When the effect was marked. The attempt that marked it ends within
+        /// one exchange deadline of this instant, so until then it may still
+        /// record a terminal answer that a retry replays.
+        effect_started_at: SystemTime,
+    },
     /// This namespace is already bound to a different request digest.
     Mismatch,
     /// The key remains spent, but response custody has expired.
@@ -570,6 +605,13 @@ pub enum IdempotencyError {
     /// A different artifact still owns live asynchronous recovery rows for
     /// this logical deployment.
     AsyncArtifactInUse,
+    /// An artifact activation found unfinished asynchronous or resumable
+    /// writes of another artifact for this logical deployment. They block it
+    /// until they finish under that artifact or expire, by `clears_by`.
+    AsyncArtifactActivationRefused {
+        unfinished: i64,
+        clears_by: SystemTime,
+    },
     /// The migration advisory lock was not held when released.
     MigrationLock,
     /// An execution token attempted an invalid or already-completed state
@@ -605,6 +647,18 @@ impl fmt::Display for IdempotencyError {
                 formatter,
                 "adapter.idempotency-async-artifact-in-use: live asynchronous recoveries belong to another artifact"
             ),
+            Self::AsyncArtifactActivationRefused {
+                unfinished,
+                clears_by,
+            } => {
+                let clears_by = OffsetDateTime::from(*clears_by)
+                    .format(&Rfc3339)
+                    .unwrap_or_else(|_| "an instant outside RFC 3339".to_owned());
+                write!(
+                    formatter,
+                    "adapter.idempotency-async-artifact-in-use: {unfinished} unfinished asynchronous or resumable write(s) of this deployment belong to another artifact and expire by {clears_by}; redeploy the previous artifact bytes so they can finish, or wait until {clears_by}"
+                )
+            }
             Self::MigrationLock => write!(
                 formatter,
                 "adapter.idempotency-migration-lock: migration lock was not held"
@@ -636,6 +690,7 @@ impl std::error::Error for IdempotencyError {
             | Self::LegacyDeploymentIdentityEntries
             | Self::LegacyResponseRequestIdEntries
             | Self::AsyncArtifactInUse
+            | Self::AsyncArtifactActivationRefused { .. }
             | Self::MigrationLock
             | Self::StateConflict
             | Self::StoredDataInvalid => None,
@@ -686,10 +741,11 @@ impl PostgresIdempotencyStore {
         let scope_digest = scope_digest(&request);
         let client = self.pool.get().await?;
         let inserted = client
-            .execute(
+            .query_opt(
                 "INSERT INTO adapter_idempotency_entries \
                  (scope_digest, request_digest, state, claimed_at) \
-                 VALUES ($1, $2, 'claimed', $3) ON CONFLICT DO NOTHING",
+                 VALUES ($1, $2, 'claimed', $3) ON CONFLICT DO NOTHING \
+                 RETURNING claimed_at",
                 &[
                     &scope_digest.as_slice(),
                     &request.request_digest.as_slice(),
@@ -697,13 +753,45 @@ impl PostgresIdempotencyStore {
                 ],
             )
             .await?;
-        if inserted == 1 {
+        if let Some(row) = inserted {
             return Ok(Claim::Execute(Execution {
                 scope_digest,
                 request_digest: request.request_digest,
+                claimed_at: row.get(0),
                 effect_attempted: false,
                 resume: None,
             }));
+        }
+
+        // A claim whose owner never marked an effect within one exchange
+        // deadline is abandoned: nothing was sent, so the same request takes
+        // it over. Resumable claims keep their own lease and are excluded.
+        if let Some(lease_start) = now.checked_sub(EXCHANGE_DEADLINE) {
+            if let Some(row) = client
+                .query_opt(
+                    "UPDATE adapter_idempotency_entries AS entries SET claimed_at = $3 \
+                     WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed' \
+                       AND claimed_at <= $4 \
+                       AND NOT EXISTS (SELECT 1 FROM adapter_idempotency_resumes AS resumes \
+                                       WHERE resumes.scope_digest = entries.scope_digest) \
+                     RETURNING claimed_at",
+                    &[
+                        &scope_digest.as_slice(),
+                        &request.request_digest.as_slice(),
+                        &now,
+                        &lease_start,
+                    ],
+                )
+                .await?
+            {
+                return Ok(Claim::Execute(Execution {
+                    scope_digest,
+                    request_digest: request.request_digest,
+                    claimed_at: row.get(0),
+                    effect_attempted: false,
+                    resume: None,
+                }));
+            }
         }
 
         // Enforce the custody horizon even if the supervised sweep has not
@@ -712,7 +800,8 @@ impl PostgresIdempotencyStore {
         let row = client
             .query_one(
                 "SELECT request_digest, state, response_status, \
-                        response_content_type, response_body, response_request_id \
+                        response_content_type, response_body, response_request_id, \
+                        effect_started_at \
                  FROM adapter_idempotency_entries WHERE scope_digest = $1",
                 &[&scope_digest.as_slice()],
             )
@@ -765,11 +854,15 @@ impl PostgresIdempotencyStore {
             false,
         )
         .await?;
+        // Expire first, so a key freed by an expired write that sent
+        // nothing is claimed fresh below.
+        expire_resume_with_client(&transaction, &scope_digest, now).await?;
         let inserted = transaction
-            .execute(
+            .query_opt(
                 "INSERT INTO adapter_idempotency_entries \
                  (scope_digest, request_digest, state, claimed_at) \
-                 VALUES ($1, $2, 'claimed', $3) ON CONFLICT DO NOTHING",
+                 VALUES ($1, $2, 'claimed', $3) ON CONFLICT DO NOTHING \
+                 RETURNING claimed_at",
                 &[
                     &scope_digest.as_slice(),
                     &request.request_digest.as_slice(),
@@ -777,7 +870,7 @@ impl PostgresIdempotencyStore {
                 ],
             )
             .await?;
-        if inserted == 1 {
+        if let Some(inserted) = inserted {
             transaction
                 .execute(
                     "INSERT INTO adapter_idempotency_resumes \
@@ -804,6 +897,7 @@ impl PostgresIdempotencyStore {
             return Ok(Claim::Execute(Execution {
                 scope_digest,
                 request_digest: request.request_digest,
+                claimed_at: inserted.get(0),
                 effect_attempted: false,
                 resume: Some(ResumeExecutionState {
                     deployment_digest,
@@ -816,11 +910,10 @@ impl PostgresIdempotencyStore {
             }));
         }
 
-        expire_resume_with_client(&transaction, &scope_digest, now).await?;
         let row = transaction
             .query_one(
                 "SELECT request_digest, state, response_status, response_content_type, \
-                        response_body, response_request_id \
+                        response_body, response_request_id, claimed_at, effect_started_at \
                  FROM adapter_idempotency_entries WHERE scope_digest = $1",
                 &[&scope_digest.as_slice()],
             )
@@ -897,6 +990,7 @@ impl PostgresIdempotencyStore {
         let execution = Execution {
             scope_digest,
             request_digest: request.request_digest,
+            claimed_at: row.get("claimed_at"),
             effect_attempted: false,
             resume: Some(ResumeExecutionState {
                 deployment_digest: fixed_digest(&resume, "deployment_digest")?,
@@ -932,11 +1026,13 @@ impl PostgresIdempotencyStore {
             .execute(
                 "UPDATE adapter_idempotency_entries \
                  SET state = 'effect_started', effect_started_at = $3 \
-                 WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed'",
+                 WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed' \
+                   AND claimed_at = $4",
                 &[
                     &execution.scope_digest.as_slice(),
                     &execution.request_digest.as_slice(),
                     &now,
+                    &execution.claimed_at,
                 ],
             )
             .await?;
@@ -1189,7 +1285,8 @@ impl PostgresIdempotencyStore {
                      async_binding_id = $8, async_profile_operation = $9, \
                      async_concrete_operation = $10, async_record_type = $11, \
                      async_recovery_id = $12, async_expires_at = $13 \
-                 WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed'",
+                 WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed' \
+                   AND claimed_at = $14",
                 &[
                     &execution.scope_digest.as_slice(),
                     &execution.request_digest.as_slice(),
@@ -1204,6 +1301,7 @@ impl PostgresIdempotencyStore {
                     &attempt.record_type,
                     &attempt.recovery_id,
                     &async_expires_at,
+                    &execution.claimed_at,
                 ],
             )
             .await?;
@@ -1288,10 +1386,12 @@ impl PostgresIdempotencyStore {
         let deleted = client
             .execute(
                 "DELETE FROM adapter_idempotency_entries \
-                 WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed'",
+                 WHERE scope_digest = $1 AND request_digest = $2 AND state = 'claimed' \
+                   AND claimed_at = $3",
                 &[
                     &execution.scope_digest.as_slice(),
                     &execution.request_digest.as_slice(),
+                    &execution.claimed_at,
                 ],
             )
             .await?;
@@ -1349,6 +1449,7 @@ impl PostgresIdempotencyStore {
                      async_recovery_id = NULL, async_poll_lease_id = NULL, \
                      async_poll_lease_until = NULL \
                  WHERE scope_digest = $1 AND request_digest = $2 AND state = $10 \
+                   AND (state <> 'claimed' OR claimed_at = $11) \
                    AND (async_binding_digest IS NULL OR response_request_id = $9)",
                 &[
                     &execution.scope_digest.as_slice(),
@@ -1361,6 +1462,7 @@ impl PostgresIdempotencyStore {
                     &response.body,
                     &response.request_id,
                     &expected_state,
+                    &execution.claimed_at,
                 ],
             )
             .await?;
@@ -1771,6 +1873,8 @@ impl PostgresIdempotencyStore {
     ///
     /// Only response custody is erased. Scope and request digests remain as a
     /// spent tombstone, so a completed or uncertain effect is never reopened.
+    /// An expired resume write that never marked a step attempted sent
+    /// nothing, so its entry is removed and the key is free again.
     pub async fn sweep_expired(
         &self,
         now: SystemTime,
@@ -1794,12 +1898,14 @@ impl PostgresIdempotencyStore {
             .await?;
         for row in &expired_resumes {
             let scope_digest: Vec<u8> = row.get(0);
+            // Marking a step attempted moves the entry to effect_started
+            // before any send, so a still-claimed entry sent nothing: its
+            // key is freed (the resume row cascades), never spent.
             transaction
                 .execute(
-                    "UPDATE adapter_idempotency_entries \
-                     SET state = 'effect_started', effect_started_at = COALESCE(effect_started_at, $2) \
+                    "DELETE FROM adapter_idempotency_entries \
                      WHERE scope_digest = $1 AND state = 'claimed'",
-                    &[&scope_digest, &now],
+                    &[&scope_digest],
                 )
                 .await?;
             transaction
@@ -2096,26 +2202,38 @@ async fn lock_async_artifact_fence(
     if !may_advance && active_artifact.as_slice() != artifact_digest {
         return Err(IdempotencyError::AsyncArtifactInUse);
     }
+    // Only unfinished work carries recovery authority: an attempted or
+    // accepted async effect, or an unexpired resume. A terminal row keeps its
+    // binding for status replay, which is bound to its own artifact digest,
+    // so it never blocks a hotfix or rollback.
     let incompatible = client
-        .query_opt(
-            "SELECT 1 FROM ( \
-                 SELECT artifact_digest FROM adapter_idempotency_entries \
+        .query_one(
+            "SELECT count(*), max(expires_at) FROM ( \
+                 SELECT artifact_digest, async_expires_at AS expires_at \
+                 FROM adapter_idempotency_entries \
                  WHERE async_deployment_digest = $1 AND async_binding_digest IS NOT NULL \
-                   AND async_expires_at > $3 \
+                   AND state IN ('effect_started', 'accepted') AND async_expires_at > $3 \
                  UNION ALL \
-                 SELECT artifact_digest FROM adapter_idempotency_resumes \
+                 SELECT artifact_digest, expires_at FROM adapter_idempotency_resumes \
                  WHERE deployment_digest = $1 AND expires_at > $3 \
-             ) AS live WHERE artifact_digest <> $2 LIMIT 1",
+             ) AS live WHERE artifact_digest <> $2",
             &[
                 &deployment_digest.as_slice(),
                 &artifact_digest.as_slice(),
                 &now,
             ],
         )
-        .await?
-        .is_some();
-    if incompatible {
-        return Err(IdempotencyError::AsyncArtifactInUse);
+        .await?;
+    let unfinished: i64 = incompatible.get(0);
+    if unfinished > 0 {
+        let clears_by: Option<SystemTime> = incompatible.get(1);
+        return Err(match (may_advance, clears_by) {
+            (true, Some(clears_by)) => IdempotencyError::AsyncArtifactActivationRefused {
+                unfinished,
+                clears_by,
+            },
+            _ => IdempotencyError::AsyncArtifactInUse,
+        });
     }
     if may_advance && active_artifact.as_slice() != artifact_digest {
         client
@@ -2326,10 +2444,12 @@ async fn expire_resume_with_client(
     scope_digest: &[u8; 32],
     now: SystemTime,
 ) -> Result<(), IdempotencyError> {
+    // A still-claimed entry never marked a step attempted, so it sent
+    // nothing: expiry frees its key (the resume row cascades) rather than
+    // spending it.
     client
         .execute(
-            "UPDATE adapter_idempotency_entries AS entries \
-             SET state = 'effect_started', effect_started_at = COALESCE(effect_started_at, $2) \
+            "DELETE FROM adapter_idempotency_entries AS entries \
              WHERE scope_digest = $1 AND state = 'claimed' \
                AND EXISTS (SELECT 1 FROM adapter_idempotency_resumes AS resumes \
                            WHERE resumes.scope_digest = entries.scope_digest \
@@ -2365,7 +2485,11 @@ fn claim_from_row(row: Row, request_digest: [u8; 32]) -> Result<Claim, Idempoten
     let state: String = row.get("state");
     match state.as_str() {
         "claimed" => Ok(Claim::InFlight),
-        "effect_started" => Ok(Claim::EffectUnknown),
+        "effect_started" => Ok(Claim::EffectUnknown {
+            effect_started_at: row
+                .get::<_, Option<SystemTime>>("effect_started_at")
+                .ok_or(IdempotencyError::StoredDataInvalid)?,
+        }),
         "accepted" => replay_accepted_from_row(&row),
         "accepted_expired" => Ok(Claim::AcceptedExpired),
         "completed" => replay_from_row(&row, TerminalOutcome::Completed),

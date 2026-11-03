@@ -559,39 +559,14 @@ fn scoped_outbound_tls<'a>(
     })
 }
 
-/// Root owns issuer-key TLS. Profiles referenced only by source connections
-/// belong to those connections. A profile referenced nowhere remains at root
-/// so the runtime's existing unused-profile check still refuses the target.
+/// Root owns issuer-key TLS; profiles that endpoints name belong to their
+/// source connections. The target reader refuses a profile named nowhere, at
+/// its key, so no inventory entry is left without an owner.
 pub(crate) fn root_runtime_outbound_tls(target: &EvidenceTarget) -> Option<TargetOutboundTls> {
-    let outbound_tls = target.outbound_tls.as_ref()?;
-    let referenced_profiles = target
-        .authentication
-        .oidc
-        .tls_trust_profile
-        .as_deref()
-        .into_iter()
-        .chain(
-            target
-                .connections
-                .values()
-                .flat_map(|connection| connection.endpoints.values())
-                .filter_map(|endpoint| endpoint.tls_trust_profile.as_deref()),
-        )
-        .collect::<BTreeSet<_>>();
-    let root_profiles = target
-        .authentication
-        .oidc
-        .tls_trust_profile
-        .as_deref()
-        .into_iter()
-        .chain(
-            outbound_tls
-                .trust_profiles
-                .keys()
-                .map(|id| id.as_str())
-                .filter(|id| !referenced_profiles.contains(id)),
-        );
-    scoped_outbound_tls(Some(outbound_tls), root_profiles)
+    scoped_outbound_tls(
+        target.outbound_tls.as_ref(),
+        target.authentication.oidc.tls_trust_profile.as_deref(),
+    )
 }
 
 pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetDocuments> {
@@ -798,6 +773,17 @@ fn projected_runtime_with_tls(
     connections: &[(&str, &str)],
     inventory: &[&str],
 ) -> Value {
+    let documents =
+        read_target_with_tls(oidc_profile, connections, inventory).expect("target documents");
+    crate::build::runtime_value(&documents.runtime).expect("runtime YAML")
+}
+
+#[cfg(test)]
+fn read_target_with_tls(
+    oidc_profile: Option<&str>,
+    connections: &[(&str, &str)],
+    inventory: &[&str],
+) -> Result<crate::build::TargetDocuments> {
     let example =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/evidence/examples/standalone");
     let root = tempfile::tempdir().expect("target root");
@@ -842,9 +828,7 @@ fn projected_runtime_with_tls(
         root.path().join("dev-authority.yaml"),
     )
     .expect("authority");
-    let documents =
-        read_target_documents(&root.path().join("local-target.yaml")).expect("target documents");
-    crate::build::runtime_value(&documents.runtime).expect("runtime YAML")
+    read_target_documents(&root.path().join("local-target.yaml"))
 }
 
 #[cfg(test)]
@@ -894,16 +878,20 @@ fn oidc_and_disjoint_source_connections_receive_only_their_own_cas() {
 
 #[cfg(test)]
 #[test]
-fn unused_ca_inventory_remains_visible_to_the_runtime_refusal() {
-    let runtime = projected_runtime_with_tls(
+fn unused_ca_inventory_is_refused_where_the_target_writes_it() {
+    let Err(error) = read_target_with_tls(
         None,
         &[("synthetic-register", "source-ca")],
         &["source-ca", "unused-ca"],
-    );
-    assert_eq!(profile_names(&runtime["outboundTls"]), vec!["unused-ca"]);
-    assert_eq!(
-        profile_names(&runtime["sourceConnections"]["synthetic-register"]["outboundTls"]),
-        vec!["source-ca"]
+    ) else {
+        panic!("a CA nothing names is refused before projection");
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("evidence.target.trust-profile-unused")
+            && message.contains("local-target.yaml:")
+            && message.contains("/outboundTls/trustProfiles/unused-ca"),
+        "{message}"
     );
 }
 

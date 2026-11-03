@@ -43,7 +43,8 @@ pub const DEFAULT_OUTPUT_DIR: &str = "products/adapter/schemas";
 /// components and the job sources the authoring checks read through
 /// `pollEnrich` or refuse as sends. Pinned to the parser by the
 /// generator's own test.
-const SEND_URI_PATTERN: &str = "^(direct|http|graphql|postgres|file|sftp|sqlite-extract):.+$";
+const SEND_URI_PATTERN: &str =
+    "^(direct|http|graphql|postgres|file|rabbitmq|sftp|sqlite-extract):.+$";
 
 #[derive(Debug, Args)]
 pub struct SchemasArgs {
@@ -670,6 +671,7 @@ mod tests {
             ("postgres:rows", true),
             ("file:drop", true),
             ("sftp:drop", true),
+            ("rabbitmq:events", true),
             ("sqlite-extract:people", true),
             ("rest:fetchCase", false),
             ("direct:", false),

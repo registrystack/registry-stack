@@ -21,7 +21,11 @@
 //! rows bound, and builds the item page itself: one item per row, the
 //! configured `keyColumn` scalar's canonical digest as the stable key,
 //! the whole row's canonical digest as its change-detecting revision, and
-//! `{"offset": cursor offset + rows}` when the page was full. The read
+//! `{"offset": cursor offset + rows}` when the page was full. The engine
+//! owns the paging: it appends `OFFSET $n+1` to the pinned statement and
+//! binds the cursor's offset (zero on the first page) as that last
+//! parameter, so a root `LIMIT` or `OFFSET` of the pack's own refuses at
+//! compile. The read
 //! is read-committed per send; the pack's scan declaration records what
 //! that means for the source (PostgreSQL isolation documentation,
 //! "Read Committed isolation level": each statement sees a snapshot as
@@ -91,11 +95,15 @@ pub fn compile_plan(
     })
 }
 
-/// One pinned, parsed, and refused-or-admitted query: its text and the
-/// parameter names its `$n` references declare, in name order.
+/// One pinned, parsed, and refused-or-admitted query: its text, the
+/// paged statement the engine runs, and the parameter names its `$n`
+/// references declare, in name order.
 #[derive(Debug, Clone)]
 pub struct PinnedQuery {
     pub text: String,
+    /// The pinned statement followed by `OFFSET $n+1`, where `$n+1` is
+    /// the engine-bound page offset after the reviewed parameters.
+    pub paged_text: String,
     pub parameter_names: Vec<String>,
 }
 
@@ -119,8 +127,9 @@ impl QueryRefused {
 
 /// Parse one query text and refuse everything but exactly one top-level
 /// plain SELECT: no other statement kind, no data-modifying CTE, no
-/// utility command, a root `ORDER BY` so offset pages are stable, and a
-/// parameter set of `$1` through `$n` with no gap.
+/// utility command, a root `ORDER BY` so offset pages are stable, no
+/// root `LIMIT` or `OFFSET` (the engine pages), and a parameter set of
+/// `$1` through `$n` with no gap.
 pub fn compile_query(text: &str, parameter_order: &[String]) -> Result<PinnedQuery, QueryRefused> {
     let parsed = pg_query::parse(text)
         .map_err(|_| QueryRefused::Query("the query file is not valid SQL"))?;
@@ -201,6 +210,14 @@ pub fn compile_query(text: &str, parameter_order: &[String]) -> Result<PinnedQue
             "the query must declare ORDER BY; offset paging needs a stable row order",
         ));
     }
+    // The engine appends the page offset itself. A root LIMIT would end
+    // the scan silently after its rows, and a root OFFSET would collide
+    // with the engine's.
+    if select.limit_count.is_some() || select.limit_offset.is_some() {
+        return Err(QueryRefused::Query(
+            "the query must not declare a root LIMIT, OFFSET or FETCH; the engine pages it by OFFSET",
+        ));
+    }
     if parameter_names.iter().any(Option::is_none) {
         return Err(QueryRefused::Query(
             "the query's parameter references leave a gap; use $1 through $n with none missing",
@@ -211,10 +228,56 @@ pub fn compile_query(text: &str, parameter_order: &[String]) -> Result<PinnedQue
             "parameterOrder must name every contiguous SQL parameter position exactly once",
         ));
     }
+    let paged_text = paged_statement(text, raw, parameter_order.len() + 1)?;
     Ok(PinnedQuery {
         text: text.to_owned(),
+        paged_text,
         parameter_names: parameter_order.to_vec(),
     })
+}
+
+/// The one statement of `text` followed by `OFFSET $offset_position`.
+/// The statement ends where the parser says it does, so a trailing
+/// semicolon is left out, and the offset starts on its own line, so a
+/// trailing line comment cannot swallow it. The result is parsed again
+/// and must carry exactly that root offset.
+fn paged_statement(
+    text: &str,
+    raw: &pg_query::protobuf::RawStmt,
+    offset_position: usize,
+) -> Result<String, QueryRefused> {
+    let refused = || QueryRefused::Query("the query cannot take the engine's page OFFSET");
+    let start = usize::try_from(raw.stmt_location).map_err(|_| refused())?;
+    let end = match usize::try_from(raw.stmt_len).map_err(|_| refused())? {
+        0 => text.len(),
+        length => start.checked_add(length).ok_or_else(refused)?,
+    };
+    let statement = text.get(start..end).ok_or_else(refused)?.trim_end();
+    let paged = format!("{statement}\nOFFSET ${offset_position}");
+    let parsed = pg_query::parse(&paged).map_err(|_| refused())?;
+    let [raw] = parsed.protobuf.stmts.as_slice() else {
+        return Err(refused());
+    };
+    let Some(pg_query::protobuf::node::Node::SelectStmt(select)) = raw
+        .stmt
+        .as_ref()
+        .and_then(|statement| statement.node.as_ref())
+    else {
+        return Err(refused());
+    };
+    let offset = select
+        .limit_offset
+        .as_ref()
+        .and_then(|node| node.node.as_ref());
+    match offset {
+        Some(pg_query::protobuf::node::Node::ParamRef(parameter))
+            if usize::try_from(parameter.number).ok() == Some(offset_position)
+                && select.limit_count.is_none() =>
+        {
+            Ok(paged)
+        }
+        _ => Err(refused()),
+    }
 }
 
 /// The send's named parameters must be exactly the query's own set:
@@ -263,6 +326,9 @@ pub enum SourceScalar {
     /// A numeric as its text, so precision never crosses the seam
     /// through a float.
     Numeric(String),
+    /// A SQL NULL column value. It never binds as a parameter and never
+    /// serves as an item key.
+    Null,
 }
 
 /// One row the host read: columns in order, each a name and a scalar.
@@ -338,7 +404,10 @@ impl PostgresRowBudget {
                 SourceScalar::Float(value) if !value.is_finite() => {
                     return Err(PostgresReadFault::Malformed);
                 }
-                SourceScalar::Integer(_) | SourceScalar::Float(_) | SourceScalar::Boolean(_) => {}
+                SourceScalar::Integer(_)
+                | SourceScalar::Float(_)
+                | SourceScalar::Boolean(_)
+                | SourceScalar::Null => {}
             }
         }
         let row_bytes = serialized_row_bytes(row, self.bounds.maximum_row_bytes)?;
@@ -373,6 +442,7 @@ impl serde::Serialize for SerializableRow<'_> {
                 SourceScalar::Integer(value) => map.serialize_entry(name, value)?,
                 SourceScalar::Float(value) => map.serialize_entry(name, value)?,
                 SourceScalar::Boolean(value) => map.serialize_entry(name, value)?,
+                SourceScalar::Null => map.serialize_entry(name, &())?,
             }
         }
         map.end()
@@ -471,6 +541,10 @@ pub enum PostgresReadFault {
     /// A field, row, row count, or aggregate response exceeded its
     /// authored source bound.
     TooLarge,
+    /// The one-based result column has a type outside the closed
+    /// scalar form. A column's type is the same on every row, so the
+    /// first row of the page is the one that refuses.
+    UnsupportedColumn { column: u32 },
 }
 
 /// The source client seam the host supplies
@@ -520,6 +594,23 @@ pub(crate) async fn send(
         })?;
         values.push(scalar(run.eval(expression)?)?);
     }
+    // The cursor's own offset, zero on the first page, binds as the
+    // engine's trailing OFFSET parameter and advances by the rows each
+    // page fetched.
+    let offset = run
+        .exchange
+        .property(crate::job::ADAPTER_JOB_CURSOR_PROPERTY)
+        .and_then(|cursor| cursor.get("offset"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    values.push(SourceScalar::Integer(i64::try_from(offset).map_err(
+        |_| {
+            failure(
+                ErrorClass::Validation,
+                "the cursor offset exceeds the PostgreSQL bigint range",
+            )
+        },
+    )?));
     let (maximum_rows, bounds) = run.context.job.profile.as_ref().map_or_else(
         || {
             (
@@ -534,11 +625,11 @@ pub(crate) async fn send(
         },
         |profile| {
             (
-                profile.read.maximum_rows_per_page,
+                profile.read.maximum_rows_per_page.get(),
                 PostgresReadBounds {
-                    maximum_response_bytes: profile.maximum_response_bytes as usize,
-                    maximum_row_bytes: profile.read.maximum_row_bytes as usize,
-                    maximum_field_bytes: profile.read.maximum_field_bytes as usize,
+                    maximum_response_bytes: profile.maximum_response_bytes.get() as usize,
+                    maximum_row_bytes: profile.read.maximum_row_bytes.get() as usize,
+                    maximum_field_bytes: profile.read.maximum_field_bytes.get() as usize,
                 },
             )
         },
@@ -551,18 +642,22 @@ pub(crate) async fn send(
             "BEGIN TRANSACTION READ ONLY".to_owned(),
             format!("SET LOCAL statement_timeout = {bound}"),
         ],
-        sql: plan.query.text.clone(),
+        sql: plan.query.paged_text.clone(),
         parameters: values,
         maximum_rows,
         bounds,
     };
     run.ensure_deadline()?;
     let fetch = async {
-        let rows = source.read(read).await.map_err(read_failure)?;
-        validate_source_rows(maximum_rows, bounds, &rows).map_err(read_failure)?;
+        let rows = source
+            .read(read)
+            .await
+            .map_err(|fault| read_failure(fault, offset))?;
+        validate_source_rows(maximum_rows, bounds, &rows)
+            .map_err(|fault| read_failure(fault, offset))?;
         let mut items = Vec::with_capacity(rows.rows.len());
-        for row in &rows.rows {
-            items.push(row_item(&plan.namespace, &plan.key_column, row)?);
+        for (ordinal, row) in (offset..).zip(&rows.rows) {
+            items.push(row_item(&plan.namespace, &plan.key_column, row, ordinal)?);
         }
         Ok::<_, RouteFailure>((items, rows))
     };
@@ -576,14 +671,6 @@ pub(crate) async fn send(
         })??;
     let mut body = serde_json::json!({ "items": items });
     if !rows.complete {
-        // The cursor's own offset, which the pack wired into its
-        // parameter, advances by the rows this page fetched.
-        let offset = run
-            .exchange
-            .property(crate::job::ADAPTER_JOB_CURSOR_PROPERTY)
-            .and_then(|cursor| cursor.get("offset"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
         body["next"] = serde_json::json!({ "offset": offset + rows.rows.len() as u64 });
     }
     run.exchange.message.body = body;
@@ -602,7 +689,14 @@ fn validate_source_rows(
     Ok(())
 }
 
-fn read_failure(fault: PostgresReadFault) -> RouteFailure {
+/// The closed code of a result column whose type has no scalar form.
+pub const POSTGRES_COLUMN_TYPE_CODE: &str = "adapter.job.postgres-column-type";
+/// The closed code of a row whose key column is NULL.
+pub const POSTGRES_KEY_NULL_CODE: &str = "adapter.job.postgres-key-null";
+
+/// `offset` is the page's first row ordinal, so a column fault, which the
+/// page's first row raises, is located at it.
+fn read_failure(fault: PostgresReadFault, offset: u64) -> RouteFailure {
     match fault {
         PostgresReadFault::Timeout => failure(
             ErrorClass::UpstreamTimeout,
@@ -623,6 +717,19 @@ fn read_failure(fault: PostgresReadFault) -> RouteFailure {
             ErrorClass::UpstreamTooLarge,
             "the source response exceeded its authored byte bound",
         ),
+        PostgresReadFault::UnsupportedColumn { column } => RouteFailure {
+            message: Some(format!(
+                "result column {column} has a PostgreSQL type the source cannot read; cast it in \
+                 the query to text, an integer, double precision, boolean, numeric, date, \
+                 timestamp, timestamptz or uuid"
+            )),
+            code: Some(POSTGRES_COLUMN_TYPE_CODE),
+            record: Some(Box::new(registry_adapter_core::RecordLocator {
+                ordinal: offset,
+                column: Some(column),
+            })),
+            ..failure(ErrorClass::UpstreamMalformed, "")
+        },
     }
 }
 
@@ -657,7 +764,12 @@ fn scalar(value: Value) -> Result<SourceScalar, RouteFailure> {
 /// One row as a source item: a map keyed by the column names, the
 /// configured scalar column's digest as stable identity, and the whole
 /// canonical row's digest as its revision across pages and scans.
-fn row_item(namespace: &str, key_column: &str, row: &SourceRow) -> Result<Value, RouteFailure> {
+fn row_item(
+    namespace: &str,
+    key_column: &str,
+    row: &SourceRow,
+    ordinal: u64,
+) -> Result<Value, RouteFailure> {
     let mut members = serde_json::Map::new();
     let mut key = None;
     for (name, value) in &row.columns {
@@ -673,6 +785,19 @@ fn row_item(namespace: &str, key_column: &str, row: &SourceRow) -> Result<Value,
             "a row carries no value for the endpoint's key column",
         )
     })?;
+    if key.is_null() {
+        return Err(RouteFailure {
+            code: Some(POSTGRES_KEY_NULL_CODE),
+            record: Some(Box::new(registry_adapter_core::RecordLocator {
+                ordinal,
+                column: None,
+            })),
+            ..failure(
+                ErrorClass::UpstreamMalformed,
+                "a row's key column is NULL; select a key column that is never NULL",
+            )
+        });
+    }
     let canonical_key =
         registry_platform_canonical_json::canonicalize_json(&key).map_err(|_| {
             failure(
@@ -708,6 +833,7 @@ fn scalar_value(value: &SourceScalar) -> Result<Value, RouteFailure> {
         }
         SourceScalar::Boolean(value) => serde_json::json!(value),
         SourceScalar::Numeric(text) => Value::String(text.clone()),
+        SourceScalar::Null => Value::Null,
     })
 }
 
@@ -857,17 +983,48 @@ mod tests {
     }
 
     #[test]
+    fn the_engine_appends_its_page_offset_after_the_reviewed_parameters() {
+        let names = vec!["status".to_owned()];
+        let query = compile_query(
+            "SELECT id FROM submissions WHERE status = $1 ORDER BY id;",
+            &names,
+        )
+        .expect("an ordered query with a trailing semicolon compiles");
+        assert_eq!(
+            query.paged_text,
+            "SELECT id FROM submissions WHERE status = $1 ORDER BY id\nOFFSET $2"
+        );
+        let commented = compile_query("SELECT id FROM submissions ORDER BY id -- by id", &[])
+            .expect("a trailing line comment compiles");
+        assert_eq!(
+            commented.paged_text, "SELECT id FROM submissions ORDER BY id -- by id\nOFFSET $1",
+            "the offset starts on its own line, past the comment"
+        );
+        for sql in [
+            "SELECT id FROM submissions ORDER BY id LIMIT 500",
+            "SELECT id FROM submissions ORDER BY id OFFSET 10",
+            "SELECT id FROM submissions ORDER BY id FETCH FIRST 5 ROWS ONLY",
+        ] {
+            let refused = compile_query(sql, &[]).expect_err(sql);
+            assert!(
+                refused.message().contains("the engine pages it by OFFSET"),
+                "{sql}: {refused:?}"
+            );
+        }
+    }
+
+    #[test]
     fn configured_key_scalar_is_stable_while_row_revision_changes() {
         let first = row(&[("id", "001"), ("status", "new")]);
         let edited = row(&[("id", "001"), ("status", "revised")]);
-        let first = row_item("ledger", "id", &first).expect("the first row shapes");
-        let edited = row_item("ledger", "id", &edited).expect("the edited row shapes");
+        let first = row_item("ledger", "id", &first, 0).expect("the first row shapes");
+        let edited = row_item("ledger", "id", &edited, 0).expect("the edited row shapes");
         assert_eq!(first["key"], edited["key"]);
         assert_ne!(first["revision"], edited["revision"]);
 
         let missing = row(&[("external_id", "001")]);
         assert_eq!(
-            row_item("ledger", "id", &missing)
+            row_item("ledger", "id", &missing, 0)
                 .expect_err("a missing configured key refuses")
                 .class,
             ErrorClass::UpstreamMalformed

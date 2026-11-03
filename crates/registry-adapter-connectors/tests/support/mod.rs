@@ -313,6 +313,36 @@ impl Mock {
         Self::start_serving(served, action_mode, false, Vec::new()).await
     }
 
+    /// Start an immediate-mode deployment whose Action is guarded: it
+    /// declares target-condition keys and a conditions route.
+    pub async fn start_guarded_action() -> Self {
+        let mut served = metadata("immediate", false);
+        let action = &mut served["actions"][0];
+        let id = action["id"].as_str().expect("action id").to_owned();
+        action["inputs"]
+            .as_array_mut()
+            .expect("action inputs")
+            .push(
+                json!({"id": "target", "apiName": "targetId", "required": true,
+                "nullable": false, "classification": "internal",
+                "schema": {"type": "string"},
+                "fieldType": {"type": "reference", "target": "company", "onDelete": "restrict"}}),
+            );
+        action["referenceInputs"] =
+            json!([{"input": "target", "apiName": "targetId", "targetRecordType": "company"}]);
+        action["requiredConditionKeys"] = json!(["targetId"]);
+        action["conditionRoute"] = json!(format!("/v1/actions/{id}/target-conditions"));
+        action["routes"]["targetConditions"] = json!({
+            "method": "POST",
+            "path": format!("/v1/actions/{id}/target-conditions"),
+            "operationId": format!("actions.{id}.target-conditions"),
+            "requiresIdempotencyKey": false,
+            "inputSchema": format!("action-{id}-target-conditions-input"),
+            "responseSchema": format!("action-{id}-target-conditions-response")
+        });
+        Self::start_serving(served, "immediate", false, Vec::new()).await
+    }
+
     async fn start_serving(
         served: Value,
         action_mode: &str,
@@ -646,7 +676,9 @@ pub fn metadata(action_mode: &str, tombstone: bool) -> Value {
         "proposals": {
             "method": "GET",
             "path": "/v1/proposals",
-            "accessProfiles": [PROFILE],
+            // The documented narrow grant: Start, Submit and Get, no List,
+            // so no profile reads the Proposal collection.
+            "accessProfiles": [],
             "get": {"method": "GET", "path": "/v1/proposals/{proposal_id}",
                 "accessProfiles": [PROFILE]},
             "actions": [{"actionId": if action_mode == "proposal" { PROPOSAL_ACTION } else { IMMEDIATE_ACTION },

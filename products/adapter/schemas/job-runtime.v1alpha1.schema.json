@@ -66,9 +66,9 @@
           "type": "integer"
         },
         "maximumResponseBytes": {
-          "description": "A lower response bound than the pack declares, in bytes; absent, the\ndeclared one applies. A value above the declared one is refused when\nthe deployment loads.",
+          "description": "A lower response bound than the pack declares, in bytes (1 to\n16777216, the largest bound a pack endpoint may declare); absent, the\ndeclared one applies. A value above the declared one is refused when\nthe deployment loads.",
           "format": "uint64",
-          "maximum": 1048576,
+          "maximum": 16777216,
           "minimum": 1,
           "type": "integer"
         },
@@ -455,6 +455,9 @@
         },
         "deadLetterRoutingKey": {
           "type": "string"
+        },
+        "declareTopology": {
+          "type": "boolean"
         },
         "heartbeatSeconds": {
           "format": "uint64",

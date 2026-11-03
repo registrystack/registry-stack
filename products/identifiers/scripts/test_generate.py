@@ -532,6 +532,8 @@ class RepositoryCatalogSourceTest(unittest.TestCase):
         for name in (
             "effective-contract",
             "fixture",
+            "job",
+            "job-runtime",
             "pack",
             "profile",
             "project",

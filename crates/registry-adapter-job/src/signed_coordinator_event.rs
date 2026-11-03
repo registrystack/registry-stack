@@ -16,7 +16,7 @@ use registry_adapter_core::JobIdentity;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use crate::destination::{DeliverableItem, HandOffOutcome, JobDestination};
+use crate::destination::{DeliverableItem, DeliveryIdentity, HandOffOutcome, JobDestination};
 
 const REVISED_ITEM: &str = "adapter.job.revised-item";
 const EVENT_UNSIGNABLE: &str = "adapter.event-unsignable";
@@ -116,23 +116,20 @@ impl SignedCoordinatorEventDestination {
 }
 
 impl JobDestination for SignedCoordinatorEventDestination {
-    fn receiver_identity(&self, _job: &JobIdentity, item: &DeliverableItem) -> Option<[u8; 32]> {
-        self.selected(item).map(|selected| selected.identity)
-    }
-
-    fn canonical_body_identity(
+    fn delivery_identity(
         &self,
         job: &JobIdentity,
         item: &DeliverableItem,
-    ) -> Option<Result<[u8; 32], ()>> {
+    ) -> Option<DeliveryIdentity> {
         let selected = self.selected(item)?;
-        Some(
-            projected_event(job, item, &event_id(job, item)).and_then(|event| {
+        Some(DeliveryIdentity {
+            receiver: selected.identity,
+            canonical_body: projected_event(job, item, &event_id(job, item)).and_then(|event| {
                 self.connector
                     .canonical_body_digest(&selected.receiver, &event)
                     .map_err(|_| ())
             }),
-        )
+        })
     }
 
     fn deliver<'a>(

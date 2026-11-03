@@ -95,3 +95,66 @@ fn unknown_interface_values_and_environment_expressions_keep_their_ordinary_refu
     read_project("current-project.yaml", PROJECT.as_bytes())
         .expect("the current pack-based project is unchanged");
 }
+
+const MIGRATION: &str =
+    "products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project";
+
+#[test]
+fn the_retired_guidance_links_the_migration_once_and_points_back_from_later_sites() {
+    let input = PROJECT
+        .replacen(
+            "interface: assertion-derive/v1",
+            "interface: source-prepare/v1",
+            1,
+        )
+        .replacen(
+            "  person-record:\n    pack:",
+            "  person-record:\n    type: http-json\n    pack:",
+            1,
+        );
+    let report = read_project("old-project.yaml", input.as_bytes())
+        .expect_err("a project with two retired sites is refused");
+    let retired = report
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == RETIRED_CODE)
+        .collect::<Vec<_>>();
+    assert_eq!(retired.len(), 2, "each retired site is located");
+    assert!(retired[0].suggested_action.contains(MIGRATION));
+    assert!(retired[0]
+        .suggested_action
+        .contains("evidencectl source import"));
+    assert!(!retired[1]
+        .suggested_action
+        .contains("evidencectl source import"));
+    assert!(retired[1].suggested_action.contains(RETIRED_CODE));
+}
+
+#[test]
+fn a_retired_acquisition_type_names_the_source_binding() {
+    let input = PROJECT.replacen(
+        "    acquisition:\n",
+        "    acquisition:\n      type: single\n",
+        1,
+    );
+    assert_ne!(
+        input, PROJECT,
+        "the retired acquisition type must be inserted"
+    );
+    let report = read_project("old-project.yaml", input.as_bytes())
+        .expect_err("the retired acquisition type is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == RETIRED_CODE)
+        .unwrap_or_else(|| panic!("no retired guidance: {:?}", report.diagnostics()));
+    assert!(
+        diagnostic.path.ends_with("/acquisition/type"),
+        "{}",
+        diagnostic.path
+    );
+    assert!(diagnostic
+        .message
+        .contains("acquisition: {source: <source-id>}"));
+    assert!(diagnostic.suggested_action.contains(MIGRATION));
+}

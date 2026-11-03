@@ -8,25 +8,30 @@ by an earlier one.
 The first operation creates a draft and checkpoints only `source_id`. The
 second operation reconstructs its request from that identifier and the
 governed constant `finalize`. If either operation fails, the facade returns its
-bounded 409 problem and keeps the first unfinished ordinal. Send the same body
-and `Idempotency-Key` after repairing the source or credential. The retry skips
-every committed ordinal. A clean failed attempt releases its lease for that
+bounded 409 problem with `Retry-After` and keeps the first unfinished ordinal.
+Send the same body and `Idempotency-Key` after repairing the source or
+credential. The retry skips every committed ordinal. A 409 without
+`Retry-After` means the key is spent: check the source for the outcome and use
+a new key for any new request. A clean failed attempt releases its lease for that
 immediate retry; cancellation or process loss keeps the lease until expiry. A
 changed body returns 422 instead.
 
 The provider must document why each named source operation is idempotent. The
 two `idempotentUpstream: true` declarations in `pack.yaml` describe the
 controlled reference service only. They do not make an arbitrary API exactly
-once, and they do not extend a provider's own deduplication window. Configure
-the Adapter's response retention no longer than that documented provider
-window.
+once, and they do not extend a provider's own deduplication window. Set
+`idempotency.responseRetentionSeconds` in the runtime configuration no longer
+than that documented provider window; `runtime.example.yaml` beside this
+project shows the member, as `examples/dhis2-tracker/runtime.example.yaml`
+does.
 
 Check and compile the project from the repository root:
 
 ```sh
 adapterctl check products/adapter/examples/facade-recovery/project.yaml \
   --profile products/adapter/profiles/breg-records/profile.yaml \
-  --pack products/adapter/examples/facade-recovery/pack.yaml
+  --pack products/adapter/examples/facade-recovery/pack.yaml \
+  --runtime products/adapter/examples/facade-recovery/runtime.example.yaml
 
 adapterctl compile products/adapter/examples/facade-recovery/project.yaml \
   --profile products/adapter/profiles/breg-records/profile.yaml \
@@ -72,8 +77,12 @@ It never stores the caller body, a prepared request, source response body,
 headers, credentials, or an arbitrary script value. The finite lease prevents
 concurrent recovery. The retention expiry erases checkpoint authority while
 leaving the key spent, so an expired process cannot be started again by a
-retry. Deploying another artifact under the same `runtime.id` is fenced while
-live recovery belongs to the current artifact.
+retry. Deploying another artifact with a resumable or asynchronous write
+under the same `runtime.id` is refused while an unexpired resume belongs to
+the current artifact. The refusal names how many resumes block it and when the
+last expires: redeploy the previous artifact bytes so the resumes can finish,
+or wait until then. Repairing a source or credential needs no new artifact,
+because the runtime configuration is outside the artifact digest.
 
 This closed form does not admit scripts, branches, loops, redelivery,
 `direct`, exception bodies, or nested EIPs. Those shapes would require state

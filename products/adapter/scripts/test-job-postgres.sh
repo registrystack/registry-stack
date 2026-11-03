@@ -23,15 +23,23 @@ db_password=adapter_test
 db_name=adapter
 
 container_id=
+# Set once this run is about to create the named container, so cleanup can
+# remove it by name when docker run returns something other than an ID.
+owned_name=
 container_name=
 cleanup() {
 	local status=$?
 	trap - EXIT
-	if [[ -n "$container_id" ]]; then
-		if docker rm -fv "$container_id" >/dev/null; then
-			printf '%s\n' "Removed owned PostgreSQL fixture ${container_id:0:12}." >&2
+	local target=$container_id label=${container_id:0:12}
+	if [[ -z "$target" && -n "$owned_name" && -n "$(docker ps -aq --filter "name=^${owned_name}$")" ]]; then
+		target=$owned_name
+		label=$owned_name
+	fi
+	if [[ -n "$target" ]]; then
+		if docker rm -fv "$target" >/dev/null; then
+			printf '%s\n' "Removed owned PostgreSQL fixture $label." >&2
 		else
-			printf '%s\n' "Failed to remove owned PostgreSQL fixture ${container_id:0:12}." >&2
+			printf '%s\n' "Failed to remove owned PostgreSQL fixture $label." >&2
 			if [[ "$status" == 0 ]]; then
 				status=1
 			fi
@@ -47,6 +55,8 @@ fi
 
 if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 	trap cleanup EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM HUP
 	checkout_hash=$(printf '%s' "$repo_root" | openssl dgst -sha256 -r | cut -c1-8)
 	container_name="adapter-job-pg-test-${checkout_hash}-$$"
 	if [[ -n "$(docker ps -aq --filter "name=^${container_name}$")" ]]; then
@@ -54,6 +64,7 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 		exit 1
 	fi
 	printf '%s\n' "Starting $container_name (loopback PostgreSQL 17)." >&2
+	owned_name=$container_name
 	created_container_id=
 	if created_container_id=$(docker run -d --name "$container_name" \
 		-e POSTGRES_USER="$db_user" -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB="$db_name" \
@@ -113,6 +124,14 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --feat
 # The host-level file proof binds row-decoder identity before source I/O and
 # refuses legacy or changed selectors without calling the destination.
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-file,postgres-test,signed-coordinator-event --test job_file_host -- --test-threads=1
+
+# The read-only PostgreSQL source host: the statement transaction refuses a
+# SELECT with a write effect, the byte bounds hold before delivery, and the
+# compiled source authority survives a replaced runtime file. The suite admits
+# only 127.0.0.0/8 as a source address, so it takes the numeric loopback host
+# rather than the fixture's localhost name.
+ADAPTER_TEST_DATABASE_URL="${ADAPTER_TEST_DATABASE_URL/@localhost:/@127.0.0.1:}" \
+	PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-postgres,postgres-test,signed-coordinator-event --test postgres_source_host -- --test-threads=1
 
 # Hook ingress only wakes the real CLI pass. This target proves authenticated
 # socket admission and source re-read against the durable store; request bodies

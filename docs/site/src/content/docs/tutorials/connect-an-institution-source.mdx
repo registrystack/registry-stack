@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-11-03"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -28,7 +28,7 @@ running, run `rstack evidence dev stop .` in its directory first, because both u
   time="About 20 minutes"
   level="Local development with a synthetic public server"
   prerequisites={[
-    'The Evidence component for rstack built from the same Registry Stack source candidate as the example archive',
+    'The Evidence component for rstack, v0.45.0 or later, installed as in your first Evidence assertion',
     'Running Docker',
     'Python 3, tar, and jq',
     'Internet access',
@@ -41,9 +41,10 @@ Settle three things about the operation you connect:
 
 - **A fixed request shape.** One method and one path template. Selector values fill the path
   parameters; the caller never chooses the operation, query, or headers.
-- **Authentication configuration and, when needed, a secret reference.** The target names the
-  authentication type and any reference. A configured secret provider supplies the credential
-  bytes, and the caller's own token never reaches your API.
+- **Authentication configuration and, when needed, a secret reference.** The reviewed pack endpoint
+  declares the authentication type and the target names the same type plus any reference;
+  `check --target` refuses the two when they differ. A configured secret provider supplies the
+  credential bytes, and the caller's own token never reaches your API.
 - **The fields the integration may retain.** Review exactly which response fields can be retained;
   nothing else in the response may reach the assertion logic.
 
@@ -62,8 +63,8 @@ Download the [Evidence example projects](../../examples/evidence-examples.tar.gz
 working directory as `evidence-examples.tar.gz`, then unpack the FHIR project into a directory of
 its own, because the next commands write keys and responses into it:
 
-The download uses the current source-candidate authoring format. Do not pair it with binaries from
-an older numbered release.
+The download uses the Adapter-pack authoring format, which v0.45.0 is the first release to read. Do
+not pair it with binaries from an older release.
 
 ```sh
 mkdir connect-an-institution-api
@@ -223,14 +224,23 @@ connections:
         maximumResponseBytes: 65536
 ```
 
-The local read-through helper needs no credential. For an API that expects a fixed Authorization
-value, set `type: static-authorization` with a `tokenRef` to a secret reference, as your first
-assertion's target does. The configured secret provider supplies the credential bytes. For your
-own description,
+The local read-through helper needs no credential, and the pack endpoint declares the same
+authentication type, `none`. For an API that expects a fixed Authorization value, change both files
+to the same type:
+
+- In `adapter-packs/fhir-read-through/pack.yaml`, set the endpoint's `authentication` to
+  `{"type": "static-authorization"}`.
+- In `local-target.yaml`, set `type: static-authorization` and add a `tokenRef` to a secret
+  reference, as your first assertion's target does.
+
+If you change only one of them, `rstack evidence check . --target local-target.yaml` refuses the
+pair with `evidence.source.authentication-mismatch`, which names both types. The configured secret
+provider supplies the credential bytes. For your own description,
 `rstack evidence init <dir> --openapi <doc> --profile local` writes a project and
 `rstack evidence source suggest <dir>` writes a pack draft into it.
 
 {/* Evidence: crates/registry-evidencectl/src/suggest/emit.rs, render_report;
+    crates/registry-evidencectl/src/authoring.rs, validate_source_authentication;
     products/evidence/examples/fhir/{evidence.yaml,local-target.yaml,adapter-packs/fhir-read-through/pack.yaml,
     adapter-packs/fhir-read-through/scripts/fhir.rhai,functions/derive-coverage-status.rhai};
     products/evidence/examples/standalone/local-target.yaml;

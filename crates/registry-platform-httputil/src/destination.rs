@@ -1249,7 +1249,9 @@ pub enum DestinationPolicyError {
     LocalPrivateDevelopmentRequiresPrivateIpLiteral,
     #[error("local private development destination requires an exact private host CIDR")]
     LocalPrivateDevelopmentRequiresExactPrivateCidr,
-    #[error("private CIDR is outside eligible private address space")]
+    #[error(
+        "private CIDR is outside eligible private address space; loopback, link-local and public ranges are never private CIDRs, and a local development service is reached over plain http://127.0.0.1 or http://localhost instead"
+    )]
     PrivateCidrDenied,
     #[error("private CIDR contains host bits instead of an exact network")]
     PrivateCidrNotCanonical,
@@ -5331,6 +5333,13 @@ mod tests {
             addresses.classify("::ffff:127.0.0.1".parse().unwrap()),
             Err(DestinationSendError::AlwaysDeniedAddress)
         );
+    }
+
+    #[test]
+    fn a_denied_private_cidr_says_loopback_is_never_one_and_names_the_local_route() {
+        let message = DestinationPolicyError::PrivateCidrDenied.to_string();
+        assert!(message.contains("loopback"), "{message}");
+        assert!(message.contains("http://127.0.0.1"), "{message}");
     }
 
     #[test]

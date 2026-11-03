@@ -632,26 +632,6 @@ pub async fn run(
         })?;
     }
     let journal = pool(&loaded.runtime.database, &loaded.resolver, false)?;
-    {
-        // A runtime role that cannot append or run retention is refused here,
-        // not at its first journal write or retention tick.
-        let client = journal
-            .get()
-            .await
-            .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?;
-        let missing = journal::missing_runtime_privileges(&client)
-            .await
-            .map_err(|error| ServeError::Configuration(format!("journal privileges: {error}")))?;
-        if !missing.is_empty() {
-            return Err(ServeError::Configuration(format!(
-                "database: the runtime role lacks {} on adapter_journal_events; it needs {} there to append events and run audit.retentionDays",
-                missing.join(", "),
-                journal::RUNTIME_PRIVILEGES.join(", "),
-            )));
-        }
-    }
-    let journal_window = journal_retention(loaded.runtime.audit.retention_days.get());
-    let journal_sweep_pool = journal.clone();
     let serves_write = loaded.served.iter().any(|served| {
         loaded
             .profile
@@ -659,6 +639,51 @@ pub async fn run(
             .get(served.operation.as_str())
             .is_some_and(|operation| !operation.is_read())
     });
+    let declares_recovery = loaded
+        .served
+        .iter()
+        .any(|served| served.async_completion.is_some() || served.resume.is_some());
+    let declares_resume = loaded.served.iter().any(|served| served.resume.is_some());
+    {
+        // A runtime role that lacks a grant this deployment uses is refused
+        // here, not at its first journal write, write claim or retention tick.
+        let client = journal
+            .get()
+            .await
+            .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?;
+        let mut required: Vec<(&str, &[&'static str])> = vec![
+            ("adapter_journal_events", &journal::RUNTIME_PRIVILEGES),
+            ("adapter_schema_migrations", &["SELECT"]),
+        ];
+        if serves_write {
+            required.extend(idempotent::WRITE_RUNTIME_GRANTS);
+        }
+        if declares_recovery {
+            required.push(idempotent::RECOVERY_RUNTIME_GRANTS);
+        }
+        if declares_resume {
+            required.push(idempotent::RESUME_RUNTIME_GRANTS);
+        }
+        let mut lacking = Vec::new();
+        for (table, privileges) in required {
+            let missing = journal::missing_table_privileges(&client, table, privileges)
+                .await
+                .map_err(|error| {
+                    ServeError::Configuration(format!("runtime privileges: {error}"))
+                })?;
+            if !missing.is_empty() {
+                lacking.push(format!("{} on {table}", missing.join(", ")));
+            }
+        }
+        if !lacking.is_empty() {
+            return Err(ServeError::Configuration(format!(
+                "database: the runtime role lacks {}; grant them to the runtime role (\"Grant the runtime database role\" in the Adapter README lists every grant)",
+                lacking.join("; lacks "),
+            )));
+        }
+    }
+    let journal_window = journal_retention(loaded.runtime.audit.retention_days.get());
+    let journal_sweep_pool = journal.clone();
     let idempotency = match (serves_write, loaded.runtime.idempotency) {
         (true, Some(retention)) => Some((
             PostgresIdempotencyStore::new(
@@ -677,27 +702,25 @@ pub async fn run(
         (false, _) => None,
     };
     let artifact_digest = loaded_artifact_digest(&loaded.deployment)?;
-    // Every artifact activation advances the one durable deployment fence,
-    // including a successor that removes all asynchronous bindings or all
-    // writes. Otherwise an older artifact could start later and mint fresh
-    // recovery authority under a ledger the successor never advanced. The
-    // fallback store's retention is unused: this call touches only the
-    // artifact-fence table.
-    let artifact_fence = match idempotency.as_ref() {
-        Some((store, _)) => store.clone(),
-        None => PostgresIdempotencyStore::new(journal.clone(), Duration::from_secs(1))
-            .map_err(|error| ServeError::Configuration(format!("idempotency: {error}")))?,
-    };
-    artifact_fence
-        .ensure_async_artifact_compatible(
-            loaded.runtime.id.as_str(),
-            artifact_digest,
-            SystemTime::now(),
-        )
-        .await
-        .map_err(|error| {
-            ServeError::Configuration(format!("asynchronous artifact custody: {error}"))
-        })?;
+    // Only a deployment that declares an asynchronous or resumable write
+    // touches the durable artifact fence. Activation advances it and is
+    // refused while another artifact still owns unfinished recovery work for
+    // this deployment. A synchronous or read-only successor leaves the fence
+    // alone: it mints no recovery authority, and it answers an older
+    // artifact's status links as unknown because each row is bound to its
+    // own artifact digest.
+    if let (true, Some((store, _))) = (declares_recovery, idempotency.as_ref()) {
+        store
+            .ensure_async_artifact_compatible(
+                loaded.runtime.id.as_str(),
+                artifact_digest,
+                SystemTime::now(),
+            )
+            .await
+            .map_err(|error| {
+                ServeError::Configuration(format!("asynchronous artifact custody: {error}"))
+            })?;
+    }
     let async_recovery = async_recovery_admission(&loaded)?;
     let async_retention = idempotency.as_ref().map(|(_, retention)| *retention);
     let facade_idempotency = idempotency.as_ref().map(|(store, _)| store.clone());

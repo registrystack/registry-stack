@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
+#
+# The BReg side of the direct KoboToolbox example job
+# (../kobotoolbox-job/job.yaml). It holds the `household` record type, the
+# `register-household` Proposal Action the job starts and submits, and the
+# `ingestion` access profile the job's destination names. The Action inputs
+# match the job-owned mapping (../kobotoolbox-job/mappings/register-household.rhai):
+# sourceSubmissionId, respondentName and householdSize.
+#
+# Check with:
+#   bregctl check products/adapter/examples/kobotoolbox-breg
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: kobo-households
+  canonicalBaseIri: https://households.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: Kobo households
+    description: Households registered from KoboToolbox submissions through the Adapter.
+
+package:
+  sourceRevision: kobo-households-0.1.0
+
+datasets:
+  - id: households
+    display: {label: Households, description: Households registered from field submissions.}
+
+recordTypes:
+  - id: household
+    route: households
+    primaryDataset: households
+    mutationMode: mutable
+    display: {label: Household, description: One household registered from one Kobo submission.}
+    fields:
+      # The ingestion principal owns every record it creates. The row boundary
+      # below keeps the service to its own rows.
+      - {id: owner, type: string, required: true, maximumLength: 80, classification: internal}
+      - {id: source-submission-id, apiName: sourceSubmissionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: respondent-name, apiName: respondentName, type: string, required: true, minimumLength: 1, maximumLength: 256, classification: internal}
+      - {id: household-size, apiName: householdSize, type: int64, required: true, classification: internal}
+    selectorProfiles:
+      - {id: by-source-submission, fields: [source-submission-id]}
+
+functions:
+  - id: register-household-plan
+    runtime: rhai
+    source: scripts/register-household.rhai
+    entrypoint: plan
+    abi: registry.action-plan/v1
+
+actions:
+  - id: register-household
+    display: {label: Register household, description: Create one household from one ingested submission.}
+    execution:
+      mode: proposal
+      proposal:
+        # The job submits the Proposal as a service, so this policy must accept
+        # a service initiator. `none` applies the Plan on submit with no human
+        # review, which suits a synthetic trial. For a pilot that needs an
+        # approver, replace it with `type: required` as in
+        # products/breg/examples/reviewed-change/registry.yaml, and keep a
+        # review policy that does not require a human initiator.
+        review: {type: none}
+        retention: {mode: retain}
+    inputs:
+      - {id: source-submission-id, apiName: sourceSubmissionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: respondent-name, apiName: respondentName, type: string, required: true, minimumLength: 1, maximumLength: 256, classification: internal}
+      - {id: household-size, apiName: householdSize, type: int64, required: true, classification: internal}
+    plan:
+      type: function
+      function: register-household-plan
+      inputs: [source-submission-id, respondent-name, household-size]
+      writes:
+        - {id: household, target: {recordType: household}, operation: create, fields: [owner, source-submission-id, respondent-name, household-size]}
+
+accessProfiles:
+  # The profile the job names as `destination.accessProfile`. The scope and
+  # the requesting client match the destination binding in
+  # ../kobotoolbox-job/job-runtime.example.yaml.
+  - id: ingestion
+    default: true
+    principalClaim: sub
+    requiredScopes: ["registry:write"]
+    actorKind: service
+    requesterClients: [adapter-kobo-ingestion]
+    permissions:
+      records:
+        - recordType: household
+          operations: [get, list, lookup]
+          readableFields: [owner, source-submission-id, respondent-name, household-size]
+          lookups:
+            - {selector: by-source-submission, valueOrigin: request}
+          rowBoundaries:
+            - {field: owner, claim: sub, operator: equals}
+      actions:
+        - action: register-household
+          operations: [start]
+          targets:
+            - recordType: household
+              rowBoundaries:
+                - {field: owner, claim: sub, operator: equals}
+      proposals:
+        - action: register-household
+          operations: [get, submit]
+          ownership: caller
+          targets:
+            - recordType: household
+              rowBoundaries:
+                - {field: owner, claim: sub, operator: equals}

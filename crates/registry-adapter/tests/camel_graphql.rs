@@ -496,8 +496,12 @@ fn the_loader_holds_the_query_files_own_line() {
         ..pack.clone()
     };
     match GraphQlQuery::load(&stale, directory.path(), &endpoint) {
-        Err(GraphQlLoadError::DigestMismatch(path)) => {
+        Err(GraphQlLoadError::DigestMismatch { path, pinned, .. }) => {
             assert_eq!(path, "queries/find-cases.graphql");
+            assert_eq!(
+                pinned,
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            );
         }
         other => panic!("a changed file is refused by its digest: {other:?}"),
     }

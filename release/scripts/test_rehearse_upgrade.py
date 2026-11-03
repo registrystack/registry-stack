@@ -393,6 +393,40 @@ class ProductSelectionTest(unittest.TestCase):
         with self.assertRaisesRegex(Error, "version 200"):
             MODULE.select_products(["scheduling"], "v0.43.0", "linux-amd64", True)
 
+    def test_evidence_is_skipped_only_when_the_rehearsal_crosses_the_source_pack_boundary(self) -> None:
+        # 0.45.0 retires the tagged Source form, so a 0.44.0 project cannot be
+        # re-packaged by the 0.45.0 tools and the Evidence leg cannot run.
+        self.assertEqual(MODULE.EVIDENCE_SOURCE_PACK_BOUNDARY, (0, 45, 0))
+        for tag, version, crosses in (
+            ("v0.44.0", "0.45.0", True),
+            ("v0.44.0", "0.46.0", True),
+            ("v0.45.0", "0.45.0", False),
+            ("v0.45.0", "0.46.0", False),
+            ("v0.44.0", "0.44.1", False),
+        ):
+            with self.subTest(tag=tag, version=version):
+                products, omitted = MODULE.select_products(
+                    None, tag, "linux-amd64", True, workspace_version=version)
+                self.assertEqual("evidence" in products, not crosses)
+                self.assertEqual("evidence" in omitted, crosses)
+                if crosses:
+                    self.assertEqual(omitted["evidence"], MODULE.EVIDENCE_SOURCE_PACK_MIGRATION)
+        self.assertIn("evidence.project.source-acquisition-retired",
+                      MODULE.EVIDENCE_SOURCE_PACK_MIGRATION)
+        self.assertIn("migrate-a-retired-source-project",
+                      MODULE.EVIDENCE_SOURCE_PACK_MIGRATION)
+
+    def test_a_named_evidence_leg_across_the_source_pack_boundary_is_refused(self) -> None:
+        with self.assertRaisesRegex(Error, "source-acquisition-retired"):
+            MODULE.select_products(["evidence"], "v0.44.0", "linux-amd64", True,
+                                   workspace_version="0.45.0")
+
+    def test_the_source_pack_boundary_skip_is_removed_once_the_floor_reaches_it(self) -> None:
+        # From 0.45.0 on the floor is the release that wrote the pack form, so
+        # no rehearsal crosses the boundary and the skip is dead code.
+        self.assertLess(MODULE.FORWARD_PATH_FLOOR, MODULE.EVIDENCE_SOURCE_PACK_BOUNDARY,
+                        "remove the Evidence source-pack boundary skip from rehearse-upgrade.py")
+
     def test_a_named_unavailable_product_is_refused(self) -> None:
         with self.assertRaisesRegex(Error, "messaging was first shipped in v0.36.0"):
             MODULE.select_products(["messaging"], "v0.35.0", "linux-amd64", True)
@@ -488,7 +522,7 @@ class ForwardPathFloorTest(unittest.TestCase):
     def test_current_source_reads_state_from_v0_44_0(self) -> None:
         self.assertEqual(MODULE.FORWARD_PATH_FLOOR, (0, 44, 0))
 
-    def test_a_default_run_rehearses_every_leg_from_v0_44_0(self) -> None:
+    def test_a_default_run_from_v0_44_0_crosses_the_source_pack_boundary_without_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             built = Path(temporary).resolve() / "bin"
             built.mkdir()
@@ -501,12 +535,15 @@ class ForwardPathFloorTest(unittest.TestCase):
         self.assertNotIn("no release from", stdout)
         self.assertEqual(document["from"], "v0.44.0")
         self.assertEqual(document["fromProvenance"], "cosign and SHA256SUMS verified")
-        self.assertEqual(document["omitted"], dict(MODULE.RETIRED_PRODUCTS))
+        self.assertEqual(document["omitted"], {
+            **MODULE.RETIRED_PRODUCTS,
+            "evidence": MODULE.EVIDENCE_SOURCE_PACK_MIGRATION,
+        })
+        self.assertIn("omitting evidence: 0.45.0 retires the tagged Evidence Source form", stdout)
         self.assertEqual(len(seen["fetched"]), 1)
         self.assertEqual(seen["fetched"][0].args[0], "v0.44.0")
         from_bin = Path(temporary).resolve() / "work/from-bin"
-        self.assertEqual(seen["legs"],
-                         [("evidence", from_bin, built), ("messaging", from_bin, built)])
+        self.assertEqual(seen["legs"], [("messaging", from_bin, built)])
 
     def test_fetch_only_downloads_v0_44_0(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

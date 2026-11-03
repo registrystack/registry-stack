@@ -17,6 +17,15 @@
           "default_values": [],
           "possible_values": [],
           "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
         }
       ],
       "constraints": [],
@@ -673,6 +682,82 @@
             }
           ],
           "subcommands": []
+        },
+        {
+          "name": "rebind-identity",
+          "invocation": "adapter-job rebind-identity",
+          "about": "Accept an intended item-identity change (a new keyPointer or CSV option) after a pass stopped with identity-migration-required. Moves the stored identity to the job as authored now, keeps every item row, and prints an audit receipt; items the new identity reads as new are delivered again",
+          "long_about": null,
+          "usage": "adapter-job rebind-identity [OPTIONS] --pack <PACK> --runtime <RUNTIME> <JOB_YAML>",
+          "arguments": [
+            {
+              "display": "<JOB_YAML>",
+              "description": "The job definition file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--pack <PACK>",
+              "description": "The pinned adapter pack file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "The operator runtime config file, whose store block names the job store's connection reference",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--profile <PROFILE>",
+              "description": "The profile document; defaults to profile.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--project <PROJECT>",
+              "description": "The project document; defaults to project.yaml beside the pack",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--show-values",
+              "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
         }
       ]
     },
@@ -1069,7 +1154,7 @@
         {
           "name": "schemas",
           "invocation": "adapterctl schemas",
-          "about": "Write the generated JSON Schemas of the five Adapter formats, or check the committed ones for drift",
+          "about": "Write the generated JSON Schemas of every Adapter format, or check the committed ones for drift",
           "long_about": null,
           "usage": "adapterctl schemas [OPTIONS]",
           "arguments": [],
@@ -16569,7 +16654,7 @@
               "options": [
                 {
                   "display": "--evidence-bin <EVIDENCE_BIN>",
-                  "description": "Path to the evidence binary; defaults to `evidence` on PATH",
+                  "description": "Path to the evidence binary; defaults to the `EVIDENCE_BIN` variable, then the `evidence` installed beside evidencectl, then `evidence` on PATH",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -16675,7 +16760,7 @@
               "arguments": [
                 {
                   "display": "[PROJECT]",
-                  "description": "Editable Evidence project directory; defaults to the current directory",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project holding evidence.yaml.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -16715,7 +16800,7 @@
                 },
                 {
                   "display": "--evidence-bin <EVIDENCE_BIN>",
-                  "description": "Path to the evidence binary; defaults to `evidence` on PATH",
+                  "description": "Path to the evidence binary; defaults to the `EVIDENCE_BIN` variable, then the `evidence` installed beside evidencectl, then `evidence` on PATH",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -16739,7 +16824,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

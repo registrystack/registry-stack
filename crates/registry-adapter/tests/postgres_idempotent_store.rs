@@ -333,7 +333,7 @@ async fn linear_resume_checkpoints_only_declared_ids_and_reacquires_the_unfinish
                 start + Duration::from_secs(3),
             )
             .await,
-        Err(IdempotencyError::AsyncArtifactInUse)
+        Err(IdempotencyError::AsyncArtifactActivationRefused { unfinished: 1, .. })
     ));
 
     let (mut resumed, next_step, bindings) = match store
@@ -459,6 +459,51 @@ async fn a_clean_resume_release_admits_a_new_lease_and_fences_the_old_owner() {
         .mark_resume_step_attempted(&mut resumed, 0, start + Duration::from_secs(3))
         .await
         .expect("the new lease alone owns the step");
+}
+
+/// A resume write whose first step was never marked attempted sent
+/// nothing, so its expiry frees the key instead of spending it: a later
+/// retry executes fresh, whether the retry or the sweep finds it first.
+#[tokio::test]
+async fn an_expired_resume_that_never_sent_frees_its_key() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(60)).await;
+    let caller = caller("resume-never-sent");
+    let start = UNIX_EPOCH + Duration::from_secs(4_200_000);
+    let after_expiry = start + Duration::from_secs(61);
+    for (key, sweep_first) in [("never-sent-retry", false), ("never-sent-sweep", true)] {
+        assert!(matches!(
+            store
+                .claim_resume(
+                    request(&caller, "records-create.person", key, 73),
+                    resume_context(44, start + Duration::from_secs(10)),
+                    start,
+                )
+                .await
+                .expect("claim the linear write"),
+            Claim::Execute(_)
+        ));
+        if sweep_first {
+            store
+                .sweep_expired(after_expiry, 100)
+                .await
+                .expect("sweep the expired resume");
+        }
+        assert!(
+            matches!(
+                store
+                    .claim_resume(
+                        request(&caller, "records-create.person", key, 73),
+                        resume_context(44, after_expiry + Duration::from_secs(10)),
+                        after_expiry,
+                    )
+                    .await
+                    .expect("the retry after expiry resolves"),
+                Claim::Execute(_)
+            ),
+            "{key}: an expired write that sent nothing executes fresh"
+        );
+    }
 }
 
 #[test]
@@ -1199,7 +1244,7 @@ async fn cancellation_or_crash_stays_fail_closed_before_and_after_effect_marking
             )
             .await
             .expect("retry the cancelled post-effect claim"),
-        Claim::EffectUnknown
+        Claim::EffectUnknown { .. }
     ));
 
     let far_future = now
@@ -1213,6 +1258,118 @@ async fn cancellation_or_crash_stays_fail_closed_before_and_after_effect_marking
         0,
         "body retention never sweeps in-flight or effect-unknown entries"
     );
+}
+
+#[tokio::test]
+async fn a_claim_abandoned_before_its_effect_mark_is_taken_over_after_the_exchange_deadline() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(3600)).await;
+    let caller = caller("abandoned-claim-caller");
+    let now = SystemTime::now();
+    let at = |seconds| {
+        now.checked_add(Duration::from_secs(seconds))
+            .expect("the test instant is representable")
+    };
+
+    let Claim::Execute(mut abandoned) = store
+        .claim(
+            request(&caller, "records-create.person", "abandoned-key", 81),
+            now,
+        )
+        .await
+        .expect("claim work whose owner then dies")
+    else {
+        panic!("a fresh claim executes");
+    };
+    assert!(matches!(
+        store
+            .claim(
+                request(&caller, "records-create.person", "abandoned-key", 81),
+                at(1),
+            )
+            .await
+            .expect("retry inside the claim lease"),
+        Claim::InFlight
+    ));
+    assert!(matches!(
+        store
+            .claim(
+                request(&caller, "records-create.person", "abandoned-key", 82),
+                at(61),
+            )
+            .await
+            .expect("a changed body never takes over the claim"),
+        Claim::Mismatch
+    ));
+    let Claim::Execute(mut successor) = store
+        .claim(
+            request(&caller, "records-create.person", "abandoned-key", 81),
+            at(61),
+        )
+        .await
+        .expect("retry after the claim lease")
+    else {
+        panic!("no effect was marked, so the retry takes the abandoned claim over");
+    };
+    assert!(matches!(
+        store.mark_effect_attempted(&mut abandoned, at(62)).await,
+        Err(IdempotencyError::StateConflict)
+    ));
+    assert!(matches!(
+        store.release_before_effect(abandoned).await,
+        Err(IdempotencyError::StateConflict)
+    ));
+    store
+        .mark_effect_attempted(&mut successor, at(62))
+        .await
+        .expect("the successor owns the claim");
+    assert!(matches!(
+        store
+            .claim(
+                request(&caller, "records-create.person", "abandoned-key", 81),
+                at(600),
+            )
+            .await
+            .expect("retry after the successor marked its effect"),
+        Claim::EffectUnknown { .. }
+    ));
+
+    let Claim::Execute(mut abandoned_async) = store
+        .claim(
+            request(&caller, "records-create.person", "abandoned-async-key", 83),
+            now,
+        )
+        .await
+        .expect("claim an async write whose owner then dies")
+    else {
+        panic!("a fresh async claim executes");
+    };
+    let Claim::Execute(successor_async) = store
+        .claim(
+            request(&caller, "records-create.person", "abandoned-async-key", 83),
+            at(61),
+        )
+        .await
+        .expect("retry the async write after the claim lease")
+    else {
+        panic!("the async retry takes the abandoned claim over");
+    };
+    let effect_deadline = at(65);
+    assert!(matches!(
+        store
+            .mark_async_effect_attempted(
+                &mut abandoned_async,
+                request(&caller, "records-create.person", "abandoned-async-key", 83),
+                async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 84, effect_deadline),
+                at(62),
+            )
+            .await,
+        Err(IdempotencyError::StateConflict)
+    ));
+    store
+        .release_before_effect(successor_async)
+        .await
+        .expect("the successor can still release before its effect");
 }
 
 #[tokio::test]
@@ -1869,7 +2026,7 @@ async fn uncertainty_is_permanently_spent_and_only_precommitted_correlation_can_
             )
             .await
             .expect("retry after uncertainty metadata expiry"),
-        Claim::EffectUnknown
+        Claim::EffectUnknown { .. }
     ));
 }
 
@@ -1980,12 +2137,34 @@ async fn incompatible_artifact_is_refused_while_async_recovery_is_live() {
         .ensure_async_artifact_compatible("deployment-a", [132; 32], now)
         .await
         .expect("the same artifact remains compatible");
-    assert!(matches!(
-        store
-            .ensure_async_artifact_compatible("deployment-a", [133; 32], now)
-            .await,
-        Err(IdempotencyError::AsyncArtifactInUse)
-    ));
+    let Err(IdempotencyError::AsyncArtifactActivationRefused {
+        unfinished,
+        clears_by,
+    }) = store
+        .ensure_async_artifact_compatible("deployment-a", [133; 32], now)
+        .await
+    else {
+        panic!("a live recovery of another artifact refuses activation");
+    };
+    assert_eq!(unfinished, 1);
+    let expected_clear = effect_deadline + Duration::from_secs(5);
+    let drift = clears_by
+        .duration_since(expected_clear)
+        .or_else(|_| expected_clear.duration_since(clears_by))
+        .expect("compare clear instants");
+    assert!(
+        drift < Duration::from_millis(1),
+        "the refusal names when the live recovery expires: {clears_by:?}"
+    );
+    assert!(
+        IdempotencyError::AsyncArtifactActivationRefused {
+            unfinished,
+            clears_by,
+        }
+        .to_string()
+        .contains("redeploy the previous artifact bytes"),
+        "the refusal names the operator's way out"
+    );
     store
         .ensure_async_artifact_compatible("another-deployment", [133; 32], now)
         .await
@@ -2002,6 +2181,50 @@ async fn incompatible_artifact_is_refused_while_async_recovery_is_live() {
         .expect("count old-artifact effects after refused activation")
         .get(0);
     assert_eq!(effect_count, 1);
+}
+
+#[tokio::test]
+async fn a_terminal_async_row_of_another_artifact_does_not_block_activation() {
+    let isolated = isolated().await;
+    let store = isolated.store(Duration::from_secs(3600)).await;
+    let owner = caller("hotfix-owner");
+    let now = SystemTime::now();
+    let effect_deadline = now
+        .checked_add(Duration::from_secs(5))
+        .expect("effect deadline is representable");
+    let Claim::Execute(mut execution) = store
+        .claim(
+            request(&owner, "records-create.person", "hotfix-key", 134),
+            now,
+        )
+        .await
+        .expect("claim an async write under the old artifact")
+    else {
+        panic!("a fresh async write executes");
+    };
+    store
+        .mark_async_effect_attempted(
+            &mut execution,
+            request(&owner, "records-create.person", "hotfix-key", 134),
+            async_attempt(RESPONSE_REQUEST_ID, Some(RECOVERY_ID), 135, effect_deadline),
+            now,
+        )
+        .await
+        .expect("precommit the old artifact's async effect");
+    store
+        .finish(
+            execution,
+            TerminalOutcome::Completed,
+            response(201, b"application/json", br#"{"record":"done"}"#),
+            now,
+        )
+        .await
+        .expect("the source answered synchronously, so the write is terminal");
+
+    store
+        .ensure_async_artifact_compatible("deployment-a", [136; 32], now)
+        .await
+        .expect("a terminal row holds no recovery authority, so a hotfix activates");
 }
 
 #[tokio::test]
@@ -2111,7 +2334,7 @@ async fn artifact_activation_and_old_precommit_are_serialized_by_one_postgres_fe
     );
 
     let expected_effect_count = match (mark.0, activation) {
-        (Ok(()), Err(IdempotencyError::AsyncArtifactInUse)) => 1,
+        (Ok(()), Err(IdempotencyError::AsyncArtifactActivationRefused { unfinished: 1, .. })) => 1,
         (Err(IdempotencyError::AsyncArtifactInUse), Ok(())) => {
             store
                 .release_before_effect(mark.1)
@@ -2198,7 +2421,7 @@ async fn cleanup_and_late_acceptance_serialize_without_reopening_or_resending() 
             )
             .await
             .expect("resolve the raced write"),
-        Claim::EffectUnknown
+        Claim::EffectUnknown { .. }
     ));
 }
 
@@ -2397,7 +2620,7 @@ async fn an_expired_uncertain_capability_cannot_accept_but_its_successor_can() {
             )
             .await
             .expect("late acceptance capability leaves effect permanently spent"),
-        Claim::EffectUnknown
+        Claim::EffectUnknown { .. }
     ));
 
     let successor_lease_until = after_first_lease
@@ -2488,7 +2711,7 @@ async fn accepted_and_terminal_custody_roll_back_with_the_callers_journal_transa
             )
             .await
             .expect("resolve rolled-back acceptance"),
-        Claim::EffectUnknown
+        Claim::EffectUnknown { .. }
     ));
 
     let Claim::Execute(mut terminal_execution) = store

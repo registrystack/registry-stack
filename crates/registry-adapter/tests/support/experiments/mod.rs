@@ -82,19 +82,17 @@ impl Scenario {
             .join(self.slug())
     }
 
+    /// The documented success fixture the harness replays. A source shape may
+    /// carry further fixtures for refusals; `adapterctl fixtures replay`
+    /// covers those in `check-contracts.sh`.
     fn fixture_path(self) -> PathBuf {
-        let fixtures = self.directory().join("fixtures");
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(fixtures)
-            .expect("read the experiment fixtures")
-            .map(|entry| entry.expect("fixture entry").path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "yaml")
-            })
-            .collect();
-        paths.sort();
-        assert_eq!(paths.len(), 1, "one documented fixture per experiment");
-        paths.pop().expect("one fixture")
+        let name = match self {
+            Self::FhirPatient => "search-two-pages.yaml",
+            Self::FhirConditionalCreate => "create-new.yaml",
+            Self::GraphQlCases => "find-first-page.yaml",
+            Self::RestMutualTls | Self::SecondProfile => "search-first-page.yaml",
+        };
+        self.directory().join("fixtures").join(name)
     }
 
     fn base_path(self) -> &'static str {
@@ -335,6 +333,8 @@ cursorKeyRef: secret:env/EXPERIMENT_CURSOR_KEY
             self.scenario.profile().to_str().expect("profile path"),
             "--pack",
             self.scenario.pack().to_str().expect("pack path"),
+            "--fixtures",
+            self.scenario.fixture_path().to_str().expect("fixture path"),
         ]);
         assert_eq!(replay["command"], "fixtures replay", "{replay}");
         assert_eq!(replay["status"], "complete", "{replay}");

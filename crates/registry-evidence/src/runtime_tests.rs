@@ -10911,8 +10911,9 @@ fn prepare_signed_evidence_fixture(
 
 /// Install the signed-Evidence protocol with a hostile route that raises an
 /// uncatchable verification refusal from `doFinally` while an ordinary HTTP
-/// failure is pending. Its breaker fallback makes wrong failure precedence
-/// observable as a later source effect and successful release.
+/// failure is pending. Its status-selected `doCatch` around the breaker's
+/// guarded block makes wrong failure precedence observable as a later source
+/// effect and successful release.
 fn prepare_signed_evidence_finally_precedence_fixture(
     binding_secret: &str,
     source_origin: &str,
@@ -11802,19 +11803,25 @@ fn install_acceptance_source_pack(
                     "openStateWaitSeconds": 60,
                     "maximumHalfOpenCalls": 1,
                     "steps": [{"doTry": {
-                        "steps": [
-                            {"throwException": {"exceptionType": "upstream.http"}}
-                        ],
-                        "doFinally": {"steps": [
-                            {"setBody": {"exchangeProperty": "signedSourceRequest"}},
-                            {"to": {"uri": "http:source-b", "parameters": {"httpMethod": "POST", "path": "/v1/evidence", "operation": "lookup", "body": {"jsonpath": "$"}}}}
-                        ]}
-                    }}],
-                    "onFallback": {"steps": [
-                        {"setBody": {"exchangeProperty": "signedSourceRequest"}},
-                        {"to": {"uri": "http:source-b", "parameters": {"httpMethod": "POST", "path": "/v1/evidence", "operation": "lookup", "body": {"jsonpath": "$"}}}},
-                        {"setBody": {"constant": {"values": {"region": "REGION-NORTH"}}}}
-                    ]}
+                        "steps": [{"doTry": {
+                            "steps": [
+                                {"throwException": {"exceptionType": "upstream.http"}}
+                            ],
+                            "doFinally": {"steps": [
+                                {"setBody": {"exchangeProperty": "signedSourceRequest"}},
+                                {"to": {"uri": "http:source-b", "parameters": {"httpMethod": "POST", "path": "/v1/evidence", "operation": "lookup", "body": {"jsonpath": "$"}}}}
+                            ]}
+                        }}],
+                        "doCatch": [{
+                            "exception": ["upstream.http"],
+                            "onWhen": {"constant": true},
+                            "steps": [
+                                {"setBody": {"exchangeProperty": "signedSourceRequest"}},
+                                {"to": {"uri": "http:source-b", "parameters": {"httpMethod": "POST", "path": "/v1/evidence", "operation": "lookup", "body": {"jsonpath": "$"}}}},
+                                {"setBody": {"constant": {"values": {"region": "REGION-NORTH"}}}}
+                            ]
+                        }]
+                    }}]
                 }},
                 {"setBody": {"rhai": {"file": "scripts/signed-evidence-lookup.rhai", "entrypoint": "signed_evidence_lookup"}}}
             ])
@@ -11829,6 +11836,7 @@ fn install_acceptance_source_pack(
                 ],
                 "doCatch": [{
                     "exception": ["upstream.http"],
+                    "onWhen": {"constant": true},
                     "steps": [
                         {"to": {"uri": "http:source-b", "parameters": {"httpMethod": "POST", "path": "/v1/evidence", "operation": "lookup", "body": {"jsonpath": "$"}}}},
                         {"setBody": {"constant": {"values": {"region": "signed-source-catch-canary"}}}}

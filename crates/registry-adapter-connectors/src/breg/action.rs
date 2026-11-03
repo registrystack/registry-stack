@@ -311,8 +311,9 @@ impl ActionInvoke {
         let envelope = unseal_invocation(&prepared.envelope, OPERATION)?;
         let key =
             BRegIdempotencyKey::parse(&envelope.key).map_err(|_| ConnectorFault::NotPrepared)?;
-        // An unguarded attempt re-arms its saved bytes exactly; a guarded
-        // one reads the target conditions fresh and rebuilds the body.
+        // An unguarded action re-arms the exact saved attempt from its
+        // own bytes; a guarded one re-reads its target conditions for the
+        // same inputs (see the module's "Target conditions").
         let request = invocation_request(&self.connector, &envelope)?;
         let answer = self.connector.block(self.connector.client().invoke_action(
             self.connector.action_binding(),

@@ -13,5 +13,9 @@ existing Sources, selector profiles, Functions or offline definition.
 `record-active` answers one boolean using `by-code`. `record-status-pair` uses
 `by-registration-number` and releases the reviewed active/retired pair. Both
 reference the imported `registry-status` Source and have their own fixtures.
+The fixtures replay the token exchange of an export made with
+`--authentication oauth2-private-key-jwt`, the flow the tutorial target binds.
+An export with another authentication type needs fixtures that record that
+type's exchanges.
 A new complete target generated with `target new --local` gives each definition
 an explicit local grant; review that authority separately from source credentials.

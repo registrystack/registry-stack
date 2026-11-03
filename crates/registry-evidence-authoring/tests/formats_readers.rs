@@ -307,3 +307,38 @@ fn target_refuses_retired_acquisition_capabilities_before_compilation() {
         assert_eq!(report.diagnostics()[0].path, "/acquisitionCapabilities");
     }
 }
+
+#[test]
+fn an_unused_trust_profile_is_refused_at_its_key_with_the_fix_named() {
+    let inventory = "outboundTls:\n  systemRoots: true\n  trustProfiles:\n    source-ca: {caBundleFile: /etc/evidence/source-ca.pem}\n    unused-ca: {caBundleFile: /etc/evidence/unused-ca.pem}\n";
+    let referenced = TARGET_TEXT.replace(
+        "        origin: http://127.0.0.1:8081\n",
+        "        origin: http://127.0.0.1:8081\n        tlsTrustProfile: source-ca\n",
+    );
+    let text = format!("{referenced}{inventory}");
+    let Err(report) =
+        registry_evidence_authoring::target::read_target("target.yaml", text.as_bytes())
+    else {
+        panic!("a trust profile nothing names is refused");
+    };
+    let [unused] = report.diagnostics() else {
+        panic!("only the unused profile is refused: {report:?}");
+    };
+    assert_eq!(unused.code, "evidence.target.trust-profile-unused");
+    assert_eq!(unused.path, "/outboundTls/trustProfiles/unused-ca");
+    assert!(
+        unused.source.is_some(),
+        "the refusal is located: {unused:?}"
+    );
+    assert!(unused.suggested_action.contains("tlsTrustProfile"));
+    assert!(unused
+        .suggested_action
+        .contains("authentication.oidc.tlsTrustProfile"));
+
+    let used = text.replace(
+        "    maximumTokenLifetimeSeconds: 300\n",
+        "    maximumTokenLifetimeSeconds: 300\n    tlsTrustProfile: unused-ca\n",
+    );
+    registry_evidence_authoring::target::read_target("target.yaml", used.as_bytes())
+        .expect("a profile the issuer names is used");
+}

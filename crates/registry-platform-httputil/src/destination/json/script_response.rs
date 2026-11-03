@@ -74,9 +74,12 @@ pub fn decode_script_json(
 /// Consume exact zeroizing bytes held by a trusted host protocol and release
 /// them under the same strict JSON and structural limits as script responses.
 ///
-/// The host protocol must enforce its authored per-response and aggregate byte
-/// limits before invoking this decoder. This seam adds no protocol parsing or
-/// product policy; it only admits bytes through the existing closed decoder.
+/// The host protocol must still enforce its authored per-response and
+/// aggregate byte limits before invoking this decoder. The decoder itself
+/// refuses more than `MAX_CLOSED_JSON_ENCODED_BODY_BYTES` as a structural-limit
+/// failure, so a caller that skips its own limit cannot hand it an unbounded
+/// buffer. This seam adds no protocol parsing or product policy; it only admits
+/// bytes through the existing closed decoder.
 pub fn decode_protocol_json(
     bytes: Zeroizing<Vec<u8>>,
 ) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
@@ -208,6 +211,29 @@ mod tests {
         );
         assert_eq!(
             decode_protocol_json(Zeroizing::new(nested.into_bytes())).unwrap_err(),
+            ScriptResponseDecodeError::StructuralLimitExceeded
+        );
+    }
+
+    #[test]
+    fn protocol_json_refuses_more_bytes_than_the_code_owned_ceiling() {
+        use crate::destination::json::MAX_CLOSED_JSON_ENCODED_BODY_BYTES;
+
+        let padded = |length: usize| {
+            let mut bytes = b"[0".to_vec();
+            bytes.resize(length - 1, b' ');
+            bytes.push(b']');
+            Zeroizing::new(bytes)
+        };
+        assert_eq!(
+            decode_protocol_json(padded(MAX_CLOSED_JSON_ENCODED_BODY_BYTES))
+                .expect("a document at the ceiling decodes")
+                .into_parts()
+                .1,
+            MAX_CLOSED_JSON_ENCODED_BODY_BYTES
+        );
+        assert_eq!(
+            decode_protocol_json(padded(MAX_CLOSED_JSON_ENCODED_BODY_BYTES + 1)).unwrap_err(),
             ScriptResponseDecodeError::StructuralLimitExceeded
         );
     }

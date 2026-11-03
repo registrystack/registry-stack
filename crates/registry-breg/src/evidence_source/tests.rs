@@ -77,7 +77,15 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
     assert_eq!(source["route"], "lookup");
     assert_eq!(source["connection"], "registry");
     assert_eq!(source["acquisitionPosture"], "field-projected");
-    assert_eq!(source["inputs"].as_object().unwrap().len(), 2);
+    let inputs = source["inputs"].as_object().unwrap();
+    assert_eq!(
+        inputs.keys().collect::<Vec<_>>(),
+        [
+            "by-code--code",
+            "by-registration-number--registration-number"
+        ]
+    );
+    assert_eq!(inputs["by-code--code"]["selector"]["field"], json!("code"));
     assert!(source.get("request").is_none());
     assert_eq!(export.identity_fields["by-code"], vec!["code"]);
     assert_eq!(
@@ -92,7 +100,9 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
     assert!(script.contains("return \"code,status\""));
     assert!(script.contains("return \"registrationNumber,status\""));
     assert!(!script.contains("code,registrationNumber,status"));
-    assert!(script.contains("\"registrationNumber\": inputs[\"input-"));
+    assert!(script.contains(
+        "\"registrationNumber\": inputs[\"by-registration-number--registration-number\"]"
+    ));
     assert!(script.contains("fn lookup(exchange)"));
     assert!(script.contains("fn project_response(exchange)"));
     assert!(script.contains("if record[\"status\"] == () { return #{lookup: \"no-match\"}; }"));
@@ -756,6 +766,16 @@ fn long_eligible_selector_names_export_as_stable_distinct_bounded_profiles() {
         export.selector_profiles[&first],
         export.selector_profiles[&second]
     );
+    let source = yaml(&export, "sources/registry-status.yaml");
+    let inputs = source["inputs"].as_object().unwrap();
+    assert_eq!(inputs.len(), 2);
+    for (input, binding) in inputs {
+        assert!(
+            input.starts_with("input-"),
+            "{input} is over 64 bytes readable"
+        );
+        assert_eq!(binding["selector"]["field"], json!("code"));
+    }
     for profile in export.selector_profiles.values() {
         assert_eq!(profile.len(), 64);
         assert!(local_name(profile));

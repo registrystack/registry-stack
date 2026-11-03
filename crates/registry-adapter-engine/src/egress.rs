@@ -626,6 +626,8 @@ pub(crate) struct ProtocolOutboundSend<'a> {
     pub authorization: Option<&'a AuthHeader>,
     pub attempt: Duration,
     pub maximum_response_bytes: usize,
+    /// Replay only: the protocol accepts a readable JSON fixture `body`.
+    pub readable_replay_body: bool,
 }
 
 impl fmt::Debug for OutboundSend<'_> {
@@ -822,12 +824,17 @@ impl EndpointEgress {
                 (attempt, None)
             }
             AttemptTimeoutProfile::Evidence => {
-                let declared = declared
+                // A pack's declared attempt is its reviewed ceiling: the
+                // runtime binding may lower it, never raise it. An omitted
+                // one is no ceiling; the runtime may set any finite attempt,
+                // and the acquisition deadline still bounds it.
+                let bound = binding
                     .attempt_timeout_milliseconds
-                    .map_or(30_000, |value| value.get());
-                let attempt = binding
-                    .attempt_timeout_milliseconds
-                    .map_or(declared, |value| value.get());
+                    .map(|value| value.get());
+                let attempt = match declared.attempt_timeout_milliseconds {
+                    Some(declared) => lowered(declared.get(), bound, "attemptTimeoutMilliseconds")?,
+                    None => bound.unwrap_or(30_000),
+                };
                 let duration = Duration::from_millis(attempt);
                 let policy = DestinationOperationTimeoutPolicy::try_new(duration)
                     .map_err(|_| EgressFault::AttemptTimeoutMissing)?;
@@ -1568,6 +1575,7 @@ impl EndpointEgress {
                     body: body.as_ref(),
                     headers: &headers,
                     maximum_response_bytes: send.maximum_response_bytes,
+                    readable_body: send.readable_replay_body,
                 })
                 .map_err(EgressRefusal::Replay)
                 .map_err(EgressError::Refused)?;
@@ -2569,6 +2577,74 @@ mod tests {
         ));
         EndpointEgress::compile(binding, &endpoint(Some(10_000)), &runtime, &resolver)
             .expect("the ordinary ceiling remains admitted");
+    }
+
+    #[test]
+    fn an_evidence_binding_may_lower_a_declared_pack_attempt_but_never_raise_it() {
+        let runtime = |attempt: u64| -> AdapterEndpointBindings {
+            serde_json::from_value(serde_json::json!({
+                "id": "evidence",
+                "endpoints": [{
+                    "endpoint": "api",
+                    "baseUrl": "http://127.0.0.1:9",
+                    "credential": {"type": "none"},
+                    "attemptTimeoutMilliseconds": attempt
+                }],
+                "allowedPrivateCidrs": []
+            }))
+            .expect("runtime bindings")
+        };
+        let resolver =
+            SecretResolver::new([registry_platform_config::SecretProvider::Environment], "")
+                .expect("resolver");
+        let endpoint = |attempt: Option<u64>| {
+            let mut document = serde_json::json!({
+                "id": "api",
+                "component": "http",
+                "authentication": {"type": "none"},
+                "maximumResponseBytes": 4096
+            });
+            if let Some(attempt) = attempt {
+                document["attemptTimeoutMilliseconds"] = serde_json::json!(attempt);
+            }
+            serde_json::from_value::<Endpoint>(document).expect("endpoint")
+        };
+        let compile = |declared: Option<u64>, bound: u64| {
+            let runtime = runtime(bound);
+            let binding = runtime.endpoints.get("api").expect("binding");
+            EndpointEgress::compile_with_captured_ca(
+                binding,
+                &endpoint(declared),
+                &runtime,
+                &resolver,
+                None,
+            )
+        };
+
+        let raised = compile(Some(2_000), 20_000);
+        assert!(
+            matches!(
+                raised,
+                Err(EgressFault::LimitAboveDeclared {
+                    key: "attemptTimeoutMilliseconds"
+                })
+            ),
+            "a binding above the pack's declared attempt is refused: {raised:?}"
+        );
+        assert_eq!(
+            compile(Some(2_000), 1_500)
+                .expect("a lower binding")
+                .attempt,
+            Duration::from_millis(1_500)
+        );
+        // An omitted pack attempt is no pack ceiling: the runtime may set
+        // any finite attempt, still bounded by the acquisition deadline.
+        assert_eq!(
+            compile(None, 45_000)
+                .expect("an omitted pack attempt")
+                .attempt,
+            Duration::from_millis(45_000)
+        );
     }
 
     fn replay_fixture(exchanges: serde_json::Value) -> registry_adapter_core::AdapterFixture {

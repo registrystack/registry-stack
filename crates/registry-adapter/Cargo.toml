@@ -54,6 +54,7 @@ url.workspace = true
 tokio-postgres.workspace = true
 registry-adapter-core.workspace = true
 registry-adapter-engine.workspace = true
+registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true

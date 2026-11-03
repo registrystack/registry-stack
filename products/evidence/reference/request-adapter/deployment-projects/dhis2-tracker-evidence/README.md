@@ -10,7 +10,7 @@ minimum-disclosure requirements:
 The two requirements are independent. Each has its own pack route, fact
 schema, derivation, authority profile, purpose, validity period, disclosure
 family, and fixtures. A caller authorized for one learns nothing about the
-other. Both routes come from the maintained `dhis2-tracker` Adapter pack, and
+other. Both routes come from the `dhis2-tracker` example Adapter pack, and
 the bundle captures that pack and every pinned artifact by digest.
 
 The reviewed governance bundle is under `bundle/`. Process-local paths,
@@ -21,15 +21,42 @@ may use different runtime files without changing evidence semantics.
 Before deployment, the operator changes only:
 
 - `.example` OIDC and DHIS2 hosts;
-- the DHIS2 programme, organisation unit, attribute, and programme-stage UIDs;
 - issuer, provider, trust-domain, framework, evidence-type, and concept URIs;
 - authority tags and purposes;
 - the referenced secret files; and
 - the runtime paths, listener binding, and private-CA bundle file.
 
+## An example pack, not your pack
+
+The `dhis2-tracker` pack is an example. Its DHIS2 programme, organisation unit,
+attribute and programme-stage UIDs (`Prg00000001`, `Prg00000002`, `Org00000001`,
+`Dob00000001`, `Rst00000001`, `Vfr00000001` and `Vun00000001`) are fixture
+values. They are constants in `pack.yaml` and `scripts/evidence.rhai`, and the
+bundle has no setting that changes them. Against a real DHIS2 instance every
+lookup would find no tracked entity and answer `unresolved`.
+
+This is deliberate: pack constants are digest-covered, so a bundle author cannot
+widen the provider query without a pack review. The consequence is that each
+deployment publishes its own pack. To do that:
+
+1. Copy `products/adapter/packs/dhis2-tracker/` into your own
+   `EvidenceProject` and give the copy a new pack `id`.
+2. Replace the fixture UIDs in `pack.yaml` and `scripts/evidence.rhai` with your
+   deployment's, and update the matching sanitized fixtures.
+3. Review the restriction rule below. The example reads an enrollment with no
+   restriction event as unrestricted; change the route if your programme cannot
+   adopt that rule.
+4. Run `evidencectl check`, `evidencectl test` and `evidencectl package` as in
+   [the authoring workflow](../CONFIG.md#authoring-and-production-build-workflow).
+   Packaging captures your pack and pins its new digest, so you do not edit
+   the files under `bundle/adapter-packs/` or their digests by hand.
+
+The bundle in this directory then stays a reference for the rest of the
+configuration. It is not a deployable bundle until you replace the pack.
+
 ## Shared lookup shape
 
-The maintained pack owns both fixed provider requests. The bundle binds only
+The example pack owns both fixed provider requests. The bundle binds only
 the minimized `recordReference` input from the authorized subject and selects
 one reviewed route. Programme, organisation unit, projected provider fields,
 page size, page, and total-page behavior stay digest-covered pack policy, so a
@@ -89,7 +116,7 @@ rejected as `derivation_input_error` rather than signed as expired.
 The professional-licence pack route explicitly treats an enrollment with no
 restriction event as unrestricted. This is reviewed, digest-covered route
 policy rather than an inference made by the Evidence bundle. A deployment that
-cannot adopt that rule must publish a distinct pack route and digest; it cannot
+cannot adopt that rule must publish its own pack, as described above; it cannot
 change the result through runtime configuration. Evidence has no third state to
 sign: a missing signal must either have a governed reading or stop the
 assertion.

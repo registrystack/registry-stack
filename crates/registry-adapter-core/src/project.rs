@@ -95,6 +95,15 @@ pub enum BindingAsyncCompletion {
 registry_platform_yaml::tagged_union!(BindingAsyncCompletion, tag = "type");
 crate::model::serialize_tagged_union!(BindingAsyncCompletion, tag = "type");
 
+/// The project keys a later format renamed, each with what replaced it
+/// (CFG-CHANGE-2), so an older `project.yaml` is refused at the key with
+/// the fix.
+pub const ADAPTER_PROJECT_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'static>] =
+    &[registry_platform_yaml::RemovedKey {
+        pointer: "/bindings/*/asyncCompletion/mode",
+        replacement: "Write type: status-link or bounded-wait in its place.",
+    }];
+
 /// One binding of a concrete contract operation to a route
 /// (`products/adapter/CONCEPT.md` section 7): one concrete operation per
 /// (profile operation, record type) pair, with the static worst-case

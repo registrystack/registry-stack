@@ -27,6 +27,25 @@ const DIRECT_MAPPING: &str = r#"fn map_proposal(exchange) {
 }
 "#;
 
+/// The household route's reviewed shaping script. A PostgreSQL row is flat,
+/// so the route groups the size column under `household`, where the
+/// projection's dotted path `household.household_size` reads it, the same
+/// value shape the Kobo pack gives a grouped answer.
+const HOUSEHOLD_SCRIPT: &str = r#"fn group_household(exchange) {
+    let page = exchange.body;
+    let items = [];
+    for item in page.items {
+        let value = item.value;
+        let size = value.remove("household_size");
+        value.household = #{household_size: size};
+        item.value = value;
+        items.push(item);
+    }
+    page.items = items;
+    page
+}
+"#;
+
 pub struct PostgresNativeSource {
     base_url: String,
     schema: String,
@@ -122,7 +141,7 @@ impl PostgresNativeSource {
         let query = if household_shape {
             format!(
                 "SELECT external_id AS id, external_id AS \"_id\", \
-                 label AS respondent_name, 4::bigint AS \"household.household_size\" \
+                 label AS respondent_name, 4::bigint AS household_size \
                  FROM {schema}.submissions ORDER BY external_id"
             )
         } else {
@@ -133,6 +152,22 @@ impl PostgresNativeSource {
         };
         std::fs::write(query_directory.join("source.sql"), &query)
             .expect("write the reviewed native source query");
+        let (shaping_step, shaping_scripts) = if household_shape {
+            let script_directory = root.join("scripts");
+            std::fs::create_dir_all(&script_directory).expect("create the native script directory");
+            std::fs::write(script_directory.join("household.rhai"), HOUSEHOLD_SCRIPT)
+                .expect("write the reviewed household shaping script");
+            (
+                "      - setBody:\n          rhai:\n            file: scripts/household.rhai\n            entrypoint: group_household\n"
+                    .to_owned(),
+                format!(
+                    "scripts:\n  - path: scripts/household.rhai\n    digest: {}\n",
+                    sha256_uri(HOUSEHOLD_SCRIPT.as_bytes())
+                ),
+            )
+        } else {
+            (String::new(), String::new())
+        };
         let old_pack = std::fs::read(pack_path).expect("read the existing native fixture pack");
         let old_pack_digest = sha256_uri(&old_pack);
         let pack = format!(
@@ -164,7 +199,7 @@ sourceRoutes:
           uri: postgres:submissions
           parameters:
             queryParameters: {{}}
-capabilities: {{}}
+{shaping_step}{shaping_scripts}capabilities: {{}}
 "#,
             sha256_uri(query.as_bytes())
         );
@@ -209,6 +244,7 @@ capabilities: {{}}
                 "namespace": "native-source",
                 "tls": {"type": "plaintext"}
             }}},
+            "secretProviders": {"file": {"root": root.display().to_string()}},
             "allowedPrivateCidrs": ["127.0.0.0/8"]
         });
         std::fs::write(

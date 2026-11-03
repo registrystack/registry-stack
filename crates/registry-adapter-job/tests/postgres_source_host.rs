@@ -97,6 +97,10 @@ enum SourceQuery {
     FiniteFloatValue(FiniteSql),
     NonFiniteKey(NonFiniteSql),
     NonFiniteValue(NonFiniteSql),
+    /// One row whose status is NULL and whose note is the given SQL
+    /// expression, so each native column type is read through the host.
+    TypedNote(&'static str),
+    NullKey,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -160,7 +164,9 @@ impl SourceQuery {
             | Self::FiniteFloatKey(_)
             | Self::FiniteFloatValue(_)
             | Self::NonFiniteKey(_)
-            | Self::NonFiniteValue(_) => SourceBounds {
+            | Self::NonFiniteValue(_)
+            | Self::TypedNote(_)
+            | Self::NullKey => SourceBounds {
                 maximum_response_bytes: 65_536,
                 maximum_row_bytes: 4_096,
                 maximum_field_bytes: 1_024,
@@ -202,7 +208,9 @@ impl SourceQuery {
             | Self::FiniteFloatKey(_)
             | Self::FiniteFloatValue(_)
             | Self::NonFiniteKey(_)
-            | Self::NonFiniteValue(_) => "{}",
+            | Self::NonFiniteValue(_)
+            | Self::TypedNote(_)
+            | Self::NullKey => "{}",
         }
     }
 
@@ -225,7 +233,9 @@ impl SourceQuery {
             | Self::FiniteFloatKey(_)
             | Self::FiniteFloatValue(_)
             | Self::NonFiniteKey(_)
-            | Self::NonFiniteValue(_) => "",
+            | Self::NonFiniteValue(_)
+            | Self::TypedNote(_)
+            | Self::NullKey => "",
         }
     }
 
@@ -425,6 +435,14 @@ impl Fixture {
                  AS source(ordinal, id, status, note) ORDER BY ordinal",
                 value.type_name(),
                 value.expression()
+            ),
+            SourceQuery::TypedNote(expression) => format!(
+                "SELECT external_id AS id, NULL::text AS status, {expression} AS note \
+                 FROM {source_schema}.submissions WHERE ordinal = 1 ORDER BY ordinal"
+            ),
+            SourceQuery::NullKey => format!(
+                "SELECT NULL::text AS id, status, note \
+                 FROM {source_schema}.submissions WHERE ordinal = 1 ORDER BY ordinal"
             ),
         };
         let bounds = query_kind.bounds();
@@ -1353,4 +1371,159 @@ async fn compiled_source_authority_survives_runtime_file_replacement() {
         .await
         .expect("the captured source authority reads the original database");
     assert_eq!(page.page.items.len(), 2);
+}
+
+// With three rows and a two-row page, a correct offset cursor reads row 003
+// on the second pass. Prints each pass's report and the delivered ids, then
+// asserts that row 003 was delivered.
+#[tokio::test]
+async fn a_two_row_page_over_three_rows_delivers_the_third_row_on_the_second_pass() {
+    let database = DatabaseBinding::from_environment();
+    let fixture = Fixture::new(
+        &database,
+        DestinationKind::SignedCoordinatorEvent,
+        SourceQuery::Rows,
+    )
+    .await;
+    let mut delivered = Vec::new();
+    for pass in 1..=3 {
+        let receiver = FixtureReceiver::start(vec![
+            Scripted::Acknowledge { run_id: None },
+            Scripted::Acknowledge { run_id: None },
+            Scripted::Acknowledge { run_id: None },
+        ])
+        .await;
+        let output = run_pass(&fixture, &receiver).await;
+        let ids: Vec<Value> = receiver
+            .requests()
+            .iter()
+            .map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).expect("delivery is JSON");
+                body["projected"]["id"].clone()
+            })
+            .collect();
+        println!(
+            "second-page pass {pass}: exit={:?} delivered={ids:?} stdout={} stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+        delivered.extend(ids);
+    }
+    let items = fixture.item_count().await;
+    println!("second-page stored items after three passes: {items}");
+    assert!(
+        delivered.contains(&json!("003")),
+        "row 003 never crossed the seam in three passes: {delivered:?}"
+    );
+}
+
+async fn typed_note_pass(expression: &'static str) -> (std::process::Output, Vec<Value>) {
+    let database = DatabaseBinding::from_environment();
+    let fixture = Fixture::new(
+        &database,
+        DestinationKind::SignedCoordinatorEvent,
+        SourceQuery::TypedNote(expression),
+    )
+    .await;
+    let receiver = FixtureReceiver::start(vec![Scripted::Acknowledge { run_id: None }]).await;
+    let output = run_pass(&fixture, &receiver).await;
+    let projected = receiver
+        .requests()
+        .iter()
+        .map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("delivery is JSON");
+            body["projected"].clone()
+        })
+        .collect();
+    (output, projected)
+}
+
+#[tokio::test]
+async fn actual_host_reads_null_date_time_uuid_and_numeric_columns_as_canonical_values() {
+    for (expression, expected) in [
+        ("DATE '2026-11-03'", json!("2026-11-03")),
+        (
+            "TIMESTAMPTZ '2026-11-03 10:15:30.25+02'",
+            json!("2026-11-03T08:15:30.250Z"),
+        ),
+        (
+            "TIMESTAMP '2026-11-03 10:15:30'",
+            json!("2026-11-03T10:15:30"),
+        ),
+        (
+            "'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11'::uuid",
+            json!("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
+        ),
+        ("12345.6700::numeric(12,4)", json!("12345.6700")),
+        ("(-0.0001)::numeric", json!("-0.0001")),
+        ("100000::numeric", json!("100000")),
+        ("0::numeric(6,2)", json!("0.00")),
+        ("0.00000001::numeric", json!("0.00000001")),
+        ("(-98765432.1)::numeric", json!("-98765432.1")),
+        ("NULL::date", Value::Null),
+    ] {
+        let (output, projected) = typed_note_pass(expression).await;
+        assert!(
+            output.status.success(),
+            "a {expression} column must be read: stderr={} stdout={}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            projected,
+            vec![json!({"id": "001", "status": null, "note": expected})],
+            "{expression} crosses the seam as its canonical value"
+        );
+    }
+}
+
+#[tokio::test]
+async fn actual_host_names_the_column_whose_type_it_cannot_read() {
+    for expression in ["INTERVAL '1 day'", "ARRAY[1, 2]"] {
+        let (output, projected) = typed_note_pass(expression).await;
+        assert!(
+            !output.status.success(),
+            "an unsupported {expression} column must stop the pass"
+        );
+        let report: Value =
+            serde_json::from_slice(&output.stdout).expect("the stopped pass report is JSON");
+        assert_eq!(
+            report["stopped"]["code"],
+            "page-fault:adapter.job.postgres-column-type:record:0:column:3",
+            "the stop names the third column, never its value"
+        );
+        assert_eq!(
+            report["stopped"]["record"],
+            json!({"ordinal": 0, "column": 3})
+        );
+        assert!(
+            projected.is_empty(),
+            "an unreadable row reaches no destination"
+        );
+    }
+}
+
+#[tokio::test]
+async fn actual_host_refuses_a_null_key_column() {
+    let database = DatabaseBinding::from_environment();
+    let fixture = Fixture::new(
+        &database,
+        DestinationKind::SignedCoordinatorEvent,
+        SourceQuery::NullKey,
+    )
+    .await;
+    let receiver = FixtureReceiver::start(vec![Scripted::Acknowledge { run_id: None }]).await;
+    let output = run_pass(&fixture, &receiver).await;
+    assert!(!output.status.success(), "a null key must stop the pass");
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("the stopped pass report is JSON");
+    assert_eq!(
+        report["stopped"]["code"],
+        "page-fault:adapter.job.postgres-key-null:record:0"
+    );
+    assert!(
+        receiver.requests().is_empty(),
+        "a keyless row reaches no destination"
+    );
 }

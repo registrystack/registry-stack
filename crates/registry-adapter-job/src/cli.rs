@@ -11,7 +11,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "adapter-job",
-    version,
+    version = registry_platform_buildinfo::DISPLAY_VERSION,
     about = "Run a governed-ingestion job: initialize its store, check, bounded pass, status, inspect, rescan.",
     after_help = "Output is value-free by default. Pass --show-values to include the projected values a dry-run pass would hand off; status, inspect, and check never carry item values."
 )]
@@ -148,6 +148,24 @@ pub enum Command {
         #[arg(long, default_value_t = crate::pass::DEFAULT_REFUSAL_LIMIT)]
         refusal_limit: u32,
     },
+    /// Accept an intended item-identity change (a new keyPointer or CSV
+    /// option) after a pass stopped with identity-migration-required. Moves
+    /// the stored identity to the job as authored now, keeps every item row,
+    /// and prints an audit receipt; items the new identity reads as new are
+    /// delivered again.
+    RebindIdentity {
+        /// The job definition file.
+        job_yaml: PathBuf,
+        /// The pinned adapter pack file.
+        #[arg(long)]
+        pack: PathBuf,
+        /// The operator runtime config file, whose store block names
+        /// the job store's connection reference.
+        #[arg(long)]
+        runtime: PathBuf,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
+    },
 }
 
 /// The command tree the binary parses.
@@ -162,6 +180,14 @@ mod tests {
     use clap::Parser as _;
 
     #[test]
+    fn the_version_is_the_display_version_the_ctl_tools_report() {
+        assert_eq!(
+            <Cli as clap::CommandFactory>::command().get_version(),
+            Some(registry_platform_buildinfo::DISPLAY_VERSION)
+        );
+    }
+
+    #[test]
     fn init_store_requires_an_explicit_runtime() {
         let error = match Cli::try_parse_from(["adapter-job", "init-store"]) {
             Ok(_) => panic!("initialization requires an explicit store runtime"),
@@ -170,6 +196,24 @@ mod tests {
         assert_eq!(
             error.kind(),
             clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn rebind_identity_takes_the_job_pack_and_runtime_and_no_delivery_options() {
+        let base = [
+            "adapter-job",
+            "rebind-identity",
+            "job.yaml",
+            "--pack",
+            "pack.yaml",
+            "--runtime",
+            "runtime.yaml",
+        ];
+        assert!(Cli::try_parse_from(base).is_ok());
+        assert!(
+            Cli::try_parse_from(base.iter().copied().chain(["--dry-run"])).is_err(),
+            "rebinding is never a preview"
         );
     }
 

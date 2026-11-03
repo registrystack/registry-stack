@@ -80,10 +80,21 @@ pub const JOB_ENGINE_CODES: &[&str] = &[
     "adapter.job.decoder-key-missing",
     "adapter.job.decoder-row",
     "adapter.job.direct-unknown",
+    "adapter.job.postgres-column-type",
+    "adapter.job.postgres-key-null",
     "adapter.job.postgres-query-refused",
     "adapter.job.rabbitmq-delivery-mode",
     "adapter.job.rabbitmq-page-shape",
+    "adapter.job.rabbitmq-topology",
+    "adapter.job.rabbitmq-unavailable",
     "adapter.job.read-bound",
+    "adapter.job.read-timeout",
+    "adapter.job.sftp-authentication",
+    "adapter.job.sftp-connection",
+    "adapter.job.sftp-credential",
+    "adapter.job.sftp-host-key",
+    "adapter.job.sftp-malformed",
+    "adapter.job.sftp-path",
     "adapter.job.source-unbound",
 ];
 
@@ -344,16 +355,23 @@ pub fn compile_job_with(
 ) -> Result<JobProgram, JobError> {
     let job_runtime =
         crate::job_sources::JobRuntimeConfig::load(runtime_path).map_err(|error| {
-            job_error(located_in(
-                error.diagnostics().to_vec(),
-                ADAPTER_JOB_RUNTIME_KIND,
-            ))
+            let mut diagnostics = error.diagnostics().to_vec();
+            if let Some(hint) =
+                crate::job_sources::JobRuntimeConfig::facade_kind_hint(runtime_path, &error)
+            {
+                for diagnostic in &mut diagnostics {
+                    if diagnostic.code == "config.wrong-kind" {
+                        diagnostic.suggested_action = hint.clone();
+                    }
+                }
+            }
+            job_error(located_in(diagnostics, ADAPTER_JOB_RUNTIME_KIND))
         })?;
-    let resolver = Arc::new(job_runtime.secret_resolver().map_err(|_| {
-        runtime_error(
-            "the secret resolver could not start from the configured platform secret providers",
-        )
-    })?);
+    let resolver = Arc::new(
+        job_runtime
+            .secret_resolver()
+            .map_err(|error| secret_providers_refusal(&error))?,
+    );
     compile_job_with_runtime(
         pack_path,
         job_path,
@@ -621,8 +639,15 @@ fn compile_job_from_source<S: ArtifactSource + ?Sized, J: ArtifactSource + ?Size
             registry_adapter_core::CheckCode::ProjectPinDigestMismatch.code(),
             ADAPTER_JOB_KIND,
             "/source/pack/digest",
-            "the pinned pack digest does not match the pack bytes",
-            "Pin the sha256 digest of the pack artifact's bytes.",
+            &format!(
+                "the pinned pack digest {} does not match the pack bytes, which hash to {}",
+                job.source.pack.digest.as_str(),
+                pack_digest.as_str()
+            ),
+            &format!(
+                "Pin {}, the sha256 digest of the pack artifact's bytes, after reviewing the change.",
+                pack_digest.as_str()
+            ),
         ));
     }
     for diagnostic in check_project_pins(
@@ -712,9 +737,7 @@ fn compile_job_from_source<S: ArtifactSource + ?Sized, J: ArtifactSource + ?Size
             };
             let plan = crate::auth::AuthPlan::compile(&declared.authentication, binding).map_err(
                 |fault| {
-                    LoadError::Runtime(format!(
-                        "endpoint {id} authentication was refused: {fault:?}"
-                    ))
+                    LoadError::Runtime(format!("endpoint {id} authentication was refused: {fault}"))
                 },
             )?;
             if !is_served_auth(plan.kind()) {
@@ -804,11 +827,7 @@ fn compile_job_from_source<S: ArtifactSource + ?Sized, J: ArtifactSource + ?Size
 fn environment_secret_resolver() -> Result<Arc<SecretResolver>, JobError> {
     SecretResolver::new([SecretProvider::Environment], "")
         .map(Arc::new)
-        .map_err(|_| {
-            runtime_error(
-                "the secret resolver could not start; run where the platform secret providers are configured",
-            )
-        })
+        .map_err(|error| secret_providers_refusal(&error))
 }
 
 impl JobProgram {
@@ -881,13 +900,29 @@ impl JobProgram {
 }
 
 fn runtime_error(reason: &str) -> JobError {
+    runtime_refusal("", reason, "Read the refusal and fix the runtime state.")
+}
+
+/// A runtime refusal located at the runtime config member to correct
+/// (`path`, an RFC 6901 pointer) with the fix for it.
+fn runtime_refusal(path: &str, reason: &str, fix: &str) -> JobError {
     job_error(vec![job_finding(
         "platform.runtime-config.refused",
         ADAPTER_JOB_RUNTIME_KIND,
-        "",
+        path,
         &format!("the job's runtime state was refused: {reason}"),
-        "Read the refusal and fix the runtime state.",
+        fix,
     )])
+}
+
+/// The refusal for a secret resolver that could not start. The cause is
+/// the resolver's own value-free sentence.
+fn secret_providers_refusal(error: &registry_platform_config::SecretError) -> JobError {
+    runtime_refusal(
+        "/secretProviders",
+        &format!("the secret resolver could not start from the configured platform secret providers: {error}"),
+        "Declare at least one provider under secretProviders; secretProviders.file.root must be an absolute directory, and secretProviders.environment takes no members.",
+    )
 }
 
 fn artifact_error(error: LoadError) -> JobError {
@@ -1086,7 +1121,11 @@ fn compile_job_sources<S: ArtifactSource + ?Sized>(
                     // pair, or a lock bound beside no changed lock,
                     // refuses the job.
                     config.read_lock().map_err(|reason| {
-                        runtime_error(&format!("endpoint {id} source was refused: {reason}"))
+                        runtime_refusal(
+                            &format!("/sources/file/{id}"),
+                            &format!("endpoint {id} source was refused: {reason}"),
+                            "Set readLock to none or changed; readLockTimeoutMilliseconds and readLockCheckIntervalMilliseconds apply only with readLock: changed.",
+                        )
                     })?;
                     files.insert(id.to_owned(), config.clone());
                 }
@@ -1274,6 +1313,7 @@ fn compile_job_sources<S: ArtifactSource + ?Sized>(
     }
     Ok(crate::job_sources::JobPageState {
         profile: None,
+        ongoing_scan: false,
         files,
         #[cfg(feature = "job-postgres")]
         postgres,
@@ -1666,9 +1706,13 @@ fn ensure_sends_resolve(
         walk(body);
     }
     if let Some(id) = missing.first() {
-        return Err(runtime_error(&format!(
-            "endpoint {id} is not bound by the runtime config, and a source route sends through it"
-        )));
+        return Err(runtime_refusal(
+            &format!("/endpoints/{id}"),
+            &format!(
+                "endpoint {id} is not bound by the runtime config, and a source route sends through it"
+            ),
+            "Bind the endpoint under endpoints in the runtime config, or remove the send that reaches it.",
+        ));
     }
     Ok(())
 }
@@ -1707,9 +1751,11 @@ pub async fn run_job_page(
         // The profile's own upstream-call budget, which the compile's
         // authoring check holds above the source route's static worst
         // case; the runtime holds the same number at the edge.
-        maximum_upstream_calls: profile.maximum_upstream_calls,
+        maximum_upstream_calls: profile.maximum_upstream_calls.get(),
         job: crate::job_sources::JobPageState {
             profile: Some(profile.clone()),
+            ongoing_scan: program.source_route.scan
+                == Some(registry_adapter_core::SourceScan::Ongoing),
             files: program.job_state.files.clone(),
             #[cfg(feature = "job-postgres")]
             postgres: program.job_state.postgres.clone(),
@@ -1737,8 +1783,8 @@ pub async fn run_job_page(
     // intermediate body of the run share the response bound, which a
     // source-route-only endpoint may declare up to the platform cap.
     let maximum_exchange_bytes =
-        usize::try_from(profile.maximum_response_bytes).unwrap_or(usize::MAX);
-    let deadline = Duration::from_millis(profile.page_deadline_milliseconds);
+        usize::try_from(profile.maximum_response_bytes.get()).unwrap_or(usize::MAX);
+    let deadline = Duration::from_millis(profile.page_deadline_milliseconds.get());
     let outcome = run_job_route(
         &context,
         &program.steps,
@@ -1803,6 +1849,38 @@ mod tests {
     use registry_adapter_core::{DestinationMapping, JobDestination};
     use registry_platform_config::sha256_uri;
     use serde_json::json;
+
+    /// A runtime refusal names the runtime member and the fix, and the
+    /// secret-provider start failure keeps the value-free cause.
+    #[test]
+    fn runtime_refusals_name_the_runtime_member_and_the_fix() {
+        let refused = runtime_refusal(
+            "/sources/file/dropbox",
+            "endpoint dropbox source was refused: the lock is wrong",
+            "Remove the member.",
+        );
+        let finding = &refused.diagnostics[0];
+        assert_eq!(finding.path, "/sources/file/dropbox");
+        assert_eq!(finding.suggested_action, "Remove the member.");
+
+        let refused = secret_providers_refusal(
+            &registry_platform_config::SecretError::InvalidProviderConfiguration,
+        );
+        let finding = &refused.diagnostics[0];
+        assert_eq!(finding.path, "/secretProviders");
+        assert!(
+            finding
+                .message
+                .contains("the secret provider configuration is invalid"),
+            "{finding:?}"
+        );
+        assert!(
+            finding
+                .suggested_action
+                .contains("secretProviders.file.root"),
+            "{finding:?}"
+        );
+    }
 
     /// The engine's additions to the job vocabulary stay closed,
     /// sorted, value-free, and three-segment, and none collides with a

@@ -64,7 +64,7 @@ impl ExactProblemClassifier {
             (Some((_, value)), None) => value,
             _ => return Err(HostProtocolError),
         };
-        if value != PROBLEM_MEDIA_TYPE {
+        if !is_problem_media_type(value) {
             return Err(HostProtocolError);
         }
         let body = response.body();
@@ -73,7 +73,7 @@ impl ExactProblemClassifier {
         }
         let value = parse_json_preserving_integers(body).map_err(|_| HostProtocolError)?;
         let object = value.as_object().ok_or(HostProtocolError)?;
-        if !exact_problem_shape(object)
+        if !required_problem_members(object)
             || !exact_status(object.get("status"), 404)
             || object.get("type").and_then(Value::as_str) != Some(self.type_uri.as_str())
             || object.get("code").and_then(Value::as_str) != Some(self.code.as_str())
@@ -118,11 +118,20 @@ fn exact_status(value: Option<&Value>, expected: u64) -> bool {
         == Some(expected)
 }
 
-fn exact_problem_shape(object: &Map<String, Value>) -> bool {
-    object.len() == 6
-        && ["type", "title", "detail", "code", "traceId"]
-            .into_iter()
-            .all(|name| object.get(name).is_some_and(Value::is_string))
+/// Media types are case-insensitive and may carry parameters (`charset`).
+fn is_problem_media_type(value: &str) -> bool {
+    value
+        .split(';')
+        .next()
+        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case(PROBLEM_MEDIA_TYPE))
+}
+
+/// The required members must be present and typed; members this classifier
+/// does not know are ignored, so a later minor release may add some.
+fn required_problem_members(object: &Map<String, Value>) -> bool {
+    ["type", "title", "detail", "code", "traceId"]
+        .into_iter()
+        .all(|name| object.get(name).is_some_and(Value::is_string))
         && object.get("status").is_some_and(Value::is_number)
 }
 
@@ -249,12 +258,40 @@ mod tests {
     }
 
     #[test]
-    fn exact_problem_requires_one_canonical_content_type_header() {
+    fn problem_media_type_ignores_case_and_parameters() {
+        for value in [
+            "Application/Problem+Json",
+            "application/problem+json; charset=utf-8",
+            "application/problem+json;charset=utf-8",
+            "APPLICATION/PROBLEM+JSON ; profile=x",
+        ] {
+            let response = response(404, &[("content-type", value)], VALID_PROBLEM);
+            assert!(
+                classifier().classify(&response).expect(value),
+                "media type: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_problem_ignores_members_it_does_not_recognise() {
+        let extended = VALID_PROBLEM.replace(
+            "\"traceId\"",
+            "\"instance\":\"/lookups/1\",\"errors\":[{\"field\":\"id\"}],\"traceId\"",
+        );
+        assert_ne!(extended, VALID_PROBLEM);
+        assert!(classifier()
+            .classify(&problem_response(extended))
+            .expect("additive members are ignored"));
+    }
+
+    #[test]
+    fn exact_problem_requires_one_problem_content_type_header() {
         let cases: &[&[(&str, &str)]] = &[
             &[],
             &[("content-type", "application/json")],
-            &[("content-type", "Application/Problem+Json")],
-            &[("content-type", "application/problem+json; charset=utf-8")],
+            &[("content-type", "application/problem+json-seq")],
+            &[("content-type", "application/problem+jsonx; charset=utf-8")],
             &[
                 ("content-type", "application/problem+json"),
                 ("Content-Type", "application/problem+json"),
@@ -277,7 +314,6 @@ mod tests {
             &format!("{VALID_PROBLEM} trailing"),
             r#"{"type":"https://source.example/problems/registry/not-found","type":"https://source.example/problems/registry/not-found","title":"Record not found","status":404,"detail":"No matching record exists.","code":"registry.record-not-found","traceId":"trace"}"#,
             r#"{"type":"https://source.example/problems/registry/not-found","title":"Record not found","status":404,"detail":"No matching record exists.","code":"registry.record-not-found"}"#,
-            r#"{"type":"https://source.example/problems/registry/not-found","title":"Record not found","status":404,"detail":"No matching record exists.","code":"registry.record-not-found","traceId":"trace","extra":true}"#,
             r#"{"type":1,"title":"Record not found","status":404,"detail":"No matching record exists.","code":"registry.record-not-found","traceId":"trace"}"#,
             r#"{"type":"https://source.example/problems/registry/not-found","title":null,"status":404,"detail":"No matching record exists.","code":"registry.record-not-found","traceId":"trace"}"#,
             r#"{"type":"https://source.example/problems/registry/not-found","title":"Record not found","status":"404","detail":"No matching record exists.","code":"registry.record-not-found","traceId":"trace"}"#,

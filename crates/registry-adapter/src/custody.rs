@@ -20,7 +20,7 @@ use registry_adapter_core::ErrorClass;
 use tokio::sync::Mutex;
 
 use crate::engine::exchange::{WriteClaim, WriteCustody};
-use crate::engine::route::RouteFailure;
+use crate::engine::route::{RouteFailure, EXCHANGE_DEADLINE};
 use crate::idempotent::{
     AsyncEffectAttempt, Claim, ClaimRequest, Execution, IdempotencyError, PostgresIdempotencyStore,
     RecoveryLease, ResumeClaimContext, StoredResponse, TerminalOutcome, VerifiedCallerIdentity,
@@ -57,6 +57,9 @@ pub enum WriteResolution {
         response: StoredResponse,
     },
     Uncertain,
+    /// Another attempt holds the key and may still finish; retrying is safe.
+    InFlight,
+    /// The key is spent: its effect is unproved and cannot be repeated.
     Conflict,
     Mismatch,
     ResponseExpired,
@@ -88,6 +91,7 @@ enum WriteState {
     Uncertain {
         key: String,
     },
+    InFlight,
     Conflict,
     Mismatch,
     ResponseExpired,
@@ -223,6 +227,7 @@ impl WriteExecutionContext {
                 response: response.clone(),
             },
             WriteState::Uncertain { .. } => WriteResolution::Uncertain,
+            WriteState::InFlight => WriteResolution::InFlight,
             WriteState::Conflict => WriteResolution::Conflict,
             WriteState::Mismatch => WriteResolution::Mismatch,
             WriteState::ResponseExpired => WriteResolution::ResponseExpired,
@@ -392,6 +397,7 @@ impl WriteCustody for WriteExecutionContext {
                 key,
                 request_digest: self.request_digest,
             };
+            let now = SystemTime::now();
             let claimed = match &self.resume_write {
                 Some(resume) => {
                     self.store
@@ -402,11 +408,11 @@ impl WriteCustody for WriteExecutionContext {
                                 effect_deadline: resume.effect_deadline,
                                 step_count: resume.step_count,
                             },
-                            SystemTime::now(),
+                            now,
                         )
                         .await
                 }
-                None => self.store.claim(request, SystemTime::now()).await,
+                None => self.store.claim(request, now).await,
             }
             .map_err(idempotency_failure)?;
             match claimed {
@@ -445,10 +451,10 @@ impl WriteCustody for WriteExecutionContext {
                     Ok(WriteClaim::Stop)
                 }
                 Claim::InFlight => {
-                    *state = WriteState::Conflict;
+                    *state = WriteState::InFlight;
                     Ok(WriteClaim::Stop)
                 }
-                Claim::EffectUnknown
+                Claim::EffectUnknown { .. }
                     if self
                         .async_write
                         .as_ref()
@@ -459,7 +465,16 @@ impl WriteCustody for WriteExecutionContext {
                     };
                     Ok(WriteClaim::Stop)
                 }
-                Claim::EffectUnknown => {
+                // The attempt that marked the effect may still be running and
+                // record an answer a retry replays; after its exchange
+                // deadline the key is spent.
+                Claim::EffectUnknown { effect_started_at }
+                    if now < effect_started_at + EXCHANGE_DEADLINE =>
+                {
+                    *state = WriteState::InFlight;
+                    Ok(WriteClaim::Stop)
+                }
+                Claim::EffectUnknown { .. } => {
                     *state = WriteState::Conflict;
                     Ok(WriteClaim::Stop)
                 }

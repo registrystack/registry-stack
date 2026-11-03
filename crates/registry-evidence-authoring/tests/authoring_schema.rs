@@ -692,6 +692,80 @@ fn the_target_schema_and_reader_close_nested_deployment_blocks() {
     assert_eq!(diagnostic.code, "config.unknown-key");
 }
 
+/// A 0.44 flat connection keeps its endpoint configuration directly under the
+/// connection. Reading it must say where each member moved, not tell the
+/// operator to delete the origin, credential and trust profile it carries.
+#[test]
+fn a_retired_flat_target_connection_names_where_each_member_moved() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["connections"]["synthetic-register"] = serde_json::json!({
+        "origin": "http://127.0.0.1:8081",
+        "authentication": {
+            "type": "static-authorization",
+            "tokenRef": "secret:file/synthetic-source-token"
+        },
+        "tlsTrustProfile": "registry-ca",
+        "maximumConcurrency": 4,
+        "admissionTimeoutMilliseconds": 1000,
+        "tokenTimeoutMilliseconds": 1000
+    });
+
+    let report = target::read_target(
+        "local-target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("a retired flat connection is refused");
+    let diagnostics = report.diagnostics();
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "config.unknown-key"),
+        "a retired member was reported as unknown: {diagnostics:#?}"
+    );
+    for member in ["origin", "authentication", "tlsTrustProfile"] {
+        let path = format!("/connections/synthetic-register/{member}");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == path)
+            .unwrap_or_else(|| panic!("{path} is not diagnosed: {diagnostics:#?}"));
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert!(
+            diagnostic.suggested_action.contains(&format!(
+                "connections.<id>.endpoints.<pack endpoint id>.{member}"
+            )),
+            "{path} does not say where it moved: {}",
+            diagnostic.suggested_action
+        );
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains("CONFIG.md#migrate-a-retired-source-project"),
+            "{path} does not link the migration: {}",
+            diagnostic.suggested_action
+        );
+    }
+    for member in [
+        "maximumConcurrency",
+        "admissionTimeoutMilliseconds",
+        "tokenTimeoutMilliseconds",
+    ] {
+        let path = format!("/connections/synthetic-register/{member}");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == path)
+            .unwrap_or_else(|| panic!("{path} is not diagnosed: {diagnostics:#?}"));
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains("attemptTimeoutMilliseconds")
+                && diagnostic.suggested_action.contains("sourceAcquisition"),
+            "{path} does not name the budgets that replace it: {}",
+            diagnostic.suggested_action
+        );
+    }
+}
+
 #[test]
 fn the_target_model_retains_complete_production_deployment_options() {
     let mut document = yaml_as_json(NORMALIZED_TARGET);

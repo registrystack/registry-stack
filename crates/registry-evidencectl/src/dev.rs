@@ -1976,7 +1976,7 @@ fn refuse_unservable_project(project: &Path) -> Result<()> {
     Err(DevRefusal {
         operational: false,
         code: "evidence.dev.local-transport-refused",
-        path: format!("evidence.yaml:/sources/{source_id}/type"),
+        path: format!("evidence.yaml:/sources/{source_id}/route"),
         message: "Local serving does not bind SQLite extracts.".to_owned(),
         suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
             .to_owned(),
@@ -3822,24 +3822,47 @@ mod tests {
             .to_json_value()
     }
 
-    fn extract_test_source(document: &Value) -> Value {
+    /// A Source bound to a reviewed pack route that reads a SQLite extract,
+    /// with that pack written into the project so the route can be read.
+    fn extract_test_source(project: &Path, document: &Value) -> Value {
+        let pack = project.join("adapter-packs/records-extract");
+        fs::create_dir_all(&pack).expect("pack directory");
+        fs::write(
+            pack.join("pack.yaml"),
+            serde_json::to_vec(&json!({
+                "id": "records-extract",
+                "version": "1",
+                "sourceRoutes": [{
+                    "id": "records",
+                    "steps": [{"to": {"uri": "sqlite-extract:records"}}]
+                }]
+            }))
+            .unwrap(),
+        )
+        .expect("extract pack");
         let mut source = document["sources"]["person-record"].clone();
-        source.as_object_mut().unwrap().remove("connection");
-        source["type"] = json!("sqlite-extract");
-        source["extractProfile"] = json!("records");
-        source["maximumExtractAgeSeconds"] = json!(3600);
-        source["request"] = json!({
-            "statement":"queries/records.sql", "columns":[], "parameterBindings":{},
-            "maximumRows":2, "maximumCellBytes":1024, "maximumStatementSteps":1000
-        });
+        source["pack"] = json!({"id": "records-extract", "version": "1"});
+        source["route"] = json!("records");
         source
+    }
+
+    fn write_example_http_pack(project: &Path) {
+        let pack = project.join("adapter-packs/synthetic-register");
+        fs::create_dir_all(&pack).expect("pack directory");
+        fs::write(
+            pack.join("pack.yaml"),
+            include_bytes!(
+                "../../../products/evidence/examples/standalone/adapter-packs/synthetic-register/pack.yaml"
+            ),
+        )
+        .expect("example HTTP pack");
     }
 
     #[test]
     fn a_project_read_from_a_sqlite_extract_is_refused_before_a_session_is_prepared() {
         let root = tempfile::tempdir().expect("tempdir");
         let mut document = transport_test_project();
-        document["sources"]["records"] = extract_test_source(&document);
+        document["sources"]["records"] = extract_test_source(root.path(), &document);
         fs::write(
             root.path().join("evidence.yaml"),
             serde_json::to_vec(&document).unwrap(),
@@ -3849,7 +3872,7 @@ mod tests {
         let error = refuse_unservable_project(root.path()).expect_err("unservable project");
         let refusal = error.downcast_ref::<DevRefusal>().expect("typed refusal");
         assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
-        assert_eq!(refusal.path, "evidence.yaml:/sources/records/type");
+        assert_eq!(refusal.path, "evidence.yaml:/sources/records/route");
         assert!(refusal.message.contains("does not bind SQLite extracts"));
         assert!(!refusal.operational);
     }
@@ -3866,11 +3889,14 @@ mod tests {
         )
         .expect("normalized project");
         fs::write(project.join("notes.txt"), "type: sqlite-extract\n").expect("other file");
+        refuse_unservable_project(project)
+            .expect("a project whose pack is absent is left to the compiler");
+        write_example_http_pack(project);
         refuse_unservable_project(project).expect("an HTTP project is not refused here");
 
         // Named Sources are examined in the same stable order as the compiler.
         for id in ["records", "holders"] {
-            document["sources"][id] = extract_test_source(&document);
+            document["sources"][id] = extract_test_source(project, &document);
         }
         fs::write(
             project.join("evidence.yaml"),

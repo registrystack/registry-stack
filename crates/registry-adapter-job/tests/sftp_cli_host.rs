@@ -304,9 +304,11 @@ async fn actual_cli_pass_recovers_cursor_and_same_name_replacement() {
     assert_eq!(resumed["itemsRead"], 1);
     assert_eq!(resumed["itemsAcknowledged"], 1);
 
+    // An ongoing scan holds its place at the tail: with no new file the pass
+    // reads nothing instead of rereading every retained file.
     let repeated = report(&run_pass(&fixture, &store_url, &receiver.url).await);
-    assert_eq!(repeated["itemsRead"], 1);
-    assert_eq!(repeated["itemsSkipped"], 1);
+    assert_eq!(repeated["itemsRead"], 0);
+    assert_eq!(repeated["itemsAcknowledged"], 0);
 
     let requests = receiver.requests();
     assert_eq!(requests.len(), 3);

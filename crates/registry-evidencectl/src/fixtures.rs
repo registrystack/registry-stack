@@ -36,7 +36,8 @@ pub struct RunArgs {
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
 
-    /// Path to the evidence binary; defaults to `evidence` on PATH.
+    /// Path to the evidence binary; defaults to the `EVIDENCE_BIN` variable, then the
+    /// `evidence` installed beside evidencectl, then `evidence` on PATH.
     #[arg(long)]
     pub evidence_bin: Option<PathBuf>,
 

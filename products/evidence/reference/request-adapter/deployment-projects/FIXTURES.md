@@ -267,8 +267,8 @@ That case requires exactly `publicProblem: evidence.unavailable`,
 `lookup` expectation. It truthfully covers both mandatory no-match and
 ambiguous categories because the provider collapsed those hidden states before
 Evidence could observe either one. The source contract suite separately sends
-the exact 404 `application/problem+json` six-member tuple through the HTTP
-transport and tests undeclared, mismatched, malformed, duplicate, extra,
+the exact 404 `application/problem+json` tuple through the HTTP
+transport and tests undeclared, mismatched, malformed, duplicate,
 mistyped, wrong-media, wrong-status, and oversized responses as dependency
 failures. No fixture may restate the Problem Details body or pass it to
 extraction.

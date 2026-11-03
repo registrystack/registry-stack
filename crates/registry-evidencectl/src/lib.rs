@@ -1088,6 +1088,21 @@ fn safe_command(
             }
             .into();
         }
+        if let Some(exists) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<build::OutputExists>())
+        {
+            return SafeCliFailure {
+                operational: false,
+                code: "evidence.package.output-exists".to_owned(),
+                artifact,
+                path: "--output".to_owned(),
+                message: exists.to_string(),
+                suggested_action: "Pass a new directory to --output, or move the existing one away if it is a candidate you no longer need, then rerun package.".to_owned(),
+                cause: None,
+            }
+            .into();
+        }
         if let Some(diagnostic) = error
             .chain()
             .find_map(|cause| cause.downcast_ref::<build::TargetDocumentDiagnostic>())
@@ -2237,6 +2252,7 @@ mod tests {
                 .map(|(path, _)| path.as_str())
                 .collect::<std::collections::BTreeSet<_>>(),
             std::collections::BTreeSet::from([
+                "evidencectl fixtures record-facts",
                 "evidencectl fixtures run",
                 "evidencectl source add",
                 "evidencectl source suggest",

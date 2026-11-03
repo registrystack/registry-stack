@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-03"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -79,13 +79,16 @@ rstack breg generate evidence-source ./registry \
   --access-profile evidence-source --record-type record \
   --selector by-code --selector by-registration-number \
   --fields status --source-id registry-status --connection registry \
+  --authentication oauth2-private-key-jwt \
   --output ./registry-status-export
 ```
 
 It reports `Generated 9 artifacts.` The export names the profile, both selectors, and the
 `status` fact, and grants no registry authority. Asking for `label` is refused with
 `breg.evidence-source.refused`: the export describes only what the registry already lets that
-profile see.
+profile see. `--authentication oauth2-private-key-jwt` makes the export's pack declare the flow the
+target binds below; the pack and the target must name the same authentication type, or
+`evidencectl check` refuses them.
 
 Import it into the project:
 

@@ -173,6 +173,57 @@ impl fmt::Display for StoreError {
     }
 }
 
+impl StoreError {
+    /// A closed, value-free token naming what refused: the store condition,
+    /// or for a refused query the PostgreSQL SQLSTATE (`sqlstate-42501`), so
+    /// an operator can tell a missing grant from a dropped connection without
+    /// the driver's prose.
+    #[must_use]
+    pub fn cause(&self) -> String {
+        let token = match self {
+            StoreError::SchemaNewer { .. } => "schema-newer",
+            StoreError::SchemaBehind { .. } => "schema-behind",
+            StoreError::MigrationLock => "migration-lock",
+            StoreError::LeaseHeld => "lease-held",
+            StoreError::LeaseLost => "lease-lost",
+            StoreError::ReceiverIdentityUnknown => "receiver-identity-unknown",
+            StoreError::ReceiverIdentityChanged => "receiver-identity-changed",
+            StoreError::CanonicalBodyIdentityUnknown => "body-identity-unknown",
+            StoreError::CanonicalBodyIdentityChanged => "body-identity-changed",
+            StoreError::DeliveryAttemptExhausted => "delivery-attempt-exhausted",
+            StoreError::ItemIdentityMigrationRequired => "item-identity-migration-required",
+            StoreError::PositionBound { .. } => "position-bound",
+            StoreError::Pool(_) => "pool",
+            StoreError::Query(error) => return query_cause(error),
+        };
+        token.to_owned()
+    }
+}
+
+/// The closed cause token of a driver error: its SQLSTATE when the server
+/// answered, `connection-closed` when the connection dropped, `query`
+/// otherwise.
+#[must_use]
+pub fn query_cause(error: &PgError) -> String {
+    if let Some(code) = error.code() {
+        format!("sqlstate-{}", code.code())
+    } else if error.is_closed() {
+        "connection-closed".to_owned()
+    } else {
+        "query".to_owned()
+    }
+}
+
+/// The closed cause token of a pool checkout failure.
+#[must_use]
+pub fn pool_cause(error: &deadpool_postgres::PoolError) -> String {
+    match error {
+        deadpool_postgres::PoolError::Backend(error) => query_cause(error),
+        deadpool_postgres::PoolError::Timeout(_) => "pool-timeout".to_owned(),
+        _ => "pool".to_owned(),
+    }
+}
+
 impl std::error::Error for StoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -1122,27 +1173,15 @@ pub async fn bind_item_identity(
         })?;
     let stored: Option<Vec<u8>> = state.get(0);
     let position: Option<Value> = state.get(1);
-    match (stored.as_deref(), digest) {
-        (Some(stored), Some(digest)) if stored == digest.as_slice() => {
+    let holds_state =
+        unbound_state_present(&tx, job_id, stored.as_deref(), digest, &position).await?;
+    match identity_verdict(stored.as_deref(), digest, holds_state) {
+        IdentityVerdict::Bound => {
             tx.commit().await?;
             return Ok(());
         }
-        (Some(_), _) => return Err(StoreError::ItemIdentityMigrationRequired),
-        (None, None) => {
-            tx.commit().await?;
-            return Ok(());
-        }
-        (None, Some(_)) => {}
-    }
-    let item_count: i64 = tx
-        .query_one(
-            "SELECT count(*) FROM adapter_job_items WHERE job_id = $1",
-            &[&job_id],
-        )
-        .await?
-        .get(0);
-    if position.is_some() || item_count != 0 {
-        return Err(StoreError::ItemIdentityMigrationRequired);
+        IdentityVerdict::Refused => return Err(StoreError::ItemIdentityMigrationRequired),
+        IdentityVerdict::Adopt => {}
     }
     let digest = digest.expect("the none/none identity state returned above");
     tx.execute(
@@ -1152,6 +1191,162 @@ pub async fn bind_item_identity(
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// What the item-identity fence decides for one stored binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdentityVerdict {
+    /// The stored binding already equals the job's, or neither exists.
+    Bound,
+    /// An unbound legacy state with no cursor and no items adopts it.
+    Adopt,
+    /// A different binding, or unbound state that already holds a cursor or
+    /// items, needs the operator's explicit rebind.
+    Refused,
+}
+
+/// Whether an unbound state already holds a cursor or items. Only that case
+/// reads the item table, so a bound job pays no per-pass count.
+async fn unbound_state_present(
+    client: &impl GenericClient,
+    job_id: &str,
+    stored: Option<&[u8]>,
+    digest: Option<&[u8; 32]>,
+    position: &Option<Value>,
+) -> Result<bool, StoreError> {
+    if stored.is_some() || digest.is_none() {
+        return Ok(false);
+    }
+    if position.is_some() {
+        return Ok(true);
+    }
+    let item_count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM adapter_job_items WHERE job_id = $1",
+            &[&job_id],
+        )
+        .await?
+        .get(0);
+    Ok(item_count != 0)
+}
+
+fn identity_verdict(
+    stored: Option<&[u8]>,
+    digest: Option<&[u8; 32]>,
+    holds_state: bool,
+) -> IdentityVerdict {
+    match (stored, digest) {
+        (Some(stored), Some(digest)) if stored == digest.as_slice() => IdentityVerdict::Bound,
+        (Some(_), _) => IdentityVerdict::Refused,
+        (None, None) => IdentityVerdict::Bound,
+        (None, Some(_)) if holds_state => IdentityVerdict::Refused,
+        (None, Some(_)) => IdentityVerdict::Adopt,
+    }
+}
+
+/// Apply the item-identity fence without writing, for the dry run: the same
+/// verdict a real pass would reach, so a preview never looks clean over a
+/// state the next real pass refuses. A job with no state row yet has no
+/// binding to disagree with.
+///
+/// # Errors
+///
+/// [`StoreError::ItemIdentityMigrationRequired`] when a real pass would stop
+/// at the fence; a failed query refuses.
+pub async fn check_item_identity(
+    client: &impl GenericClient,
+    job_id: &str,
+    digest: Option<&[u8; 32]>,
+) -> Result<(), StoreError> {
+    let Some(state) = client
+        .query_opt(
+            "SELECT item_identity_digest, position FROM adapter_job_state WHERE job_id = $1",
+            &[&job_id],
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let stored: Option<Vec<u8>> = state.get(0);
+    let position: Option<Value> = state.get(1);
+    let holds_state =
+        unbound_state_present(client, job_id, stored.as_deref(), digest, &position).await?;
+    match identity_verdict(stored.as_deref(), digest, holds_state) {
+        IdentityVerdict::Refused => Err(StoreError::ItemIdentityMigrationRequired),
+        IdentityVerdict::Bound | IdentityVerdict::Adopt => Ok(()),
+    }
+}
+
+/// The outcome of an explicit item-identity rebind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdentityRebind {
+    /// False when the stored binding already equalled the job's.
+    pub changed: bool,
+    /// The item rows the job holds; a rebind never rewrites or removes them.
+    pub items_kept: i64,
+}
+
+/// Move the stored item-identity binding to the job as it is authored now.
+/// This is the operator's explicit acceptance after an intended `keyPointer`
+/// or CSV change: the existing item rows keep the keys they were stored under
+/// and are not rewritten. The job's lease must be free, so no pass is running
+/// under the old identity.
+///
+/// # Errors
+///
+/// [`StoreError::LeaseHeld`] while a pass holds the lease; a failed query
+/// refuses.
+pub async fn rebind_item_identity(
+    client: &mut Object,
+    job_id: &str,
+    digest: Option<&[u8; 32]>,
+) -> Result<IdentityRebind, StoreError> {
+    let tx = client.transaction().await?;
+    let state = tx
+        .query_opt(
+            "SELECT item_identity_digest, (lease_expires IS NOT NULL AND lease_expires > now()) \
+             FROM adapter_job_state WHERE job_id = $1 FOR UPDATE",
+            &[&job_id],
+        )
+        .await?;
+    let items_kept: i64 = tx
+        .query_one(
+            "SELECT count(*) FROM adapter_job_items WHERE job_id = $1",
+            &[&job_id],
+        )
+        .await?
+        .get(0);
+    let Some(state) = state else {
+        // A job that never ran has nothing to rebind; the first pass binds it.
+        tx.commit().await?;
+        return Ok(IdentityRebind {
+            changed: false,
+            items_kept,
+        });
+    };
+    let leased: bool = state.get(1);
+    if leased {
+        return Err(StoreError::LeaseHeld);
+    }
+    let stored: Option<Vec<u8>> = state.get(0);
+    let wanted = digest.map(<[u8; 32]>::as_slice);
+    if stored.as_deref() == wanted {
+        tx.commit().await?;
+        return Ok(IdentityRebind {
+            changed: false,
+            items_kept,
+        });
+    }
+    tx.execute(
+        "UPDATE adapter_job_state SET item_identity_digest = $2 WHERE job_id = $1",
+        &[&job_id, &wanted],
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(IdentityRebind {
+        changed: true,
+        items_kept,
+    })
 }
 
 /// The job state row, everything the pass, the schedule, and the
@@ -1457,7 +1652,13 @@ pub struct StatusCounts {
     pub refusals_by_code: BTreeMap<String, u64>,
     /// Held rows by their value-free reason code.
     pub holds_by_code: BTreeMap<String, u64>,
+    /// The keys of the oldest pending rows, at most [`PENDING_KEYS_SHOWN`]:
+    /// the rows a stopped pass keeps retrying first.
+    pub pending_keys: Vec<String>,
 }
+
+/// How many pending keys status names.
+pub const PENDING_KEYS_SHOWN: i64 = 5;
 
 /// Count the job's items by status and refusal code.
 ///
@@ -1509,6 +1710,16 @@ pub async fn item_counts(
         let count: i64 = row.get(1);
         counts.refusals_by_code.insert(code, count.max(0) as u64);
     }
+    counts.pending_keys = client
+        .query(
+            "SELECT item_key FROM adapter_job_items \
+             WHERE job_id = $1 AND status = 'pending' ORDER BY sequence, item_key LIMIT $2",
+            &[&job_id, &PENDING_KEYS_SHOWN],
+        )
+        .await?
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
     Ok(counts)
 }
 
@@ -1522,7 +1733,9 @@ pub struct ReceiptHorizonCounts {
 }
 
 /// Count pending rows in the last day before the receipt horizon and rows
-/// already past it.
+/// already past it. BReg's receipt belongs to the current sequence's command
+/// key, so the horizon counts from the sequence's event time, not the key's
+/// first sighting.
 pub async fn receipt_horizon_counts(
     client: &impl GenericClient,
     job_id: &str,
@@ -1538,8 +1751,8 @@ pub async fn receipt_horizon_counts(
     let row = client
         .query_one(
             "SELECT \
-             count(*) FILTER (WHERE first_seen <= $3 AND first_seen > $2), \
-             count(*) FILTER (WHERE first_seen <= $2) \
+             count(*) FILTER (WHERE event_time <= $3 AND event_time > $2), \
+             count(*) FILTER (WHERE event_time <= $2) \
              FROM adapter_job_items WHERE job_id = $1 AND status = 'pending'",
             &[&job_id, &expired_before, &warning_before],
         )
@@ -1582,4 +1795,41 @@ pub async fn inspect_item(
         first_seen: row.get(8),
         last_seen: row.get(9),
     }))
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::{identity_verdict, IdentityVerdict};
+
+    const OLD: [u8; 32] = [1; 32];
+    const NEW: [u8; 32] = [2; 32];
+
+    #[test]
+    fn the_fence_binds_equal_or_absent_identity_and_refuses_change() {
+        let stored = OLD.as_slice();
+        assert_eq!(
+            identity_verdict(Some(stored), Some(&OLD), false),
+            IdentityVerdict::Bound
+        );
+        assert_eq!(
+            identity_verdict(Some(stored), Some(&NEW), false),
+            IdentityVerdict::Refused,
+            "a changed identity needs the explicit rebind"
+        );
+        assert_eq!(
+            identity_verdict(Some(stored), None, false),
+            IdentityVerdict::Refused
+        );
+        assert_eq!(identity_verdict(None, None, true), IdentityVerdict::Bound);
+        assert_eq!(
+            identity_verdict(None, Some(&NEW), false),
+            IdentityVerdict::Adopt,
+            "an empty legacy state adopts the identity"
+        );
+        assert_eq!(
+            identity_verdict(None, Some(&NEW), true),
+            IdentityVerdict::Refused,
+            "a legacy state with items needs the explicit rebind"
+        );
+    }
 }

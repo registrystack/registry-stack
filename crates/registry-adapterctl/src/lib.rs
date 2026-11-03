@@ -5,7 +5,7 @@
 //! This crate owns the `adapterctl` binary. Its commands: `check`, the
 //! offline check over authored artifacts (project, profile, pack, fixtures,
 //! and with `--runtime` the runtime config); `project lock`, the pin
-//! rewriter; `schemas`, the generator and drift gate of the five format
+//! rewriter; `schemas`, the generator and drift gate of the Adapter format
 //! JSON Schemas; `compile`, the per-deployment contract compiler;
 //! `fixtures replay`, the offline replay of a project's fixture suites
 //! against its compiled contract; and `verify --live`, the probe that
@@ -60,7 +60,7 @@ enum Command {
     Job(job::JobArgs),
     /// Operate one authored adapter project.
     Project(project::ProjectArgs),
-    /// Write the generated JSON Schemas of the five Adapter formats, or
+    /// Write the generated JSON Schemas of every Adapter format, or
     /// check the committed ones for drift.
     Schemas(schemas::SchemasArgs),
     /// Compile the deployment's concrete OpenAPI contract beside the
@@ -652,8 +652,15 @@ fn human_lead(report: &Value) -> String {
         "compile" if report["check"] == json!(true) => "Compile drift check passed.".to_owned(),
         "compile" => "Compiled contract written.".to_owned(),
         "fixtures replay" => {
-            "Fixture replay completed through the runtime engine; upstream sends were intercepted offline."
-                .to_owned()
+            let count = |member: &str| report[member].as_u64().unwrap_or_default();
+            format!(
+                "Fixture replay completed through the runtime engine; upstream sends were intercepted offline.\n\
+                 Fixture files: {}; entries replayed: {}; upstream exchanges: {}; simulated writes: {}.",
+                count("fixtures"),
+                count("entries"),
+                count("upstreamExchanges"),
+                count("writesSimulated"),
+            )
         }
         "verify" => match report["drove"].as_u64().unwrap_or_default() {
             0 => {

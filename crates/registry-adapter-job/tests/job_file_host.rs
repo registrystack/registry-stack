@@ -69,7 +69,7 @@ impl FileFixture {
         )
         .expect("the project");
         std::fs::write(&job, job_yaml(&pack_digest, maximum_file_bytes)).expect("the job");
-        std::fs::write(&runtime, runtime_json(&source)).expect("the runtime config");
+        std::fs::write(&runtime, runtime_json(&source, component)).expect("the runtime config");
 
         Self {
             _root: root,
@@ -165,8 +165,12 @@ profile:
     )
 }
 
-fn runtime_json(source: &Path) -> String {
-    serde_json::to_string_pretty(&json!({
+/// Only a `file` pack endpoint carries a `sources.file` binding: the
+/// engine refuses a binding no declared endpoint of its kind owns before it
+/// reaches the per-endpoint serving check, so a fixture for an unserved
+/// component binds no source at all.
+fn runtime_json(source: &Path, component: &str) -> String {
+    let mut runtime = json!({
         "apiVersion": "id.registrystack.org/formats/adapter/job-runtime/v1alpha1",
         "kind": "AdapterJobRuntimeConfig",
         "id": "file-job-test",
@@ -176,10 +180,6 @@ fn runtime_json(source: &Path) -> String {
             "anonymousHttps": "operator-approved",
             "credential": {"type": "none"}
         }],
-        "sources": {"file": {"submissions": {
-            "directory": source,
-            "namespace": "submissions"
-        }}},
         "allowedPrivateCidrs": ["10.0.0.0/8"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
@@ -191,8 +191,14 @@ fn runtime_json(source: &Path) -> String {
             "signingKeyRef": "secret:env/JOB_TEST_SIGNING_KEY",
             "attemptTimeoutMilliseconds": 1000
         }}
-    }))
-    .expect("the runtime config renders")
+    });
+    if component == "file" {
+        runtime["sources"] = json!({"file": {"submissions": {
+            "directory": source,
+            "namespace": "submissions"
+        }}});
+    }
+    serde_json::to_string_pretty(&runtime).expect("the runtime config renders")
 }
 
 fn run_check(fixture: &FileFixture) -> std::process::Output {
@@ -299,33 +305,41 @@ async fn an_oversized_file_stops_at_the_engine_bound() {
     assert_eq!(failure.code, Some("adapter.job.read-bound"));
 }
 
+/// Enabling `job-file` serves the file source and nothing else: an SFTP
+/// endpoint still refuses unless this build carries `job-sftp`. The postgres
+/// source needs a query file and key column before the serving check is
+/// reached; its default-build refusal is held in
+/// `registry-adapter/tests/adapter_job.rs`.
+#[cfg(not(feature = "job-sftp"))]
 #[test]
 fn unserved_job_sources_remain_refused_by_the_host() {
-    let mut components = vec!["sftp"];
-    if !cfg!(feature = "job-postgres") {
-        components.push("postgres");
-    }
-    for component in components {
-        let fixture = FileFixture::new("csv", component, 1_048_576);
-        let output = run_check(&fixture);
-        assert!(!output.status.success(), "{component} must remain refused");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("adapter.job.component-unavailable at /endpoints/submissions"),
-            "the host names the refused {component} endpoint: {stderr}"
-        );
-    }
+    let fixture = FileFixture::new("csv", "sftp", 1_048_576);
+    let output = run_check(&fixture);
+    assert!(!output.status.success(), "sftp must remain refused");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error[adapter.job.component-unavailable] /endpoints/submissions"),
+        "the host names the refused sftp endpoint: {stderr}"
+    );
+    assert!(
+        stderr.contains("next: serve the SFTP source by building with the job-sftp feature"),
+        "the host names the build fix: {stderr}"
+    );
 }
 
 #[cfg(feature = "postgres-test")]
 async fn isolated_store_url() -> String {
     let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
         .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    // The macOS clock ticks in microseconds, so parallel tests can read the
+    // same instant; the serial keeps each schema name distinct.
+    static NEXT_SCHEMA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = NEXT_SCHEMA.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let unique = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("the test clock is after the Unix epoch")
         .as_nanos();
-    let schema = format!("adapter_job_file_{unique}");
+    let schema = format!("adapter_job_file_{unique}_{serial}");
     let (client, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
         .await
         .expect("connect the Adapter test database");
@@ -491,4 +505,107 @@ async fn legacy_file_and_raw_state_stop_before_source_or_destination_io() {
             "the {decoder} migration fence precedes destination I/O"
         );
     }
+}
+
+fn run_host(store_url: &str, fixture: &FileFixture, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_adapter-job"))
+        .env("JOB_TEST_DB", store_url)
+        .args(args)
+        .arg(&fixture.job)
+        .arg("--pack")
+        .arg(&fixture.pack)
+        .arg("--runtime")
+        .arg(&fixture.runtime)
+        .output()
+        .expect("run the adapter-job command")
+}
+
+/// The preview applies the item-identity fence read-only, the refusal names
+/// the one command that clears it, and that command moves the fence to the
+/// job as it is now authored without touching the stored items.
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn rebind_identity_clears_the_fence_the_dry_run_reports() {
+    let store_url = isolated_store_url().await;
+    let fixture = FileFixture::new("csv", "file", 1_048_576);
+    fixture.write_source("submissions.csv", b"id,status,note\n001,new,ready\n");
+    let runtime = fixture.runtime.clone();
+    let initialized = Command::new(env!("CARGO_BIN_EXE_adapter-job"))
+        .env("JOB_TEST_DB", &store_url)
+        .arg("init-store")
+        .arg("--runtime")
+        .arg(runtime)
+        .output()
+        .expect("initialize the fenced test store");
+    assert!(initialized.status.success());
+    let (client, connection) = tokio_postgres::connect(&store_url, tokio_postgres::NoTls)
+        .await
+        .expect("connect the scoped fenced store");
+    let connection = tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            panic!("the scoped fenced store connection failed: {error}");
+        }
+    });
+    client
+        .batch_execute(
+            "INSERT INTO adapter_job_state(job_id) VALUES ('file-daily');\
+             INSERT INTO adapter_job_items \
+             (job_id, item_key, last_digest, sequence, status, first_seen, last_seen, \
+              event_time, delivery_attempt, receiver_identity_known) \
+             VALUES ('file-daily', 'legacy/item', \
+             'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', \
+             1, 'acknowledged', now(), now(), now(), 1, true);",
+        )
+        .await
+        .expect("insert non-empty legacy file state");
+
+    let fenced = run_host(&store_url, &fixture, &["pass", "--dry-run"]);
+    assert!(!fenced.status.success(), "the preview applies the fence");
+    let report: Value = serde_json::from_slice(&fenced.stdout).expect("the stop report is JSON");
+    assert_eq!(
+        report["stopped"]["code"],
+        "page-fault:adapter.job.identity-migration-required"
+    );
+    let next = report["stopped"]["next"]
+        .as_str()
+        .expect("the fence refusal carries a next step");
+    assert!(next.contains("adapter-job rebind-identity"), "{next}");
+
+    let rebound = run_host(&store_url, &fixture, &["rebind-identity"]);
+    assert!(
+        rebound.status.success(),
+        "rebind failed: {}",
+        String::from_utf8_lossy(&rebound.stderr)
+    );
+    let receipt: Value = serde_json::from_slice(&rebound.stdout).expect("the receipt is JSON");
+    assert_eq!(receipt["ok"], true);
+    assert_eq!(receipt["jobId"], "file-daily");
+    assert_eq!(receipt["changed"], true);
+    assert_eq!(receipt["itemsKept"], 1);
+    let audit = String::from_utf8_lossy(&rebound.stderr);
+    assert!(audit.contains("adapter.job.identity-rebound"), "{audit}");
+    assert!(audit.contains("file-daily"), "{audit}");
+
+    let after = run_host(&store_url, &fixture, &["pass", "--dry-run"]);
+    let after_report: Value = serde_json::from_slice(&after.stdout).expect("the report is JSON");
+    assert!(
+        after_report["stopped"].is_null(),
+        "the fence is cleared: {after_report}"
+    );
+
+    let again = run_host(&store_url, &fixture, &["rebind-identity"]);
+    assert!(again.status.success());
+    let again: Value = serde_json::from_slice(&again.stdout).expect("the receipt is JSON");
+    assert_eq!(again["changed"], false, "a bound job has nothing to rebind");
+    let items: i64 = client
+        .query_one(
+            "SELECT count(*) FROM adapter_job_items WHERE job_id = 'file-daily'",
+            &[],
+        )
+        .await
+        .expect("count the kept items")
+        .get(0);
+    assert_eq!(items, 1, "rebinding never rewrites or removes items");
+    drop(client);
+    connection.abort();
 }

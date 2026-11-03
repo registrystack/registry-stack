@@ -202,6 +202,10 @@ fn a_passed_replay_names_its_limits_in_the_human_lead() {
     let human = String::from_utf8_lossy(&stdout);
     assert!(human.contains("Fixture replay completed through the runtime engine"));
     assert!(human.contains("upstream sends were intercepted offline"));
+    assert!(
+        human.contains("Fixture files: 1; entries replayed: "),
+        "the lead counts what ran: {human}"
+    );
     assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
 }
 

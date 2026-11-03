@@ -24,11 +24,3 @@ Coordinator currently exposes state/attention, Proposal following, and Run
 turn operations needed by this journey. It has no Run-list filter by finish
 outcome. `GET /v1/runs?attention=true` remains sufficient for stopped or failed
 work; it does not replace Casework for revised items requiring a person.
-
-Adapter store schema 103 also binds the file/SFTP item-identity function
-before reading. An existing non-empty file/SFTP job whose state predates that
-binding stops as `adapter.job.identity-migration-required`, including a legacy
-raw decoder whose authored semantics did not change. Operators must migrate or
-retire that state explicitly; the host never infers identity from stored keys,
-rewrites rows, or resets the cursor automatically. HTTP and PostgreSQL sources
-do not receive this file-row fence.

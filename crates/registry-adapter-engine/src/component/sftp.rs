@@ -91,6 +91,9 @@ pub struct SftpReadResult {
 pub enum SftpReadFault {
     Timeout,
     Connection,
+    /// The server and this host share no key exchange, cipher, MAC or
+    /// host-key algorithm.
+    Negotiation,
     HostKey,
     Credential,
     Authentication,
@@ -99,7 +102,10 @@ pub enum SftpReadFault {
     Escape,
     NotRegular,
     Incomplete,
+    /// A file over the profile's `read.maximumFileBytes`.
     TooLarge,
+    /// A listing over the runtime's `maximumListingEntries`.
+    ListingTooLarge,
     Malformed,
     Close,
     Row(u64),
@@ -129,6 +135,7 @@ pub(crate) async fn read_page(
     cursor: Option<&Value>,
     decoder: &Decoder,
     deadline: tokio::time::Instant,
+    ongoing: bool,
 ) -> Result<SourceReadPage, SftpReadFault> {
     let (resume_name, resume_digest, resume_position) = cursor_parts(cursor);
     let host_cursor = match (resume_name.clone(), resume_digest.clone(), resume_position) {
@@ -142,24 +149,30 @@ pub(crate) async fn read_page(
     let result = source
         .read(SftpRead {
             cursor: host_cursor,
-            maximum_file_bytes: bounds.maximum_file_bytes,
+            maximum_file_bytes: bounds.maximum_file_bytes.get(),
             deadline,
         })
         .await?;
     if result.listing_entries > plan.maximum_listing_entries {
-        return Err(SftpReadFault::TooLarge);
+        return Err(SftpReadFault::ListingTooLarge);
     }
     let Some(file) = result.file else {
         if result.more_candidates {
             return Err(SftpReadFault::Malformed);
         }
+        // A finite scan has ended. An ongoing scan has caught up and keeps
+        // the cursor it was given.
+        let body = match cursor {
+            Some(cursor) if ongoing => json!({ "items": [], "next": cursor }),
+            _ => json!({ "items": [] }),
+        };
         return Ok(SourceReadPage {
-            body: json!({ "items": [] }),
+            body,
             malformed_lines: 0,
         });
     };
     validate_flat_name(&file.name)?;
-    if file.bytes.len() as u64 > bounds.maximum_file_bytes {
+    if file.bytes.len() as u64 > bounds.maximum_file_bytes.get() {
         return Err(SftpReadFault::TooLarge);
     }
     if resume_name
@@ -206,9 +219,10 @@ pub(crate) async fn read_page(
         }
         crate::component::file::FileReadFault::RowBound => SftpReadFault::RowBound,
         crate::component::file::FileReadFault::DecoderSyntax => SftpReadFault::DecoderSyntax,
+        crate::component::file::FileReadFault::DecodeTimeout => SftpReadFault::Timeout,
         _ => SftpReadFault::Malformed,
     })?;
-    let body = if page.complete && !result.more_candidates {
+    let body = if page.complete && !result.more_candidates && !ongoing {
         json!({ "items": page.items })
     } else {
         json!({
@@ -277,12 +291,122 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct Empty;
+
+    impl SftpSource for Empty {
+        fn read<'a>(
+            &'a self,
+            _read: SftpRead,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<SftpReadResult, SftpReadFault>> + Send + 'a,
+            >,
+        > {
+            Box::pin(async {
+                Ok(SftpReadResult {
+                    file: None,
+                    more_candidates: false,
+                    listing_entries: 1,
+                })
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct Crowded;
+
+    impl SftpSource for Crowded {
+        fn read<'a>(
+            &'a self,
+            _read: SftpRead,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<SftpReadResult, SftpReadFault>> + Send + 'a,
+            >,
+        > {
+            Box::pin(async {
+                Ok(SftpReadResult {
+                    file: None,
+                    more_candidates: false,
+                    listing_entries: 11,
+                })
+            })
+        }
+    }
+
+    /// A listing over the cap is its own fault, not the file-size fault.
+    #[tokio::test]
+    async fn a_listing_over_the_entry_cap_is_not_a_file_size_fault() {
+        let result = read_page(
+            &plan(),
+            &Crowded,
+            &bounds(),
+            None,
+            &Decoder::Raw,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            false,
+        )
+        .await;
+        assert!(matches!(result, Err(SftpReadFault::ListingTooLarge)));
+    }
+
+    fn plan() -> SftpPlan {
+        SftpPlan {
+            namespace: "people".to_owned(),
+            include: None,
+            completion: SftpCompletion::CompletedName,
+            maximum_listing_entries: 10,
+        }
+    }
+
+    async fn read_with(
+        source: &dyn SftpSource,
+        cursor: Option<&Value>,
+        ongoing: bool,
+    ) -> serde_json::Value {
+        read_page(
+            &plan(),
+            source,
+            &bounds(),
+            cursor,
+            &Decoder::Raw,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            ongoing,
+        )
+        .await
+        .expect("the SFTP read")
+        .body
+    }
+
+    /// An ongoing scan holds its place at the tail: the last file's page
+    /// carries a cursor, and a caught-up read keeps the cursor it was
+    /// given instead of clearing the position. A finite scan ends.
+    #[tokio::test]
+    async fn an_ongoing_scan_keeps_a_cursor_at_the_tail_and_a_finite_scan_ends() {
+        let one = OneFile {
+            bytes: b"x".to_vec(),
+        };
+        let finite = read_with(&one, None, false).await;
+        assert!(finite.get("next").is_none(), "finite ends: {finite}");
+
+        let ongoing = read_with(&one, None, true).await;
+        assert_eq!(ongoing["next"]["resumeAfter"], "people.csv", "{ongoing}");
+
+        let tail = ongoing["next"].clone();
+        let caught_up = read_with(&Empty, Some(&tail), true).await;
+        assert_eq!(caught_up["items"], json!([]), "{caught_up}");
+        assert_eq!(caught_up["next"], tail, "{caught_up}");
+        let finished = read_with(&Empty, Some(&tail), false).await;
+        assert!(finished.get("next").is_none(), "finite ends: {finished}");
+    }
+
     fn bounds() -> ReadBounds {
         ReadBounds {
-            maximum_file_bytes: 1024,
-            maximum_row_bytes: 256,
-            maximum_field_bytes: 128,
-            maximum_rows_per_page: 10,
+            maximum_file_bytes: 1024.try_into().expect("inside its range"),
+            maximum_row_bytes: 256.try_into().expect("inside its range"),
+            maximum_field_bytes: 128.try_into().expect("inside its range"),
+            maximum_rows_per_page: 10.try_into().expect("inside its range"),
         }
     }
 
@@ -317,6 +441,7 @@ mod tests {
             None,
             &decoder,
             tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            false,
         )
         .await
         .expect("the SFTP decoder accepts the row");

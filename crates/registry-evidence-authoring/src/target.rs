@@ -7,7 +7,8 @@ use crate::{
     },
 };
 use registry_platform_yaml::{
-    ApiVersion, Decoded, Diagnostic, EnvelopeRule, FormatSpec, LocalId, Report, UniqueList,
+    ApiVersion, Decoded, Diagnostic, EnvelopeRule, FormatSpec, LocalId, RemovedKey, Report,
+    Severity, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -26,8 +27,42 @@ pub const TARGET: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(TARGET_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: TARGET_REMOVED_KEYS,
 };
+
+/// The flat 0.44 connection form, whose endpoint members now sit under one
+/// pack endpoint. Each member says where it moved, so an operator moves the
+/// origin, credential and trust profile instead of deleting them.
+const TARGET_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/connections/*/origin",
+        replacement: MOVED_ORIGIN,
+    },
+    RemovedKey {
+        pointer: "/connections/*/authentication",
+        replacement: MOVED_AUTHENTICATION,
+    },
+    RemovedKey {
+        pointer: "/connections/*/tlsTrustProfile",
+        replacement: MOVED_TLS_TRUST_PROFILE,
+    },
+    RemovedKey {
+        pointer: "/connections/*/maximumConcurrency",
+        replacement: RETIRED_CONNECTION_BUDGET,
+    },
+    RemovedKey {
+        pointer: "/connections/*/admissionTimeoutMilliseconds",
+        replacement: RETIRED_CONNECTION_BUDGET,
+    },
+    RemovedKey {
+        pointer: "/connections/*/tokenTimeoutMilliseconds",
+        replacement: RETIRED_CONNECTION_BUDGET,
+    },
+];
+const MOVED_ORIGIN: &str = "Move it to connections.<id>.endpoints.<pack endpoint id>.origin, one entry per endpoint the pack declares; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const MOVED_AUTHENTICATION: &str = "Move it unchanged to connections.<id>.endpoints.<pack endpoint id>.authentication; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const MOVED_TLS_TRUST_PROFILE: &str = "Move it to connections.<id>.endpoints.<pack endpoint id>.tlsTrustProfile; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const RETIRED_CONNECTION_BUDGET: &str = "Delete it; a connection no longer sets this budget. Bound each attempt with connections.<id>.endpoints.<pack endpoint id>.attemptTimeoutMilliseconds and the whole acquisition with sourceAcquisition; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
 pub const AUTHORITY: FormatSpec<'static> = FormatSpec {
     kind: AUTHORITY_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
@@ -218,7 +253,51 @@ fn target_id_collision_diagnostics(decoded: &Decoded<EvidenceTarget>) -> Vec<Dia
             &outbound_tls.trust_profiles,
         ));
     }
+    diagnostics.extend(unused_trust_profile_diagnostics(decoded));
     diagnostics
+}
+
+/// Refuse a trust profile that no endpoint and no issuer names, at its key.
+///
+/// The runtime refuses an unused profile too, but only after projection and
+/// without a place in `target.yaml`; this names the profile where it is
+/// written and the two ways to resolve it.
+fn unused_trust_profile_diagnostics(decoded: &Decoded<EvidenceTarget>) -> Vec<Diagnostic> {
+    let target = &decoded.value;
+    let Some(outbound_tls) = &target.outbound_tls else {
+        return Vec::new();
+    };
+    let referenced = target
+        .authentication
+        .oidc
+        .tls_trust_profile
+        .as_deref()
+        .into_iter()
+        .chain(
+            target
+                .connections
+                .values()
+                .flat_map(|connection| connection.endpoints.values())
+                .filter_map(|endpoint| endpoint.tls_trust_profile.as_deref()),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+    outbound_tls
+        .trust_profiles
+        .keys()
+        .filter(|id| !referenced.contains(id.as_str()))
+        .map(|id| {
+            decoded.document.diagnostic_at_key(
+                Severity::Error,
+                "evidence.target.trust-profile-unused",
+                &format!(
+                    "/outboundTls/trustProfiles/{}",
+                    registry_platform_yaml::escape_pointer_segment(id.as_str())
+                ),
+                &format!("trust profile `{id}` is not named by any endpoint or by the token issuer, so the runtime would refuse this target"),
+                "Name it from a connection endpoint `tlsTrustProfile` or from `authentication.oidc.tlsTrustProfile`, or delete it.",
+            )
+        })
+        .collect()
 }
 
 pub fn validate_authority(

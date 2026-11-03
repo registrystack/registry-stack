@@ -221,9 +221,17 @@ pub enum ReplayFailure {
     Leftover,
     /// An OAuth endpoint has no recorded token request.
     TokenMissing,
-    /// A raw host-protocol response was missing, invalid, used on an ordinary
-    /// replay, or exceeded the caller's byte bound.
-    RawBody,
+    /// A host-protocol response recorded neither `rawBodyBase64` nor `body`.
+    ProtocolBodyMissing,
+    /// A host protocol that verifies exact response bytes was given a
+    /// readable `body` instead of `rawBodyBase64`.
+    ProtocolBodyNotRaw,
+    /// A recorded `rawBodyBase64` is not valid base64.
+    ProtocolBodyInvalid,
+    /// A recorded host-protocol response exceeds the endpoint byte bound.
+    ProtocolBodyTooLarge,
+    /// An endpoint without a host protocol recorded `rawBodyBase64`.
+    RawBodyOnOrdinaryEndpoint,
 }
 
 impl fmt::Display for ReplayFailure {
@@ -260,7 +268,19 @@ impl fmt::Display for ReplayFailure {
             Self::HeaderOrder => "the outgoing header order differs from the next recorded send",
             Self::Leftover => "the route made fewer sends than the fixture recorded",
             Self::TokenMissing => "the OAuth endpoint has no recorded token request",
-            Self::RawBody => "the fixture raw response body is unavailable or invalid",
+            Self::ProtocolBodyMissing => {
+                "the recorded host-protocol response has no body; record it as `rawBodyBase64`, or as a JSON `body` when the protocol verifies no signature"
+            }
+            Self::ProtocolBodyNotRaw => {
+                "this host protocol verifies the exact response bytes; record the response as `rawBodyBase64`, not `body`"
+            }
+            Self::ProtocolBodyInvalid => "the recorded `rawBodyBase64` is not valid base64",
+            Self::ProtocolBodyTooLarge => {
+                "the recorded host-protocol response is larger than the endpoint `maximumResponseBytes`"
+            }
+            Self::RawBodyOnOrdinaryEndpoint => {
+                "this endpoint has no host protocol, so record its response as a JSON `body`, not `rawBodyBase64`"
+            }
         })
     }
 }
@@ -306,6 +326,9 @@ pub(crate) struct ProtocolReplaySend<'a> {
     pub body: Option<&'a serde_json::Value>,
     pub headers: &'a [(&'a str, &'a str)],
     pub maximum_response_bytes: usize,
+    /// The selected protocol verifies no signature over the response bytes,
+    /// so a fixture may record its JSON response as a readable `body`.
+    pub readable_body: bool,
 }
 
 impl ReplayTranscript {
@@ -372,13 +395,15 @@ impl ReplayTranscript {
             Some(ReplayRequestHeaders::Ordered(headers)),
         )?;
         if response.raw_body_base64.is_some() {
-            return Err(self.remember_failure(ReplayFailure::RawBody));
+            return Err(self.remember_failure(ReplayFailure::RawBodyOnOrdinaryEndpoint));
         }
         Ok(response)
     }
 
     /// Answer one selected host-protocol send with exact bounded wire bytes.
-    /// The encoded-length check runs before allocating the decoded buffer.
+    /// The encoded-length check runs before allocating the decoded buffer. A
+    /// protocol that verifies no signature may replay a readable JSON `body`,
+    /// answered as its compact JSON bytes.
     pub(crate) fn answer_protocol(
         &self,
         send: ProtocolReplaySend<'_>,
@@ -394,26 +419,33 @@ impl ReplayTranscript {
             },
             Some(ReplayRequestHeaders::ByName(send.headers)),
         )?;
-        let Some(encoded) = response.raw_body_base64.as_deref() else {
-            return Err(self.remember_failure(ReplayFailure::RawBody));
+        let body = match (response.raw_body_base64.as_deref(), response.body.as_ref()) {
+            // The fixture reader refuses a response that records both forms.
+            (Some(encoded), _) => {
+                let maximum_encoded = send
+                    .maximum_response_bytes
+                    .checked_add(2)
+                    .and_then(|value| value.checked_div(3))
+                    .and_then(|value| value.checked_mul(4))
+                    .ok_or_else(|| self.remember_failure(ReplayFailure::ProtocolBodyTooLarge))?;
+                if encoded.len() > maximum_encoded {
+                    return Err(self.remember_failure(ReplayFailure::ProtocolBodyTooLarge));
+                }
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|_| self.remember_failure(ReplayFailure::ProtocolBodyInvalid))?
+            }
+            (None, Some(_)) if !send.readable_body => {
+                return Err(self.remember_failure(ReplayFailure::ProtocolBodyNotRaw));
+            }
+            (None, Some(readable)) => serde_json::to_vec(readable.as_value())
+                .map_err(|_| self.remember_failure(ReplayFailure::ProtocolBodyInvalid))?,
+            (None, None) => {
+                return Err(self.remember_failure(ReplayFailure::ProtocolBodyMissing));
+            }
         };
-        if response.body.is_some() {
-            return Err(self.remember_failure(ReplayFailure::RawBody));
-        }
-        let maximum_encoded = send
-            .maximum_response_bytes
-            .checked_add(2)
-            .and_then(|value| value.checked_div(3))
-            .and_then(|value| value.checked_mul(4))
-            .ok_or_else(|| self.remember_failure(ReplayFailure::RawBody))?;
-        if encoded.len() > maximum_encoded {
-            return Err(self.remember_failure(ReplayFailure::RawBody));
-        }
-        let body = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|_| self.remember_failure(ReplayFailure::RawBody))?;
         if body.len() > send.maximum_response_bytes {
-            return Err(self.remember_failure(ReplayFailure::RawBody));
+            return Err(self.remember_failure(ReplayFailure::ProtocolBodyTooLarge));
         }
         Ok(RecordedProtocolResponse {
             status: response.status.get() as u16,
@@ -623,6 +655,7 @@ mod tests {
                 body: Some(&request),
                 headers: &[],
                 maximum_response_bytes: wire.len(),
+                readable_body: false,
             })
             .expect("exact raw response");
         assert_eq!(response.body.as_slice(), wire);
@@ -638,8 +671,9 @@ mod tests {
                 body: Some(&request),
                 headers: &[],
                 maximum_response_bytes: wire.len() - 1,
+                readable_body: false,
             }),
-            Err(ReplayFailure::RawBody)
+            Err(ReplayFailure::ProtocolBodyTooLarge)
         ));
     }
 
@@ -665,6 +699,7 @@ mod tests {
                     ("registry-access-purpose", "eligibility"),
                 ],
                 maximum_response_bytes: 64,
+                readable_body: false,
             })
             .expect("a recorded header map does not prescribe HTTP field order");
         transcript
@@ -708,6 +743,7 @@ mod tests {
                     body: Some(&request),
                     headers,
                     maximum_response_bytes: 64,
+                    readable_body: false,
                 })
                 .is_err());
             assert!(transcript.finish().is_err());
@@ -728,7 +764,91 @@ mod tests {
                 Some(&request),
                 &[],
             ),
-            Err(ReplayFailure::RawBody)
+            Err(ReplayFailure::RawBodyOnOrdinaryEndpoint)
         ));
+    }
+
+    fn protocol_transcript(response: serde_json::Value) -> ReplayTranscript {
+        let intercepts = serde_json::from_value(serde_json::json!([
+            {"type": "endpoint", "endpoint": "register"}
+        ]))
+        .expect("intercepts");
+        let exchanges = serde_json::from_value(serde_json::json!([{
+            "request": {"endpoint": "register", "method": "GET", "path": "/v1/records/r-1"},
+            "response": response
+        }]))
+        .expect("protocol exchange");
+        ReplayTranscript::from_exchanges(intercepts, exchanges)
+    }
+
+    fn answer_lookup(
+        transcript: &ReplayTranscript,
+        readable_body: bool,
+        maximum_response_bytes: usize,
+    ) -> Result<RecordedProtocolResponse, ReplayFailure> {
+        transcript.answer_protocol(ProtocolReplaySend {
+            endpoint: "register",
+            method: HttpMethod::Get,
+            path: "/v1/records/r-1",
+            query: None,
+            body: None,
+            headers: &[],
+            maximum_response_bytes,
+            readable_body,
+        })
+    }
+
+    #[test]
+    fn a_readable_body_answers_a_protocol_that_verifies_no_signature() {
+        let problem = serde_json::json!({"type": "urn:example:not-found", "status": 404});
+        let transcript =
+            protocol_transcript(serde_json::json!({"status": 404, "body": problem.clone()}));
+        let response = answer_lookup(&transcript, true, 1024).expect("a readable lookup body");
+        assert_eq!(response.status, 404);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&response.body).expect("JSON bytes"),
+            problem
+        );
+        transcript.finish().expect("complete transcript");
+
+        let signed = protocol_transcript(serde_json::json!({"status": 404, "body": problem}));
+        assert!(matches!(
+            answer_lookup(&signed, false, 1024),
+            Err(ReplayFailure::ProtocolBodyNotRaw)
+        ));
+        let small = protocol_transcript(serde_json::json!({"status": 200, "body": {"a": "bb"}}));
+        assert!(matches!(
+            answer_lookup(&small, true, 4),
+            Err(ReplayFailure::ProtocolBodyTooLarge)
+        ));
+    }
+
+    #[test]
+    fn each_protocol_body_fault_names_its_own_cause() {
+        let missing = protocol_transcript(serde_json::json!({"status": 204}));
+        assert_eq!(
+            answer_lookup(&missing, false, 64).err(),
+            Some(ReplayFailure::ProtocolBodyMissing)
+        );
+        let invalid =
+            protocol_transcript(serde_json::json!({"status": 200, "rawBodyBase64": "not base64!"}));
+        assert_eq!(
+            answer_lookup(&invalid, false, 64).err(),
+            Some(ReplayFailure::ProtocolBodyInvalid)
+        );
+        let causes = [
+            ReplayFailure::ProtocolBodyMissing,
+            ReplayFailure::ProtocolBodyNotRaw,
+            ReplayFailure::ProtocolBodyInvalid,
+            ReplayFailure::ProtocolBodyTooLarge,
+            ReplayFailure::RawBodyOnOrdinaryEndpoint,
+        ]
+        .map(|failure| failure.to_string());
+        let distinct = causes.iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(distinct.len(), causes.len(), "{causes:?}");
+        assert!(causes[0].contains("rawBodyBase64") && causes[0].contains("`body`"));
+        assert!(causes[1].contains("rawBodyBase64"));
+        assert!(causes[3].contains("maximumResponseBytes"));
+        assert!(causes[4].contains("`body`"));
     }
 }

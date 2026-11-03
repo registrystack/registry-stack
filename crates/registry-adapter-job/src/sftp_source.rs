@@ -27,6 +27,26 @@ use russh_sftp::client::{Config as SftpConfig, RawSftpSession, SftpSession};
 use russh_sftp::protocol::StatusCode;
 use tokio::io::AsyncReadExt as _;
 
+/// The short modern algorithm set the client offers, in preference order.
+/// It covers servers under a FIPS-style policy (NIST-curve key exchange,
+/// AES-CTR with encrypt-then-MAC) as well as curve25519 and AES-GCM
+/// servers, and nothing weaker: no SHA-1, CBC, 3DES, or finite-field
+/// Diffie-Hellman. The AEAD ciphers carry their own integrity, so the
+/// MACs apply to the CTR ciphers only.
+const ACCEPTED_KEX: &[russh::kex::Name] = &[
+    russh::kex::CURVE25519,
+    russh::kex::ECDH_SHA2_NISTP256,
+    russh::kex::ECDH_SHA2_NISTP384,
+];
+const ACCEPTED_CIPHERS: &[russh::cipher::Name] = &[
+    russh::cipher::AES_256_GCM,
+    russh::cipher::AES_128_GCM,
+    russh::cipher::AES_256_CTR,
+    russh::cipher::AES_128_CTR,
+];
+const ACCEPTED_MACS: &[russh::mac::Name] =
+    &[russh::mac::HMAC_SHA256_ETM, russh::mac::HMAC_SHA512_ETM];
+
 const SFTP_PACKET_BYTES: u32 = 256 * 1024;
 const READ_CHUNK_BYTES: usize = 32 * 1024;
 
@@ -97,11 +117,11 @@ impl RusshSftpSource {
             inactivity_timeout: Some(remaining(read.deadline)?),
             nodelay: true,
             preferred: russh::Preferred {
-                kex: Cow::Owned(vec![russh::kex::CURVE25519]),
+                kex: Cow::Borrowed(ACCEPTED_KEX),
                 key: Cow::Owned(vec![self.pinned_key.algorithm()]),
                 host_key_certificates: Cow::Borrowed(&[]),
-                cipher: Cow::Owned(vec![russh::cipher::AES_256_GCM]),
-                mac: Cow::Owned(vec![russh::mac::HMAC_SHA256_ETM]),
+                cipher: Cow::Borrowed(ACCEPTED_CIPHERS),
+                mac: Cow::Borrowed(ACCEPTED_MACS),
                 compression: Cow::Owned(vec![russh::compression::NONE]),
             },
             ..Default::default()
@@ -123,12 +143,16 @@ impl RusshSftpSource {
         )
         .await
         .map_err(|_| SftpReadFault::Timeout)?
-        .map_err(
-            |_| match verification.load(std::sync::atomic::Ordering::Acquire) {
-                1 => SftpReadFault::HostKey,
+        .map_err(|error| {
+            match (
+                verification.load(std::sync::atomic::Ordering::Acquire),
+                error,
+            ) {
+                (1, _) => SftpReadFault::HostKey,
+                (_, russh::Error::NoCommonAlgo { .. }) => SftpReadFault::Negotiation,
                 _ => SftpReadFault::Connection,
-            },
-        )?;
+            }
+        })?;
 
         // Deliberately after key verification: a wrong server receives no
         // credential lookup, password, signature, or public client key.
@@ -145,10 +169,7 @@ impl RusshSftpSource {
             ssh.disconnect(russh::Disconnect::ByApplication, "", ""),
         )
         .await;
-        if !matches!(disconnect, Ok(Ok(()))) && result.is_ok() {
-            return Err(SftpReadFault::Close);
-        }
-        result
+        keep_read_after_disconnect(result, matches!(disconnect, Ok(Ok(()))))
     }
 }
 
@@ -393,6 +414,8 @@ async fn list_candidates(
         .map_err(|_| SftpReadFault::Close)?;
     session_close.map_err(|_| SftpReadFault::Close)?;
     let mut candidates = Vec::new();
+    // One channel answers every done-file lookup of this listing.
+    let mut marker_session = None;
     for (name, attrs) in files {
         if attrs.is_symlink() || !attrs.is_regular() {
             return Err(SftpReadFault::NotRegular);
@@ -401,16 +424,19 @@ async fn list_candidates(
             let marker_name = pattern.of(&name);
             validate_flat_name(&marker_name)?;
             let marker = joined(&root, &marker_name);
-            let attrs = RawSftpSession::new_with_config(
-                open_sftp_channel(ssh, deadline).await?,
-                sftp_config(deadline)?,
-            );
-            tokio::time::timeout_at(deadline, attrs.init())
-                .await
-                .map_err(|_| SftpReadFault::Timeout)?
-                .map_err(|_| SftpReadFault::Listing)?;
+            if marker_session.is_none() {
+                let session = RawSftpSession::new_with_config(
+                    open_sftp_channel(ssh, deadline).await?,
+                    sftp_config(deadline)?,
+                );
+                tokio::time::timeout_at(deadline, session.init())
+                    .await
+                    .map_err(|_| SftpReadFault::Timeout)?
+                    .map_err(|_| SftpReadFault::Listing)?;
+                marker_session = Some(session);
+            }
+            let attrs = marker_session.as_ref().ok_or(SftpReadFault::Listing)?;
             let ready = tokio::time::timeout_at(deadline, attrs.lstat(marker.clone())).await;
-            attrs.close_session().map_err(|_| SftpReadFault::Close)?;
             match ready {
                 Ok(Ok(value)) if value.attrs.is_regular() && !value.attrs.is_symlink() => {}
                 Ok(Err(russh_sftp::client::error::Error::Status(status)))
@@ -426,6 +452,9 @@ async fn list_candidates(
             None
         };
         candidates.push(Candidate { name, marker });
+    }
+    if let Some(session) = marker_session {
+        session.close_session().map_err(|_| SftpReadFault::Close)?;
     }
     candidates.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(Listing {
@@ -449,28 +478,50 @@ fn select_listing_page(
         if matches!(file.filename.as_str(), "." | "..") {
             continue;
         }
-        *entries = entries.checked_add(1).ok_or(SftpReadFault::TooLarge)?;
-        if *entries > binding.maximum_listing_entries {
-            return Err(SftpReadFault::TooLarge);
+        // A hidden name (a dotfile, an editor or transfer temp file) and a
+        // subdirectory are never candidates, so they neither fail the read
+        // nor count against the listing bound.
+        if (file.filename.starts_with('.') && !file.filename.contains(['/', '\\']))
+            || file.attrs.is_dir()
+        {
+            continue;
         }
-        validate_flat_name(&file.filename)?;
         let included = binding
             .plan
             .include
             .as_ref()
             .is_none_or(|pattern| pattern.matches(&file.filename));
-        if tokio::time::Instant::now() >= deadline {
-            return Err(SftpReadFault::Timeout);
-        }
         let marker = match &binding.plan.completion {
             SftpCompletion::DoneFile { pattern } => pattern.is_done_file(&file.filename),
             SftpCompletion::CompletedName => false,
         };
-        if included && !marker {
-            files.push((file.filename, file.attrs));
+        if !included || marker {
+            continue;
         }
+        // Only a name this read can open is validated and counted.
+        validate_flat_name(&file.filename)?;
+        *entries = entries
+            .checked_add(1)
+            .ok_or(SftpReadFault::ListingTooLarge)?;
+        if *entries > binding.maximum_listing_entries {
+            return Err(SftpReadFault::ListingTooLarge);
+        }
+        files.push((file.filename, file.attrs));
     }
     Ok(())
+}
+
+/// The read already finished and was verified by digest, so a server that
+/// is slow to answer the disconnect costs nothing: keep the page and log
+/// the close failure. A failed read keeps its own fault.
+fn keep_read_after_disconnect(
+    result: Result<SftpReadResult, SftpReadFault>,
+    disconnected: bool,
+) -> Result<SftpReadResult, SftpReadFault> {
+    if !disconnected && result.is_ok() {
+        tracing::warn!("an SFTP source session did not close cleanly after a complete read");
+    }
+    result
 }
 
 async fn read_candidate(
@@ -992,6 +1043,10 @@ sJWR7W+cGvJ/vLsw==
     }
 
     async fn server(state: TestState) -> Harness {
+        server_offering(state, russh::Preferred::DEFAULT).await
+    }
+
+    async fn server_offering(state: TestState, preferred: russh::Preferred) -> Harness {
         let state = Arc::new(Mutex::new(state));
         let key =
             russh::keys::decode_secret_key(TEST_HOST_KEY, Some("blabla")).expect("test host key");
@@ -1006,6 +1061,7 @@ sJWR7W+cGvJ/vLsw==
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
             keys: vec![key],
+            preferred,
             ..Default::default()
         });
         let server = Box::leak(Box::new(TestServer {
@@ -1132,6 +1188,20 @@ sJWR7W+cGvJ/vLsw==
         assert!(matches!(
             source.read(read(Duration::from_secs(2), 4)).await,
             Err(SftpReadFault::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn a_complete_read_survives_a_slow_disconnect() {
+        let page = SftpReadResult {
+            file: None,
+            more_candidates: false,
+            listing_entries: 0,
+        };
+        assert!(keep_read_after_disconnect(Ok(page), false).is_ok());
+        assert!(matches!(
+            keep_read_after_disconnect(Err(SftpReadFault::Authentication), false),
+            Err(SftpReadFault::Authentication)
         ));
     }
 
@@ -1276,6 +1346,151 @@ sJWR7W+cGvJ/vLsw==
         let state = harness.state.lock().await;
         assert_eq!(state.outside_open_attempts.load(Ordering::Relaxed), 1);
         assert_eq!(state.outside_bytes_served.load(Ordering::Relaxed), 0);
+    }
+
+    fn ready_state(listing: &[&str]) -> TestState {
+        let mut state = TestState {
+            listing: listing.iter().map(|name| (*name).to_owned()).collect(),
+            ..Default::default()
+        };
+        for name in listing {
+            state
+                .entries
+                .insert((*name).to_owned(), Entry::regular(b"id\n1\n"));
+        }
+        state
+    }
+
+    /// Hidden files and editor or transfer temp names beside the data are
+    /// not candidates, so they cannot fail the read.
+    #[tokio::test]
+    async fn hidden_entries_beside_the_data_are_skipped() {
+        std::env::set_var("ADAPTER_SFTP_TEST_PASSWORD", "test-password");
+        let harness = server(ready_state(&[
+            ".DS_Store",
+            ".people.csv.XyZ12",
+            "people.csv",
+            "people.csv.done",
+        ]))
+        .await;
+        let source = test_source(&harness, harness.host_key.clone());
+        let read = source
+            .read(read(Duration::from_secs(2), 1024))
+            .await
+            .expect("hidden entries do not fail the read");
+        assert_eq!(read.file.expect("the data file").name, "people.csv");
+    }
+
+    /// With no include glob a subdirectory is not a candidate and does not
+    /// fail the read.
+    #[tokio::test]
+    async fn a_subdirectory_is_skipped_when_no_include_glob_is_declared() {
+        std::env::set_var("ADAPTER_SFTP_TEST_PASSWORD", "test-password");
+        let mut state = ready_state(&["people.csv", "people.csv.done"]);
+        let mut archive = Entry::regular(b"");
+        archive.attrs.set_regular(false);
+        archive.attrs.set_dir(true);
+        state.listing.insert(0, "archive".to_owned());
+        state.entries.insert("archive".to_owned(), archive);
+        let harness = server(state).await;
+        let mut source = test_source(&harness, harness.host_key.clone());
+        source.binding.plan.include = None;
+        let read = source
+            .read(read(Duration::from_secs(2), 1024))
+            .await
+            .expect("a subdirectory does not fail the read");
+        assert_eq!(read.file.expect("the data file").name, "people.csv");
+    }
+
+    /// The listing cap counts the entries a read can use, not every name in
+    /// the directory.
+    #[tokio::test]
+    async fn the_listing_cap_counts_only_matching_entries() {
+        std::env::set_var("ADAPTER_SFTP_TEST_PASSWORD", "test-password");
+        let mut names = (0..40)
+            .map(|index| format!("old-{index}.tmp"))
+            .collect::<Vec<_>>();
+        names.extend(["people.csv".to_owned(), "people.csv.done".to_owned()]);
+        let names = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let harness = server(ready_state(&names)).await;
+        let source = test_source(&harness, harness.host_key.clone());
+        let read = source
+            .read(read(Duration::from_secs(2), 1024))
+            .await
+            .expect("unrelated names do not count against the cap");
+        assert_eq!(read.file.expect("the data file").name, "people.csv");
+        assert_eq!(read.listing_entries, 1);
+    }
+
+    fn offering(
+        kex: russh::kex::Name,
+        cipher: russh::cipher::Name,
+        mac: russh::mac::Name,
+    ) -> russh::Preferred {
+        russh::Preferred {
+            kex: Cow::Owned(vec![kex]),
+            cipher: Cow::Owned(vec![cipher]),
+            mac: Cow::Owned(vec![mac]),
+            ..russh::Preferred::DEFAULT
+        }
+    }
+
+    /// Institutional servers under a FIPS-style policy offer NIST-curve key
+    /// exchange and AES-CTR with encrypt-then-MAC, not curve25519 and
+    /// AES-GCM.
+    #[tokio::test]
+    async fn a_server_offering_only_nist_key_exchange_and_aes_ctr_is_readable() {
+        std::env::set_var("ADAPTER_SFTP_TEST_PASSWORD", "test-password");
+        for (kex, cipher, mac) in [
+            (
+                russh::kex::ECDH_SHA2_NISTP256,
+                russh::cipher::AES_256_CTR,
+                russh::mac::HMAC_SHA256_ETM,
+            ),
+            (
+                russh::kex::ECDH_SHA2_NISTP384,
+                russh::cipher::AES_128_CTR,
+                russh::mac::HMAC_SHA512_ETM,
+            ),
+            (
+                russh::kex::CURVE25519,
+                russh::cipher::AES_128_GCM,
+                russh::mac::HMAC_SHA256_ETM,
+            ),
+        ] {
+            let harness = server_offering(
+                ready_state(&["people.csv", "people.csv.done"]),
+                offering(kex, cipher, mac),
+            )
+            .await;
+            let source = test_source(&harness, harness.host_key.clone());
+            let read = source
+                .read(read(Duration::from_secs(2), 1024))
+                .await
+                .unwrap_or_else(|fault| panic!("{kex:?} {cipher:?} {mac:?}: {fault:?}"));
+            assert_eq!(read.file.expect("the data file").name, "people.csv");
+        }
+    }
+
+    /// A server whose algorithms do not overlap is a negotiation failure
+    /// with its own fault, not a generic connection failure.
+    #[tokio::test]
+    async fn a_server_with_no_shared_algorithm_is_a_negotiation_fault() {
+        std::env::set_var("ADAPTER_SFTP_TEST_PASSWORD", "test-password");
+        let harness = server_offering(
+            ready_state(&["people.csv", "people.csv.done"]),
+            offering(
+                russh::kex::DH_G14_SHA256,
+                russh::cipher::AES_256_CTR,
+                russh::mac::HMAC_SHA256_ETM,
+            ),
+        )
+        .await;
+        let source = test_source(&harness, harness.host_key.clone());
+        assert!(matches!(
+            source.read(read(Duration::from_secs(2), 1024)).await,
+            Err(SftpReadFault::Negotiation)
+        ));
     }
 
     #[tokio::test]

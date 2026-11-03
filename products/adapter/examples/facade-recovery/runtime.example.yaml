@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# The facade-recovery reference deployment's runtime configuration, in the
+# example form: every secret is a reference into the operator's provider,
+# never a value, and the listener binds loopback only. A deployment copies
+# this file to its own runtime.yaml and fills in its environment's
+# references. Check it with the project, from the repository root:
+#   adapterctl check products/adapter/examples/facade-recovery/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --pack products/adapter/examples/facade-recovery/pack.yaml \
+#     --runtime products/adapter/examples/facade-recovery/runtime.example.yaml
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: facade-recovery-example
+endpoints:
+  - endpoint: reference
+    baseUrl: https://reference.example.invalid
+    credential:
+      type: basic
+      usernameRef: secret:env/REFERENCE_USERNAME
+      passwordRef: secret:env/REFERENCE_PASSWORD
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter-example
+allowedClients:
+  # The OAuth clients whose access tokens the facade admits.
+  - registry-adapter-example-client
+allowedPrivateCidrs:
+  # The private ranges this deployment may call upstream. The example
+  # range stands in for the deployment's own; private endpoints stay
+  # refused unless their range is listed here.
+  - 10.0.0.0/8
+audit:
+  retentionDays: 90
+idempotency:
+  # How long the facade keeps a write's exact response and its resume
+  # checkpoint. Keep it no longer than the provider's documented
+  # deduplication window for create-draft and finalize-draft: a retry
+  # after the provider forgets a key could repeat the effect.
+  responseRetentionSeconds: 86400

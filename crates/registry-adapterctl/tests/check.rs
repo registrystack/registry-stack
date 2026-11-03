@@ -1411,6 +1411,38 @@ fn the_runtime_file_refuses_the_removed_ca_bundle_ref_key() {
     );
 }
 
+/// A project binding still writing the renamed `asyncCompletion.mode` is
+/// refused with the reader's removed-key diagnostic at the key, naming the
+/// `type` replacement (CFG-CHANGE-2).
+#[test]
+fn the_project_refuses_the_renamed_async_completion_mode_key() {
+    let (_root, project) = mutated_project(|root| {
+        let path = root.join("project.yaml");
+        let text = std::fs::read_to_string(&path).unwrap().replace(
+            "    route: createCase\n    maximumUpstreamCalls: 5\n",
+            "    route: createCase\n    maximumUpstreamCalls: 5\n    asyncCompletion:\n      mode: status-link\n",
+        );
+        std::fs::write(path, text).unwrap();
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "config.removed-key");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    let removed = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.removed-key")
+        .unwrap();
+    assert_eq!(
+        removed["path"], "/bindings/1/asyncCompletion/mode",
+        "{report}"
+    );
+    assert!(
+        removed["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("type: status-link")),
+        "{report}"
+    );
+}
+
 /// With `--environment` an expression naming an unset variable is refused
 /// at the member, naming the variable and never its value (CFG-SEC-2,
 /// CFG-SEC-3).

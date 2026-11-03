@@ -157,7 +157,6 @@ fn governed_ingestion_members_refuse_with_exactly_their_code() {
         "adapter.job.poll-timeout",
         "adapter.job.postgres-key-required",
         "adapter.job.postgres-parameters-unbounded",
-        "adapter.job.profile-bound",
         "adapter.job.profile-endpoint-bound",
         "adapter.job.profile-inconsistent",
         "adapter.job.projection-bound",
@@ -224,4 +223,42 @@ fn governed_ingestion_members_refuse_with_exactly_their_code() {
             "{name} refuses with exactly its own code and its documented co-fires"
         );
     }
+}
+
+/// A typo inside the CSV decoder mapping is reported at the misspelt
+/// key, with its line and the CSV option set, never as a whole-union
+/// mismatch at the step: the decoder chooses its form by node kind.
+#[test]
+fn a_misspelt_csv_decoder_option_is_located_at_the_key() {
+    let path = corpus().join("base-job").join("pack.yaml");
+    let text = std::fs::read_to_string(&path).expect("base-job pack");
+    assert!(
+        text.contains("decoder: csv"),
+        "the control declares a csv decoder"
+    );
+    let edited = text.replace("decoder: csv", "decoder: { delimeter: \";\" }");
+    let format = pack_format();
+    let refused = registry_platform_yaml::decode_document::<AdapterPack>(
+        "pack.yaml",
+        edited.as_bytes(),
+        &Expect::one(&format),
+    )
+    .expect_err("a misspelt decoder option refuses");
+    let finding = refused.diagnostics().first().expect("one located finding");
+    assert!(
+        finding.path.ends_with("/decoder/delimeter"),
+        "the finding points at the misspelt key: {finding:?}"
+    );
+    assert!(
+        finding
+            .source
+            .as_ref()
+            .and_then(|source| source.line)
+            .is_some(),
+        "the finding carries a line: {finding:?}"
+    );
+    assert!(
+        finding.message.contains("delimeter") || finding.path.contains("delimeter"),
+        "the finding names the key: {finding:?}"
+    );
 }

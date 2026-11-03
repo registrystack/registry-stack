@@ -201,6 +201,14 @@ source:
     version: "1"
     digest: {pack_digest}
   route: {route}
+destination:
+  type: signed-coordinator-event
+  binding: household-workflow
+  workflow: register-household
+  trigger: submission-received
+  source: urn:registry-adapter:job:test
+  eventType: org.example.submission-received.v1
+  dataSchema: urn:registry-adapter:schema:submission:v1
 projection:
   fields:
     - id
@@ -449,8 +457,8 @@ fn compile_refuses_a_route_that_writes_the_cursor_property() {
         .expect_err("writing the cursor property refuses");
     assert!(
         error.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("reserved property")
-                || diagnostic.suggested_action.contains("reserved property")
+            diagnostic.code == "adapter.route.reserved-property-name"
+                && diagnostic.path == "/sourceRoutes/0/steps/1"
         }),
         "the refusal names the reserved property: {:?}",
         error.diagnostics
@@ -628,8 +636,11 @@ fn the_default_build_refuses_a_file_job() {
 }
 
 /// The default build compiles no postgres send: a pack whose source
-/// route sends to a postgres endpoint refuses at compile under
-/// `adapter.job.component-unavailable`.
+/// route sends to a postgres endpoint refuses at compile. The route's
+/// served-shape walk refuses it first, as a runtime-state refusal that
+/// names the missing component and the feature that compiles it;
+/// `adapter.job.component-unavailable` is the
+/// refusal for a source this build compiles but a binding leaves unserved.
 #[cfg(not(feature = "job-postgres"))]
 #[test]
 fn the_default_build_refuses_a_postgres_job() {
@@ -641,16 +652,21 @@ fn the_default_build_refuses_a_postgres_job() {
         .expect_err("the default build refuses a postgres source");
     assert!(
         error.diagnostics.iter().any(|diagnostic| diagnostic.code
-            == "adapter.job.component-unavailable"
-            && diagnostic.path == "/endpoints/ledger"),
-        "the refusal names the postgres endpoint: {:?}",
+            == "platform.runtime-config.refused"
+            && diagnostic
+                .message
+                .contains("the postgres source component is not compiled into this binary")
+            && diagnostic.message.contains("job-postgres")),
+        "the refusal names the missing component and its feature: {:?}",
         error.diagnostics
     );
 }
 
 /// A source route that sends to a `direct:` route the pack declares no
-/// body for refuses at compile under `adapter.job.direct-unknown`, with
-/// the sending step's pointer, instead of failing the first page run.
+/// body for refuses at compile under `adapter.route.unknown-direct-target`
+/// (the pack's own route check, which runs before the job compiler's
+/// graph walk), with the sending step's pointer, instead of failing the
+/// first page run.
 #[test]
 fn compile_refuses_a_source_route_to_an_undeclared_direct_route() {
     let pack = r#"apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
@@ -681,11 +697,9 @@ capabilities: {}
     let error = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
         .expect_err("an undeclared direct route refuses");
     assert!(
-        error
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "adapter.job.direct-unknown"
-                && diagnostic.path == "/sourceRoutes/0/steps/0"),
+        error.diagnostics.iter().any(|diagnostic| diagnostic.code
+            == "adapter.route.unknown-direct-target"
+            && diagnostic.path == "/sourceRoutes/0/steps/0"),
         "the refusal names the sending step: {:?}",
         error.diagnostics
     );

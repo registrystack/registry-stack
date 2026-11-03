@@ -182,11 +182,18 @@ pub(crate) fn assemble(
                     }
                 }
                 None => {
+                    // The status GET answers the write's terminal replay,
+                    // its pending 202, and the shared protocol and profile
+                    // problems; it has no body, so the write's
+                    // request-body problems never apply.
+                    let mut status_responses = responses.clone();
+                    status_responses.remove("413");
+                    status_responses.remove("415");
                     statuses.insert(
                         path,
                         AsyncStatusDocument {
                             operation: operation.id.as_str().to_owned(),
-                            responses: responses.clone(),
+                            responses: status_responses,
                             terminal_status,
                             terminal_schemas: vec![terminal_schema],
                         },
@@ -1030,6 +1037,40 @@ mod tests {
         assert!(status.get("requestBody").is_none());
         assert!(status["responses"].get("404").is_some());
         assert!(status["responses"].get("412").is_some());
+    }
+
+    /// The bodiless status GET does not advertise the write's request-body
+    /// problems (413, 415); the problems a stored terminal failure can
+    /// replay stay declared.
+    #[test]
+    fn async_status_get_omits_the_write_request_body_problems() {
+        let mut value = serde_json::to_value(async_profile()).expect("profile JSON");
+        let problems = value["problems"].as_array_mut().expect("problems");
+        problems.push(json!({
+            "code": "cases.too-large", "status": 413,
+            "title": "The request body is too large.", "classes": ["facade.payload-too-large"],
+        }));
+        problems.push(json!({
+            "code": "cases.media-type", "status": 415,
+            "title": "The request body type is not JSON.",
+            "classes": ["facade.unsupported-media-type"],
+        }));
+        let profile: AdapterProfile = serde_json::from_value(value).expect("profile decodes");
+        let document =
+            assemble(&profile, &project(both_bindings())).expect("the contract assembles");
+        let write = &document["paths"]["/v2/cases/case"]["post"]["responses"];
+        let status = &document["paths"]["/v2/write-status/{statusId}"]["get"]["responses"];
+        for code in ["413", "415"] {
+            assert!(write.get(code).is_some(), "the write keeps {code}");
+            assert!(
+                status.get(code).is_none(),
+                "the status GET omits {code}: {status}"
+            );
+        }
+        assert_eq!(
+            status["409"], write["409"],
+            "a replayable terminal failure stays"
+        );
     }
 
     #[test]

@@ -53,6 +53,72 @@ owns the ingestion contract and its declared limits.
 | `fixtures/source-shapes/` | Authored packs over five upstream API shapes (FHIR R4 search and conditional create, Relay GraphQL, JSON:API behind mTLS, and a second target profile); each README states what the shape proves and the gaps it records |
 | `scripts/` | Product gates and helpers |
 
+## Try an example
+
+The Adapter is unreleased, so run `adapterctl` from a checkout. From the
+repository root, with `CARGO_TARGET_DIR` set to a directory outside the
+repository, check, compile and replay the
+[facade recovery example](examples/facade-recovery/README.md) offline. No
+source, database or token is needed:
+
+```sh
+cargo run --locked -p registry-adapterctl -- check \
+  products/adapter/examples/facade-recovery/project.yaml \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack products/adapter/examples/facade-recovery/pack.yaml \
+  --runtime products/adapter/examples/facade-recovery/runtime.example.yaml
+
+cargo run --locked -p registry-adapterctl -- compile \
+  products/adapter/examples/facade-recovery/project.yaml \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack products/adapter/examples/facade-recovery/pack.yaml \
+  --output /tmp/facade-recovery-openapi.json
+
+cargo run --locked -p registry-adapterctl -- fixtures replay \
+  products/adapter/examples/facade-recovery/project.yaml \
+  --profile products/adapter/profiles/breg-records/profile.yaml \
+  --pack products/adapter/examples/facade-recovery/pack.yaml \
+  --fixtures products/adapter/examples/facade-recovery/fixture.yaml
+```
+
+`check` validates the project against its pinned profile and pack, and the
+runtime configuration against both. `compile` writes the OpenAPI contract the
+facade serves. `fixtures replay` runs the routes through the real engine
+against the recorded source exchanges. The `dhis2-tracker`, `dhis2-govstack`
+and `opencrvs-events` facade examples take the same commands with their own
+profile, pack and fixtures; `scripts/check-contracts.sh` runs each one. The
+job examples use `adapterctl job check` instead; `kobotoolbox-job`,
+`odk-central-job` and `postgres-source` give the command in their README or
+`job.yaml` header.
+
+## Grant the runtime database role
+
+`adapter serve` migrates through `database.migrationUrlRef` and serves through
+`database.runtimeUrlRef`. The migration role owns the tables. Give the runtime
+role only the grants its deployment uses; it is refused at startup, naming each
+missing grant and table, before it listens. With `adapter` standing for the
+schema on the runtime role's search path and `runtime` for that role:
+
+```sql
+-- Every deployment: append journal events, run audit.retentionDays, report readiness.
+GRANT USAGE ON SCHEMA adapter TO runtime;
+GRANT INSERT, SELECT, DELETE ON adapter_journal_events TO runtime;
+GRANT SELECT ON adapter_schema_migrations TO runtime;
+
+-- A deployment that serves any write: idempotent claims, response custody and the expiry sweep.
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON adapter_idempotency_entries, adapter_idempotency_resumes TO runtime;
+
+-- A deployment that declares asyncCompletion or a resumable write: the artifact fence.
+GRANT SELECT, INSERT, UPDATE ON adapter_idempotency_async_artifacts TO runtime;
+
+-- A deployment that declares a resumable write: its checkpointed identifiers.
+GRANT SELECT, INSERT ON adapter_idempotency_resume_bindings TO runtime;
+```
+
+The runtime role needs no grant on `adapter_idempotency_schema_migrations`;
+only the migration role reads it.
+
 ## Recover a multi-effect facade write
 
 Use the [facade recovery example](examples/facade-recovery/README.md) when a
@@ -87,6 +153,13 @@ Pin one complete OpenSSH Ed25519 or P-256 public key and use only secret
 references for the password or private key. The maintained
 [`sftp-source` example](examples/sftp-source/README.md) shows the runtime shape
 and producer lifecycle.
+
+## Read a PostgreSQL view
+
+A job can page a read-only query over a PostgreSQL view and register each row in
+BReg. The [`postgres-source` example](examples/postgres-source/README.md) ships
+the view SQL, the paged query, the pack, the job and the runtime binding, and
+says how to adapt them to your own table.
 
 ## Operate a RabbitMQ job source
 
@@ -153,6 +226,21 @@ delivery under approved broker policy. Only after that does the source
 operator correct immutable-identity and version handling for legitimate
 future work. Publishing a new message ID does not clear the old held row or
 acknowledge its delivery; that delivery can continue to block the queue head.
+
+A pass that stops as `adapter.job.identity-migration-required` found stored
+file or SFTP items that predate the job's item-identity binding (store
+schema 103), including a legacy raw decoder whose authored semantics did not
+change. This is a stop, not a held item. HTTP and PostgreSQL jobs do not
+receive it. Confirm the job definition is the one you intend to run, stop any
+running pass or loop, then run
+`adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>`
+once. It records the job's current identity and keeps the stored items and
+cursor, so the next pass reads source rows as new and may deliver them
+again. The host never infers identity from stored keys, rewrites rows, or
+resets the cursor automatically. To keep the old identity instead, restore the
+previous job definition. `pass --dry-run` shows the same stop before reading a
+page. The [Kobo job operations guide](examples/kobotoolbox-job/OPERATIONS.md)
+describes the receipt and the audit line.
 
 ## Check the product
 

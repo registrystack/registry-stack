@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Registry Stack Adapter parked BReg connector over the maintained client."
+description = "Registry Stack Adapter native destination connectors: BReg over the maintained client and the signed Coordinator event send."
 repository.workspace = true
 publish = false
 
@@ -14,9 +14,10 @@ workspace = true
 [features]
 default = []
 # The BReg connector is compiled only when named. The feature is off by
-# default: no facade binary and no job path links this crate, a build
-# without the feature carries no product client, and only
-# registry-breg-client is admitted while the crate is parked. The
+# default: no facade binary links this crate, only the job host's
+# direct-breg feature turns it on, a build without the feature carries no
+# product client, and registry-breg-client is the only product client
+# admitted. The
 # connector needs a runtime to run its client's async exchanges under the
 # synchronous operation contract, so the feature carries the smallest
 # tokio runtime slice.

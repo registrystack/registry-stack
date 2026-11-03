@@ -37,7 +37,7 @@ use registry_adapter_connectors::coordinator_event::{
     CoordinatorEventConnector, CoordinatorEventReceiver,
 };
 use registry_adapter_core::JobIdentity;
-use registry_adapter_engine::job::compile_job;
+use registry_adapter_engine::job::{compile_job, compile_job_with};
 use registry_adapter_job::destination::{DeliverableItem, HandOffOutcome, JobDestination};
 use registry_adapter_job::pass::{run_pass, PassOptions, StopReason};
 #[cfg(feature = "job-postgres")]
@@ -510,7 +510,13 @@ async fn forward(
         .get("x-coordinator-run-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    assert_eq!(status.as_u16(), 204);
+    if status.as_u16() != 204 {
+        let problem = response
+            .text()
+            .await
+            .unwrap_or_else(|error| format!("unreadable Problem body: {error}"));
+        panic!("native Coordinator answered {status}: {problem}");
+    }
     let mut first = proxy.first_run.lock().expect("the proxy Run lock");
     if first.is_none() {
         *first = run;
@@ -534,8 +540,32 @@ async fn wait_for_proposal(issuer: &TestAuthorizationServer, coordinator_origin:
         "coordinator:operate",
         chrono::Utc::now().timestamp() + 3600,
     );
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // BReg applies a review-free Proposal from its own queue, so the
+    // Coordinator's first read right after Submit usually finds it still
+    // submitted and schedules the next read at the connection's result
+    // check. The operator's Check now brings that read forward to the
+    // 30 second read floor, as an operator watching the Run would.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut checked = false;
     let final_status = loop {
+        if !checked {
+            let response = reqwest::Client::new()
+                .post(format!("{coordinator_origin}/v1/runs/{run}/check"))
+                .bearer_auth(&token)
+                .json(&json!({"step": "await-proposal"}))
+                .send()
+                .await
+                .expect("ask the native Coordinator to check now");
+            if response.status().is_success() {
+                let answer: Value = response
+                    .json()
+                    .await
+                    .expect("native Check now answer is JSON");
+                checked = answer["observations"]
+                    .as_u64()
+                    .is_some_and(|reads| reads > 0);
+            }
+        }
         let response = reqwest::Client::new()
             .get(format!("{coordinator_origin}/v1/runs/{run}"))
             .bearer_auth(&token)
@@ -556,12 +586,14 @@ async fn wait_for_proposal(issuer: &TestAuthorizationServer, coordinator_origin:
         }
         assert!(
             !matches!(state, "failed" | "attention"),
-            "native Coordinator left the Proposal path at step {} in state {state}",
-            status["step"]
+            "native Coordinator left the Proposal path at step {} in state {state} \
+             (failure code {}); a product refusal is logged in the kept BReg fixture's service.log",
+            status["step"],
+            status["failureCode"]
         );
         assert!(
             Instant::now() < deadline,
-            "native Coordinator did not reach the Proposal wait"
+            "native Coordinator did not finish the Proposal path in time: {status}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
@@ -584,14 +616,13 @@ async fn wait_for_proposal(issuer: &TestAuthorizationServer, coordinator_origin:
                 && effect["state"] == "accepted"
         })
     }));
-    assert!(inspection["waits"].as_array().is_some_and(|waits| {
-        waits.iter().any(|wait| {
-            wait["step"] == "await-proposal"
-                && wait["acceptedStep"] == "submit-first"
-                && wait["completion"] == "proposal"
-                && wait["lastObservation"]["state"] == "applied"
-        })
-    }));
+    // A settled Run ends its waits, so the finished outcome, not a kept
+    // wait, is the evidence of which completion the Run followed.
+    assert_eq!(
+        inspection["waits"],
+        json!([]),
+        "a finished native Run keeps no wait"
+    );
 }
 
 fn operator_token(issuer: &TestAuthorizationServer) -> String {
@@ -656,25 +687,27 @@ async fn assert_revised_run_used_resolved_lookup(
         .json()
         .await
         .expect("the revised native Run inspection is JSON");
-    assert!(inspection["effects"].as_array().is_some_and(|effects| {
-        effects.iter().any(|effect| {
-            effect["step"] == "lookup-revised"
-                && effect["operation"]["id"] == "breg.lookup-record/v1"
-                && effect["state"] == "accepted"
-        }) && effects.iter().any(|effect| {
-            effect["step"] == "review-resolved"
-                && effect["operation"]["id"] == "casework.submit-review-request/v1"
-                && effect["state"] == "accepted"
-        })
-    }));
-    assert!(inspection["waits"].as_array().is_some_and(|waits| {
-        waits.iter().any(|wait| {
-            wait["step"] == "await-resolved-review"
-                && wait["acceptedStep"] == "review-resolved"
-                && wait["completion"] == "result"
-                && wait["lastObservation"]["settlement"] == "approved"
-        })
-    }));
+    // Inspection lists only calls with a dispatch risk, so the read-only
+    // lookup is never an effect; the resolved review, which the workflow
+    // reaches only when the lookup resolved, is the evidence.
+    assert!(
+        inspection["effects"].as_array().is_some_and(|effects| {
+            effects.iter().any(|effect| {
+                effect["step"] == "review-resolved"
+                    && effect["operation"]["id"] == "casework.submit-review-request/v1"
+                    && effect["state"] == "accepted"
+            })
+        }),
+        "the revised Run reached the resolved review: {}",
+        inspection["effects"]
+    );
+    // A settled Run ends its waits, so the finished outcome, not a kept
+    // wait, is the evidence of which completion the Run followed.
+    assert_eq!(
+        inspection["waits"],
+        json!([]),
+        "a finished native Run keeps no wait"
+    );
 }
 
 async fn assert_revised_run_used_unresolved_review(
@@ -700,13 +733,13 @@ async fn assert_revised_run_used_unresolved_review(
                 && effect["state"] == "accepted"
         })
     }));
-    assert!(inspection["waits"].as_array().is_some_and(|waits| {
-        waits.iter().any(|wait| {
-            wait["step"] == "await-unresolved-review"
-                && wait["acceptedStep"] == "review-unresolved"
-                && wait["completion"] == "result"
-        })
-    }));
+    // A settled Run ends its waits, so the finished outcome, not a kept
+    // wait, is the evidence of which completion the Run followed.
+    assert_eq!(
+        inspection["waits"],
+        json!([]),
+        "a finished native Run keeps no wait"
+    );
 }
 
 fn maintained_destination(base_url: &str, policy_name: &str) -> SignedCoordinatorEventDestination {
@@ -863,7 +896,9 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
         job_fixture::PAGE_SCRIPT,
         vec![(
             200,
-            json!({"data": [{"id": "a", "_id": "a", "respondent_name": "Amina", "household.household_size": "4"}], "nextCursor": "p2"}),
+            // The projection's dotted path walks nested objects, so the
+            // group arrives as an object, as the Kobo pack shapes it.
+            json!({"data": [{"id": "a", "_id": "a", "respondent_name": "Amina", "household": {"household_size": "4"}}], "nextCursor": "p2"}),
         )],
         job_fixture::Edits::Ordered,
     )
@@ -942,8 +977,14 @@ async fn maintained_kobo_pack_reaches_proposal_repeat_and_resolved_revision_revi
     )
     .await;
     let source = kobo_native_source::MaintainedKoboSource::start().await;
-    let program = compile_job(&source.pack, &source.job, &source.runtime)
-        .expect("the maintained Kobo pack and Coordinator job compile together");
+    let program = compile_job_with(
+        &source.pack,
+        &source.job,
+        &source.runtime,
+        &source.profile,
+        &source.project,
+    )
+    .expect("the maintained Kobo pack and Coordinator job compile together");
     assert_eq!(
         program.job.job.id.as_str(),
         "kobotoolbox-submissions-workflow-example"
@@ -1034,6 +1075,12 @@ async fn maintained_kobo_pack_reaches_proposal_repeat_and_resolved_revision_revi
     assert_eq!(unchanged.stopped, None);
     assert_eq!(unchanged.items_read, 1);
     assert_eq!(unchanged.items_skipped, 1);
+    // An ongoing scan's rescan ends at its first empty page, so the next
+    // pass reads the tail and closes the traversal; only then does a
+    // requested rescan start again from the first page.
+    let caught_up = run_pass(&pool, &program, &destination, PassOptions::default()).await;
+    assert_eq!(caught_up.stopped, None);
+    assert_eq!(caught_up.items_read, 0);
 
     source.revise();
     let revised = run_pass(
@@ -1073,7 +1120,7 @@ async fn maintained_kobo_pack_reaches_proposal_repeat_and_resolved_revision_revi
     assert_revised_run_used_resolved_lookup(&issuer, &coordinator.origin, &revised_run).await;
 
     let requests = source.requests();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 6);
     assert!(requests.iter().all(|request| request.authenticated));
     for request in &requests {
         let parsed = url::Url::parse(&format!("http://fixture{}", request.target))
@@ -1092,21 +1139,23 @@ async fn maintained_kobo_pack_reaches_proposal_repeat_and_resolved_revision_revi
             Some(r#"{"_id":1}"#)
         );
     }
-    for index in [0, 1, 3, 4] {
+    for index in [0, 1, 3, 5] {
         let parsed = url::Url::parse(&format!("http://fixture{}", requests[index].target))
             .expect("the first-page Kobo target parses");
         assert!(parsed.query_pairs().all(|(name, _)| name != "query"));
     }
-    let tail_target = url::Url::parse(&format!("http://fixture{}", requests[2].target))
-        .expect("the Kobo tail target parses");
-    let tail_query = tail_target
-        .query_pairs()
-        .find_map(|(name, value)| (name == "query").then_some(value.into_owned()))
-        .expect("the ordered tail read carries its keyset query");
-    assert_eq!(
-        serde_json::from_str::<Value>(&tail_query).expect("the Kobo keyset query is JSON"),
-        json!({"_id": {"$gt": 4103}})
-    );
+    for index in [2, 4] {
+        let tail_target = url::Url::parse(&format!("http://fixture{}", requests[index].target))
+            .expect("the Kobo tail target parses");
+        let tail_query = tail_target
+            .query_pairs()
+            .find_map(|(name, value)| (name == "query").then_some(value.into_owned()))
+            .expect("the ordered tail read carries its keyset query");
+        assert_eq!(
+            serde_json::from_str::<Value>(&tail_query).expect("the Kobo keyset query is JSON"),
+            json!({"_id": {"$gt": 4103}})
+        );
+    }
 
     drop(destination);
     drop(coordinator);

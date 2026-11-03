@@ -87,6 +87,9 @@ pub(crate) fn usage_message(error: &clap::Error) -> String {
             }
         }
         ErrorKind::InvalidValue => named("invalid value for"),
+        ErrorKind::UnknownArgument if argument.is_none() && refused_positional(error) => {
+            "unexpected positional argument".to_owned()
+        }
         ErrorKind::UnknownArgument => named("unexpected argument"),
         ErrorKind::InvalidSubcommand => "unrecognized subcommand".to_owned(),
         ErrorKind::NoEquals => named("an equals sign is required for"),
@@ -145,6 +148,16 @@ fn refused_argument(error: &clap::Error) -> Option<String> {
         })
         .collect::<Vec<_>>();
     (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// Whether clap refused a value that is not shaped as a flag: an extra
+/// positional. Only the shape is read; the value is never repeated.
+fn refused_positional(error: &clap::Error) -> bool {
+    use clap::error::{ContextKind, ContextValue};
+    matches!(
+        error.get(ContextKind::InvalidArg),
+        Some(ContextValue::String(token)) if !token.starts_with('-')
+    )
 }
 
 /// Write one report, envelope members first, and its trailing newline.
@@ -238,6 +251,25 @@ mod tests {
             "sentinel-7f3a9c",
         );
         assert_eq!(usage_message(&echoing), "invalid value for --reference");
+    }
+
+    /// An extra positional value is called a positional without repeating
+    /// it, so the author knows to remove a value rather than look for a
+    /// misspelt flag; an unknown flag is still named.
+    #[test]
+    fn an_unexpected_positional_is_called_one_without_repeating_it() {
+        let refused = |arguments: &[&str]| {
+            clap::Command::new("ctl")
+                .arg(clap::Arg::new("project").required(true))
+                .try_get_matches_from(arguments)
+                .unwrap_err()
+        };
+        let extra = usage_message(&refused(&["ctl", "project.yaml", "sentinel-7f3a9c.yaml"]));
+        assert_eq!(extra, "unexpected positional argument");
+        assert_eq!(
+            usage_message(&refused(&["ctl", "project.yaml", "--bogus"])),
+            "unexpected argument --bogus"
+        );
     }
 
     #[test]

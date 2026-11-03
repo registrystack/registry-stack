@@ -62,8 +62,7 @@ struct ExportManifestArtifact<'a> {
     digest: &'a str,
 }
 
-/// Technical choices only. Questions, permissions, targets and credentials stay with
-/// the Evidence project and its operator.
+/// How the generated pack authenticates to the BReg API.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum EvidenceSourceAuthentication {
     #[default]
@@ -80,6 +79,8 @@ impl EvidenceSourceAuthentication {
     }
 }
 
+/// Technical choices only. Questions, permissions, targets and credentials stay with
+/// the Evidence project and its operator.
 pub struct EvidenceSourceOptions {
     pub access_profile: String,
     pub entity: String,
@@ -286,7 +287,21 @@ fn object(properties: Map<String, Value>, required: Vec<String>) -> Value {
     json!({"type":"object","additionalProperties":false,"required":required,"properties":properties})
 }
 
+/// Names an input `<selector>--<field>` so authors can read which selector field it
+/// binds. A field id starts with a letter, so when neither id contains `--` the
+/// last `--` is the separator and the name is unambiguous. Like selector profiles,
+/// other names and names over 64 bytes are hashed.
 fn route_input_name(selector: &str, field: &str) -> String {
+    let readable = format!("{selector}--{field}");
+    if readable.len() <= 64
+        && !selector.contains("--")
+        && !field.contains("--")
+        && readable.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+    {
+        return readable;
+    }
     let framed = format!("{}:{selector}{}:{field}", selector.len(), field.len());
     format!("input-{}", digest(framed.as_bytes()))
 }

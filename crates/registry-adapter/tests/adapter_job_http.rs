@@ -7,7 +7,6 @@
 //! refuse, and the profile's upstream-call budget held at the page run.
 
 use registry_adapter::engine::job::{compile_job, run_job_page};
-use registry_adapter_core::ErrorClass;
 use registry_platform_config::sha256_uri;
 use serde_json::{json, Value};
 
@@ -94,6 +93,14 @@ source:
     version: "1"
     digest: {pack_digest}
   route: kobo-submissions
+destination:
+  type: signed-coordinator-event
+  binding: household-workflow
+  workflow: register-household
+  trigger: submission-received
+  source: urn:registry-adapter:job:test
+  eventType: org.example.submission-received.v1
+  dataSchema: urn:registry-adapter:schema:submission:v1
 projection:
   fields:
     - id
@@ -294,26 +301,13 @@ async fn the_upstream_call_budget_holds_at_the_run() {
         .expect("the kobo-shaped job compiles");
     // The budget the compile admitted: the static worst case of the
     // source route is one send, so the check held 8.
-    assert_eq!(program.profile().maximum_upstream_calls, 8);
+    assert_eq!(program.profile().maximum_upstream_calls.get(), 8);
 
     // The one send meets a budget of one exactly.
-    program.job.profile.maximum_upstream_calls = 1;
+    program.job.profile.maximum_upstream_calls = 1.try_into().expect("inside its range");
     let result = run_job_page(&program, None)
         .await
         .expect("one send runs inside a budget of one");
     assert_eq!(result.page.items.len(), 1);
     assert_eq!(fixture.double.request_count(), 1);
-
-    // The same send outgrows a budget of zero: the run refuses before
-    // the request leaves.
-    program.job.profile.maximum_upstream_calls = 0;
-    let failure = run_job_page(&program, None)
-        .await
-        .expect_err("a send past the budget refuses the run");
-    assert_eq!(failure.class, Some(ErrorClass::BudgetExhausted));
-    assert_eq!(
-        fixture.double.request_count(),
-        1,
-        "the refused send never reaches the upstream"
-    );
 }
