@@ -468,8 +468,8 @@ $defs:
     properties:
       id: {$ref: '#/$defs/LocalId'}
       endpoints:
+        description: One binding per distinct endpoint name.
         type: array
-        uniqueItems: true
         items: {$ref: '#/$defs/source-endpoint-binding'}
       outboundTls:
         type: object
@@ -500,7 +500,7 @@ $defs:
       credential: {$ref: '#/$defs/source-runtime-credential'}
       anonymousHttps: {const: operator-approved}
       attemptTimeoutMilliseconds: {type: integer, minimum: 1, maximum: 18446744073709551615}
-      maximumResponseBytes: {type: integer, minimum: 1, maximum: 1048576}
+      maximumResponseBytes: {type: integer, minimum: 1, maximum: 16777216}
       maximumConcurrency: {type: integer, minimum: 1, maximum: 256, default: 8}
       tlsTrustProfile: {$ref: '#/$defs/LocalId'}
       mtlsIdentity:

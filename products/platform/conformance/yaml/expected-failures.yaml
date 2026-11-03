@@ -12,14 +12,18 @@
 # on an entry that no longer holds.
 
 expectedFailures:
+- format: adapter/job
+  case: integer-boundary-sweep
+  reason: missing config.out-of-range at /destination/receiptRetentionDays 45:25; unexpected adapter.job.destination-bound at /destination/receiptRetentionDays (file) (and 2 more problems)
+  digest: c797a582f012
 - format: coordinator/runtime
   case: unique-list-sweep
   reason: missing config.duplicate-item at /deployment/packages/1 39:7; unexpected coordinator.deployment.configuration at /deployment/packages/1/root 39:13 (and 1 more problem)
   digest: 3f5b4a2719cd
 - format: evidence/bundle
   case: unique-list-sweep
-  reason: missing config.duplicate-item at /authentication/oidc/tokenTypes/1 15:26; unexpected evidence.bundle.invalid-authentication at /authentication/oidc 12:5 (and 5 more problems)
-  digest: 20994639e080
+  reason: missing config.duplicate-item at /authentication/oidc/tokenTypes/1 18:9; unexpected evidence.bundle.invalid-authentication at /authentication/oidc 12:5 (and 5 more problems)
+  digest: 2766ca3f0c3c
 unreachedFormats:
 - format: breg/backup-binding
   reason: syntax json; the corpus mutates YAML text

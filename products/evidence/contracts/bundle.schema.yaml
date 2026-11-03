@@ -991,9 +991,8 @@ $defs:
     required: [endpoints]
     properties:
       endpoints:
-        description: Distinct reviewed endpoint policies; empty grants no network authority.
+        description: Reviewed endpoint policies, one per distinct endpoint name; empty grants no network authority.
         type: array
-        uniqueItems: true
         items: {$ref: '#/$defs/source-endpoint-policy'}
   source-endpoint-policy:
     type: object
