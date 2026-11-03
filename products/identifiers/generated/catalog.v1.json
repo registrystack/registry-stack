@@ -5082,11 +5082,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "9bb613d4cd8be94f6cf271614c711db6893613873e572e816e324ca20d275b67"
+        "sha256": "2847a56eda9c8b838d28fde619853c36851acc57b094b74ec2665150f1ace8d4"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "9bb613d4cd8be94f6cf271614c711db6893613873e572e816e324ca20d275b67",
+        "sha256": "2847a56eda9c8b838d28fde619853c36851acc57b094b74ec2665150f1ace8d4",
         "mediaType": "application/yaml"
       }
     },
@@ -5244,11 +5244,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "5cf36c491a0079fcaa8163fb85426480ea3ded71ce44f35790030e1838191411"
+        "sha256": "fd4ef085ef94087f5fa6d846a284957345d5463df44372c5667ea1a8cf643d0d"
       },
       "artifact": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "5cf36c491a0079fcaa8163fb85426480ea3ded71ce44f35790030e1838191411",
+        "sha256": "fd4ef085ef94087f5fa6d846a284957345d5463df44372c5667ea1a8cf643d0d",
         "mediaType": "application/yaml"
       }
     },
