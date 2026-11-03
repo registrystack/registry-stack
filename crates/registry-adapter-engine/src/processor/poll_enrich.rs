@@ -122,8 +122,11 @@ pub(crate) async fn run(
             "the RabbitMQ source and rabbitmq-json decoder profile do not match".to_owned(),
         ));
     }
+    // The rabbitmq-json profile is decoded by the broker path; a file decoder
+    // is built only for file and SFTP polls.
     #[cfg(feature = "job-file")]
     let decoder = match poll.decoder.as_ref() {
+        _ if rabbitmq_json => Decoder::Raw,
         None => Decoder::Raw,
         Some(PollDecoder::Csv(options)) => Decoder::Csv {
             options: options.clone(),

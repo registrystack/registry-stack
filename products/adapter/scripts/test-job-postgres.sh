@@ -144,9 +144,10 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --feat
 
 # Each broker target owns its loopback RabbitMQ fixtures. Serial execution
 # keeps process-global TLS providers and synthetic credential environments
-# isolated; the pass suite uses the PostgreSQL fixture above as well.
+# isolated; the pass suite uses the PostgreSQL fixture above as well, and
+# carries job-file so a build with both broker and file sources stays proven.
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-rabbitmq,rabbitmq-test-plaintext --test rabbitmq_source -- --test-threads=1
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-rabbitmq,rabbitmq-test-plaintext,postgres-test,signed-coordinator-event --test rabbitmq_pass -- --test-threads=1
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-rabbitmq,rabbitmq-test-plaintext,postgres-test,signed-coordinator-event,job-file --test rabbitmq_pass -- --test-threads=1
 
 # Build BReg and Coordinator together from this checkout, then run the
 # ignored job-destination proofs through the real product binaries and this
