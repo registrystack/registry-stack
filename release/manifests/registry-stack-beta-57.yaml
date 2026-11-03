@@ -1,0 +1,66 @@
+stack:
+  release: beta-57
+  version: 0.45.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.45.0
+
+artifacts:
+  registry-manifest: 0.45.0
+  evidence: 0.45.0
+  evidencectl: 0.45.0
+  evidence-oid4vci: 0.45.0
+  evidencectl-installer: 0.45.0
+  registry-docs: 0.45.0
+  discovery: 0.45.0
+  discoveryctl: 0.45.0
+  discovery-installer: 0.45.0
+  breg: 0.45.0
+  bregctl: 0.45.0
+  breg-mcp: 0.45.0
+  breg-mcp-installer: 0.45.0
+  breg-review: 0.45.0
+  breg-review-installer: 0.45.0
+  breg-installer: 0.45.0
+  casework: 0.45.0
+  caseworkctl: 0.45.0
+  casework-installer: 0.45.0
+  scheduling: 0.45.0
+  schedulingctl: 0.45.0
+  scheduling-installer: 0.45.0
+  messaging: 0.45.0
+  messagingctl: 0.45.0
+  messaging-installer: 0.45.0
+  registry-render: 0.45.0
+  registry-render-installer: 0.45.0
+  registry-manifest-installer: 0.45.0
+  coordinator: 0.45.0
+  coordinatorctl: 0.45.0
+  coordinator-installer: 0.45.0
+  rstack: 0.45.0
+  rstack-installer: 0.45.0
+  registry-client-node: 0.45.0
+  registry-client-python: 0.45.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 5403d4735416d7ab68110ac2b4e33c9c564b3aa6db0f663e75b66b32371591ac
+  entry_count: 306
+
+external: {}
+
+warnings:
+  - code: fresh-state-baselines
+    classification: breaking-change
+    detail: BReg's managed schema fingerprint changes with the Proposal hand-off store, and every package declares the record_timer_store engine feature; the Coordinator refuses protected state schema 4 namespaces and interpreter ABI v1 definitions. Retain previous databases and namespaces, settle Coordinator runs with v0.44.0, provision fresh state, and apply matching v0.45.0 packages and projects before cutover. See release/notes/v0.45.0.md.
+  - code: evidence-source-pack-boundary
+    classification: breaking-change
+    detail: Evidence Sources move into reviewed Adapter packs and v0.45.0 refuses the retired http-json and sqlite-extract Source form, flat target connections, and non-empty acquisitionCapabilities. There is no in-place upgrade and the v0.44.0 to v0.45.0 Evidence upgrade is not rehearsed. Migrate projects by hand, keep the previous deployment and audit, update audit readers for audit v3, and verify a fresh synthetic assertion before cutover. See release/notes/v0.45.0.md.
+  - code: unsafe-runtime-config-file
+    classification: breaking-change
+    detail: Every runtime refuses a configuration file whose file or ancestor directory is not owned by root or the runtime user, or is writable by group or others. Check ownership and modes before cutover. See release/notes/v0.45.0.md.
+  - code: shared-report-envelope
+    classification: breaking-change
+    detail: Operator tools write the shared report envelope with status complete, domain-refusal, usage-error, or operational-failure and command-specific results under outcome. Update automation that parses machine-readable reports. See release/notes/v0.45.0.md.
+  - code: record-and-wire-renames
+    classification: breaking-change
+    detail: Registry Record v1 uses recordTypeIdentifier, BReg Batch, Proposal, and direct-write contracts and SDK names change, BReg takes today's date in project.timezone, and Evidence and Coordinator clients must be upgraded with their servers. Regenerate source exports with the matching bregctl and update clients together. See release/notes/v0.45.0.md.

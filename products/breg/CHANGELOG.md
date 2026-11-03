@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0 - 2026-11-03
+
 - BREAKING: `bregctl generate evidence-source` exports a reviewed Adapter pack
   under `adapter-packs/<source>/` in place of the `adapters/*.rhai` and
   `schemas/*.yaml` artifacts, to match Evidence sources moving into Adapter

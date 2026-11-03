@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0
+
 ## 0.44.0
 
 - BREAKING: `render` uses `--artifact-format` because its standard output is

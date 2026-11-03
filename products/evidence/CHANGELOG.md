@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0 - 2026-11-03
+
 - BREAKING: Source acquisition moves into reviewed Adapter packs. Authored
   Sources now declare `pack`, `route`, `connection` and `inputs`; the tagged
   `http-json`/`sqlite-extract` form and `source-prepare/v1`/`source-extract/v1`

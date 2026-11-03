@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0 - 2026-11-03
+
 - Add default-off delegated staff-reader policies and dedicated assigned-task
   list/context routes. They admit an explicitly trusted gateway and represented
   Staff profile, require the configured read scopes and bounded lifetime, and

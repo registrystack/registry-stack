@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0 - 2026-11-03
+
 - BREAKING: Registry Record v1 renames `entityTypeIdentifier` to
   `recordTypeIdentifier` before the 1.0 freeze. `breg.read-record` output
   follows the v1 contract, so a Service reads `meta.recordTypeIdentifier`.

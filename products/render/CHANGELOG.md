@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.45.0 - 2026-11-03
+
 - BREAKING: A runtime configuration file is refused with
   `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
   owned by root or the runtime user, or is writable by group or others. A
