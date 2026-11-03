@@ -72,6 +72,12 @@ PRODUCTS = {
         "optional": (),
         "runtime": "coordinator",
     },
+    "adapter": {
+        "entrypoint": "adapterctl",
+        "baseline": ("adapterctl", "adapter"),
+        "optional": ("adapter-job",),
+        "runtime": "adapter",
+    },
 }
 
 

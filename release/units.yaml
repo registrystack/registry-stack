@@ -13,6 +13,16 @@
     ]
   },
   "units": {
+    "adapter": {
+      "display_name": "Registry Adapter",
+      "status": "held",
+      "tag_prefix": "adapter/",
+      "asset_prefix": "registry-adapter",
+      "members": ["adapter", "adapterctl", "adapter-job"],
+      "artifact_patterns": ["adapter-v*-*", "adapter-install.sh", "adapterctl-v*-*", "adapter-job-v*-*"],
+      "dependencies": [],
+      "candidate": null
+    },
     "breg-casework-evidence": {
       "display_name": "Base Registry, Casework, and Evidence",
       "status": "held",

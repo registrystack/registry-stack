@@ -298,6 +298,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.add("registry-render")
         if release_roster.coordinator_binaries_in_release(parsed_version):
             expected_inventory.update({"coordinator", "coordinatorctl"})
+        if release_roster.adapter_in_release(parsed_version):
+            expected_inventory.update({"adapter", "adapterctl", "adapter-job"})
         if release_roster.rstack_in_release(parsed_version):
             expected_inventory.update({"rstack", "rstack-installer"})
         expected_inventory.update(
