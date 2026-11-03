@@ -625,7 +625,9 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # The Casework and BReg shards take 11 to 13 minutes on a typical runner;
+    # this limit only stops a hung shard, so it leaves room for a slow one.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       # Avoid filling the runner pool with short shards while the longer
