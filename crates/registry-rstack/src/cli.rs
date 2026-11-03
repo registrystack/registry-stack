@@ -13,7 +13,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
-const PRODUCTS: [&str; 9] = [
+const PRODUCTS: [&str; 10] = [
     "breg",
     "casework",
     "discovery",
@@ -23,6 +23,7 @@ const PRODUCTS: [&str; 9] = [
     "render",
     "scheduling",
     "coordinator",
+    "adapter",
 ];
 
 macro_rules! reportln {
@@ -863,6 +864,7 @@ fn product_help(product: &str, format: ReportFormat, path: &[String]) -> Result<
         "render" => "registry-render",
         "scheduling" => "schedulingctl",
         "coordinator" => "coordinatorctl",
+        "adapter" => "adapterctl",
         _ => return Err(format!("unknown component {product}").into()),
     };
     let catalog: Value = serde_json::from_str(include_str!("../../registry-cli-docs/catalog.json"))

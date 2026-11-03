@@ -113,6 +113,21 @@ fn manifest_help_rewrites_the_command_without_rewriting_product_prose() {
 }
 
 #[test]
+fn adapter_help_is_offline_and_names_the_author_tool_actions() {
+    let output = run(&["help", "adapter", "--format", "json"]);
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"]["invocation"], "rstack adapter");
+    let subcommands: Vec<&str> = report["command"]["subcommands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|command| command["name"].as_str().unwrap())
+        .collect();
+    assert!(subcommands.contains(&"check"), "{subcommands:?}");
+}
+
+#[test]
 fn action_help_accepts_json_after_the_product_without_an_installation() {
     let output = run(&["evidence", "check", "--help", "--format", "json"]);
     assert!(output.status.success(), "{output:?}");
@@ -241,6 +256,7 @@ fn piped_output_keeps_the_human_default() {
     assert!(output.starts_with("No installation selected."));
     assert!(output.contains("breg: availability unknown, version unavailable, path none"));
     assert!(output.contains("coordinator: availability unknown, version unavailable, path none"));
+    assert!(output.contains("adapter: availability unknown, version unavailable, path none"));
 }
 
 #[test]
@@ -257,7 +273,7 @@ fn unselected_component_inventory_has_stable_detail_fields() {
     assert!(output.status.success(), "{output:?}");
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let components = report["components"].as_array().unwrap();
-    assert_eq!(components.len(), 9);
+    assert_eq!(components.len(), 10);
     assert!(components.iter().all(|component| {
         component["version"].is_null()
             && component["path"].is_null()
