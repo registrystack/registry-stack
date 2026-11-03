@@ -340,7 +340,6 @@ mod tests {
     use super::*;
     #[test]
     fn pairing_preserves_schema_header_exact_pins_and_existing_description_bytes() {
-        use std::os::unix::fs::PermissionsExt;
         let temporary = crate::canonical_tempdir();
         let project = temporary.path().join("review");
         crate::project::init(&project, "canonical-review").unwrap();
@@ -380,16 +379,14 @@ mod tests {
         // The fixture CLI supplies only the version/package-check report;
         // pair still verifies the sealed native bytes and compiled policy.
         let bregctl = temporary.path().join("bregctl");
-        fs::write(
+        crate::write_executable_stub(
             &bregctl,
-            format!(
+            &format!(
                 "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf '%s\\n' 'bregctl {}'\nelse\n  printf '%s\\n' '{{\"ok\":true,\"packageDigest\":\"{}\"}}'\nfi\n",
                 registry_platform_buildinfo::DISPLAY_VERSION,
                 verified.digest()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let sums = fs::read(package.join("SHA256SUMS")).unwrap();
         let untouched = temporary.path().join("outside-destination.txt");
         fs::write(&untouched, b"preserved").unwrap();
@@ -563,8 +560,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn native_package_check_preserves_the_peer_exit_class() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temporary = crate::canonical_tempdir();
         let bregctl = temporary.path().join("bregctl");
         for (child_exit, expected_exit) in [
@@ -574,15 +569,13 @@ mod tests {
                 crate::OPERATIONAL_FAILURE_EXIT,
             ),
         ] {
-            fs::write(
+            crate::write_executable_stub(
                 &bregctl,
-                format!(
+                &format!(
                     "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf '%s\\n' 'bregctl {}'\n  exit 0\nfi\nprintf '%s\\n' '{{\"ok\":false}}'\nexit {child_exit}\n",
                     registry_platform_buildinfo::DISPLAY_VERSION
                 ),
-            )
-            .unwrap();
-            fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+            );
             let error = verify(temporary.path(), &bregctl)
                 .expect_err("the child package check was refused");
             let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Authoring, &error);
@@ -666,7 +659,6 @@ mod tests {
     }
 
     fn pairing_refusal(cause: &str, pointer: &str, message: &str) {
-        use std::os::unix::fs::PermissionsExt;
         let temporary = crate::canonical_tempdir();
         let project = temporary.path().join("review");
         crate::project::init(&project, "canonical-review").unwrap();
@@ -705,16 +697,14 @@ mod tests {
         // The fixture CLI supplies only the version/package-check report;
         // pair still verifies the sealed native bytes and compiled policy.
         let bregctl = temporary.path().join("bregctl");
-        fs::write(
+        crate::write_executable_stub(
             &bregctl,
-            format!(
+            &format!(
                 "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf '%s\\n' 'bregctl {}'\nelse\n  printf '%s\\n' '{{\"ok\":true,\"packageDigest\":\"{}\"}}'\nfi\n",
                 registry_platform_buildinfo::DISPLAY_VERSION,
                 verified.digest()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+        );
 
         {
             let mut authored = original_value.clone();
@@ -730,11 +720,10 @@ mod tests {
                         .push(json!("routing-context"));
                 }
                 "version-mismatch" => {
-                    fs::write(
+                    crate::write_executable_stub(
                         &bregctl,
                         "#!/bin/sh\nprintf '%s\\n' 'bregctl incompatible-release-canary'\n",
-                    )
-                    .unwrap();
+                    );
                 }
                 "action-not-exported" => {}
                 _ => unreachable!(),
