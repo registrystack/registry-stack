@@ -1677,7 +1677,7 @@ async fn start_trusting_with_request_burst_jwks_and_task_authority(
     write_secret(&secret_root, "source-a-token", SOURCE_BEARER);
     fs::write(
         &runtime_path,
-        runtime_document(port, &bundle_root, &secret_root, &audit_path),
+        runtime_document(port, &bundle_root, &secret_root, &audit_path, &source.uri()),
     )
     .expect("write the runtime configuration");
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
@@ -3103,15 +3103,21 @@ fn rewrite_for_local_profile(
     );
     replace_exact(
         &mut document,
-        "algorithms: [ES256]",
-        "algorithms: [EdDSA, ES256, RS256]",
+        "    algorithms:\n      - ES256\n",
+        "    algorithms: [EdDSA, ES256, RS256]\n",
         1,
     );
     replace_exact(
         &mut document,
-        "responseFormats: [signed-jws]",
-        "responseFormats: [signed-jws, sd-jwt-vc]",
-        2,
+        "\nresponseFormats:\n  - signed-jws\n",
+        "\nresponseFormats: [signed-jws, sd-jwt-vc]\n",
+        1,
+    );
+    replace_exact(
+        &mut document,
+        "        responseFormats:\n          - signed-jws\n",
+        "        responseFormats: [signed-jws, sd-jwt-vc]\n",
+        1,
     );
     replace_exact(
         &mut document,
@@ -3146,8 +3152,8 @@ fn rewrite_for_task_grant_profile(bundle_root: &Path, authority_issuer: &str) {
     );
     replace_exact(
         &mut document,
-        "        subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]",
-        "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: authenticated-grant\n            valueClaims: {given_name: identity.given_name, family_name: identity.family_name, birth_date: identity.birth_date}",
+        "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: request\n",
+        "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: authenticated-grant\n            valueClaims: {given_name: identity.given_name, family_name: identity.family_name, birth_date: identity.birth_date}\n",
         1,
     );
     fs::write(&configuration_path, document).expect("the task-grant configuration is written");
@@ -3195,6 +3201,7 @@ fn runtime_document(
     bundle_root: &Path,
     secret_root: &Path,
     audit_path: &Path,
+    source_origin: &str,
 ) -> String {
     format!(
         r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
@@ -3220,6 +3227,16 @@ audit:
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
+sourceConnections:
+  provider:
+    id: provider
+    endpoints:
+      - endpoint: provider
+        baseUrl: {source_origin}
+        credential:
+          type: static-authorization
+          tokenRef: secret:file/source-a-token
+    allowedPrivateCidrs: []
 "#,
         bundle = bundle_root.display(),
         secrets = secret_root.display(),
@@ -3339,13 +3356,7 @@ fn refresh_package_envelope(root: &Path) {
     registry_platform_config::write_sum_file(
         root,
         None,
-        &registry_platform_config::PackageLimits {
-            max_files: registry_evidence::bundle::MAX_BUNDLE_FILES,
-            max_file_bytes: registry_evidence::bundle::MAX_ARTIFACT_BYTES,
-            max_total_bytes: registry_evidence::bundle::MAX_BUNDLE_BYTES,
-            max_depth: 3,
-            max_path_bytes: 128,
-        },
+        &registry_evidence::bundle::evidence_package_limits(),
         "evidencectl package",
     )
     .expect("publish the staged test package");

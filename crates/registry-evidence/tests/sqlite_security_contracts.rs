@@ -326,10 +326,16 @@ async fn the_time_budget_stops_a_slow_statement() {
          ) SELECT SUM(length(hex(zeroblob(20000 + n % 2)))) AS total FROM counter",
         &snapshot,
     );
+    // The worker and the caller's wait share one deadline. Whichever notices
+    // it first names the cause, so a loaded host may report the wait's
+    // `Timeout`; both carry the same public budget code.
     let error = run_error(&source).await;
-    assert_eq!(
-        error,
-        SqliteExtractError::Statement(ErrorKind::TimeBudgetExceeded)
+    assert!(
+        matches!(
+            error,
+            SqliteExtractError::Statement(ErrorKind::TimeBudgetExceeded | ErrorKind::Timeout)
+        ),
+        "{error:?}"
     );
     assert_eq!(error.code(), "adapter.sqlite.statement-budget");
 }
