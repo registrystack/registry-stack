@@ -2621,6 +2621,7 @@ class RegistryReleaseTest(TestCase):
                 "documents-contracts",
                 "documents-postgres",
                 "adapter-contracts",
+                "adapter-postgres",
                 "coordinator-postgres",
                 "config-conformance",
             },
