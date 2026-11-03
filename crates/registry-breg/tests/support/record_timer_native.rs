@@ -2962,20 +2962,52 @@ impl NativeTimerHarness {
     /// Fixture-only pause control used to isolate scheduler lifecycle behavior.
     /// This is deliberately not operator-command evidence.
     pub async fn set_scheduler_paused(&self, paused: bool) -> Result<i64, String> {
-        self.database()
-            .admin
-            .query_one(
-                "UPDATE registry_internal.registry_record_timer_control
-                    SET control_state=CASE WHEN $1 THEN 'paused' ELSE 'running' END,
-                        control_epoch=control_epoch+1,
-                        updated_at=clock_timestamp()
-                  WHERE singleton AND control_state<>'adoption-hold'
-              RETURNING control_epoch",
-                &[&paused],
-            )
-            .await
-            .map(|row| row.get(0))
-            .map_err(|_| "native timer pause control update failed".to_owned())
+        self.update_timer_control(
+            "UPDATE registry_internal.registry_record_timer_control
+                SET control_state=CASE WHEN $1 THEN 'paused' ELSE 'running' END,
+                    control_epoch=control_epoch+1,
+                    updated_at=clock_timestamp()
+              WHERE singleton AND control_state<>'adoption-hold'
+          RETURNING control_epoch",
+            &[&paused],
+        )
+        .await
+        .map_err(|error| format!("native timer pause control update failed: {error}"))
+    }
+
+    /// Apply one fixture control update under the exclusive control lock the
+    /// operator transition takes. Each worker pass holds that lock shared for
+    /// its whole transaction, so no pass sees the control epoch change midway,
+    /// exactly as with a real operator pause. A held worker that blocks the
+    /// update fails it after the lock timeout instead of hanging the test.
+    async fn update_timer_control(
+        &self,
+        statement: &str,
+        parameters: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<i64, String> {
+        let admin = &self.database().admin;
+        let result = async {
+            admin
+                .batch_execute(
+                    "BEGIN;
+                     SET LOCAL lock_timeout = '10s';
+                     SELECT pg_advisory_xact_lock(
+                         pg_catalog.hashtextextended('breg/record-timer-control/v1', 0)
+                     );",
+                )
+                .await?;
+            let epoch = admin.query_one(statement, parameters).await?.get(0);
+            admin.batch_execute("COMMIT").await?;
+            Ok::<i64, tokio_postgres::Error>(epoch)
+        }
+        .await;
+        match result {
+            Ok(epoch) => Ok(epoch),
+            Err(error) => match admin.batch_execute("ROLLBACK").await {
+                Ok(()) => Err(error.to_string()),
+                Err(rollback) => Err(format!("{error}; rollback also failed: {rollback}")),
+            },
+        }
     }
 
     /// Fixture-only future-state control setup for global readiness and
@@ -2993,23 +3025,20 @@ impl NativeTimerHarness {
         {
             return Err("timer control fixture input was outside its closed contract".to_owned());
         }
-        self.database()
-            .admin
-            .query_one(
-                "UPDATE registry_internal.registry_record_timer_control AS control
-                    SET protocol_version=$1,
-                        control_state=$2,
-                        control_epoch=control.control_epoch+1,
-                        bound_instance_epoch=state.epoch+$3,
-                        updated_at=clock_timestamp()
-                   FROM registry_internal.registry_state AS state
-                  WHERE control.singleton AND state.singleton
-              RETURNING control.control_epoch",
-                &[&protocol_version, &state, &instance_epoch_offset],
-            )
-            .await
-            .map(|row| row.get(0))
-            .map_err(|_| "timer control fixture update failed".to_owned())
+        self.update_timer_control(
+            "UPDATE registry_internal.registry_record_timer_control AS control
+                SET protocol_version=$1,
+                    control_state=$2,
+                    control_epoch=control.control_epoch+1,
+                    bound_instance_epoch=state.epoch+$3,
+                    updated_at=clock_timestamp()
+               FROM registry_internal.registry_state AS state
+              WHERE control.singleton AND state.singleton
+          RETURNING control.control_epoch",
+            &[&protocol_version, &state, &instance_epoch_offset],
+        )
+        .await
+        .map_err(|error| format!("timer control fixture update failed: {error}"))
     }
 
     /// Change only the disposable database's active-package digest so metrics
