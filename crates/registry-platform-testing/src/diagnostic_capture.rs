@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::{
     future::Future,
     io::Write,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use crate::sign_compact_jwt_with_key;
@@ -28,6 +28,15 @@ impl CapturedDiagnosticLogs {
     /// future with `tracing::instrument::WithSubscriber`.
     #[must_use]
     pub fn subscriber(&self) -> tracing::Dispatch {
+        // While only one dispatcher is registered, tracing-core computes a
+        // newly reached callsite's interest and the global level limit from
+        // the reaching thread's default alone. A parallel test thread with no
+        // subscriber would then disable the callsite for this capture too.
+        // One permanently registered no-op dispatcher keeps every computation
+        // on the full set of live dispatchers.
+        static REGISTRY_ANCHOR: OnceLock<tracing::Dispatch> = OnceLock::new();
+        REGISTRY_ANCHOR
+            .get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
         let writer = self.clone();
         tracing::Dispatch::new(
             tracing_subscriber::fmt()
