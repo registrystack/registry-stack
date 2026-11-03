@@ -337,8 +337,18 @@ async fn fetch_rows(
         .iter()
         .map(NativeParameter::from_scalar)
         .collect::<Result<Vec<_>, _>>()?;
+    // Execute through a portal that returns at most one row past the page
+    // bound, which is enough to tell a full page from a complete result. The
+    // engine pages with OFFSET and no LIMIT, so an unbounded execution would
+    // drain the rest of the result until the statement timeout.
+    let fetch_limit = i32::try_from(read.maximum_rows.saturating_add(1))
+        .map_err(|_| PostgresReadFault::TooLarge)?;
+    let portal = transaction
+        .bind_raw(read.sql.as_str(), parameters.iter())
+        .await
+        .map_err(statement_fault)?;
     let stream = transaction
-        .query_raw(&read.sql, parameters.iter())
+        .query_portal_raw(&portal, fetch_limit)
         .await
         .map_err(statement_fault)?;
     futures::pin_mut!(stream);
@@ -1002,5 +1012,45 @@ mod tests {
         observer_connection
             .await
             .expect("the verified TLS cancellation observer task joins");
+    }
+
+    /// A page stops at its row bound. The engine pages with OFFSET and no
+    /// LIMIT, so a read that drained the rest of the result would hold its
+    /// connection until the statement timeout instead of returning the page.
+    #[tokio::test]
+    async fn page_read_stops_at_its_row_bound_without_draining_the_result() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("the test clock is after the Unix epoch")
+            .as_nanos();
+        let application_name = format!("adapter-source-bound-{}-{suffix}", std::process::id());
+        let pool =
+            store::build_verified_pool(test_config(&application_name), tokio_postgres::NoTls, 1)
+                .expect("build the one-connection source pool");
+        let source = PooledPostgresSource {
+            pool,
+            cancellation: PostgresCancellation::Plaintext,
+        };
+
+        let started = Instant::now();
+        let page = source
+            .read(read(
+                "SELECT generate_series(1, 2000000000)::bigint AS n".to_owned(),
+                10_000,
+            ))
+            .await
+            .expect("a bounded page of a large result reads");
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            page.rows[0].columns,
+            vec![("n".to_owned(), SourceScalar::Integer(1))]
+        );
+        assert_eq!(page.rows.len(), 1);
+        assert!(!page.complete, "a page cut at its bound is not complete");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the page returns without draining the result, took {elapsed:?}"
+        );
     }
 }
