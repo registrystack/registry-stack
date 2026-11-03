@@ -29,9 +29,9 @@ ACTION_EXAMPLES_RUNNER = SCRIPT_DIR / "test-immediate-action-examples.sh"
 
 
 class PostgresRunnerTests(unittest.TestCase):
-    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, preexisting_python: bool = False, runner: Path = RUNNER, shell: Path | None = None):
+    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, preexisting_python: bool = False, cargo_target_dir: bool = True, runner: Path = RUNNER, shell: Path | None = None):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             log = root / "cargo.jsonl"
             cargo = root / "cargo"
             cargo.write_text(
@@ -76,7 +76,8 @@ class PostgresRunnerTests(unittest.TestCase):
             bregctl = root / "configured target with spaces" / "debug" / "bregctl"
             bregctl.write_text("#!/bin/sh\nexit 0\n")
             bregctl.chmod(0o755)
-            python_binary = root / "target with spaces" / "breg-test-python" / "bin" / "python"
+            target = root / ("target with spaces" if cargo_target_dir else "target")
+            python_binary = target / "breg-test-python" / "bin" / "python"
             if preexisting_python:
                 python_binary.parent.mkdir(parents=True)
                 python_binary.write_text(
@@ -121,11 +122,14 @@ class PostgresRunnerTests(unittest.TestCase):
                 BREG_RUNNER_TEST_FAIL="1" if fail else "0",
                 BREG_RUNNER_TEST_FAIL_BUILD="1" if fail_build else "0",
             )
+            if not cargo_target_dir:
+                environment.pop("CARGO_TARGET_DIR")
             environment.pop("BREG_TEST_DATABASE_URL", None)
             if database:
                 environment["BREG_TEST_DATABASE_URL"] = "postgresql://fixture.invalid/test"
             result = subprocess.run(
                 [*([str(shell)] if shell else []), str(runner), *arguments], env=environment,
+                cwd=None if cargo_target_dir else root,
                 capture_output=True, text=True, check=False,
             )
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -227,6 +231,13 @@ class PostgresRunnerTests(unittest.TestCase):
         result, calls = self.run_lane("--lane", "postgres", preexisting_python=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, sum(call[0] == "python" for call in calls))
+
+    def test_python_interpreter_path_is_absolute_without_a_configured_target_dir(self):
+        # cargo runs the proof from the crate directory, so a relative
+        # interpreter path under the default target dir would not resolve.
+        result, calls = self.run_lane("--lane", "postgres", cargo_target_dir=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(any("postgres_action_evidence" in call for call in calls))
 
     def test_sharded_lanes_partition_every_owned_target_exactly_once(self):
         ci_changes = self.load_ci_changes()
