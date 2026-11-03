@@ -369,6 +369,9 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
                 "registry-render",
                 "coordinator",
                 "coordinatorctl",
+                "adapter",
+                "adapterctl",
+                "adapter-job",
             ]
             if missing_fips_binary is not None:
                 fips_binaries.remove(missing_fips_binary)
@@ -429,6 +432,24 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         )
         return relayctl
 
+    def test_v0_45_1_core_bundles_each_adapter_binary_with_its_own_features(self):
+        result, output, calls = self.build("core", version="0.45.1")
+        self.assertEqual(0, result.returncode, result.stderr)
+        for crate, binary, features in (
+            ("registry-adapter", "adapter", ()),
+            ("registry-adapterctl", "adapterctl", ()),
+            ("registry-adapter-job", "adapter-job", ("--features", "job-file,job-postgres")),
+        ):
+            self.assertIn(
+                ["build", "--release", "--locked", "-p", crate, "--bin", binary, *features, "--target", TARGET],
+                calls,
+            )
+            self.assertTrue((output / "platform" / f"{binary}-v0.45.1-macos-arm64.tar.gz").is_file(), binary)
+        self.assertEqual(
+            MODULE.rosters("0.45.1")["core"],
+            [line.split("  ", 1)[1] for line in (output / "SHA256SUMS").read_text().splitlines()],
+        )
+
     def test_v0_44_core_bundles_and_launches_every_additional_native_binary(self):
         result, output, calls = self.build("core", version="0.44.0")
         self.assertEqual(0, result.returncode, result.stderr)
@@ -446,8 +467,9 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             ],
             calls,
         )
+        in_v0_44 = set(MODULE.release_roster.additional_platform_builds((0, 44, 0)))
         for crate, binary in MODULE.release_roster.ADDITIONAL_PLATFORM_BUILDS:
-            if binary == "scheduling":
+            if binary == "scheduling" or (crate, binary) not in in_v0_44:
                 self.assertNotIn(["build", "--release", "--locked", "-p", crate, "--bin", binary, "--target", TARGET], calls)
                 continue
             self.assertIn(["build", "--release", "--locked", "-p", crate, "--bin", binary, "--target", TARGET], calls)

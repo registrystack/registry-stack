@@ -3941,6 +3941,8 @@ class RegistryReleaseTest(TestCase):
                 inventory["discoveryctl"] = version
             if module.release_roster.coordinator_binaries_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
+            if module.release_roster.adapter_in_release(version_tuple):
+                inventory.update({"adapter": version, "adapterctl": version, "adapter-job": version})
             if module.release_roster.rstack_in_release(version_tuple):
                 inventory.update({"rstack": version, "rstack-installer": version})
             if module.release_roster.scheduling_installer_in_release(version_tuple):
@@ -4003,6 +4005,19 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(messaging)", recipe)
 
+    def test_adapter_release_surface_begins_at_v0_45_1(self) -> None:
+        module = load_registry_release()
+        adapter = {"adapter", "adapterctl", "adapter-job", "adapter-installer"}
+
+        def missing(version: str) -> set[str]:
+            errors = module.artifact_inventory_errors(version, {})
+            self.assertEqual(1, len(errors))
+            details = errors[0].split("missing ", 1)[1]
+            return set(details.split("; ", 1)[0].split(", "))
+
+        self.assertEqual(set(), adapter & missing("0.45.0"))
+        self.assertEqual(adapter, adapter & missing("0.45.1"))
+
     @mock.patch.object(load_release_roster(), "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_release_surface_begins_at_its_first_release(self) -> None:
         module = load_registry_release()
@@ -4048,6 +4063,8 @@ class RegistryReleaseTest(TestCase):
                 inventory.update({"messaging": version, "messagingctl": version})
             if roster.coordinator_binaries_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
+            if roster.adapter_in_release(version_tuple):
+                inventory.update({"adapter": version, "adapterctl": version, "adapter-job": version})
             if roster.rstack_in_release(version_tuple):
                 inventory.update({"rstack": version, "rstack-installer": version})
             if roster.scheduling_installer_in_release(version_tuple):
@@ -4202,6 +4219,8 @@ class RegistryReleaseTest(TestCase):
                         current.update({"messaging": version, "messagingctl": version})
                     if module.release_roster.coordinator_binaries_in_release(version_tuple):
                         current.update({"coordinator": version, "coordinatorctl": version})
+                    if module.release_roster.adapter_in_release(version_tuple):
+                        current.update({"adapter": version, "adapterctl": version, "adapter-job": version})
                     if module.release_roster.rstack_in_release(version_tuple):
                         current.update({"rstack": version, "rstack-installer": version})
                     if module.release_roster.scheduling_installer_in_release(version_tuple):
@@ -6153,6 +6172,10 @@ def write_manifest(
     if load_release_roster().coordinator_binaries_in_release(version_tuple):
         artifacts["coordinator"] = version
         artifacts["coordinatorctl"] = version
+    if load_release_roster().adapter_in_release(version_tuple):
+        artifacts["adapter"] = version
+        artifacts["adapterctl"] = version
+        artifacts["adapter-job"] = version
     if load_release_roster().rstack_in_release(version_tuple):
         artifacts["rstack"] = version
         artifacts["rstack-installer"] = version

@@ -208,6 +208,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("registry-render",)
     if REGISTRY_RELEASE.release_roster.coordinator_binaries_in_release(version_tuple):
         inventory += ("coordinator", "coordinatorctl")
+    if REGISTRY_RELEASE.release_roster.adapter_in_release(version_tuple):
+        inventory += ("adapter", "adapterctl", "adapter-job")
     if REGISTRY_RELEASE.release_roster.rstack_in_release(version_tuple):
         inventory += ("rstack", "rstack-installer")
     if REGISTRY_RELEASE.release_roster.scheduling_installer_in_release(version_tuple):
