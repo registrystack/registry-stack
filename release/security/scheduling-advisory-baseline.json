@@ -75,7 +75,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -133,7 +133,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -191,7 +191,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -249,7 +249,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -307,7 +307,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -365,7 +365,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -423,7 +423,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -481,7 +481,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -539,7 +539,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -597,7 +597,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -655,7 +655,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -713,7 +713,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-11-04",
+      "reviewed_at": "2026-11-03",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",

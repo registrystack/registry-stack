@@ -47,7 +47,7 @@ LIVE_REFERENCE_SOURCE_REVISION = "e1f2772def2febbc477854ba2e8a5c447eef9893"
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-11-04"
+LIVE_REVIEW_EVALUATION_DATE = "2026-11-03"
 LIVE_REFERENCE_PROVENANCE = {
     "breg": "local_reproduction",
     "casework": "local_reproduction",
