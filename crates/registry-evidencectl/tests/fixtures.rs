@@ -9,12 +9,99 @@ use std::{
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Command, Output},
+    time::{Duration, Instant},
 };
 
 use registry_platform_yaml::Reader;
 
 fn evidencectl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+}
+
+/// Run `command`, waiting out Linux ETXTBSY for a binary written moments ago.
+/// A concurrent test's fork can hold the writer descriptor of a freshly copied
+/// binary until its own exec closes it, so the first exec of the copy may be
+/// refused. Nothing else is retried.
+fn output_waiting_for_busy_binary(command: &mut Command) -> std::io::Result<Output> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    retry_while_busy(|| command.output(), || Instant::now() < deadline)
+}
+
+fn retry_while_busy<T>(
+    mut run: impl FnMut() -> std::io::Result<T>,
+    mut keep_waiting: impl FnMut() -> bool,
+) -> std::io::Result<T> {
+    loop {
+        match run() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && keep_waiting() =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
+
+#[test]
+fn a_busy_binary_is_retried_until_it_runs() {
+    let mut attempts = 0;
+    let result = retry_while_busy(
+        || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(std::io::ErrorKind::ExecutableFileBusy.into())
+            } else {
+                Ok("ran")
+            }
+        },
+        || true,
+    );
+    assert_eq!(result.unwrap(), "ran");
+    assert_eq!(attempts, 3);
+}
+
+#[test]
+fn only_a_busy_binary_is_waited_for() {
+    let error = retry_while_busy::<()>(
+        || Err(std::io::ErrorKind::PermissionDenied.into()),
+        || panic!("only an executable-busy failure may wait"),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+
+    let error = retry_while_busy::<()>(
+        || Err(std::io::ErrorKind::ExecutableFileBusy.into()),
+        || false,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+}
+
+/// The race [`output_waiting_for_busy_binary`] exists for, made deterministic:
+/// hold a copy open for writing exactly as a forked sibling would, and release
+/// it only after the first exec has been refused.
+///
+/// Linux only. macOS executes a file that is open for writing, so the same
+/// test there would pass without the retry.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_copy_still_held_open_for_writing_is_waited_for() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctl = dir.path().join("evidencectl");
+    fs::copy(env!("CARGO_BIN_EXE_evidencectl"), &ctl).expect("copy evidencectl");
+    let held = fs::OpenOptions::new()
+        .write(true)
+        .open(&ctl)
+        .expect("hold the copy open for writing");
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(held);
+    });
+
+    let output = output_waiting_for_busy_binary(Command::new(&ctl).arg("--version"))
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
 }
 
 fn stdout_of(output: &Output) -> String {
@@ -1217,13 +1304,14 @@ fn a_non_executable_evidence_on_path_is_skipped_with_a_clear_resolution_error() 
     permissions.set_mode(0o644);
     fs::set_permissions(&candidate, permissions).expect("chmod candidate non-executable");
 
-    let output = Command::new(ctl)
-        .args(["fixtures", "run"])
-        .arg(&project)
-        .env("PATH", &path_dir)
-        .env_remove("EVIDENCE_BIN")
-        .output()
-        .expect("run evidencectl");
+    let output = output_waiting_for_busy_binary(
+        Command::new(ctl)
+            .args(["fixtures", "run"])
+            .arg(&project)
+            .env("PATH", &path_dir)
+            .env_remove("EVIDENCE_BIN"),
+    )
+    .expect("run evidencectl");
 
     assert!(!output.status.success());
     let stderr = stderr_of(&output);
